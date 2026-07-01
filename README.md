@@ -13,17 +13,28 @@ capabilities, architecture, and roadmap.
 
 ## Development with Superpowers
 
-This repository is configured to use the
-[obra/superpowers](https://github.com/obra/superpowers) agentic skills framework
-for Claude Code. The marketplace and plugin are declared at project scope in
-[`.claude/settings.json`](.claude/settings.json), so collaborators are prompted to
-install them after trusting the repository folder.
+This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)
+agentic skills framework directly into [`.claude/skills/`](.claude/skills), rather
+than depending on the plugin marketplace. The skills are checked into version
+control, so every collaborator gets them automatically — no marketplace, install,
+or trust step required.
 
-If the plugin does not load automatically, install it manually:
+Included skills:
 
-```shell
-/plugin marketplace add obra/superpowers-marketplace
-/plugin install superpowers@superpowers-marketplace
-```
+- `brainstorming` — turn ideas into designs before implementation
+- `writing-plans` / `executing-plans` — plan authoring and execution
+- `test-driven-development` — red/green/refactor discipline
+- `systematic-debugging` — root-cause tracing and defense-in-depth
+- `requesting-code-review` / `receiving-code-review` — review workflows
+- `subagent-driven-development` / `dispatching-parallel-agents` — subagent orchestration
+- `using-git-worktrees` / `finishing-a-development-branch` — branch workflows
+- `verification-before-completion` — pre-completion checks
+- `writing-skills` — authoring new skills
+- `using-superpowers` — meta-skill that coordinates the rest
 
-Then run `/reload-plugins` to activate it.
+Claude Code discovers these on the next session (or after `/reload-plugins`).
+Model-invoked skills trigger automatically from their descriptions; you can also
+invoke one explicitly, e.g. `/brainstorming`.
+
+To update the vendored copies, re-pull the `skills/` directory from the upstream
+[obra/superpowers](https://github.com/obra/superpowers) repository.
