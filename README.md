@@ -36,5 +36,12 @@ Claude Code discovers these on the next session (or after `/reload-plugins`).
 Model-invoked skills trigger automatically from their descriptions; you can also
 invoke one explicitly, e.g. `/brainstorming`.
 
+A `SessionStart` hook ([`.claude/hooks/session-start`](.claude/hooks), wired in
+[`.claude/settings.json`](.claude/settings.json)) injects the `using-superpowers`
+meta-skill at the start of every session — so Claude consults the skills library
+proactively rather than only when a description happens to match. The hook is a
+cross-platform polyglot wrapper (`run-hook.cmd`) that runs under both Windows
+(Git Bash) and Unix shells.
+
 To update the vendored copies, re-pull the `skills/` directory from the upstream
 [obra/superpowers](https://github.com/obra/superpowers) repository.
