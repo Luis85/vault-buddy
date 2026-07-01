@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# SessionStart hook: inject the "using-superpowers" skill as session context.
+#
+# Adapted from obra/superpowers (hooks/session-start) for project-scope
+# vendoring under .claude/. The upstream plugin resolves its skills via
+# CLAUDE_PLUGIN_ROOT; here the script self-locates and reads the vendored
+# copy at .claude/skills/using-superpowers/SKILL.md, and always emits the
+# Claude Code hook output format.
+
+set -euo pipefail
+
+# Resolve .claude/ as the parent of this hooks/ directory.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Read the using-superpowers skill content.
+using_superpowers_content=$(cat "${CLAUDE_DIR}/skills/using-superpowers/SKILL.md" 2>&1 || echo "Error reading using-superpowers skill")
+
+# Escape a string for JSON embedding using bash parameter substitution.
+# Each ${s//old/new} is a single C-level pass.
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+using_superpowers_escaped=$(escape_for_json "$using_superpowers_content")
+session_context="<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your 'using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\n\n${using_superpowers_escaped}\n</EXTREMELY_IMPORTANT>"
+
+# Emit context injection in the Claude Code SessionStart hook format.
+# Uses printf instead of a heredoc to avoid a bash 5.3+ heredoc hang.
+# See: https://github.com/obra/superpowers/issues/571
+printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
+
+exit 0
