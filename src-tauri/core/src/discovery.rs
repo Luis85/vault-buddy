@@ -28,7 +28,7 @@ pub fn parse_obsidian_config(json: &str) -> Vec<Vault> {
             })
         })
         .collect();
-    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result.sort_by_key(|v| v.name.to_lowercase());
     result
 }
 
