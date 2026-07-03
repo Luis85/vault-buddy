@@ -16,7 +16,8 @@ export const useVaultsStore = defineStore("vaults", {
         this.vaults = await invoke<Vault[]>("list_vaults");
         this.error = null;
       } catch (e) {
-        this.vaults = [];
+        // Keep whatever list we had; a transient failure shouldn't blank
+        // a panel that was working a moment ago.
         this.error = String(e);
       } finally {
         this.loaded = true;
@@ -24,7 +25,10 @@ export const useVaultsStore = defineStore("vaults", {
     },
     async togglePanel() {
       this.panelOpen = !this.panelOpen;
-      if (this.panelOpen && !this.loaded) {
+      // Refresh on every open: discovery is one JSON read, and a user who
+      // saw the empty state, then opened Obsidian, must not stay stuck on
+      // the cached result until the app restarts.
+      if (this.panelOpen) {
         await this.loadVaults();
       }
     },

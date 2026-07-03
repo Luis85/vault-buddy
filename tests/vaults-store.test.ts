@@ -70,4 +70,35 @@ describe("vaults store", () => {
     expect(store.vaults).toEqual([]);
     expect(store.error).toContain("ipc unavailable");
   });
+
+  it("re-runs discovery on every panel open so an empty first load can recover", async () => {
+    let discovered: typeof sampleVaults = [];
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults") return discovered;
+    });
+    const store = useVaultsStore();
+    await store.togglePanel(); // Obsidian not set up yet
+    expect(store.vaults).toEqual([]);
+    await store.togglePanel(); // close
+
+    discovered = sampleVaults; // user has now opened Obsidian
+    await store.togglePanel(); // reopen
+    expect(store.vaults).toEqual(sampleVaults);
+  });
+
+  it("keeps the previous vault list when a refresh fails transiently", async () => {
+    let fail = false;
+    mockIPC((cmd) => {
+      if (fail) throw "ipc unavailable";
+      if (cmd === "list_vaults") return sampleVaults;
+    });
+    const store = useVaultsStore();
+    await store.loadVaults();
+    expect(store.vaults).toEqual(sampleVaults);
+
+    fail = true;
+    await store.loadVaults();
+    expect(store.vaults).toEqual(sampleVaults);
+    expect(store.error).toContain("ipc unavailable");
+  });
 });
