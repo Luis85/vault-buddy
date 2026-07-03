@@ -50,7 +50,10 @@ describe("ActionPanel", () => {
     const store = useVaultsStore();
     store.loaded = true;
     const wrapper = mount(ActionPanel);
-    expect(wrapper.text()).toContain("Obsidian not found");
+    const text = wrapper.text().replace(/\s+/g, " ");
+    expect(text).toContain(
+      "Obsidian not found — no vaults discovered. Is Obsidian installed and has it been opened at least once?"
+    );
   });
 
   it("shows the error banner when an action failed", () => {
@@ -60,5 +63,27 @@ describe("ActionPanel", () => {
     store.error = "failed to launch obsidian://open";
     const wrapper = mount(ActionPanel);
     expect(wrapper.text()).toContain("failed to launch");
+  });
+
+  it("disables all buttons while busy", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.busyVaultId = "a1b2c3";
+    const wrapper = mount(ActionPanel);
+    const buttons = wrapper.findAll("button");
+    expect(buttons).toHaveLength(4);
+    expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
+      true
+    );
+  });
+
+  it("renders error banner and empty state together", () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    store.error = "failed to launch obsidian://open";
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.text()).toContain("failed to launch");
+    expect(wrapper.text()).toContain("Obsidian not found");
   });
 });
