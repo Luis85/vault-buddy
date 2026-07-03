@@ -6,7 +6,7 @@ const store = useVaultsStore();
 </script>
 
 <template>
-  <div class="h-full w-64 overflow-y-auto rounded-xl bg-slate-100/95 p-3 shadow-xl">
+  <div class="h-full w-full overflow-y-auto rounded-xl bg-slate-100/95 p-3 shadow-xl">
     <h1 class="mb-2 text-sm font-bold text-slate-700">Your vaults</h1>
     <p
       v-if="store.error"
