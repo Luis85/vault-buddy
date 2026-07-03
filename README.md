@@ -11,6 +11,26 @@ operating layer.
 See the full [Product Requirements Document](docs/PRD.md) for vision, principles,
 capabilities, architecture, and roadmap.
 
+## Development
+
+Prerequisites: [Node 22+](https://nodejs.org), [Rust stable](https://rustup.rs),
+and on Windows the [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+(WebView2 is preinstalled on Windows 11).
+
+```bash
+npm install          # frontend dependencies
+npm run test         # Vitest component/store tests
+npm run build        # typecheck + production frontend build
+cd src-tauri/core && cargo test   # pure Rust core tests (run anywhere)
+npm run tauri dev    # run the desktop app (needs a desktop OS with WebView)
+```
+
+The Rust code is split in two: `src-tauri/core/` is a pure crate with all
+Obsidian logic (config parsing, daily-note resolution, URI building) and no
+GUI dependencies — it tests on any machine, including CI containers.
+`src-tauri/` is the thin Tauri shell (window, tray, command wrappers) and
+needs platform WebView libraries to compile.
+
 ## Development with Superpowers
 
 This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)
