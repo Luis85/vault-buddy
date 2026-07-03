@@ -10,14 +10,22 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&toggle, &quit])?;
 
     TrayIconBuilder::with_id("main-tray")
-        .icon(app.default_window_icon().cloned().expect("bundled icon missing"))
+        .icon(
+            app.default_window_icon()
+                .cloned()
+                .expect("bundled icon missing"),
+        )
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let visible = window.is_visible().unwrap_or(true);
-                    let _ = if visible { window.hide() } else { window.show() };
+                    let _ = if visible {
+                        window.hide()
+                    } else {
+                        window.show()
+                    };
                 }
             }
             "quit" => app.exit(0),

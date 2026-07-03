@@ -43,10 +43,7 @@ mod tests {
     fn builds_open_vault_uri_with_encoding() {
         // Vault IDs from obsidian.json are hex, but the builder must encode
         // whatever it is given.
-        assert_eq!(
-            open_vault_uri("a1b2 c3"),
-            "obsidian://open?vault=a1b2%20c3"
-        );
+        assert_eq!(open_vault_uri("a1b2 c3"), "obsidian://open?vault=a1b2%20c3");
     }
 
     #[test]

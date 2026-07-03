@@ -57,6 +57,9 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("Journal")).unwrap();
         std::fs::write(dir.path().join("Journal/2026-07-03.md"), "x").unwrap();
         let uri = daily_note_uri("a1b2c3", dir.path(), date());
-        assert_eq!(uri, "obsidian://open?vault=a1b2c3&file=Journal%2F2026%2D07%2D03");
+        assert_eq!(
+            uri,
+            "obsidian://open?vault=a1b2c3&file=Journal%2F2026%2D07%2D03"
+        );
     }
 }

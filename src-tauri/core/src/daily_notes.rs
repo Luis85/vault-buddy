@@ -113,7 +113,10 @@ mod tests {
 
     #[test]
     fn renders_format_with_subfolders() {
-        assert_eq!(render_format("YYYY/MM/YYYY-MM-DD", date()), "2026/07/2026-07-03");
+        assert_eq!(
+            render_format("YYYY/MM/YYYY-MM-DD", date()),
+            "2026/07/2026-07-03"
+        );
     }
 
     #[test]
@@ -148,18 +151,27 @@ mod tests {
     #[test]
     fn malformed_settings_fall_back_to_default() {
         assert_eq!(parse_settings("garbage"), DailyNoteSettings::default());
-        assert_eq!(parse_settings(r#"{ "format": "" }"#), DailyNoteSettings::default());
+        assert_eq!(
+            parse_settings(r#"{ "format": "" }"#),
+            DailyNoteSettings::default()
+        );
     }
 
     #[test]
     fn rel_path_joins_folder_and_name() {
-        let s = DailyNoteSettings { folder: "Daily".into(), format: "YYYY-MM-DD".into() };
+        let s = DailyNoteSettings {
+            folder: "Daily".into(),
+            format: "YYYY-MM-DD".into(),
+        };
         assert_eq!(daily_note_rel_path(&s, date()), "Daily/2026-07-03");
     }
 
     #[test]
     fn rel_path_without_folder_is_just_the_name() {
-        assert_eq!(daily_note_rel_path(&DailyNoteSettings::default(), date()), "2026-07-03");
+        assert_eq!(
+            daily_note_rel_path(&DailyNoteSettings::default(), date()),
+            "2026-07-03"
+        );
     }
 
     #[test]
