@@ -105,9 +105,12 @@ Exposed Tauri commands: `list_vaults()`, `open_vault(id)`,
    the user's daily-note template is not applied (would require the
    Advanced URI plugin or Obsidian's own daily-note command). Candidate for
    increment 2.
-2. Only the common moment tokens `YYYY`, `MM`, `DD` (plus literal folder
-   segments) are supported in the daily-note date format; exotic formats
-   fall back to `YYYY-MM-DD`.
+2. Only the common moment tokens `YYYY`, `MM`, `DD` are supported in the
+   daily-note date format. If any letters remain after substituting them,
+   the format uses unsupported tokens and rendering falls back to
+   `YYYY-MM-DD` — safer than pointing Obsidian at a misnamed path.
+   (Folder prefixes belong in the `folder` setting, which is fully
+   supported; digits and punctuation in the format string are fine.)
 3. Windows only. The code compiles and unit-tests cross-platform, but
    vault discovery paths and desktop behavior target Windows.
 
