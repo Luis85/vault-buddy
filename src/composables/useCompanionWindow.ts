@@ -60,54 +60,79 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
   // buddy stays put even if the window was dragged while open.
   let offset = { x: 0, y: 0 };
 
-  watch(panelOpen, async (open) => {
+  // A transition was superseded when the panel state changed while its
+  // window calls were still in flight (e.g. a quick double-click).
+  const stale = (expected: boolean) => panelOpen.value !== expected;
+
+  async function applyOpen(): Promise<void> {
     const win = getCurrentWindow();
-    if (open) {
-      let placement = STAY;
-      try {
-        const [pos, scale, monitor] = await Promise.all([
-          win.outerPosition(),
-          win.scaleFactor(),
-          currentMonitor(),
-        ]);
-        placement = planPanelPlacement(
-          pos,
-          monitorRect(monitor),
-          scale,
-          COLLAPSED,
-          EXPANDED,
+    let placement = STAY;
+    try {
+      const [pos, scale, monitor] = await Promise.all([
+        win.outerPosition(),
+        win.scaleFactor(),
+        currentMonitor(),
+      ]);
+      if (stale(true)) return;
+      placement = planPanelPlacement(
+        pos,
+        monitorRect(monitor),
+        scale,
+        COLLAPSED,
+        EXPANDED,
+      );
+      if (placement.offset.x !== 0 || placement.offset.y !== 0) {
+        // Record before moving: if we're superseded right after the move,
+        // the close transition still knows what to undo.
+        offset = placement.offset;
+        await win.setPosition(
+          new PhysicalPosition(
+            pos.x - placement.offset.x,
+            pos.y - placement.offset.y,
+          ),
         );
-        if (placement.offset.x !== 0 || placement.offset.y !== 0) {
-          await win.setPosition(
-            new PhysicalPosition(
-              pos.x - placement.offset.x,
-              pos.y - placement.offset.y,
-            ),
-          );
-        }
-      } catch {
-        placement = STAY; // no monitor info — grow right/down as before
       }
-      side.value = placement.side;
-      valign.value = placement.valign;
-      offset = placement.offset;
-      await win.setSize(new LogicalSize(EXPANDED.width, EXPANDED.height));
-    } else {
-      await win.setSize(new LogicalSize(COLLAPSED.width, COLLAPSED.height));
-      if (offset.x !== 0 || offset.y !== 0) {
-        try {
-          const pos = await win.outerPosition();
-          await win.setPosition(
-            new PhysicalPosition(pos.x + offset.x, pos.y + offset.y),
-          );
-        } catch {
-          // window may be gone during shutdown; nothing to restore
-        }
-        offset = { x: 0, y: 0 };
-      }
-      side.value = "right";
-      valign.value = "down";
+    } catch {
+      placement = STAY; // no monitor info — grow right/down as before
     }
+    if (stale(true)) return;
+    side.value = placement.side;
+    valign.value = placement.valign;
+    offset = placement.offset;
+    await win.setSize(new LogicalSize(EXPANDED.width, EXPANDED.height));
+  }
+
+  async function applyClose(): Promise<void> {
+    const win = getCurrentWindow();
+    await win.setSize(new LogicalSize(COLLAPSED.width, COLLAPSED.height));
+    if (offset.x !== 0 || offset.y !== 0) {
+      try {
+        const pos = await win.outerPosition();
+        await win.setPosition(
+          new PhysicalPosition(pos.x + offset.x, pos.y + offset.y),
+        );
+      } catch {
+        // window may be gone during shutdown; nothing to restore
+      }
+      offset = { x: 0, y: 0 };
+    }
+    side.value = "right";
+    valign.value = "down";
+  }
+
+  // Serialize transitions: a close never interleaves with an in-flight open
+  // (which could re-expand the window after it was collapsed, leaving an
+  // invisible click-blocking area). Superseded transitions are skipped.
+  let queue: Promise<void> = Promise.resolve();
+  watch(panelOpen, (open) => {
+    queue = queue
+      .then(() => {
+        if (stale(open)) return; // a newer toggle already won
+        return open ? applyOpen() : applyClose();
+      })
+      .catch(() => {
+        // a failed transition must not wedge the queue
+      });
   });
 
   return { side, valign };
