@@ -15,6 +15,11 @@
     "pinia": "^3",
     "vue": "^3.5"
   },
+  "overrides": {
+    "js-beautify": {
+      "glob": "^13"
+    }
+  },
   "devDependencies": {
     "@tailwindcss/vite": "^4",
     "@tauri-apps/cli": "^2",
