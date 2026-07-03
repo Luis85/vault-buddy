@@ -11,25 +11,79 @@ operating layer.
 See the full [Product Requirements Document](docs/PRD.md) for vision, principles,
 capabilities, architecture, and roadmap.
 
-## Development
+## Run it on your machine
 
-Prerequisites: [Node 22+](https://nodejs.org), [Rust stable](https://rustup.rs),
-and on Windows the [Tauri prerequisites](https://tauri.app/start/prerequisites/)
-(WebView2 is preinstalled on Windows 11).
+### Prerequisites (Windows)
+
+1. [Node.js 22+](https://nodejs.org)
+2. [Rust stable](https://rustup.rs) — the default MSVC toolchain; rustup will
+   prompt you to install the Visual Studio C++ Build Tools if missing
+3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
+   [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+
+### Check out and run
 
 ```bash
-npm install          # frontend dependencies
-npm run test         # Vitest component/store tests
-npm run build        # typecheck + production frontend build
-cd src-tauri/core && cargo test   # pure Rust core tests (run anywhere)
-npm run tauri dev    # run the desktop app (needs a desktop OS with WebView)
+git clone https://github.com/Luis85/vault-buddy.git
+cd vault-buddy
+
+# to try a branch that isn't merged yet (e.g. a PR branch):
+#   git fetch origin <branch-name>
+#   git checkout <branch-name>
+
+npm install
+npm run tauri dev
+```
+
+The first `tauri dev` compiles the Rust shell and takes a few minutes; after
+that it's incremental. The companion appears as a small transparent
+always-on-top window; click the character to open the vault panel, and use the
+tray icon (Show/Hide, Quit) to control it.
+
+### Build an installer
+
+```bash
+npm run tauri build
+```
+
+Installers land in `src-tauri/target/release/bundle/` (`msi/` and `nsis/`).
+Alternatively, every push through CI builds Windows installers — download the
+`vault-buddy-windows-<sha>` artifact from the
+[Actions](https://github.com/Luis85/vault-buddy/actions) run.
+
+### Tests and checks
+
+```bash
+npm run test                       # Vitest component/store tests
+npm run build                      # vue-tsc typecheck + production build
+cd src-tauri && cargo fmt --check  # Rust formatting (whole workspace)
+cd core && cargo clippy --all-targets -- -D warnings
+cargo test                         # pure Rust core tests (run anywhere)
 ```
 
 The Rust code is split in two: `src-tauri/core/` is a pure crate with all
 Obsidian logic (config parsing, daily-note resolution, URI building) and no
 GUI dependencies — it tests on any machine, including CI containers.
 `src-tauri/` is the thin Tauri shell (window, tray, command wrappers) and
-needs platform WebView libraries to compile.
+needs platform WebView libraries to compile — on Windows that works out of
+the box; Linux containers can't compile it (no webkit2gtk), which is why CI
+builds the app on a Windows runner.
+
+## Quality pipeline
+
+CI runs on every push to `main` and every pull request
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+
+| Job | Runner | What it gates |
+| --- | --- | --- |
+| Frontend | Linux | Vitest tests, `vue-tsc` typecheck, production build |
+| Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
+| Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
+
+The Windows job only runs after the two fast jobs pass. Desktop behavior that
+can't be asserted in CI (transparency, tray, drag, the real Obsidian
+round-trip) is covered by the manual verification checklist in
+[`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ## Development with Superpowers
 
