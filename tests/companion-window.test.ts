@@ -1,30 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, ref } from "vue";
 
-const calls = vi.hoisted(() => [] as string[]);
-const pending = vi.hoisted(
-  () => ({ resolveOuterPosition: null }) as {
-    resolveOuterPosition: ((pos: { x: number; y: number }) => void) | null;
+interface Point {
+  x: number;
+  y: number;
+}
+
+const state = vi.hoisted(() => ({
+  calls: [] as string[],
+  pos: { x: 0, y: 0 } as Point,
+  monitor: null as null | {
+    position: Point;
+    size: { width: number; height: number };
   },
-);
+  deferOuter: false,
+  pendingOuter: [] as Array<() => void>,
+}));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     outerPosition: () =>
-      new Promise<{ x: number; y: number }>((resolve) => {
-        pending.resolveOuterPosition = resolve;
-      }),
+      state.deferOuter
+        ? new Promise<Point>((resolve) => {
+            state.pendingOuter.push(() => resolve({ ...state.pos }));
+          })
+        : Promise.resolve({ ...state.pos }),
     scaleFactor: () => Promise.resolve(1),
-    setPosition: () => {
-      calls.push("setPosition");
+    setPosition: (p: Point) => {
+      state.pos = { x: p.x, y: p.y };
+      state.calls.push(`setPosition:${p.x},${p.y}`);
       return Promise.resolve();
     },
     setSize: (size: { width: number }) => {
-      calls.push(`setSize:${size.width}`);
+      state.calls.push(`setSize:${size.width}`);
       return Promise.resolve();
     },
   }),
-  currentMonitor: () => Promise.resolve(null),
+  currentMonitor: () => Promise.resolve(state.monitor),
   LogicalSize: class {
     constructor(
       public width: number,
@@ -46,11 +58,19 @@ import {
 } from "../src/composables/useCompanionWindow";
 
 const flush = () => new Promise((r) => setTimeout(r));
+const resolveOuter = () => {
+  for (const resolve of state.pendingOuter.splice(0)) resolve();
+};
+const lastResize = () =>
+  state.calls.filter((c) => c.startsWith("setSize")).pop();
 
 describe("useCompanionWindow", () => {
   beforeEach(() => {
-    calls.length = 0;
-    pending.resolveOuterPosition = null;
+    state.calls.length = 0;
+    state.pos = { x: 100, y: 100 };
+    state.monitor = null;
+    state.deferOuter = false;
+    state.pendingOuter.length = 0;
   });
 
   it("expands on open and collapses on close", async () => {
@@ -59,31 +79,71 @@ describe("useCompanionWindow", () => {
 
     open.value = true;
     await nextTick();
-    pending.resolveOuterPosition?.({ x: 100, y: 100 });
     await flush();
-    expect(calls).toContain(`setSize:${EXPANDED.width}`);
+    expect(state.calls).toContain(`setSize:${EXPANDED.width}`);
 
     open.value = false;
     await nextTick();
     await flush();
-    expect(calls[calls.length - 1]).toBe(`setSize:${COLLAPSED.width}`);
+    expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
   });
 
   it("never leaves the window expanded when close arrives mid-open", async () => {
     const open = ref(false);
     useCompanionWindow(open);
 
+    state.deferOuter = true;
     open.value = true;
     await nextTick(); // open transition is now awaiting outerPosition
     open.value = false;
     await nextTick(); // close requested while open is still in flight
 
-    pending.resolveOuterPosition?.({ x: 100, y: 100 });
+    state.deferOuter = false;
+    resolveOuter();
     await flush();
     await flush();
 
     // the stale open must not expand after the close collapsed the window
-    const last = calls.filter((c) => c.startsWith("setSize")).pop();
-    expect(last).toBe(`setSize:${COLLAPSED.width}`);
+    expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
+  });
+
+  it("restores the original position after open→close→open at a screen edge", async () => {
+    // buddy hugging the right edge of a 1920x1080 monitor: opening shifts
+    // the window left so the panel can unfold on-screen
+    state.monitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+    };
+    state.pos = { x: 1780, y: 100 };
+
+    const open = ref(false);
+    useCompanionWindow(open);
+
+    state.deferOuter = true;
+    open.value = true;
+    await nextTick(); // first open awaiting outerPosition
+    open.value = false;
+    await nextTick(); // close queued
+    open.value = true;
+    await nextTick(); // reopen queued
+
+    state.deferOuter = false;
+    resolveOuter();
+    await flush();
+    await flush();
+    await flush();
+
+    // the reopen must not re-plan from the shifted position and forget the
+    // pending offset — the window stays shifted exactly once
+    const shift = EXPANDED.width - COLLAPSED.width;
+    expect(state.pos).toEqual({ x: 1780 - shift, y: 100 });
+
+    open.value = false;
+    await nextTick();
+    await flush();
+
+    // closing puts the buddy back exactly where the user left it
+    expect(state.pos).toEqual({ x: 1780, y: 100 });
+    expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
   });
 });

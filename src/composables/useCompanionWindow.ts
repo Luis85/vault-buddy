@@ -74,31 +74,37 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         currentMonitor(),
       ]);
       if (stale(true)) return;
+      // Plan from the unshifted "home" position. If a previous open already
+      // shifted the window (rapid open→close→open where the close was
+      // superseded), planning from the raw position would conclude there is
+      // room and reset the pending offset — the following close would then
+      // never move the buddy back to where the user left it.
+      const home = { x: pos.x + offset.x, y: pos.y + offset.y };
       placement = planPanelPlacement(
-        pos,
+        home,
         monitorRect(monitor),
         scale,
         COLLAPSED,
         EXPANDED,
       );
-      if (placement.offset.x !== 0 || placement.offset.y !== 0) {
-        // Record before moving: if we're superseded right after the move,
-        // the close transition still knows what to undo.
-        offset = placement.offset;
-        await win.setPosition(
-          new PhysicalPosition(
-            pos.x - placement.offset.x,
-            pos.y - placement.offset.y,
-          ),
-        );
+      // Record before moving: if we're superseded right after the move,
+      // the close transition still knows what to undo.
+      offset = placement.offset;
+      const target = {
+        x: home.x - placement.offset.x,
+        y: home.y - placement.offset.y,
+      };
+      if (target.x !== pos.x || target.y !== pos.y) {
+        await win.setPosition(new PhysicalPosition(target.x, target.y));
       }
     } catch {
-      placement = STAY; // no monitor info — grow right/down as before
+      // No monitor info — grow right/down. Leave any recorded offset
+      // untouched so a pending shift is still undone on close.
+      placement = STAY;
     }
     if (stale(true)) return;
     side.value = placement.side;
     valign.value = placement.valign;
-    offset = placement.offset;
     await win.setSize(new LogicalSize(EXPANDED.width, EXPANDED.height));
   }
 
