@@ -10,11 +10,17 @@ const store = useVaultsStore();
 const { panelOpen, busyVaultId } = storeToRefs(store);
 const working = computed(() => busyVaultId.value !== null);
 
-useCompanionWindow(panelOpen);
+const { side, valign } = useCompanionWindow(panelOpen);
 </script>
 
 <template>
-  <main class="flex h-screen w-screen items-start gap-2 p-2">
+  <main
+    class="flex h-screen w-screen gap-2 p-2"
+    :class="[
+      side === 'left' ? 'flex-row-reverse' : 'flex-row',
+      valign === 'up' ? 'items-end' : 'items-start',
+    ]"
+  >
     <CompanionCharacter :working="working" @toggle="store.togglePanel()" />
     <ActionPanel v-if="panelOpen" />
   </main>

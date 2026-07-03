@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import CompanionCharacter from "../src/components/CompanionCharacter.vue";
 
+const startDragging = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ startDragging }),
+}));
+
 describe("CompanionCharacter", () => {
+  beforeEach(() => {
+    startDragging.mockClear();
+  });
+
   it("emits toggle when the character is clicked", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     await wrapper.find("button.buddy").trigger("click");
@@ -14,8 +23,35 @@ describe("CompanionCharacter", () => {
     expect(wrapper.find("button.buddy").classes()).toContain("working");
   });
 
-  it("has a drag region handle for moving the window", () => {
+  it("starts a window drag when the pointer moves past the threshold", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
-    expect(wrapper.find("[data-tauri-drag-region]").exists()).toBe(true);
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 70, screenY: 60 });
+    expect(startDragging).toHaveBeenCalledTimes(1);
+    // the OS drag consumed the gesture — a trailing click must not toggle
+    await buddy.trigger("click");
+    expect(wrapper.emitted("toggle")).toBeUndefined();
+  });
+
+  it("treats a press with only tiny movement as a click", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 52, screenY: 51 });
+    await buddy.trigger("pointerup");
+    await buddy.trigger("click");
+    expect(startDragging).not.toHaveBeenCalled();
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  it("toggles again on the click after a completed drag", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+    await buddy.trigger("click"); // swallowed
+    await buddy.trigger("click"); // genuine follow-up click
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
   });
 });

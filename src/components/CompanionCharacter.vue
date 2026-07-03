@@ -1,24 +1,59 @@
 <script setup lang="ts">
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 defineProps<{ working: boolean }>();
-defineEmits<{ (e: "toggle"): void }>();
+const emit = defineEmits<{ (e: "toggle"): void }>();
+
+// The buddy is both the click target (toggle panel) and the drag handle
+// (move window). A tauri drag region would swallow clicks, so distinguish
+// the gestures ourselves: a press that travels past the threshold becomes a
+// native window drag, a press that doesn't is a click.
+const DRAG_THRESHOLD_PX = 5;
+let pressedAt: { x: number; y: number } | null = null;
+let dragged = false;
+
+function onPointerDown(e: PointerEvent) {
+  if (e.button !== 0) return;
+  pressedAt = { x: e.screenX, y: e.screenY };
+  dragged = false;
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!pressedAt) return;
+  const moved = Math.hypot(e.screenX - pressedAt.x, e.screenY - pressedAt.y);
+  if (moved < DRAG_THRESHOLD_PX) return;
+  pressedAt = null;
+  dragged = true;
+  void getCurrentWindow().startDragging();
+}
+
+function onPointerEnd() {
+  pressedAt = null;
+}
+
+function onClick() {
+  if (dragged) {
+    // trailing click of a drag gesture — not an intent to open the panel
+    dragged = false;
+    return;
+  }
+  emit("toggle");
+}
 </script>
 
 <template>
   <div class="flex flex-col items-center">
-    <div
-      data-tauri-drag-region
-      class="cursor-move px-2 py-1 text-xs leading-none text-slate-400"
-      title="Drag to move Vault Buddy"
-      aria-hidden="true"
-    >
-      ⠿
-    </div>
     <button
       type="button"
-      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      class="buddy block cursor-grab focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
       :class="{ working }"
-      aria-label="Vault Buddy — click to open the panel"
-      @click="$emit('toggle')"
+      aria-label="Vault Buddy — click to open the panel, drag to move"
+      title="Click to open · drag to move"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerEnd"
+      @pointercancel="onPointerEnd"
+      @click="onClick"
     >
       <svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true">
         <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />

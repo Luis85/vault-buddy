@@ -8,8 +8,20 @@ Setup: `npm install`, then `npm run tauri dev`.
 
 - [ ] App launches; the companion appears in a transparent window (no frame,
       no background rectangle), always on top, with a tray icon.
-- [ ] Character idles (bobbing), wiggles on hover, and the ⠿ handle drags the
-      window around the desktop.
+- [ ] Character idles (bobbing), wiggles on hover.
+- [ ] Pressing the character and moving the mouse drags the window around the
+      desktop (no separate handle); releasing without movement still counts as
+      a click and does not accidentally start a drag.
+- [ ] After dropping the buddy from a drag, the panel does not pop open from
+      the release; the next deliberate click opens it.
+- [ ] With the buddy against the right screen edge, clicking it opens the
+      panel to the LEFT of the buddy, fully on-screen, and the buddy does not
+      visibly move; closing restores everything.
+- [ ] Same near the bottom edge (panel unfolds upward) and in the
+      bottom-right corner (left + up).
+- [ ] Open the panel near the right edge, drag the window somewhere else
+      while it is open, close the panel: the buddy stays where it was
+      dropped (no teleporting).
 - [ ] Clicking the character grows the window and shows the panel listing your
       real vaults (names match Obsidian's vault switcher).
 - [ ] "Open vault" brings that vault up in Obsidian.
