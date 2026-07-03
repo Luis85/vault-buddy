@@ -23,6 +23,9 @@ Setup: `npm install`, then `npm run tauri dev`.
       panel stays responsive.
 - [ ] Rename `%APPDATA%\obsidian\obsidian.json` temporarily and restart: the
       panel shows the "Obsidian not found" message; no crash. Restore the file.
+- [ ] While Vault Buddy is running, remove a vault from Obsidian (so it leaves
+      `obsidian.json`), then trigger one of its actions from the still-open
+      panel: an inline "vault not found" error banner appears; no crash.
 - [ ] Tray "Show / Hide" toggles the companion; "Quit Vault Buddy" exits the
       app.
 - [ ] `tauri dev` console shows a `launching URI: obsidian://...` log line for

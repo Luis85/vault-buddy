@@ -59,4 +59,15 @@ describe("vaults store", () => {
     expect(store.error).toContain("vault not found");
     expect(store.busyVaultId).toBe(null);
   });
+
+  it("loadVaults surfaces failures instead of leaving the panel blank", async () => {
+    mockIPC(() => {
+      throw "ipc unavailable";
+    });
+    const store = useVaultsStore();
+    await store.loadVaults();
+    expect(store.loaded).toBe(true);
+    expect(store.vaults).toEqual([]);
+    expect(store.error).toContain("ipc unavailable");
+  });
 });

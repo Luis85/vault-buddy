@@ -12,8 +12,15 @@ export const useVaultsStore = defineStore("vaults", {
   }),
   actions: {
     async loadVaults() {
-      this.vaults = await invoke<Vault[]>("list_vaults");
-      this.loaded = true;
+      try {
+        this.vaults = await invoke<Vault[]>("list_vaults");
+        this.error = null;
+      } catch (e) {
+        this.vaults = [];
+        this.error = String(e);
+      } finally {
+        this.loaded = true;
+      }
     },
     async togglePanel() {
       this.panelOpen = !this.panelOpen;

@@ -9,12 +9,13 @@ defineEmits<{ (e: "toggle"): void }>();
       data-tauri-drag-region
       class="cursor-move px-2 py-1 text-xs leading-none text-slate-400"
       title="Drag to move Vault Buddy"
+      aria-hidden="true"
     >
       ⠿
     </div>
     <button
       type="button"
-      class="buddy block focus:outline-none"
+      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
       :class="{ working }"
       aria-label="Vault Buddy — click to open the panel"
       @click="$emit('toggle')"
