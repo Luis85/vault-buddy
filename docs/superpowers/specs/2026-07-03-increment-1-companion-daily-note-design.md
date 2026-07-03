@@ -33,15 +33,19 @@ layer, Obsidian integration) with one genuinely useful action.
    (id, display name, filesystem path).
 5. **Action panel** — clicking the character grows the window and shows a
    panel beside the character listing discovered vaults; each vault offers:
-   - **Open vault** — launches `obsidian://open?vault=<name>`
+   - **Open vault** — launches `obsidian://open?vault=<id>`
    - **Open today's daily note** — resolves today's note (see below) and
      launches the appropriate URI
+
+   URIs address vaults by their Obsidian vault **ID** (the unique key in
+   `obsidian.json`), not by name — two vaults can share a folder name, and
+   the URI scheme accepts either.
 6. **Daily note resolution** — Rust reads the vault's
    `.obsidian/daily-notes.json` (folder + moment-style date format,
    defaulting to `YYYY-MM-DD` in the vault root), computes today's note
    path, then:
-   - file exists → `obsidian://open?vault=<name>&file=<path>`
-   - file missing → `obsidian://new?vault=<name>&file=<path>`
+   - file exists → `obsidian://open?vault=<id>&file=<path>`
+   - file missing → `obsidian://new?vault=<id>&file=<path>`
 
    Obsidian performs all file creation; Vault Buddy never writes into a
    vault.
@@ -69,7 +73,7 @@ multi-monitor management, macOS/Linux support.
 | Module | Responsibility |
 | --- | --- |
 | `discovery.rs` | Parse `obsidian.json` into a vault list. Pure parsing separated from file I/O so it is unit-testable. |
-| `daily_notes.rs` | Parse per-vault `daily-notes.json`; render today's date using a supported subset of moment tokens (`YYYY`, `MM`, `DD`) plus literal folder segments in the format string; fall back to defaults on any parse failure. |
+| `daily_notes.rs` | Parse per-vault `daily-notes.json`; render today's date using a supported subset of moment tokens (`YYYY`, `MM`, `DD` — each letter run must be exactly one token); fall back to defaults on any parse failure or unsupported format. |
 | `uri.rs` | Build `obsidian://` URIs (proper percent-encoding) and launch them via the OS opener. URI construction is pure and unit-testable; launching is a thin shell. |
 
 Exposed Tauri commands: `list_vaults()`, `open_vault(id)`,
@@ -106,9 +110,10 @@ Exposed Tauri commands: `list_vaults()`, `open_vault(id)`,
    Advanced URI plugin or Obsidian's own daily-note command). Candidate for
    increment 2.
 2. Only the common moment tokens `YYYY`, `MM`, `DD` are supported in the
-   daily-note date format. If any letters remain after substituting them,
-   the format uses unsupported tokens and rendering falls back to
-   `YYYY-MM-DD` — safer than pointing Obsidian at a misnamed path.
+   daily-note date format. Every run of consecutive letters in the format
+   must be exactly one supported token; any other run (`MMMM`, `dddd`,
+   `YYYYMMDD`, …) means an unsupported moment format, and rendering falls
+   back to `YYYY-MM-DD` — safer than pointing Obsidian at a misnamed path.
    (Folder prefixes belong in the `folder` setting, which is fully
    supported; digits and punctuation in the format string are fine.)
 3. Windows only. The code compiles and unit-tests cross-platform, but

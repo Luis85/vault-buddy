@@ -17,7 +17,8 @@
 - Vault Buddy never writes into a vault; all note creation is delegated to Obsidian via `obsidian://new`.
 - Every launched URI is logged via `log::info!`.
 - All parsing failures degrade gracefully (empty vault list / default daily-note settings); no panics on bad input.
-- Supported daily-note format tokens: `YYYY`, `MM`, `DD` only. If letters remain after substitution, fall back to `YYYY-MM-DD` (never point Obsidian at a wrong path).
+- Supported daily-note format tokens: `YYYY`, `MM`, `DD` only. Every run of consecutive letters in the format must be exactly one supported token; any other run (e.g. `MMMM`, `dddd`, `YYYYMMDD`) means an unsupported moment format — fall back to `YYYY-MM-DD` (never point Obsidian at a wrong path). Naive string replacement is forbidden: `MMMM` must NOT be consumed as two `MM`s.
+- `obsidian://` URIs address vaults by their Obsidian vault **ID** (the key in `obsidian.json`), never by name — two vaults can share a folder name; the ID is unique.
 - Frontend copy for the empty state: "Obsidian not found — no vaults discovered. Is Obsidian installed and has it been opened at least once?"
 - Window sizes: collapsed 140×170 logical px, expanded 440×340 logical px.
 - Commit after every task with a descriptive message.
@@ -298,6 +299,15 @@ mod tests {
     }
 
     #[test]
+    fn repeated_token_runs_fall_back_instead_of_double_substituting() {
+        // "MMMM" is moment's full month name. Consuming it as two "MM"s
+        // would render "2026-0707-03" — a misnamed note that dodges the
+        // fallback check. Letter runs must match a supported token exactly.
+        assert_eq!(render_format("YYYY-MMMM-DD", date()), "2026-07-03");
+        assert_eq!(render_format("YYYYMMDD", date()), "2026-07-03");
+    }
+
+    #[test]
     fn parses_settings() {
         let s = parse_settings(r#"{ "folder": "Daily Notes", "format": "YYYY-MM-DD" }"#);
         assert_eq!(s.folder, "Daily Notes");
@@ -410,23 +420,42 @@ pub fn load_settings(vault_path: &Path) -> DailyNoteSettings {
 }
 
 /// Renders `format` for `date`, substituting the supported moment tokens
-/// `YYYY`, `MM`, `DD`. If any letters remain after substitution, the format
-/// uses tokens we don't support — fall back to the default format rather
-/// than risk telling Obsidian to create a misnamed note.
+/// `YYYY`, `MM`, `DD`. Every run of consecutive letters must be exactly one
+/// supported token; any other run (`dddd`, `MMMM`, `YYYYMMDD`, …) means the
+/// format uses moment features we don't support — fall back to the default
+/// format rather than risk telling Obsidian to create a misnamed note.
+/// (Naive `str::replace` would consume `MMMM` as two `MM`s: "2026-0707-03".)
 pub fn render_format(format: &str, date: NaiveDate) -> String {
-    let rendered = substitute_tokens(format, date);
-    if rendered.chars().any(|c| c.is_ascii_alphabetic()) {
-        substitute_tokens(DEFAULT_FORMAT, date)
-    } else {
-        rendered
-    }
+    substitute_tokens(format, date).unwrap_or_else(|| {
+        substitute_tokens(DEFAULT_FORMAT, date).expect("default format is valid")
+    })
 }
 
-fn substitute_tokens(format: &str, date: NaiveDate) -> String {
-    format
-        .replace("YYYY", &date.format("%Y").to_string())
-        .replace("MM", &date.format("%m").to_string())
-        .replace("DD", &date.format("%d").to_string())
+/// `None` when the format contains a letter run that is not exactly one
+/// supported token.
+fn substitute_tokens(format: &str, date: NaiveDate) -> Option<String> {
+    let chars: Vec<char> = format.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_alphabetic() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            let run: String = chars[start..i].iter().collect();
+            match run.as_str() {
+                "YYYY" => out.push_str(&date.format("%Y").to_string()),
+                "MM" => out.push_str(&date.format("%m").to_string()),
+                "DD" => out.push_str(&date.format("%d").to_string()),
+                _ => return None,
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    Some(out)
 }
 
 /// Vault-relative path of the daily note, without the `.md` extension —
@@ -444,7 +473,7 @@ pub fn daily_note_rel_path(settings: &DailyNoteSettings, date: NaiveDate) -> Str
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd src-tauri/core && cargo test`
-Expected: `test result: ok. 16 passed` (6 from Task 1 + 10 new)
+Expected: `test result: ok. 17 passed` (6 from Task 1 + 11 new)
 
 - [ ] **Step 6: Commit**
 
@@ -465,11 +494,12 @@ git commit -m "feat(core): daily-note settings parsing and date-format rendering
 **Interfaces:**
 - Consumes: `daily_notes::{load_settings, daily_note_rel_path}` (Task 2)
 - Produces:
-  - `uri::open_vault_uri(vault_name: &str) -> String`
-  - `uri::open_file_uri(vault_name: &str, file: &str) -> String`
-  - `uri::new_file_uri(vault_name: &str, file: &str) -> String`
+  - `uri::open_vault_uri(vault_id: &str) -> String`
+  - `uri::open_file_uri(vault_id: &str, file: &str) -> String`
+  - `uri::new_file_uri(vault_id: &str, file: &str) -> String`
   - `uri::launch(uri: &str) -> Result<(), String>` — logs then launches via the OS opener
-  - crate-root `daily_note_uri(vault_name: &str, vault_path: &Path, date: NaiveDate) -> String` — `obsidian://open` if today's note file exists, else `obsidian://new`
+  - crate-root `daily_note_uri(vault_id: &str, vault_path: &Path, date: NaiveDate) -> String` — `obsidian://open` if today's note file exists, else `obsidian://new`
+  - The `vault` URI parameter is always the Obsidian vault **ID** (unique key from `obsidian.json`) — the URI scheme accepts name or ID, and IDs disambiguate same-named vaults.
 
 - [ ] **Step 1: Register the module**
 
@@ -492,25 +522,27 @@ mod tests {
 
     #[test]
     fn builds_open_vault_uri_with_encoding() {
+        // Vault IDs from obsidian.json are hex, but the builder must encode
+        // whatever it is given.
         assert_eq!(
-            open_vault_uri("My Vault"),
-            "obsidian://open?vault=My%20Vault"
+            open_vault_uri("a1b2 c3"),
+            "obsidian://open?vault=a1b2%20c3"
         );
     }
 
     #[test]
     fn builds_open_file_uri() {
         assert_eq!(
-            open_file_uri("Work", "Daily/2026-07-03"),
-            "obsidian://open?vault=Work&file=Daily%2F2026%2D07%2D03"
+            open_file_uri("a1b2c3", "Daily/2026-07-03"),
+            "obsidian://open?vault=a1b2c3&file=Daily%2F2026%2D07%2D03"
         );
     }
 
     #[test]
     fn builds_new_file_uri() {
         assert_eq!(
-            new_file_uri("Work", "2026-07-03"),
-            "obsidian://new?vault=Work&file=2026%2D07%2D03"
+            new_file_uri("a1b2c3", "2026-07-03"),
+            "obsidian://new?vault=a1b2c3&file=2026%2D07%2D03"
         );
     }
 }
@@ -532,14 +564,14 @@ mod tests {
     fn existing_note_uses_open_uri() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("2026-07-03.md"), "hello").unwrap();
-        let uri = daily_note_uri("Work", dir.path(), date());
+        let uri = daily_note_uri("a1b2c3", dir.path(), date());
         assert!(uri.starts_with("obsidian://open?"), "got: {uri}");
     }
 
     #[test]
     fn missing_note_uses_new_uri() {
         let dir = tempfile::tempdir().unwrap();
-        let uri = daily_note_uri("Work", dir.path(), date());
+        let uri = daily_note_uri("a1b2c3", dir.path(), date());
         assert!(uri.starts_with("obsidian://new?"), "got: {uri}");
     }
 
@@ -555,8 +587,8 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(dir.path().join("Journal")).unwrap();
         std::fs::write(dir.path().join("Journal/2026-07-03.md"), "x").unwrap();
-        let uri = daily_note_uri("Work", dir.path(), date());
-        assert_eq!(uri, "obsidian://open?vault=Work&file=Journal%2F2026%2D07%2D03");
+        let uri = daily_note_uri("a1b2c3", dir.path(), date());
+        assert_eq!(uri, "obsidian://open?vault=a1b2c3&file=Journal%2F2026%2D07%2D03");
     }
 }
 ```
@@ -577,22 +609,26 @@ fn encode(value: &str) -> String {
     utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
 }
 
-pub fn open_vault_uri(vault_name: &str) -> String {
-    format!("obsidian://open?vault={}", encode(vault_name))
+// The `vault` parameter is always the Obsidian vault ID (the unique key
+// from obsidian.json). The URI scheme accepts name or ID; the ID
+// disambiguates vaults whose folders share a name.
+
+pub fn open_vault_uri(vault_id: &str) -> String {
+    format!("obsidian://open?vault={}", encode(vault_id))
 }
 
-pub fn open_file_uri(vault_name: &str, file: &str) -> String {
+pub fn open_file_uri(vault_id: &str, file: &str) -> String {
     format!(
         "obsidian://open?vault={}&file={}",
-        encode(vault_name),
+        encode(vault_id),
         encode(file)
     )
 }
 
-pub fn new_file_uri(vault_name: &str, file: &str) -> String {
+pub fn new_file_uri(vault_id: &str, file: &str) -> String {
     format!(
         "obsidian://new?vault={}&file={}",
-        encode(vault_name),
+        encode(vault_id),
         encode(file)
     )
 }
@@ -614,15 +650,15 @@ use std::path::Path;
 /// Builds the URI that opens today's daily note for a vault:
 /// `obsidian://open` if the note file already exists, `obsidian://new`
 /// otherwise — Obsidian itself performs the creation. Vault Buddy never
-/// writes into a vault.
-pub fn daily_note_uri(vault_name: &str, vault_path: &Path, date: NaiveDate) -> String {
+/// writes into a vault. `vault_id` is the unique key from obsidian.json.
+pub fn daily_note_uri(vault_id: &str, vault_path: &Path, date: NaiveDate) -> String {
     let settings = daily_notes::load_settings(vault_path);
     let rel = daily_notes::daily_note_rel_path(&settings, date);
     let exists = vault_path.join(format!("{rel}.md")).exists();
     if exists {
-        uri::open_file_uri(vault_name, &rel)
+        uri::open_file_uri(vault_id, &rel)
     } else {
-        uri::new_file_uri(vault_name, &rel)
+        uri::new_file_uri(vault_id, &rel)
     }
 }
 ```
@@ -630,7 +666,7 @@ pub fn daily_note_uri(vault_name: &str, vault_path: &Path, date: NaiveDate) -> S
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd src-tauri/core && cargo test`
-Expected: `test result: ok. 22 passed` (16 prior + 3 uri + 3 lib)
+Expected: `test result: ok. 23 passed` (17 prior + 3 uri + 3 lib)
 
 - [ ] **Step 6: Commit**
 
@@ -1565,14 +1601,15 @@ pub fn list_vaults() -> Vec<discovery::Vault> {
 #[tauri::command]
 pub fn open_vault(id: String) -> Result<(), String> {
     let vault = find_vault(&id)?;
-    uri::launch(&uri::open_vault_uri(&vault.name))
+    // Address the vault by ID, not name — names can collide across vaults.
+    uri::launch(&uri::open_vault_uri(&vault.id))
 }
 
 #[tauri::command]
 pub fn open_daily_note(id: String) -> Result<(), String> {
     let vault = find_vault(&id)?;
     let today = Local::now().date_naive();
-    let target = daily_note_uri(&vault.name, Path::new(&vault.path), today);
+    let target = daily_note_uri(&vault.id, Path::new(&vault.path), today);
     uri::launch(&target)
 }
 ```
@@ -1671,7 +1708,7 @@ Expected: `src-tauri/icons/` now contains `32x32.png`, `128x128.png`, `128x128@2
 - [ ] **Step 5: Verify what this environment can verify**
 
 Run: `cd src-tauri/core && cargo test`
-Expected: `test result: ok. 22 passed` — the core crate still tests green as a workspace member. (Cargo will download the tauri dependency graph to update the lockfile; it will not compile the app crate.)
+Expected: `test result: ok. 23 passed` — the core crate still tests green as a workspace member. (Cargo will download the tauri dependency graph to update the lockfile; it will not compile the app crate.)
 
 Run: `npm run build && npm run test`
 Expected: build succeeds, 11 tests pass.
