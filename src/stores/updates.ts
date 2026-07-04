@@ -1,3 +1,4 @@
+import { markRaw } from "vue";
 import { defineStore } from "pinia";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -34,7 +35,9 @@ export const useUpdatesStore = defineStore("updates", {
       try {
         const update = await check();
         if (update) {
-          this.available = update;
+          // Update extends Resource, whose rid lives in a JS private field;
+          // a reactive proxy around it would make downloadAndInstall() throw
+          this.available = markRaw(update);
           this.phase = "available";
         } else {
           this.available = null;

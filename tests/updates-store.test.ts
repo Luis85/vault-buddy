@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { isReactive } from "vue";
 
 const mocks = vi.hoisted(() => ({
   getVersion: vi.fn(),
@@ -46,6 +47,16 @@ describe("updates store", () => {
     await store.checkForUpdates();
     expect(store.phase).toBe("available");
     expect(store.available?.version).toBe("0.2.0");
+  });
+
+  it("keeps the update object out of reactive state", async () => {
+    // the real Update extends Resource, whose rid lives in a JS private
+    // field — a Vue reactive proxy around it breaks downloadAndInstall()
+    const update = { version: "0.2.0", downloadAndInstall: vi.fn() };
+    mocks.check.mockResolvedValue(update);
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    expect(isReactive(store.available)).toBe(false);
   });
 
   it("surfaces check failures as an error state", async () => {
