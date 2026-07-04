@@ -18,6 +18,8 @@ tauri-plugin-window-state = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
+# generate_context! serializes the plugins config section via serde_json
+serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 vault_buddy_core = { path = "core" }
 
