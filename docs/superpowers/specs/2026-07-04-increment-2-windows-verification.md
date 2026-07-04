@@ -48,3 +48,25 @@ device-dependent behavior below must be verified here before release.
 ## Audit
 - [ ] App log contains started/saved/recovered lines with vault + path
       for every case above.
+
+## Final-review additions
+- [ ] Long recording (≥ 45 min): zero "dropping … overflowed samples" log
+      lines; note `duration` matches wall clock (regression check for the
+      fixed-schedule worker pacing vs Windows 15.6 ms timer granularity).
+- [ ] Silent desktop for several minutes mid-meeting (loopback delivers no
+      packets while nothing renders): mic continues, no warning fires, and
+      mic/desktop stay aligned when desktop audio resumes.
+- [ ] Mic at 48 kHz (typical headset): listen for per-chunk resampling
+      artifacts (linear resampler resets phase per callback chunk).
+- [ ] OS session end: log off / shut down Windows mid-recording — verify
+      CloseRequested fires and finalize completes before the OS kills the
+      process; if not, verify the next launch's recovery catches it.
+- [ ] Tray icon/tooltip/menu updates issued from the background monitor
+      thread after save/fail apply correctly on Windows.
+- [ ] Toasts from an installed (MSI/NSIS) build: saved, failed, and
+      recovered variants all display.
+- [ ] Antivirus-locked `.part`: recovery logs "cannot read … skipping" and
+      recovers it on a later launch.
+- [ ] Rename-collision guard: manually create the exact final `.mp3` name
+      mid-recording — stop suffixes to " (2)" without touching the planted
+      file (exercises the non-replacing hard-link rename).
