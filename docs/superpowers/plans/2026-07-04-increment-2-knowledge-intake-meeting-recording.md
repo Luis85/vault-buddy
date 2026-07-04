@@ -1494,7 +1494,13 @@ pub fn recover_root(
             actions.push(RecoveryAction::Fresh(path.to_path_buf()));
             return;
         }
-        let bytes = std::fs::read(path).unwrap_or_default();
+        // A read failure (permissions, AV lock, transient I/O) must NOT
+        // look like "no audio" — deletion is only for provably frameless
+        // parts. Unreadable files are left for a later pass.
+        let Ok(bytes) = std::fs::read(path) else {
+            log::warn!("recovery: cannot read {}, skipping", path.display());
+            return;
+        };
         if !has_mp3_frame(&bytes) {
             log::info!("recovery: deleting frameless part {}", path.display());
             let _ = std::fs::remove_file(path);
