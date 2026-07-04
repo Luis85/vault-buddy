@@ -70,10 +70,12 @@ naming, crash recovery, and full audit logging.
    **failed**.
 8. **Crash recovery** — on startup, orphaned `.part` files are finalized
    as `… (recovered).mp3` (plus note and toast). The scan covers the
-   **effective** recording folders of every discovered vault — each
-   vault's configured folder, or the `Meetings/YYYY/MM` default when that
-   vault has no persisted config entry — so a first-ever capture that
-   crashed before any config existed is still found. Streaming MP3
+   **effective recording root** of every discovered vault — each vault's
+   configured recording folder, or the `Meetings/` default when that
+   vault has no persisted config entry — and walks **all dated
+   subfolders** beneath it (`YYYY/MM/`), not just the current month's, so
+   both a first-ever capture that crashed before any config existed and a
+   crash just before a month boundary are still found. Streaming MP3
    encoding means partial files are playable.
    Recovery must never touch a live recording: the app enforces **single
    instance** (`tauri-plugin-single-instance` — a second launch focuses
