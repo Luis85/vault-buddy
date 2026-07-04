@@ -1359,6 +1359,21 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_directories_are_not_followed() {
+        // A symlink inside a recording root must not let recovery walk
+        // outside the vault and rename/delete files there.
+        let outside = tempfile::tempdir().unwrap();
+        let part = outside.path().join(format!(".{BASE}.mp3.part"));
+        std::fs::write(&part, mp3_bytes()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+        let actions = recover_root(root.path(), "Work", Duration::ZERO, true);
+        assert!(actions.is_empty(), "walked through symlink: {actions:?}");
+        assert!(part.exists(), "outside file untouched");
+    }
+
     #[test]
     fn foreign_mp3_parts_are_never_touched() {
         // Another tool's hidden partial download must survive recovery
@@ -1541,9 +1556,16 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // entry.file_type() reads the dirent and does NOT follow symlinks:
+        // a symlinked directory (or Windows junction) inside a recording
+        // root must never let the scan escape the vault or enter a cycle,
+        // and symlinked files are skipped for the same reason.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             walk(&path, visit);
-        } else {
+        } else if file_type.is_file() {
             visit(&path);
         }
     }
@@ -1555,7 +1577,7 @@ Add `pub mod recovery;` to `src-tauri/capture/src/lib.rs`.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_capture recovery`
-Expected: 8 passed.
+Expected: 9 passed (the symlink test is `#[cfg(unix)]`; on Windows 8).
 
 - [ ] **Step 5: fmt + clippy + commit**
 
