@@ -32,8 +32,10 @@ describe("useGreeting", () => {
 
   it("dismiss() hides immediately and cancels the timer", () => {
     const wrapper = mount(Host);
+    expect(vi.getTimerCount()).toBe(1); // the auto-dismiss timer is pending
     wrapper.vm.dismiss();
     expect(wrapper.vm.bubbleVisible).toBe(false);
+    expect(vi.getTimerCount()).toBe(0); // dismiss() cleared it, not just fired it
     // advancing past the original timeout must not throw or re-toggle
     vi.advanceTimersByTime(GREETING_MS);
     expect(wrapper.vm.bubbleVisible).toBe(false);
@@ -41,7 +43,9 @@ describe("useGreeting", () => {
 
   it("clears the timer on unmount", () => {
     const wrapper = mount(Host);
+    expect(vi.getTimerCount()).toBe(1); // pending auto-dismiss timer
     wrapper.unmount();
+    expect(vi.getTimerCount()).toBe(0); // onUnmounted cleared it
     // no dangling callback flips a ref on a torn-down component
     expect(() => vi.advanceTimersByTime(GREETING_MS)).not.toThrow();
   });
