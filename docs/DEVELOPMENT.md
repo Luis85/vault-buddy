@@ -171,8 +171,12 @@ ever written into your vaults except recordings and their notes.
       "mode": "meeting",          // "meeting" (mic + desktop audio) | "voice-note" (mic only)
       "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
       "bitrateKbps": 128,          // 128 | 160 | 192
-      "createNote": true           // companion .md with metadata + embed
+      "createNote": true,          // companion .md with metadata + embed
+      "inputDevice": "USB Mic",    // optional — cpal device name; omit for system default
+      "outputDevice": "Speakers"   // optional — loopback source (Meeting mode); omit for system default
     }
   }
 }
 ```
+
+The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.
