@@ -119,6 +119,60 @@ pub fn install_panic_hook() {
     }));
 }
 
+// Keeps the OS-level handler registered for the whole process lifetime —
+// dropping it would silently unregister the hooks.
+static NATIVE_CRASH_HANDLER: OnceLock<crash_handler::CrashHandler> = OnceLock::new();
+
+/// Catch what the panic hook cannot: native faults (SEH exceptions on
+/// Windows — WebView2, GPU or audio-driver crashes — and fatal signals on
+/// Unix). The handler runs in a crashed process, so it does the minimum:
+/// preformat one record and append it to crash.log. Returning
+/// Handled(false) lets the previous/default handling (WER dumps on Windows,
+/// default signal disposition on Unix) still run afterward.
+pub fn install_native_crash_handler() {
+    let result = crash_handler::CrashHandler::attach(unsafe {
+        crash_handler::make_crash_event(move |context: &crash_handler::CrashContext| {
+            let timestamp = chrono::Local::now()
+                .format("%Y-%m-%d %H:%M:%S%.3f %z")
+                .to_string();
+            let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+            #[cfg(windows)]
+            let message = format!(
+                "native crash: exception code {:#010x}",
+                context.exception_code
+            );
+            #[cfg(target_os = "linux")]
+            let message = format!("native crash: signal {}", context.siginfo.ssi_signo);
+            #[cfg(target_os = "macos")]
+            let message = "native crash (mach exception)".to_string();
+            let record = format_crash_record(&CrashRecord {
+                timestamp: &timestamp,
+                thread: "<native fault>",
+                message: &message,
+                location: None,
+                backtrace: "<unavailable for native faults — enable WER LocalDumps for a dump>",
+                app_version: env!("CARGO_PKG_VERSION"),
+                os: &os,
+            });
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(crash_file())
+            {
+                let _ = file.write_all(record.as_bytes());
+                let _ = file.flush();
+            }
+            crash_handler::CrashEventResult::Handled(false)
+        })
+    });
+    match result {
+        Ok(handler) => {
+            let _ = NATIVE_CRASH_HANDLER.set(handler);
+        }
+        Err(e) => log::warn!("native crash handler unavailable: {e}"),
+    }
+}
+
 /// Reveal the folder holding `vault-buddy.log` and `crash.log`. Best-effort:
 /// spawn/exit failures are ignored (explorer returns nonzero even on success).
 /// No `tauri-plugin-opener` dependency — a one-shot spawn is enough.

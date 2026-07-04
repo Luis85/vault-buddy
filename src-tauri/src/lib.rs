@@ -10,6 +10,10 @@ pub fn run() {
     // Before anything else: a panic during builder construction or in any
     // thread should still be captured on disk.
     diagnostics::install_panic_hook();
+    // SEH/signal-level net under the panic hook: catches native faults the
+    // Rust hook can never see. Installed this early so even plugin/builder
+    // construction is covered.
+    diagnostics::install_native_crash_handler();
 
     tauri::Builder::default()
         // Registered first (per the plugin's docs) so a second launch bails
