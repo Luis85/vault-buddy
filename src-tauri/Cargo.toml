@@ -23,7 +23,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 log = "0.4"
 vault_buddy_core = { path = "core" }
 vault_buddy_capture = { path = "capture" }
-cpal = "0.15"
 
 [workspace]
 members = ["core", "capture"]

@@ -36,6 +36,26 @@ describe("capture store", () => {
     expect(store.startedAtMs).toBe(123);
   });
 
+  it("ignores a second start while one is pending or active", async () => {
+    let resolveFirst!: (v: unknown) => void;
+    invoke.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+    const store = useCaptureStore();
+    const first = store.start("v1");
+    expect(store.status).toBe("starting");
+    await store.start("v2"); // pending: must be ignored
+    expect(invoke).toHaveBeenCalledTimes(1);
+    resolveFirst({ recording: true, vaultId: "v1", startedAtMs: 123 });
+    await first;
+    expect(store.status).toBe("recording");
+    await store.start("v2"); // active: must be ignored
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(store.vaultId).toBe("v1");
+  });
+
   it("start failure surfaces the error and stays idle", async () => {
     invoke.mockRejectedValueOnce("No microphone found");
     const store = useCaptureStore();

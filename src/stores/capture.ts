@@ -5,7 +5,7 @@ import type { CaptureSaved, CaptureStatus } from "../types";
 
 export const useCaptureStore = defineStore("capture", {
   state: () => ({
-    status: "idle" as "idle" | "recording" | "saving",
+    status: "idle" as "idle" | "starting" | "recording" | "saving",
     vaultId: null as string | null,
     startedAtMs: null as number | null,
     error: null as string | null,
@@ -42,6 +42,12 @@ export const useCaptureStore = defineStore("capture", {
       }
     },
     async start(vaultId: string) {
+      // Synchronous guard + "starting" state: without it a double-click
+      // fires start_capture twice during device setup, and the second
+      // call's "already running" rejection would reset the UI to idle
+      // while Rust keeps recording.
+      if (this.status !== "idle") return;
+      this.status = "starting";
       this.error = null;
       this.warning = null;
       try {
@@ -50,7 +56,9 @@ export const useCaptureStore = defineStore("capture", {
         this.vaultId = s.vaultId;
         this.startedAtMs = s.startedAtMs;
       } catch (e) {
-        this.status = "idle";
+        // Only downgrade if this attempt still owns the state — an event
+        // may have moved it on in the meantime.
+        if (this.status === "starting") this.status = "idle";
         this.error = String(e);
       }
     },

@@ -126,10 +126,12 @@ pub fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>
     f.write_all(content.as_bytes())?;
     f.sync_all()?;
     drop(f);
-    // Non-replacing on Windows (rename fails if dest exists). On Unix,
-    // rename would replace — the exists() guard above plus the pairwise
-    // reservation makes that window acceptable for a dev-only platform.
-    let result = std::fs::rename(&tmp, note_path);
+    // Atomic non-replacing move: fails with AlreadyExists if the note name
+    // got taken since the exists() check above (std::fs::rename would
+    // REPLACE an existing destination on both Unix and Windows), so a
+    // user/sync-client file can never be silently clobbered — the caller's
+    // collision-safe loop takes a suffixed name instead.
+    let result = crate::capture_paths::rename_noreplace(&tmp, note_path);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }

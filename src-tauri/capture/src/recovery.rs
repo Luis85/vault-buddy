@@ -124,10 +124,11 @@ pub fn recover_root(
 }
 
 /// Finalize `from` under the first free suffixed name for `base` in `dir`.
-/// The rename is the arbiter: a destination created between the reserve
-/// check and the rename advances the suffix and retries (Windows renames
-/// are non-replacing; on Unix the exists() pre-check plus the tight retry
-/// loop is the accepted dev-platform approximation).
+/// The move is the arbiter: `rename_noreplace` is an atomic non-replacing
+/// move (std::fs::rename would REPLACE an existing destination on both
+/// Unix and Windows), so a destination created between the reserve check
+/// and the move fails with AlreadyExists, advances the suffix, and
+/// retries — a sync-client race can never clobber an existing file.
 pub fn rename_into_reserved(
     from: &Path,
     dir: &Path,
@@ -135,11 +136,11 @@ pub fn rename_into_reserved(
 ) -> Result<(PathBuf, PathBuf), String> {
     loop {
         let (mp3, note) = reserve_final(dir, base);
-        match std::fs::rename(from, &mp3) {
+        match vault_buddy_core::capture_paths::rename_noreplace(from, &mp3) {
             Ok(()) => return Ok((mp3, note)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            // Windows reports rename-onto-existing as PermissionDenied or
-            // AlreadyExists depending on the API path.
+            // Some Windows API paths report a taken destination as
+            // PermissionDenied instead of AlreadyExists.
             Err(_) if mp3.exists() => continue,
             Err(e) => return Err(format!("finalize rename failed: {e}")),
         }

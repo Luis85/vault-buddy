@@ -101,6 +101,45 @@ pub fn assert_root_inside_vault(vault_path: &Path, root: &Path) -> Result<(), St
     }
 }
 
+/// Errors from `hard_link` that mean "this filesystem can't do hard
+/// links" rather than "this destination is taken": Unsupported, plus the
+/// raw OS codes some filesystems report instead — EPERM/EXDEV on Unix,
+/// ERROR_NOT_SUPPORTED on Windows.
+fn hard_link_unsupported(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    const CODES: &[i32] = &[1, 18]; // EPERM, EXDEV
+    #[cfg(windows)]
+    const CODES: &[i32] = &[50]; // ERROR_NOT_SUPPORTED
+    #[cfg(not(any(unix, windows)))]
+    const CODES: &[i32] = &[];
+    e.raw_os_error().is_some_and(|c| CODES.contains(&c))
+}
+
+/// Atomic non-replacing move: hard_link + remove_file fails with
+/// AlreadyExists if `to` exists — unlike std::fs::rename, which
+/// replaces on both Unix and Windows. On filesystems without hard
+/// links (exFAT/FAT32), falls back to the racy exists()+rename with
+/// an honest caveat: the reservation pre-check remains the only
+/// arbiter there.
+pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::hard_link(from, to) {
+        Ok(()) => std::fs::remove_file(from),
+        Err(e) if hard_link_unsupported(&e) => {
+            if to.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "destination exists",
+                ));
+            }
+            std::fs::rename(from, to)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Stop-time recheck: only the final destinations matter — the session's
 /// own .part must not push an ordinary save onto a suffixed name.
 pub fn reserve_final(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
@@ -220,6 +259,30 @@ mod tests {
         let root = vault.path().join("Meetings");
         std::fs::create_dir_all(&root).unwrap();
         assert!(assert_root_inside_vault(vault.path(), &root).is_ok());
+    }
+
+    #[test]
+    fn rename_noreplace_refuses_existing_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.txt");
+        let to = dir.path().join("to.txt");
+        std::fs::write(&from, "source").unwrap();
+        std::fs::write(&to, "already here").unwrap();
+        let err = rename_noreplace(&from, &to).expect_err("must not replace");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&from).unwrap(), "source");
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "already here");
+    }
+
+    #[test]
+    fn rename_noreplace_moves_when_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.txt");
+        let to = dir.path().join("to.txt");
+        std::fs::write(&from, "payload").unwrap();
+        rename_noreplace(&from, &to).unwrap();
+        assert!(!from.exists(), "source removed");
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "payload");
     }
 
     #[cfg(unix)]

@@ -118,7 +118,6 @@ fn run_worker(
         })
         .collect();
     let device_names: Vec<String> = states.iter().map(|s| s.input.name.clone()).collect();
-    let started = Instant::now();
     let mut last_flush = Instant::now();
     let mut last_fsync = Instant::now();
     let mut frames_written: u64 = 0;
@@ -131,11 +130,23 @@ fn run_worker(
     // and surfaced to the caller instead of stranded as a hidden .part.
     let mut write_error: Option<String> = None;
 
+    // Tick on a fixed schedule rather than sleeping a full TICK per cycle:
+    // each iteration consumes one TICK of audio, so waiting TICK *plus*
+    // processing time would consume structurally below real time, filling
+    // the buffers to BUFFER_CAP after a few minutes and then dropping
+    // samples for the rest of a long recording. When processing overruns,
+    // `wait` collapses to zero (recv_timeout returns immediately) and
+    // catch-up cycles run back-to-back until the schedule is met again, so
+    // average consumption matches real time; the buffer-occupancy drop then
+    // only handles true device clock drift.
+    let mut next_tick = Instant::now() + TICK;
     loop {
+        let wait = next_tick.saturating_duration_since(Instant::now());
         let stopped = matches!(
-            stop_rx.recv_timeout(TICK),
+            stop_rx.recv_timeout(wait),
             Ok(()) | Err(RecvTimeoutError::Disconnected)
         );
+        next_tick += TICK;
 
         // Drain every source's channel into its (converted) buffer.
         for s in states.iter_mut().filter(|s| s.alive) {
@@ -197,6 +208,9 @@ fn run_worker(
             tick_frames
         };
         if take > 0 {
+            // Mic + loopback only in this increment: a 3rd+ source would be
+            // silently dropped from the mix by design.
+            debug_assert!(states.len() <= 2, "mixer folds only two sources");
             let mut mono_slices: Vec<Vec<f32>> = Vec::with_capacity(states.len());
             for s in states.iter_mut() {
                 let n = take.min(s.buffer.len());
@@ -270,7 +284,6 @@ fn run_worker(
     drop(file);
 
     let duration_secs = frames_written / TARGET_RATE as u64;
-    let _elapsed = started.elapsed();
     let (mp3, note_path) =
         crate::recovery::rename_into_reserved(&params.part, &params.dir, &params.base)?;
     // Make the rename's directory entry durable where the platform
