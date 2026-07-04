@@ -200,6 +200,7 @@ pub fn start_capture(
             flush_every: Duration::from_secs(1),
             fsync_every: Duration::from_secs(30),
             warn_tx: Some(warn_tx),
+            level_tx: None,
         };
         let session = match CaptureSession::start(params, open.inputs) {
             Ok(s) => s,

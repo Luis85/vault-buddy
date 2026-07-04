@@ -47,6 +47,10 @@ pub struct SessionParams {
     pub fsync_every: Duration,
     /// Live source-loss warnings, delivered while the recording continues.
     pub warn_tx: Option<Sender<String>>,
+    /// Advisory live level meter: post-mix per-tick peak (0–1), sent every
+    /// other tick (~5 Hz). Lossy by design — a gone receiver must never
+    /// slow or fail the encode path.
+    pub level_tx: Option<Sender<f32>>,
 }
 
 pub struct Outcome {
@@ -167,6 +171,7 @@ fn run_worker(
     let mut paused = false;
     let mut paused_total = Duration::ZERO;
     let mut pause_started: Option<Instant> = None;
+    let mut level_tick: u32 = 0;
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());
         let mut stopped = false;
@@ -279,6 +284,16 @@ fn run_worker(
                 .map(|v| v.as_slice())
                 .unwrap_or(&silence[..take]);
             let stereo = mixer::mix_to_stereo_i16(a, b);
+            if let Some(level_tx) = &params.level_tx {
+                level_tick = level_tick.wrapping_add(1);
+                if level_tick.is_multiple_of(2) {
+                    let peak = stereo
+                        .iter()
+                        .map(|s| (*s as f32 / i16::MAX as f32).abs())
+                        .fold(0.0f32, f32::max);
+                    let _ = level_tx.send(peak);
+                }
+            }
             frames_written += (stereo.len() / 2) as u64;
             let bytes = match encoder.encode(&stereo) {
                 Ok(b) => b,
@@ -432,6 +447,7 @@ mod tests {
             flush_every: Duration::from_millis(100),
             fsync_every: Duration::from_secs(30),
             warn_tx: None,
+            level_tx: None,
         }
     }
 
@@ -636,6 +652,40 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         let outcome = session.stop().unwrap();
         assert!(outcome.mp3.exists());
+    }
+
+    #[test]
+    fn level_tap_reports_normalized_peaks_for_a_known_sine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (level_tx, level_rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.level_tx = Some(level_tx);
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        for chunk in sine_chunks(44_100, 1.0) {
+            tx.send(SourceMsg::Samples(chunk)).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(600));
+        let outcome = session.stop().unwrap();
+        assert!(outcome.mp3.exists());
+        let levels: Vec<f32> = level_rx.try_iter().collect();
+        assert!(!levels.is_empty(), "levels were emitted");
+        assert!(
+            levels.iter().all(|l| (0.0..=1.0).contains(l)),
+            "normalized 0-1: {levels:?}"
+        );
+        // 0.4-amplitude sine through soft_clip peaks near tanh(0.4) ≈ 0.38
+        let max = levels.iter().cloned().fold(0.0f32, f32::max);
+        assert!(max > 0.2, "peak tracks the signal: {max}");
     }
 
     #[test]
