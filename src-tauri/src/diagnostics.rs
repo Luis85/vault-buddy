@@ -92,12 +92,15 @@ pub fn install_panic_hook() {
         let timestamp = chrono::Local::now()
             .format("%Y-%m-%d %H:%M:%S%.3f %z")
             .to_string();
+        let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
         let record = format_crash_record(&CrashRecord {
             timestamp: &timestamp,
             thread: &thread,
             message: &message,
             location: location.as_deref(),
             backtrace: &backtrace,
+            app_version: env!("CARGO_PKG_VERSION"),
+            os: &os,
         });
         if let Ok(mut file) = OpenOptions::new()
             .create(true)
