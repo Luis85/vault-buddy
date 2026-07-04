@@ -1,10 +1,15 @@
 mod capture_commands;
 mod commands;
+mod diagnostics;
 mod tray;
 
 use tauri::{Emitter, Manager};
 
 pub fn run() {
+    // Before anything else: a panic during builder construction or in any
+    // thread should still be captured on disk.
+    diagnostics::install_panic_hook();
+
     tauri::Builder::default()
         // Registered first (per the plugin's docs) so a second launch bails
         // before any other plugin runs. Two instances would mean two buddies,
@@ -99,6 +104,11 @@ pub fn run() {
             capture_commands::capture_status
         ])
         .setup(|app| {
+            // Give the panic hook the real log dir; until now it falls back to
+            // the temp dir.
+            if let Ok(dir) = app.path().app_log_dir() {
+                diagnostics::set_log_dir(dir);
+            }
             tray::create_tray(app.handle())?;
             capture_commands::run_recovery(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
