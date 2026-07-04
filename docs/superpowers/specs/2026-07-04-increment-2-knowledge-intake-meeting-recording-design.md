@@ -32,7 +32,11 @@ naming, crash recovery, and full audit logging.
    starting a recording shows the buddy if it was hidden, the
    hide-to-tray / Show-Hide paths are disabled while recording, and the
    tray menu gains a **Stop recording** item as a secondary,
-   always-reachable control.
+   always-reachable control. Likewise, every shutdown path (tray Quit,
+   buddy-menu Quit, window close, OS session end) finalizes an active
+   recording — stop, flush, rename, note — before the app exits, so
+   quitting mid-meeting saves the capture through the normal path instead
+   of stranding a hidden `.part` for a future recovery.
 3. **Audio pipeline** — cpal microphone stream + WASAPI loopback stream →
    resample/mix to 44.1 kHz stereo with soft-clip limiting → stream-encode
    128 kbps MP3 (LAME) into a hidden `.part` file inside the target folder,
@@ -64,9 +68,13 @@ naming, crash recovery, and full audit logging.
 7. **Notifications** — buddy/panel states cover started/stopped; an OS
    toast (Tauri notification plugin) reports **saved** (with filename) and
    **failed**.
-8. **Crash recovery** — on startup, orphaned `.part` files in configured
-   recording folders are finalized as `… (recovered).mp3` (plus note and
-   toast). Streaming MP3 encoding means partial files are playable.
+8. **Crash recovery** — on startup, orphaned `.part` files are finalized
+   as `… (recovered).mp3` (plus note and toast). The scan covers the
+   **effective** recording folders of every discovered vault — each
+   vault's configured folder, or the `Meetings/YYYY/MM` default when that
+   vault has no persisted config entry — so a first-ever capture that
+   crashed before any config existed is still found. Streaming MP3
+   encoding means partial files are playable.
    Recovery must never touch a live recording: the app enforces **single
    instance** (`tauri-plugin-single-instance` — a second launch focuses
    the running buddy instead of starting a new process), and as a second
