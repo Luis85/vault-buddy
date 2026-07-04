@@ -179,6 +179,13 @@ Windows (development environment is Linux).
   Teams call with both sides audible in the MP3; device unplug
   mid-meeting; kill the app mid-recording and verify recovery; toasts;
   tray/buddy indicators.
+- **CI workflow update (required):** the `rust-core` job currently runs
+  clippy and `cargo test` only from `src-tauri/core`
+  (`.github/workflows/ci.yml`). This increment must extend that job to
+  also cover the new `capture` crate (e.g. run clippy/tests per crate or
+  workspace-wide from `src-tauri`, excluding the Tauri shell crate if its
+  system dependencies are unavailable on the runner) — otherwise the
+  capture tests above would exist but never execute in CI.
 
 ## Known limitations (accepted for this increment)
 
@@ -209,4 +216,5 @@ Increment 2 is done when, on a Windows machine:
    next launch finalizes as `… (recovered).mp3`.
 6. Saved and failed outcomes raise OS toasts; every recording action
    appears in the app log.
-7. All Rust and Vitest tests pass in CI (Linux) with capture code compiled.
+7. All Rust and Vitest tests pass in CI (Linux), with the CI workflow
+   updated so the capture crate's clippy and tests actually run there.
