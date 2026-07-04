@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use vault_buddy_core::capture_note::{render_note, write_note_collision_safe, NoteMeta};
+use vault_buddy_core::capture_note::{
+    render_note, write_note_collision_safe, NoteMeta, NOTE_TMP_SUFFIX,
+};
 use vault_buddy_core::capture_paths::{base_from_part, recovered_base, reserve_final};
 
 #[derive(Debug)]
@@ -65,8 +67,7 @@ pub fn recover_root(
         // Ownership marker filter: only OUR temps are ever deleted. A
         // foreign `.something.md.tmp` from another tool must survive —
         // this is the app's first write path into user vaults.
-        if name.ends_with(vault_buddy_core::capture_note::NOTE_TMP_SUFFIX) && name.starts_with('.')
-        {
+        if name.ends_with(NOTE_TMP_SUFFIX) && name.starts_with('.') {
             if is_stale(path, stale_after) {
                 log::info!("recovery: removing stale note temp {}", path.display());
                 let _ = std::fs::remove_file(path);
@@ -83,7 +84,13 @@ pub fn recover_root(
             actions.push(RecoveryAction::Fresh(path.to_path_buf()));
             return;
         }
-        let bytes = std::fs::read(path).unwrap_or_default();
+        // A read failure (permissions, AV lock, transient I/O) must NOT
+        // look like "no audio" — deletion is only for provably frameless
+        // parts. Unreadable files are left for a later pass.
+        let Ok(bytes) = std::fs::read(path) else {
+            log::warn!("recovery: cannot read {}, skipping", path.display());
+            return;
+        };
         if !has_mp3_frame(&bytes) {
             log::info!("recovery: deleting frameless part {}", path.display());
             let _ = std::fs::remove_file(path);
@@ -145,9 +152,16 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // entry.file_type() reads the dirent and does NOT follow symlinks:
+        // a symlinked directory (or Windows junction) inside a recording
+        // root must never let the scan escape the vault or enter a cycle,
+        // and symlinked files are skipped for the same reason.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             walk(&path, visit);
-        } else {
+        } else if file_type.is_file() {
             visit(&path);
         }
     }
@@ -277,6 +291,21 @@ mod tests {
             "foreign part produced actions: {actions:?}"
         );
         assert!(foreign.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_directories_are_not_followed() {
+        // A symlink inside a recording root must not let recovery walk
+        // outside the vault and rename/delete files there.
+        let outside = tempfile::tempdir().unwrap();
+        let part = outside.path().join(format!(".{BASE}.mp3.part"));
+        std::fs::write(&part, mp3_bytes()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+        let actions = recover_root(root.path(), "Work", Duration::ZERO, true);
+        assert!(actions.is_empty(), "walked through symlink: {actions:?}");
+        assert!(part.exists(), "outside file untouched");
     }
 
     #[test]
