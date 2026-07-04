@@ -5,3 +5,4 @@
 pub mod encoder;
 pub mod mixer;
 pub mod recovery;
+pub mod session;
