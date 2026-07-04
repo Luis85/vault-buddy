@@ -37,6 +37,10 @@ pub struct VaultCaptureConfig {
     pub recording_folder: Option<String>,
     pub bitrate_kbps: u32,
     pub create_note: bool,
+    pub transcribe: bool,
+    pub transcription_model: String,
+    pub transcription_language: Option<String>,
+    pub transcript_timestamps: bool,
 }
 
 impl Default for VaultCaptureConfig {
@@ -46,6 +50,10 @@ impl Default for VaultCaptureConfig {
             recording_folder: None,
             bitrate_kbps: 128,
             create_note: true,
+            transcribe: false,
+            transcription_model: "small".to_string(),
+            transcription_language: None,
+            transcript_timestamps: true,
         }
     }
 }
@@ -107,6 +115,23 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("createNote")
             .and_then(|v| v.as_bool())
             .unwrap_or(defaults.create_note),
+        transcribe: entry
+            .get("transcribe")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.transcribe),
+        transcription_model: entry
+            .get("transcriptionModel")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| defaults.transcription_model.clone()),
+        transcription_language: entry
+            .get("transcriptionLanguage")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        transcript_timestamps: entry
+            .get("transcriptTimestamps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.transcript_timestamps),
     }
 }
 
@@ -211,5 +236,41 @@ mod tests {
     fn loopback_is_an_explicit_per_mode_decision() {
         assert!(RecordingMode::Meeting.uses_loopback());
         assert!(!RecordingMode::VoiceNote.uses_loopback());
+    }
+
+    #[test]
+    fn transcription_defaults_are_opt_in_small_timestamped() {
+        let v = vault_config(&parse_config("{}"), "any");
+        assert!(!v.transcribe, "opt-in: off by default");
+        assert_eq!(v.transcription_model, "small");
+        assert_eq!(v.transcription_language, None);
+        assert!(v.transcript_timestamps);
+    }
+
+    #[test]
+    fn transcription_fields_parse() {
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": {
+                "transcribe": true,
+                "transcriptionModel": "medium",
+                "transcriptionLanguage": "es",
+                "transcriptTimestamps": false
+            } } }"#,
+        );
+        let v = vault_config(&cfg, "a");
+        assert!(v.transcribe);
+        assert_eq!(v.transcription_model, "medium");
+        assert_eq!(v.transcription_language.as_deref(), Some("es"));
+        assert!(!v.transcript_timestamps);
+    }
+
+    #[test]
+    fn malformed_transcribe_defaults_locally() {
+        // A quoted bool must not enable transcription, nor drop the entry.
+        let cfg =
+            parse_config(r#"{ "vaults": { "a": { "transcribe": "yes", "mode": "voice-note" } } }"#);
+        let v = vault_config(&cfg, "a");
+        assert!(!v.transcribe);
+        assert_eq!(v.mode, RecordingMode::VoiceNote);
     }
 }
