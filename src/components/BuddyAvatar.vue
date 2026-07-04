@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { getCharacter } from "../characters";
 
 const props = withDefaults(
@@ -17,6 +17,48 @@ const sheet = computed(() => {
   if (!sprite) return null;
   return props.working ? sprite.run : sprite.idle;
 });
+
+// A constant idle loop reads as fidgeting no matter the speed. Instead the
+// sprite stands still and plays ONE quick idle cycle at random moments —
+// like a creature that occasionally shifts its weight. The jitter keeps
+// multiple avatars (companion + settings previews) from blinking in sync.
+const IDLE_MIN_DELAY_MS = 3000;
+const IDLE_DELAY_JITTER_MS = 4000;
+
+const idlePlaying = ref(false);
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+const idleEligible = computed(
+  () => character.value.sprite !== null && !props.working && props.animated,
+);
+
+function scheduleIdleBurst() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(
+    () => {
+      idlePlaying.value = true;
+    },
+    IDLE_MIN_DELAY_MS + Math.random() * IDLE_DELAY_JITTER_MS,
+  );
+}
+
+function onSheetAnimationEnd() {
+  // the one-shot idle cycle finished — back to standing still, re-arm
+  idlePlaying.value = false;
+  if (idleEligible.value) scheduleIdleBurst();
+}
+
+watch(
+  idleEligible,
+  (eligible) => {
+    idlePlaying.value = false;
+    clearTimeout(idleTimer);
+    if (eligible) scheduleIdleBurst();
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => clearTimeout(idleTimer));
 </script>
 
 <template>
@@ -54,8 +96,9 @@ const sheet = computed(() => {
   >
     <div
       class="sheet"
-      :class="{ running: working }"
+      :class="{ running: working, playing: idlePlaying }"
       :style="{ backgroundImage: `url(${sheet})` }"
+      @animationend="onSheetAnimationEnd"
     />
   </div>
 </template>
@@ -98,13 +141,16 @@ const sheet = computed(() => {
   /* 64×28 strip at 2× — 4 frames of 32×56 */
   background-size: 128px 56px;
   image-rendering: pixelated;
-  /* idle is a calm breathing loop (~3 fps) — anything faster reads as
-     jittery for a character that just stands around on the desktop */
-  animation: frames 1.3s steps(4) infinite;
 }
-/* working — the run cycle, a touch faster than idle */
+/* idle burst — one quick cycle, then animationend hands control back to
+   the random scheduler in the script */
+.sheet.playing {
+  animation: frames 0.5s steps(4);
+}
+/* working — a continuous run loop (infinite animations never fire
+   animationend, so the scheduler stays out of the way) */
 .sheet.running {
-  animation-duration: 0.45s;
+  animation: frames 0.45s steps(4) infinite;
 }
 @keyframes frames {
   from {

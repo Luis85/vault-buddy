@@ -55,9 +55,12 @@ next to `LICENSE.md` with the attribution.
 - **`src/components/BuddyAvatar.vue`** — presentational renderer used by both
   the companion and the settings previews. Renders the classic SVG or a
   sprite `<div>` animated via CSS `steps(4)` over the strip
-  (`image-rendering: pixelated`, 2× scale → 32×56). `working` swaps the idle
-  strip for the run strip; `animated: false` freezes everything (existing
-  "still" behavior, now also freezing sprite playback on frame 0).
+  (`image-rendering: pixelated`, 2× scale → 32×56). Idle is not a constant
+  loop: the sprite stands still and plays one quick cycle at random moments
+  (3 s minimum delay + up to 4 s jitter, re-armed via `animationend`), so it
+  reads as a creature shifting its weight rather than fidgeting. `working`
+  swaps to a continuous run loop; `animated: false` freezes everything
+  (existing "still" behavior, sprites frozen on frame 0).
 - **`src/components/CompanionCharacter.vue`** — keeps all gesture logic
   (click/drag/context menu) and delegates drawing to `BuddyAvatar`. Gains a
   `character` prop.
