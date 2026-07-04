@@ -24,10 +24,7 @@ pub fn parse_obsidian_config(json: &str) -> Vec<Vault> {
         .filter_map(|(id, entry)| {
             let path = entry.get("path")?.as_str()?;
             let name = vault_name_from_path(path)?;
-            let open = entry
-                .get("open")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let open = entry.get("open").and_then(|v| v.as_bool()).unwrap_or(false);
             Some(Vault {
                 id: id.clone(),
                 name,
