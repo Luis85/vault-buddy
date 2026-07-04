@@ -4,7 +4,9 @@
 //! marker (pending/failed/complete) is how the worker tells its own
 //! regenerable sidecars from a finished transcript or a user's edits.
 
-use crate::capture_note::{format_duration, yaml_quote};
+use crate::capture_note::{format_duration, write_note_atomic, yaml_quote, NOTE_TMP_SUFFIX};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// Frontmatter marker line values. `pending`/`failed` sidecars are ours to
 /// (re)write; `complete` — and any file without the marker — is left alone.
@@ -86,6 +88,108 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
         }
     }
     out
+}
+
+pub fn transcript_file_name(mp3_file_name: &str) -> String {
+    let stem = mp3_file_name.strip_suffix(".mp3").unwrap_or(mp3_file_name);
+    format!("{stem}.transcript.md")
+}
+
+pub fn transcript_path(mp3: &Path) -> PathBuf {
+    let dir = mp3.parent().unwrap_or_else(|| Path::new("."));
+    let name = mp3
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dir.join(transcript_file_name(&name))
+}
+
+/// Missing sidecar, or one of our own not-yet-finished sidecars → work to do.
+pub fn needs_transcription(mp3: &Path) -> bool {
+    let path = transcript_path(mp3);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => is_regenerable(&content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        // Unreadable (permissions/AV lock): don't spin on it this pass.
+        Err(_) => false,
+    }
+}
+
+/// Create the "transcribing…" placeholder so the note's embed never shows
+/// "file not found". Idempotent: an existing sidecar (placeholder or real)
+/// is left untouched — the reserved name means the exclusive-create wins on
+/// the common path.
+pub fn write_placeholder(mp3: &Path) -> std::io::Result<()> {
+    let path = transcript_path(mp3);
+    if path.exists() {
+        return Ok(());
+    }
+    let name = mp3
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match write_note_atomic(&path, &render_placeholder(&name)) {
+        Ok(()) => Ok(()),
+        // Raced by a concurrent writer — the sidecar exists, which is all we wanted.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+pub enum ReplaceOutcome {
+    Written,
+    SkippedForeign,
+}
+
+/// Atomically replace one of OUR regenerable sidecars (or write a missing
+/// one). A finished transcript or a user-edited file is never overwritten.
+/// Unlike the audio note, replacing here is intentional — but only ever our
+/// own `pending`/`failed` output, verified before the move.
+pub fn replace_if_ours(transcript_path: &Path, content: &str) -> std::io::Result<ReplaceOutcome> {
+    match std::fs::read_to_string(transcript_path) {
+        Ok(existing) if !is_regenerable(&existing) => return Ok(ReplaceOutcome::SkippedForeign),
+        Ok(_) => {} // our placeholder/error — safe
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // fine, create it
+        Err(e) => return Err(e),
+    }
+    let dir = transcript_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = transcript_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Exclusive-create an owned temp (numbered on collision), carrying the
+    // ownership marker so recovery's cleanup can sweep it. Mirrors
+    // capture_note::write_note_atomic deliberately — kept separate so the
+    // audio-note writer (which must NEVER replace) is not touched.
+    let (tmp, mut f) = {
+        let mut attempt = 0u32;
+        loop {
+            let candidate = if attempt == 0 {
+                dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"))
+            } else {
+                dir.join(format!(".{file_name}.{attempt}{NOTE_TMP_SUFFIX}"))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => break (candidate, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
+                Err(e) => return Err(e),
+            }
+        }
+    };
+    f.write_all(content.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    // Replacing rename is correct here: we verified the destination is our
+    // own regenerable sidecar (or absent) above.
+    let result = std::fs::rename(&tmp, transcript_path);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map(|()| ReplaceOutcome::Written)
 }
 
 #[cfg(test)]
@@ -180,5 +284,93 @@ mod tests {
     #[test]
     fn user_edited_sidecar_is_not_regenerable() {
         assert!(!is_regenerable("just some notes the user typed"));
+    }
+
+    use std::path::Path;
+
+    #[test]
+    fn transcript_name_appends_transcript_before_md() {
+        assert_eq!(
+            transcript_file_name("2026-07-04 1405 Meeting.mp3"),
+            "2026-07-04 1405 Meeting.transcript.md"
+        );
+    }
+
+    #[test]
+    fn transcript_path_sits_beside_the_mp3() {
+        let p = transcript_path(Path::new("/v/Meetings/2026/07/b.mp3"));
+        assert_eq!(p, Path::new("/v/Meetings/2026/07/b.transcript.md"));
+    }
+
+    #[test]
+    fn write_placeholder_is_idempotent_and_needs_transcription_tracks_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("b.mp3");
+        std::fs::write(&mp3, b"fake").unwrap();
+        assert!(needs_transcription(&mp3), "no sidecar yet");
+        write_placeholder(&mp3).unwrap();
+        let side = transcript_path(&mp3);
+        assert!(side.exists());
+        assert!(needs_transcription(&mp3), "a placeholder still needs work");
+        // second call must not error or clobber
+        write_placeholder(&mp3).unwrap();
+    }
+
+    #[test]
+    fn replace_overwrites_our_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("b.mp3");
+        std::fs::write(&mp3, b"fake").unwrap();
+        write_placeholder(&mp3).unwrap();
+        let side = transcript_path(&mp3);
+        let real = render_transcript(&meta(), &[seg(0, 1000, "done")]);
+        assert!(matches!(
+            replace_if_ours(&side, &real).unwrap(),
+            ReplaceOutcome::Written
+        ));
+        let text = std::fs::read_to_string(&side).unwrap();
+        assert!(text.contains("vault-buddy-transcript: complete"));
+        assert!(!needs_transcription(&mp3), "a complete transcript is done");
+    }
+
+    #[test]
+    fn replace_never_touches_a_user_owned_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("b.mp3");
+        let side = transcript_path(&mp3);
+        std::fs::write(&side, "my own hand-written transcript").unwrap();
+        assert!(matches!(
+            replace_if_ours(&side, "generated").unwrap(),
+            ReplaceOutcome::SkippedForeign
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&side).unwrap(),
+            "my own hand-written transcript"
+        );
+    }
+
+    #[test]
+    fn replace_writes_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("b.mp3");
+        let side = transcript_path(&mp3);
+        assert!(matches!(
+            replace_if_ours(&side, "generated").unwrap(),
+            ReplaceOutcome::Written
+        ));
+        assert_eq!(std::fs::read_to_string(&side).unwrap(), "generated");
+    }
+
+    #[test]
+    fn replace_leaves_no_temp_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let side = dir.path().join("b.transcript.md");
+        replace_if_ours(&side, "generated").unwrap();
+        let temps: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(temps.is_empty(), "temp not cleaned: {temps:?}");
     }
 }
