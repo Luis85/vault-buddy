@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from "vue";
 import { storeToRefs } from "pinia";
+import { invoke } from "@tauri-apps/api/core";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
@@ -8,6 +9,8 @@ import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
 import RenamePrompt from "./RenamePrompt.vue";
+import RecordModeDialog from "./RecordModeDialog.vue";
+import type { CaptureConfig } from "../types";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -43,11 +46,40 @@ function onFilterEscape(event: KeyboardEvent) {
 
 // The panel component is destroyed on close — that IS the close signal.
 onUnmounted(() => capture.dismissRename());
+
+// One-shot, component-local dialog state: nothing persisted, nothing in
+// Pinia. The panel unmounts on close, which is what dismisses the dialog
+// if it's still open — no explicit teardown needed.
+const recordRequest = ref<{
+  vaultId: string;
+  vaultName: string;
+  defaultMode: "meeting" | "voice-note";
+} | null>(null);
+
+// The chooser needs the vault's DEFAULT mode; fetch it, then show. A
+// config read failure must not block recording — fall back to meeting.
+async function openRecordDialog(vaultId: string) {
+  const vault = store.vaults.find((v) => v.id === vaultId);
+  let defaultMode: "meeting" | "voice-note" = "meeting";
+  try {
+    const cfg = await invoke<CaptureConfig>("get_capture_config", { id: vaultId });
+    defaultMode = cfg.mode;
+  } catch {
+    // stale config never blocks recording — mirror the backend's rule
+  }
+  recordRequest.value = { vaultId, vaultName: vault?.name ?? "", defaultMode };
+}
+
+function startWithMode(mode: "meeting" | "voice-note") {
+  const request = recordRequest.value;
+  recordRequest.value = null;
+  if (request) void capture.start(request.vaultId, mode);
+}
 </script>
 
 <template>
   <div
-    class="flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
+    class="relative flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
   >
     <div class="mb-2 flex items-center justify-between">
       <h1 class="text-sm font-bold text-slate-100">
@@ -170,7 +202,7 @@ onUnmounted(() => capture.dismissRename());
         :recording-vault-id="capture.vaultId"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
-        @capture="capture.start($event)"
+        @capture="openRecordDialog($event)"
         @capture-settings="store.openCaptureSettings($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
@@ -181,5 +213,12 @@ onUnmounted(() => capture.dismissRename());
         has it been opened at least once?
       </p>
     </div>
+    <RecordModeDialog
+      v-if="recordRequest"
+      :vault-name="recordRequest.vaultName"
+      :default-mode="recordRequest.defaultMode"
+      @start="startWithMode($event)"
+      @cancel="recordRequest = null"
+    />
   </div>
 </template>

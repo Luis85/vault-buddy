@@ -248,4 +248,96 @@ describe("ActionPanel", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).not.toContain("name this recording");
   });
+
+  it("clicking a vault's capture button opens the mode chooser instead of recording immediately", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") {
+        return { mode: "meeting", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .find('[aria-label="Capture knowledge in Personal"]')
+      .trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+    expect(calls.map((c) => c.cmd)).not.toContain("start_capture");
+  });
+
+  it("preselects the vault's configured default mode in the chooser", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config") {
+        return { mode: "voice-note", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .find('[aria-label="Capture knowledge in Personal"]')
+      .trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    const voiceNote = wrapper.get('[data-testid="mode-voice-note"]');
+    expect(voiceNote.classes()).toContain("border-violet-400");
+  });
+
+  it("choosing meeting invokes start_capture with the mode and closes the dialog", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") {
+        return { mode: "voice-note", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
+      }
+      if (cmd === "start_capture") {
+        return { recording: true, vaultId: "d4e5f6", startedAtMs: 1 };
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .find('[aria-label="Capture knowledge in Personal"]')
+      .trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-testid="mode-meeting"]').trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(calls).toContainEqual({
+      cmd: "start_capture",
+      args: { id: "d4e5f6", mode: "meeting" },
+    });
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+  });
+
+  it("cancel closes the chooser without starting a recording", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") {
+        return { mode: "meeting", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .find('[aria-label="Capture knowledge in Personal"]')
+      .trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[aria-label="Cancel recording"]').trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(calls.map((c) => c.cmd)).not.toContain("start_capture");
+  });
 });

@@ -43,9 +43,26 @@ describe("capture store", () => {
     });
     const store = useCaptureStore();
     await store.start("v1");
-    expect(calls).toEqual([{ cmd: "start_capture", args: { id: "v1" } }]);
+    expect(calls).toEqual([
+      { cmd: "start_capture", args: { id: "v1", mode: null } },
+    ]);
     expect(store.status).toBe("recording");
     expect(store.startedAtMs).toBe(123);
+  });
+
+  it("passes an explicit mode override through to start_capture", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "start_capture") {
+        return { recording: true, vaultId: "v1", startedAtMs: 123 };
+      }
+    });
+    const store = useCaptureStore();
+    await store.start("v1", "voice-note");
+    expect(calls).toEqual([
+      { cmd: "start_capture", args: { id: "v1", mode: "voice-note" } },
+    ]);
   });
 
   it("ignores a second start while one is pending or active", async () => {

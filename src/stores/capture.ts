@@ -87,7 +87,10 @@ export const useCaptureStore = defineStore("capture", {
         // not running under Tauri (unit tests without a status mock)
       }
     },
-    async start(vaultId: string) {
+    async start(
+      vaultId: string,
+      mode: "meeting" | "voice-note" | null = null,
+    ) {
       // Synchronous guard + "starting" state: without it a double-click
       // fires start_capture twice during device setup, and the second
       // call's "already running" rejection would reset the UI to idle
@@ -100,7 +103,10 @@ export const useCaptureStore = defineStore("capture", {
       this.dismissRename();
       try {
         logBreadcrumb(`capture: start requested (vault ${vaultId})`);
-        const s = await invoke<CaptureStatus>("start_capture", { id: vaultId });
+        const s = await invoke<CaptureStatus>("start_capture", {
+          id: vaultId,
+          mode,
+        });
         this.status = "recording";
         this.startedAtMs = s.startedAtMs;
         this.vaultId = s.vaultId;

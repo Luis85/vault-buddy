@@ -101,7 +101,7 @@ async function save() {
   <form v-else class="flex flex-col gap-3" @submit.prevent="save">
     <section>
       <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Recording mode
+        Default recording mode
       </h2>
       <div class="flex gap-1" role="radiogroup" aria-label="Recording mode">
         <button
