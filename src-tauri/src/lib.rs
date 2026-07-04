@@ -27,18 +27,21 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // Persist to a rotating file in the app log dir — the bare `.build()`
         // logged only to stdout, which is invisible in a release GUI build,
-        // so crashes left no trail. `LogDir` writes `vault-buddy.log`; the
-        // default stdout target is kept for `tauri dev`. 5 MB + KeepOne bounds
-        // disk while keeping the one rotated-out file that usually holds the
-        // crash preceding a restart. Local timestamps so lines match the
-        // user's clock.
+        // so crashes left no trail. `targets` REPLACES the plugin defaults
+        // (which are Stdout + an unnamed LogDir): set them explicitly to
+        // Stdout (kept for `tauri dev`) + a single `vault-buddy.log`, so we
+        // don't also spawn a second, default-named log file. 5 MB + KeepOne
+        // bounds disk while keeping the one rotated-out file that usually
+        // holds the crash preceding a restart. Local timestamps so lines
+        // match the user's clock.
         .plugin(
             tauri_plugin_log::Builder::new()
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir {
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: Some("vault-buddy".into()),
-                    },
-                ))
+                    }),
+                ])
                 .level(log::LevelFilter::Info)
                 .max_file_size(5 * 1024 * 1024)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
