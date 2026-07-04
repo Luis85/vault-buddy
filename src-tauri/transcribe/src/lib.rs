@@ -2,6 +2,8 @@
 //! whisper.cpp (via whisper-rs, behind the `whisper` feature) behind a
 //! `Transcriber` trait so orchestration is testable without a real model.
 
+pub mod decode;
+
 use vault_buddy_core::transcript::Segment;
 
 /// A speech-to-text backend. `samples` are 16 kHz mono f32 in [-1, 1];
