@@ -8,6 +8,12 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 /// Hide the companion; the tray "Show / Hide" brings it back.
 pub fn hide_to_tray(app: &AppHandle) {
+    // The buddy is the recording indicator; hiding it mid-capture would
+    // violate the spec's no-hidden-recordings requirement.
+    if crate::capture_commands::is_recording(app) {
+        log::info!("hide ignored: recording in progress");
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -47,34 +53,90 @@ pub fn quit(app: &AppHandle) {
     app.exit(0);
 }
 
-/// Placeholder tray indicator toggle — Task 11 replaces this with the real
-/// recording-state icon swap. Kept here now so `capture_commands` can call
-/// it without a forward-reference to code that doesn't exist yet.
-pub fn set_recording(_app: &AppHandle, _recording: bool) {}
+/// Programmatic 32×32 RGBA icon: the buddy's violet disc, plus a red
+/// recording dot when active — no asset pipeline needed for a state that
+/// is pure signal.
+fn buddy_icon(recording: bool) -> tauri::image::Image<'static> {
+    const SIZE: u32 = 32;
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let center = (SIZE / 2) as i32;
+    for y in 0..SIZE as i32 {
+        for x in 0..SIZE as i32 {
+            let idx = ((y as u32 * SIZE + x as u32) * 4) as usize;
+            let dx = x - center;
+            let dy = y - center;
+            if dx * dx + dy * dy <= (center - 2) * (center - 2) {
+                rgba[idx..idx + 4].copy_from_slice(&[0x7c, 0x5c, 0xff, 0xff]);
+            }
+            if recording {
+                // red dot bottom-right
+                let rx = x - (SIZE as i32 - 9);
+                let ry = y - (SIZE as i32 - 9);
+                if rx * rx + ry * ry <= 36 {
+                    rgba[idx..idx + 4].copy_from_slice(&[0xe0, 0x2e, 0x2e, 0xff]);
+                }
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+}
+
+fn tray_menu(app: &AppHandle, recording: bool) -> tauri::Result<Menu<tauri::Wry>> {
+    let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", !recording, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit Vault Buddy", true, None::<&str>)?;
+    if recording {
+        let stop = MenuItem::with_id(
+            app,
+            "tray-stop-recording",
+            "⏹ Stop recording",
+            true,
+            None::<&str>,
+        )?;
+        Menu::with_items(app, &[&stop, &toggle, &quit_item])
+    } else {
+        Menu::with_items(app, &[&toggle, &quit_item])
+    }
+}
+
+/// Swap the tray icon, tooltip, and menu to reflect recording state. Called
+/// when a capture starts and when it finishes (successfully or not).
+pub fn set_recording(app: &AppHandle, recording: bool) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_icon(Some(buddy_icon(recording)));
+        let _ = tray.set_tooltip(Some(if recording {
+            "Vault Buddy — recording"
+        } else {
+            "Vault Buddy"
+        }));
+        if let Ok(menu) = tray_menu(app, recording) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+}
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit Vault Buddy", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &quit_item])?;
+    let menu = tray_menu(app, false)?;
 
     TrayIconBuilder::with_id("main-tray")
-        .icon(
-            app.default_window_icon()
-                .cloned()
-                .expect("bundled icon missing"),
-        )
+        .icon(buddy_icon(false))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let visible = window.is_visible().unwrap_or(true);
+                    if visible && crate::capture_commands::is_recording(app) {
+                        return; // indicator must stay visible while recording
+                    }
                     let _ = if visible {
                         window.hide()
                     } else {
                         window.show()
                     };
                 }
+            }
+            "tray-stop-recording" => {
+                crate::capture_commands::stop_from_menu(app);
             }
             "quit" => quit(app),
             _ => {}

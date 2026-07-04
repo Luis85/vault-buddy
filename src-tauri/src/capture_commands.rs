@@ -322,6 +322,11 @@ pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result
     Ok(())
 }
 
+/// Stop triggered from a native menu (tray or buddy) rather than the panel.
+pub fn stop_from_menu(app: &AppHandle) {
+    request_stop_and_wait(app, Some(std::time::Duration::from_secs(15)));
+}
+
 pub fn is_recording(app: &AppHandle) -> bool {
     app.state::<CaptureState>().0.lock().unwrap().is_some()
 }
