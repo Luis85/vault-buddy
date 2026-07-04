@@ -7,6 +7,8 @@
 - **Technology Stack:** Tauri 2 · Vue 3 · TypeScript · Rust
 - **Product Owner:** TBD
 
+See [The Knowledge Lifecycle](prds/knowledge-lifecycle.md) for the core product vision underpinning this PRD.
+
 ---
 
 ## 1. Executive Summary
