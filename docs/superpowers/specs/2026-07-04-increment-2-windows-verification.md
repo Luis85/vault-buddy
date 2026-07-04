@@ -70,3 +70,9 @@ device-dependent behavior below must be verified here before release.
 - [ ] Rename-collision guard: manually create the exact final `.mp3` name
       mid-recording — stop suffixes to " (2)" without touching the planted
       file (exercises the non-replacing hard-link rename).
+- [ ] Finalize while an AV/indexer holds the `.part`: single save (or one
+      clean warning), never a `(2)…(n)` suffix spam of duplicate files.
+- [ ] Vault on an exFAT USB stick: record + stop saves via the rename
+      fallback; kill mid-recording and confirm recovery finalizes there.
+- [ ] Suspend/resume mid-recording: catch-up completes, the sleep gap
+      appears as silence — no hang, no drop-log spam.
