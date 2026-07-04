@@ -2,10 +2,17 @@ name: Release
 
 # Pushing a version tag (v0.1.0, v1.2.3, ...) builds the Windows installers
 # and publishes them as a GitHub Release — users download and double-click,
-# no toolchain required.
+# no toolchain required. Manual dispatch takes the tag as an input instead
+# (remote Claude sessions can push branches but not tags); tauri-action
+# creates the tag and the release itself either way.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.1.1 — must match the version in tauri.conf.json"
+        required: true
 
 permissions:
   contents: write
@@ -45,8 +52,8 @@ jobs:
           # install the NSIS setup.exe; without this latest.json points
           # self-updates at the MSI and updaters silently switch installer
           updaterJsonPreferNsis: true
-          tagName: ${{ github.ref_name }}
-          releaseName: "Vault Buddy ${{ github.ref_name }}"
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Vault Buddy ${{ inputs.tag || github.ref_name }}"
           releaseDraft: false
           prerelease: false
           releaseBody: |
