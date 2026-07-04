@@ -131,9 +131,11 @@ pub fn open_sources(
         {
             Some(device) => Some(device),
             None => {
-                warnings.push(format!(
+                let w = format!(
                     "Configured microphone \"{name}\" not found — using the default input device"
-                ));
+                );
+                log::warn!("capture: {w}");
+                warnings.push(w);
                 None
             }
         },
@@ -170,9 +172,11 @@ pub fn open_sources(
             {
                 Some(device) => Some(device),
                 None => {
-                    warnings.push(format!(
+                    let w = format!(
                         "Configured output device \"{name}\" not found — using the default output device"
-                    ));
+                    );
+                    log::warn!("capture: {w}");
+                    warnings.push(w);
                     None
                 }
             },

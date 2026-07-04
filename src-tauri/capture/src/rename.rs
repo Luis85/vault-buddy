@@ -31,6 +31,11 @@ pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
 
     let (mp3_to, note_to) =
         crate::recovery::rename_into_reserved(&plan.mp3_from, &plan.dir, &plan.new_base)?;
+    log::info!(
+        "capture: renamed {} -> {}",
+        plan.mp3_from.display(),
+        mp3_to.display()
+    );
     let new_mp3_name = mp3_to
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -57,12 +62,14 @@ pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
     };
 
     let warning = note_error.map(|e| {
-        format!(
+        let warning = format!(
             "Recording renamed, but its note needs attention ({e}). \
              Audio: {}; note: {}",
             mp3_to.display(),
             plan.note_from.display()
-        )
+        );
+        log::warn!("capture: {warning}");
+        warning
     });
 
     Ok(RenameOutcome {

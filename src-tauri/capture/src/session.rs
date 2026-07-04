@@ -380,7 +380,11 @@ fn run_worker(
     if let Ok(dir_handle) = std::fs::File::open(&params.dir) {
         let _ = dir_handle.sync_all();
     }
-    log::info!("capture: saved {}", mp3.display());
+    log::info!(
+        "capture: saved {} ({duration_secs}s audio, {}s paused)",
+        mp3.display(),
+        paused_total.as_secs()
+    );
 
     if let Some(err) = write_error {
         ended_early = true;

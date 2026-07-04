@@ -64,6 +64,7 @@ fn toast(app: &AppHandle, title: &str, body: &str) {
 /// so no path can silently log-and-vanish (the UI must never look healthy
 /// after a failed start or finalize).
 fn emit_failed(app: &AppHandle, message: &str) {
+    log::error!("capture: failed: {message}");
     let _ = app.emit("capture:failed", serde_json::json!({ "message": message }));
     toast(app, "Recording failed", message);
 }
@@ -200,7 +201,19 @@ pub fn set_capture_config(
         output_device: cfg.output_device.clone().filter(|d| !d.is_empty()),
     };
     let _guard = lock_ignoring_poison(&lock.0);
-    capture_config::update_vault_config(&id, value)
+    let result = capture_config::update_vault_config(&id, value.clone());
+    if result.is_ok() {
+        log::info!(
+            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}",
+            value.mode.as_key(),
+            value.recording_folder,
+            value.bitrate_kbps,
+            value.create_note,
+            value.input_device,
+            value.output_device
+        );
+    }
+    result
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -604,16 +617,21 @@ fn set_paused(app: &AppHandle, pause: bool) -> Result<(), String> {
         let _ = active.control_tx.send(Control::Resume);
     }
     let paused_total_ms = active.paused_total_ms;
+    // Captured under the lock so the audit log line below (after the guard
+    // drops and the event emits) doesn't need to reacquire the mutex.
+    let vault_id = active.vault_id.clone();
     drop(guard);
     if pause {
         let _ = app.emit("capture:paused", serde_json::json!({ "atMs": now }));
         crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Paused);
+        log::info!("capture: paused (vault {vault_id})");
     } else {
         let _ = app.emit(
             "capture:resumed",
             serde_json::json!({ "pausedTotalMs": paused_total_ms }),
         );
         crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Recording);
+        log::info!("capture: resumed after {paused_total_ms}ms total paused (vault {vault_id})");
     }
     Ok(())
 }
