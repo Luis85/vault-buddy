@@ -42,9 +42,38 @@ describe("CompanionCharacter", () => {
     expect(startDragging).toHaveBeenCalledTimes(1);
     // App needs to know so it can ignore the drag-induced focus loss
     expect(wrapper.emitted("drag-start")).toHaveLength(1);
-    // the OS drag consumed the gesture — a trailing click must not toggle
-    await buddy.trigger("click");
+    // the OS drag consumed the gesture — a trailing mouse click must not
+    // toggle (detail >= 1 marks a pointer-generated click)
+    await buddy.trigger("click", { detail: 1 });
     expect(wrapper.emitted("toggle")).toBeUndefined();
+  });
+
+  it("recovers when the native drag consumes the release entirely", async () => {
+    // Windows can swallow the release without a trailing click
+    // (tauri-apps/tauri#10767) — the suppression must not eat the next
+    // deliberate interaction
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+    expect(startDragging).toHaveBeenCalledTimes(1);
+
+    // no trailing click arrives; the user later hovers and clicks
+    await buddy.trigger("pointermove", { screenX: 91, screenY: 91 });
+    await buddy.trigger("click", { detail: 1 });
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  it("never swallows keyboard activation after a drag", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+
+    // Enter/Space produce a click with detail 0 and no pointer events —
+    // it can never be a drag's trailing click
+    await buddy.trigger("click", { detail: 0 });
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
   });
 
   it("treats a press with only tiny movement as a click", async () => {
@@ -94,8 +123,8 @@ describe("CompanionCharacter", () => {
     const buddy = wrapper.find("button.buddy");
     await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
     await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
-    await buddy.trigger("click"); // swallowed
-    await buddy.trigger("click"); // genuine follow-up click
+    await buddy.trigger("click", { detail: 1 }); // swallowed trailing click
+    await buddy.trigger("click", { detail: 1 }); // genuine follow-up click
     expect(wrapper.emitted("toggle")).toHaveLength(1);
   });
 });

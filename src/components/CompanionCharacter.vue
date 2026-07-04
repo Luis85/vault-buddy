@@ -28,7 +28,15 @@ function onPointerDown(e: PointerEvent) {
 }
 
 function onPointerMove(e: PointerEvent) {
-  if (!pressedAt) return;
+  if (!pressedAt) {
+    // A hover move with no press means the native drag is over and any
+    // trailing click has already been dispatched. Windows sometimes
+    // consumes the release without a trailing click at all
+    // (tauri-apps/tauri#10767) — without this reset the suppression
+    // would eat the user's next deliberate click.
+    dragged = false;
+    return;
+  }
   const moved = Math.hypot(e.screenX - pressedAt.x, e.screenY - pressedAt.y);
   if (moved < DRAG_THRESHOLD_PX) return;
   pressedAt = null;
@@ -48,12 +56,15 @@ function onPointerEnd(e: PointerEvent) {
   pressedAt = null;
 }
 
-function onClick() {
-  if (dragged) {
+function onClick(e: MouseEvent) {
+  // detail 0 = keyboard activation (Enter/Space) — never a drag's
+  // trailing click, so it must not be suppressed.
+  if (dragged && e.detail !== 0) {
     // trailing click of a drag gesture — not an intent to open the panel
     dragged = false;
     return;
   }
+  dragged = false;
   emit("toggle");
 }
 
