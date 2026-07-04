@@ -190,7 +190,16 @@ folder, or Settings).
   two records with matching timestamps as one crash, not two.
 - `.vault-buddy.run` — the run marker. If a session ends without passing
   through a graceful exit path, the next launch logs a warning and shows a
-  notification that the previous session ended uncleanly. Crash detection
+  notification that the previous session ended uncleanly. The notification
+  distinguishes two cases by checking whether `crash.log` holds a record at
+  least as new as the stale marker: **a crash record is present** ("Vault
+  Buddy crashed last time" — see crash.log) versus **no record** ("Vault
+  Buddy didn't shut down cleanly" — see vault-buddy.log instead). The
+  second case is not rare: a native WebView2/GPU/audio-driver fault that
+  happens while interacting with another window (e.g. dragging the buddy
+  over another app) commonly kills the process before any handler runs, so
+  no crash.log record ever gets written — the previous notification wording
+  ("see crash.log") was misleading in exactly this case. Crash detection
   also re-arms itself automatically if an update install fails after the
   updater's pre-install step already stamped the marker "clean" — the
   frontend tells Rust to turn detection back on since the process is

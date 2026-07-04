@@ -157,15 +157,36 @@ pub fn run() {
                 if let vault_buddy_core::app_diagnostics::PreviousRun::Unclean(previous) =
                     vault_buddy_core::app_diagnostics::check_previous_run(&dir)
                 {
-                    log::warn!(
-                        "previous session did not shut down cleanly ({previous}) — \
-                         see crash.log and the rotated log for its last moments"
-                    );
+                    // Freshness is judged against the stale marker's mtime,
+                    // so this must run before write_running_marker re-stamps.
+                    let (headline, body) =
+                        if vault_buddy_core::app_diagnostics::crash_record_looks_fresh(&dir) {
+                            log::warn!(
+                                "previous session did not shut down cleanly ({previous}); \
+                                 crash.log holds a matching record"
+                            );
+                            (
+                                "Vault Buddy crashed last time",
+                                "Details are in crash.log — tray → Open logs folder",
+                            )
+                        } else {
+                            log::warn!(
+                                "previous session did not shut down cleanly ({previous}) and \
+                                 no crash record was written — a native fault (graphics/\
+                                 WebView2/audio driver) or a kill; the tail of vault-buddy.log \
+                                 shows its last moments. For native dumps enable WER LocalDumps."
+                            );
+                            (
+                                "Vault Buddy didn't shut down cleanly",
+                                "No crash record was written (native fault or kill) — \
+                                 see vault-buddy.log via tray → Open logs folder",
+                            )
+                        };
                     let _ = app
                         .notification()
                         .builder()
-                        .title("Vault Buddy restarted after an unclean shutdown")
-                        .body("Logs: tray → Open logs folder")
+                        .title(headline)
+                        .body(body)
                         .show();
                 }
                 if let Err(e) = vault_buddy_core::app_diagnostics::write_running_marker(

@@ -71,6 +71,20 @@ pub fn adopt_stray_crash_log(stray: &Path, dir: &Path) -> std::io::Result<bool> 
     Ok(true)
 }
 
+/// Whether crash.log plausibly holds a record for the run the stale
+/// marker belongs to: it must exist and be at least as new as the
+/// marker (the heartbeat re-stamps the marker every ~15s, so a record
+/// written at death is never older). Best-effort — clock jumps degrade
+/// to the pessimistic answer.
+pub fn crash_record_looks_fresh(dir: &Path) -> bool {
+    let crash_modified = std::fs::metadata(dir.join("crash.log")).and_then(|m| m.modified());
+    let marker_modified = std::fs::metadata(dir.join(RUN_MARKER)).and_then(|m| m.modified());
+    match (crash_modified, marker_modified) {
+        (Ok(crash), Ok(marker)) => crash >= marker,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +142,34 @@ mod tests {
         assert_eq!(merged, "existing\nearly panic\n");
         // idempotent: nothing left to adopt
         assert!(!adopt_stray_crash_log(&stray, logs.path()).unwrap());
+    }
+
+    #[test]
+    fn no_crash_log_is_never_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        write_running_marker(dir.path(), "9.9.9").unwrap();
+        assert!(!crash_record_looks_fresh(dir.path()));
+    }
+
+    #[test]
+    fn crash_log_written_after_the_marker_looks_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        write_running_marker(dir.path(), "9.9.9").unwrap();
+        // Coarse filesystem mtimes (e.g. FAT-like granularity) need a gap
+        // clearly larger than the resolution so ordering is unambiguous.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.path().join("crash.log"), "native crash ...").unwrap();
+        assert!(crash_record_looks_fresh(dir.path()));
+    }
+
+    #[test]
+    fn crash_log_written_before_the_marker_does_not_look_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        // A stale crash.log from an earlier run must not be mistaken for
+        // this run's record just because the file exists.
+        std::fs::write(dir.path().join("crash.log"), "old crash").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_running_marker(dir.path(), "9.9.9").unwrap();
+        assert!(!crash_record_looks_fresh(dir.path()));
     }
 }
