@@ -56,6 +56,10 @@ launched the app on the CI runner and never exited.
 `src-tauri/src/commands.rs`. Tray + buddy context menu live in
 `src-tauri/src/tray.rs`; menu item events are handled in `lib.rs`.
 
+The app is single-instance (`tauri-plugin-single-instance`, registered
+FIRST in the builder — keep it first): a second launch exits immediately
+and the surviving instance reveals the buddy instead.
+
 ### The window geometry system (most invariant-heavy area)
 
 The transparent window is 88×88 collapsed and grows to 440×340 when the

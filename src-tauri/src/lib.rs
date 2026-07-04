@@ -5,6 +5,17 @@ use tauri::{Emitter, Manager};
 
 pub fn run() {
     tauri::Builder::default()
+        // Registered first (per the plugin's docs) so a second launch bails
+        // before any other plugin runs. Two instances would mean two buddies,
+        // two trays, and both processes racing the window-state file. The
+        // callback runs in the surviving instance: reveal the buddy — a
+        // relaunch attempt means the user was looking for it.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_log::Builder::new().build())
         // Remember where the user parked the buddy across restarts. Only the
         // position: the window size is managed dynamically by the panel
