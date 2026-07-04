@@ -154,9 +154,11 @@ the existing `discovery`/`daily_notes`/`uri` style.
 ## Data flow (happy path)
 
 1. `start_capture(vault_id)` → load config (defaults if absent) → verify
-   the vault path is writable → **open the loopback and mic streams first**
-   (device validation happens before any file exists, keeping start
-   failures file-free) → create `Meetings/YYYY/MM/` → reserve a base name
+   the vault path is writable → **open the streams the vault's recording
+   mode requires, before any file exists** (`meeting`: loopback + mic;
+   `voice-note`: mic only — loopback is neither opened nor required, and
+   the mixer and metadata reflect the single source), keeping start
+   failures file-free → create `Meetings/YYYY/MM/` → reserve a base name
    where `.mp3`, `.md`, and `.mp3.part` are all free, then exclusive-create
    `.YYYY-MM-DD HHmm Meeting.mp3.part` (dot-prefixed → hidden in Obsidian)
    in the target folder — an unrecovered orphan `.part` from a same-minute
@@ -167,9 +169,14 @@ the existing `discovery`/`daily_notes`/`uri` style.
    to the OS every second and `fsync`ed to disk roughly every 30 seconds
    (per-second flush protects against app crashes; the periodic fsync
    bounds power-loss data loss to ~30 s without hammering the disk).
-3. `stop_capture()` → flush encoder → fsync → rename to the final name →
-   write the `.md` note → emit `capture:saved` + toast. Streaming encode
-   makes stop near-instant regardless of meeting length.
+3. `stop_capture()` → flush encoder → fsync → **re-run the pairwise name
+   reservation immediately before the rename** (during a long recording a
+   user or sync client may have created the preselected final name; the
+   suffix simply advances rather than failing the stop or stranding the
+   `.part`) → rename to the final name → write the `.md` note **if
+   enabled in the vault's config** (the same toggle governs recovery's
+   note) → emit `capture:saved` + toast. Streaming encode makes stop
+   near-instant regardless of meeting length.
 
 ## Performance targets
 
