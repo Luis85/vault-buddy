@@ -53,21 +53,35 @@ export const useUpdatesStore = defineStore("updates", {
       this.phase = "installing";
       this.error = null;
       try {
+        // Download with the panel still open: the spinner and any
+        // download/signature error render inside it, so it must not vanish
+        // while the slow part runs.
+        await this.available.download();
+      } catch (e) {
+        // keep `available` so the user can retry the install
+        this.error = String(e);
+        this.phase = "error";
+        return;
+      }
+      const vaults = useVaultsStore();
+      try {
         // The install path exits the process without the normal close/quit
         // hooks, and the window-state plugin persists the position on exit.
         // Close the panel (its transition restores the window's unshifted
         // home position) and run the Rust-side restore as a deterministic
         // backstop, so installing with the panel open at a screen edge
         // can't persist the shifted point.
-        useVaultsStore().panelOpen = false;
+        vaults.panelOpen = false;
         await new Promise((resolve) => setTimeout(resolve, 150));
         await invoke("prepare_update_install").catch(() => {});
-        await this.available.downloadAndInstall();
+        await this.available.install();
         // Tauri's signature check has already verified the payload; hand
         // over to the new version.
         await relaunch();
       } catch (e) {
-        // keep `available` so the user can retry the install
+        // reopen the panel so the error is visible; keep `available` so
+        // the user can retry the install
+        vaults.panelOpen = true;
         this.error = String(e);
         this.phase = "error";
       }

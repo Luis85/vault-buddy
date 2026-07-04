@@ -68,20 +68,44 @@ describe("updates store", () => {
   });
 
   it("downloads, installs and relaunches on install", async () => {
-    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
-    mocks.check.mockResolvedValue({ version: "0.2.0", downloadAndInstall });
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockResolvedValue(undefined);
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
-    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalledTimes(1);
     expect(mocks.relaunch).toHaveBeenCalledTimes(1);
   });
 
-  it("closes the panel and restores the home position before installing", async () => {
+  it("keeps the panel open while downloading, closes it before installing", async () => {
+    // the download can be slow or fail — its spinner/error live in the
+    // panel, so the panel must not vanish until the process is about to exit
+    const vaults = useVaultsStore();
+    const panelOpenDuring = { download: false, install: true };
+    const download = vi.fn().mockImplementation(async () => {
+      panelOpenDuring.download = vaults.panelOpen;
+    });
+    const install = vi.fn().mockImplementation(async () => {
+      panelOpenDuring.install = vaults.panelOpen;
+    });
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    vaults.panelOpen = true;
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+
+    expect(panelOpenDuring.download).toBe(true);
+    expect(panelOpenDuring.install).toBe(false);
+  });
+
+  it("restores the home position before installing", async () => {
     // the install path exits the process without close/quit hooks — the
     // shifted window position must be restored before that happens
-    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
-    mocks.check.mockResolvedValue({ version: "0.2.0", downloadAndInstall });
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockResolvedValue(undefined);
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
     const vaults = useVaultsStore();
     vaults.panelOpen = true;
     const store = useUpdatesStore();
@@ -90,21 +114,42 @@ describe("updates store", () => {
 
     expect(vaults.panelOpen).toBe(false);
     expect(mocks.invoke).toHaveBeenCalledWith("prepare_update_install");
-    // the restore must land before the download/install starts
+    // the restore must land before the install starts
     const restoreOrder = mocks.invoke.mock.invocationCallOrder[0];
-    const installOrder = downloadAndInstall.mock.invocationCallOrder[0];
+    const installOrder = install.mock.invocationCallOrder[0];
     expect(restoreOrder).toBeLessThan(installOrder);
   });
 
-  it("keeps the update retryable when the install fails", async () => {
-    const downloadAndInstall = vi.fn().mockRejectedValue("download broke");
-    mocks.check.mockResolvedValue({ version: "0.2.0", downloadAndInstall });
+  it("keeps the update retryable and the panel open when the download fails", async () => {
+    const download = vi.fn().mockRejectedValue("download broke");
+    const install = vi.fn();
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    const vaults = useVaultsStore();
+    vaults.panelOpen = true;
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
     expect(store.phase).toBe("error");
     expect(store.error).toContain("download broke");
     expect(store.available).not.toBeNull(); // retry stays possible
+    expect(vaults.panelOpen).toBe(true); // the error stays visible
+    expect(install).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("reopens the panel when the install fails after the download", async () => {
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockRejectedValue("install broke");
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    const vaults = useVaultsStore();
+    vaults.panelOpen = true;
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+    expect(store.phase).toBe("error");
+    expect(store.error).toContain("install broke");
+    expect(store.available).not.toBeNull(); // retry stays possible
+    expect(vaults.panelOpen).toBe(true); // the error stays visible
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
