@@ -79,6 +79,9 @@ describe("updates store", () => {
     expect(download).toHaveBeenCalledTimes(1);
     expect(install).toHaveBeenCalledTimes(1);
     expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+    // the marker is only mis-stamped when install() throws after
+    // prepare_update_install — a successful install must not re-arm
+    expect(mocks.invoke).not.toHaveBeenCalledWith("rearm_crash_detection");
   });
 
   it("keeps the panel open while downloading, closes it before installing", async () => {
@@ -176,6 +179,22 @@ describe("updates store", () => {
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("install failed"),
     );
+  });
+
+  it("re-arms crash detection when the install fails", async () => {
+    // prepare_update_install already stamped the run marker "clean" and
+    // latched crash detection off before install() ran — if install()
+    // then throws, the app keeps running with detection permanently
+    // disabled unless the frontend explicitly asks Rust to re-arm it.
+    const vaults = useVaultsStore();
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockRejectedValue("install broke");
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    vaults.panelOpen = true;
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+    expect(mocks.invoke).toHaveBeenCalledWith("rearm_crash_detection");
   });
 
   it("ignores install requests when no update is available", async () => {

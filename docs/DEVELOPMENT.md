@@ -172,14 +172,29 @@ folder, or Settings).
 - Native faults (a SEH exception on Windows — WebView2, GPU, or
   audio-driver crashes — or a fatal signal on Unix) are now caught by an
   OS-level crash handler (the `crash-handler` crate) and also land in
-  `crash.log`, as a `native crash: …` record with the exception code
-  (Windows) or signal number (Unix), version, and OS — but no stack: the
-  handler runs in an already-crashed process and stays deliberately
-  minimal (preformat + append + flush, no allocator-heavy work, no
-  logging framework calls).
+  `crash.log`, as a `native crash …` record with the exception code
+  (Windows) or signal number (Unix), version, and OS — but no stack, and
+  no fault timestamp (see the record's timestamp field, which instead
+  points at the tail of `vault-buddy.log`). The handler runs in an
+  already-crashed process, possibly with the heap lock still held by
+  whatever corrupted it, so it does zero allocation on the path that
+  matters: the record text is preformatted once at startup, and at fault
+  time the handler only writes those bytes plus the exception/signal code
+  (rendered into a fixed stack buffer, no `format!`) through a `crash.log`
+  handle opened in advance. Only a fault in the first few milliseconds of
+  startup, before that handle is ready, falls back to opening a file at
+  crash time (best-effort, and the one place this path may still
+  allocate). A main-thread Rust panic on Windows can produce **both** a
+  panic record and a native-crash record for the same event (the panic
+  unwinds into an abort, which the native handler also observes) — read
+  two records with matching timestamps as one crash, not two.
 - `.vault-buddy.run` — the run marker. If a session ends without passing
   through a graceful exit path, the next launch logs a warning and shows a
-  notification that the previous session ended uncleanly.
+  notification that the previous session ended uncleanly. Crash detection
+  also re-arms itself automatically if an update install fails after the
+  updater's pre-install step already stamped the marker "clean" — the
+  frontend tells Rust to turn detection back on since the process is
+  clearly still running.
 - `Vault Buddy.log` (if you still have one) — the pre-v0.2.2 default-named
   log; the app no longer writes it, safe to delete manually.
 

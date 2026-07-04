@@ -98,6 +98,13 @@ export const useUpdatesStore = defineStore("updates", {
         this.error = String(e);
         this.phase = "error";
         logWarning(`update install failed: ${String(e)}`);
+        // prepare_update_install already stamped the run marker "clean" and
+        // latched crash detection off, expecting the process to exit
+        // moments later. It didn't — install() threw — so the session
+        // keeps running with detection permanently disabled unless we tell
+        // Rust to re-arm it. Fire-and-forget: this must never block or
+        // fail the retry path.
+        void invoke("rearm_crash_detection").catch(() => {});
       }
     },
   },
