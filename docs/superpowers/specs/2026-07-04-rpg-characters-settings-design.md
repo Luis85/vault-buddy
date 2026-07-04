@@ -58,9 +58,12 @@ next to `LICENSE.md` with the attribution.
   (`image-rendering: pixelated`, 2× scale → 32×56). Idle is not a constant
   loop: the sprite stands still and, at random moments (3 s minimum delay +
   up to 4 s jitter), either plays one quick cycle (re-armed via
-  `animationend`) or glances the other way via a `scaleX(-1)` mirror — so it
-  reads as a creature shifting its weight and looking around rather than
-  fidgeting. Turning animations off resets the facing to canonical. `working`
+  `animationend`) or glances the other way via a `scaleX(-1)` mirror for
+  0.7–1.5 s before snapping back — so it reads as a creature shifting its
+  weight and looking around rather than fidgeting. The home view direction
+  is a setting (`vault-buddy.facing`, right by default) with a Left/Right
+  control in the settings view; anything that interrupts idling (work,
+  animations off) also ends a glance. `working`
   swaps to a continuous run loop; `animated: false` freezes everything
   (existing "still" behavior, sprites frozen on frame 0).
 - **`src/components/CompanionCharacter.vue`** — keeps all gesture logic

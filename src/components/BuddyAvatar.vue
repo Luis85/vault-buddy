@@ -7,8 +7,10 @@ const props = withDefaults(
     characterId?: string;
     working?: boolean;
     animated?: boolean;
+    /** home view direction — sprite strips are drawn facing right */
+    facing?: "right" | "left";
   }>(),
-  { characterId: "classic", working: false, animated: true },
+  { characterId: "classic", working: false, animated: true, facing: "right" },
 );
 
 const character = computed(() => getCharacter(props.characterId));
@@ -26,10 +28,19 @@ const sheet = computed(() => {
 const IDLE_MIN_DELAY_MS = 3000;
 const IDLE_DELAY_JITTER_MS = 4000;
 const IDLE_FLIP_CHANCE = 0.5;
+// a glance is a quick look, not a new pose — snap back well before the
+// next burst is due
+const GLANCE_MIN_MS = 700;
+const GLANCE_JITTER_MS = 800;
 
 const idlePlaying = ref(false);
-const facing = ref<1 | -1>(1);
+// true while the buddy glances AWAY from its home view direction
+const glancing = ref(false);
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+const flipped = computed(
+  () => (props.facing === "left") !== glancing.value,
+);
 
 const idleEligible = computed(
   () => character.value.sprite !== null && !props.working && props.animated,
@@ -46,8 +57,15 @@ function scheduleIdleBurst() {
 function fireIdleBurst() {
   if (Math.random() < IDLE_FLIP_CHANCE) {
     // instant turn — pixel-art characters snap around, no tween needed
-    facing.value = facing.value === 1 ? -1 : 1;
-    scheduleIdleBurst();
+    glancing.value = true;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(
+      () => {
+        glancing.value = false;
+        if (idleEligible.value) scheduleIdleBurst();
+      },
+      GLANCE_MIN_MS + Math.random() * GLANCE_JITTER_MS,
+    );
   } else {
     idlePlaying.value = true; // animationend re-arms
   }
@@ -62,20 +80,14 @@ function onSheetAnimationEnd() {
 watch(
   idleEligible,
   (eligible) => {
+    // whatever interrupted idling (work starting, animations turned off)
+    // also ends a glance — the buddy snaps back to its home direction
     idlePlaying.value = false;
+    glancing.value = false;
     clearTimeout(idleTimer);
     if (eligible) scheduleIdleBurst();
   },
   { immediate: true },
-);
-
-// animations off means "canonical pose" — face forward-right again so the
-// frozen buddy isn't stuck looking off to the side
-watch(
-  () => props.animated,
-  (on) => {
-    if (!on) facing.value = 1;
-  },
 );
 
 onUnmounted(() => clearTimeout(idleTimer));
@@ -116,7 +128,7 @@ onUnmounted(() => clearTimeout(idleTimer));
   >
     <div
       class="sheet"
-      :class="{ running: working, playing: idlePlaying, flipped: facing === -1 }"
+      :class="{ running: working, playing: idlePlaying, flipped }"
       :style="{ backgroundImage: `url(${sheet})` }"
       @animationend="onSheetAnimationEnd"
     />

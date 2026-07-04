@@ -37,8 +37,30 @@ const settings = useSettingsStore();
           <BuddyAvatar
             :character-id="c.id"
             :animated="settings.animationsEnabled"
+            :facing="settings.facing"
           />
           <span class="text-xs text-slate-200">{{ c.name }}</span>
+        </button>
+      </div>
+    </section>
+    <section class="flex items-center justify-between">
+      <span class="text-sm text-slate-200">View direction</span>
+      <div class="flex gap-1" role="radiogroup" aria-label="View direction">
+        <button
+          v-for="dir in ['left', 'right'] as const"
+          :key="dir"
+          type="button"
+          role="radio"
+          class="facing-option cursor-pointer rounded-lg border px-2 py-0.5 text-xs capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :class="
+            settings.facing === dir
+              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
+              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+          "
+          :aria-checked="settings.facing === dir"
+          @click="settings.setFacing(dir)"
+        >
+          {{ dir }}
         </button>
       </div>
     </section>

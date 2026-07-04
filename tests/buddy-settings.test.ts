@@ -32,6 +32,19 @@ describe("BuddySettings", () => {
     ).toBe("true");
   });
 
+  it("selects the buddy's home view direction", async () => {
+    const wrapper = mount(BuddySettings);
+    const options = wrapper.findAll(".facing-option");
+    expect(options).toHaveLength(2);
+    // right is the default
+    expect(options[1].attributes("aria-checked")).toBe("true");
+
+    await options[0].trigger("click");
+    expect(useSettingsStore().facing).toBe("left");
+    expect(localStorage.getItem("vault-buddy.facing")).toBe("left");
+    expect(options[0].attributes("aria-checked")).toBe("true");
+  });
+
   it("mirrors the dragging toggle", async () => {
     const wrapper = mount(BuddySettings);
     const toggle = wrapper.find("#dragging-toggle");

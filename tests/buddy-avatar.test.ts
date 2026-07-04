@@ -130,31 +130,57 @@ describe("BuddyAvatar", () => {
       expect(wrapper.find(".sprite .sheet").classes()).toContain("playing");
     });
 
-    it("glances the other way instead of playing, then turns back", async () => {
+    it("glances the other way briefly, then snaps back", async () => {
       // < 0.5 deterministically picks the mirror "glance" action, and
-      // makes each delay exactly 3000 + 0.25 × 4000 = 4000ms
+      // makes the burst delay exactly 3000 + 0.25 × 4000 = 4000ms and the
+      // glance duration exactly 700 + 0.25 × 800 = 900ms
       vi.spyOn(Math, "random").mockReturnValue(0.25);
-      const FLIP_DELAY_MS = 4000;
       const wrapper = mount(BuddyAvatar, { props: { characterId: "knight" } });
       const sheet = wrapper.find(".sprite .sheet");
       expect(sheet.classes()).not.toContain("flipped");
 
-      vi.advanceTimersByTime(FLIP_DELAY_MS);
+      vi.advanceTimersByTime(4000);
       await nextTick();
       expect(sheet.classes()).toContain("flipped");
       // a glance is not a strip animation
       expect(sheet.classes()).not.toContain("playing");
 
-      // the glance re-arms the scheduler directly; next draw turns back
-      vi.advanceTimersByTime(FLIP_DELAY_MS);
+      // a glance is a quick look — it returns on its own well before the
+      // next burst would be due
+      vi.advanceTimersByTime(900);
       await nextTick();
       expect(sheet.classes()).not.toContain("flipped");
+
+      // and the regular scheduler is re-armed afterwards
+      vi.advanceTimersByTime(4000);
+      await nextTick();
+      expect(sheet.classes()).toContain("flipped");
     });
 
-    it("faces forward again when animations are turned off", async () => {
+    it("honors a left home direction, glancing to the right", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.25);
+      const wrapper = mount(BuddyAvatar, {
+        props: { characterId: "wizard", facing: "left" },
+      });
+      const sheet = wrapper.find(".sprite .sheet");
+      // home direction is left — mirrored from the start, no timer needed
+      expect(sheet.classes()).toContain("flipped");
+
+      // a glance looks AWAY from home, i.e. back to the unmirrored side
+      vi.advanceTimersByTime(4000);
+      await nextTick();
+      expect(sheet.classes()).not.toContain("flipped");
+
+      vi.advanceTimersByTime(900);
+      await nextTick();
+      expect(sheet.classes()).toContain("flipped");
+    });
+
+    it("faces forward again when animations are turned off mid-glance", async () => {
       vi.spyOn(Math, "random").mockReturnValue(0.25);
       const wrapper = mount(BuddyAvatar, { props: { characterId: "elf" } });
-      vi.advanceTimersByTime(MAX_IDLE_DELAY_MS);
+      // 4000ms puts us inside the glance window (returns on its own at 4900)
+      vi.advanceTimersByTime(4000);
       await nextTick();
       expect(wrapper.find(".sprite .sheet").classes()).toContain("flipped");
 

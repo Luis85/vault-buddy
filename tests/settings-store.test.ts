@@ -37,6 +37,21 @@ describe("settings store", () => {
     expect(useSettingsStore().draggingEnabled).toBe(false);
   });
 
+  it("faces right by default", () => {
+    expect(useSettingsStore().facing).toBe("right");
+  });
+
+  it("persists the view direction across store instances", () => {
+    useSettingsStore().setFacing("left");
+    setActivePinia(createPinia());
+    expect(useSettingsStore().facing).toBe("left");
+  });
+
+  it("falls back to right for an unknown stored view direction", () => {
+    localStorage.setItem("vault-buddy.facing", "up");
+    expect(useSettingsStore().facing).toBe("right");
+  });
+
   it("uses the classic buddy by default", () => {
     expect(useSettingsStore().character).toBe("classic");
   });

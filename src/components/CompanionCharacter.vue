@@ -9,8 +9,9 @@ const props = withDefaults(
     animated?: boolean;
     character?: string;
     draggable?: boolean;
+    facing?: "right" | "left";
   }>(),
-  { animated: true, character: "classic", draggable: true },
+  { animated: true, character: "classic", draggable: true, facing: "right" },
 );
 const emit = defineEmits<{
   (e: "toggle"): void;
@@ -119,6 +120,7 @@ function onContextMenu() {
         :character-id="character"
         :working="working"
         :animated="animated"
+        :facing="facing"
       />
     </button>
   </div>
