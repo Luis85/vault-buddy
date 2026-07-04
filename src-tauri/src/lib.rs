@@ -6,14 +6,19 @@ use tauri::{Emitter, Manager};
 
 pub fn run() {
     tauri::Builder::default()
+        // Registered first (per the plugin's docs) so a second launch bails
+        // before any other plugin runs. Two instances would mean two buddies,
+        // two trays, both processes racing the window-state file — and a
+        // second recovery scan racing a live recording. The callback runs in
+        // the surviving instance: reveal the buddy — a relaunch attempt
+        // means the user was looking for it.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second launch: focus the running buddy instead of starting a
-            // new process (spec: recovery must never race a live recording).
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
+        // Recording saved/failed toasts.
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_log::Builder::new().build())
         // Remember where the user parked the buddy across restarts. Only the
@@ -24,6 +29,11 @@ pub fn run() {
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
                 .build(),
         )
+        // In-app updates: the settings panel checks GitHub Releases'
+        // latest.json and installs signed updates; process gives it the
+        // relaunch after install.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
         // Alt+F4 / session shutdown destroy the window without going through
@@ -61,6 +71,7 @@ pub fn run() {
             commands::list_vaults,
             commands::open_vault,
             commands::open_daily_note,
+            commands::prepare_update_install,
             commands::set_panel_offset,
             commands::set_window_geometry,
             commands::show_buddy_menu,
@@ -93,11 +104,51 @@ pub fn run() {
             // z-order-only SetWindowPos that never moves, resizes, or
             // steals focus.
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Some(window) = handle.get_webview_window("main") {
-                    if window.is_visible().unwrap_or(false) {
-                        let _ = window.set_always_on_top(true);
+            std::thread::spawn(move || {
+                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+                // Checkpoint of the buddy's parked position. Exit paths that
+                // save state can silently fail or be bypassed (the updater
+                // kills the process via std::process::exit) — persisting
+                // within a second of any move means the state file always
+                // holds a recent correct position, whatever the exit path.
+                let mut last_pos: Option<(i32, i32)> = None;
+                let mut ticks: u32 = 0;
+                let mut saved_once = false;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    ticks = ticks.saturating_add(1);
+                    let Some(window) = handle.get_webview_window("main") else {
+                        continue;
+                    };
+                    if !window.is_visible().unwrap_or(false) {
+                        continue;
+                    }
+                    let _ = window.set_always_on_top(true);
+                    // Never persist while the panel has the window shifted —
+                    // only the unshifted home position may reach disk.
+                    let offset = *handle.state::<commands::PanelOffset>().0.lock().unwrap();
+                    if offset != (0, 0) {
+                        continue;
+                    }
+                    if let Ok(pos) = window.outer_position() {
+                        let pos = (pos.x, pos.y);
+                        let moved = last_pos.is_some() && last_pos != Some(pos);
+                        // The early ticks must not write: a save that lands
+                        // before the window-state plugin's restore would
+                        // poison its cache with the pre-restore default
+                        // position. But a drag within that window would be
+                        // absorbed into the baseline and lost until the next
+                        // move — so once restore has certainly landed, one
+                        // unconditional save persists whatever the baseline
+                        // is. Any successful save (moved or initial) counts.
+                        let initial = !saved_once && ticks >= 3;
+                        if moved || initial {
+                            match handle.save_window_state(StateFlags::POSITION) {
+                                Ok(()) => saved_once = true,
+                                Err(e) => log::warn!("position checkpoint failed: {e}"),
+                            }
+                        }
+                        last_pos = Some(pos);
                     }
                 }
             });

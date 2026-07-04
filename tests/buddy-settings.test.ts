@@ -1,14 +1,32 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+
+const updaterMocks = vi.hoisted(() => ({
+  getVersion: vi.fn(),
+  check: vi.fn(),
+  relaunch: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: updaterMocks.getVersion,
+}));
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: updaterMocks.check }));
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: updaterMocks.relaunch,
+}));
+
 import BuddySettings from "../src/components/BuddySettings.vue";
 import { CHARACTERS } from "../src/characters";
 import { useSettingsStore } from "../src/stores/settings";
+
+const flush = () => new Promise((r) => setTimeout(r));
 
 describe("BuddySettings", () => {
   beforeEach(() => {
     localStorage.clear();
     setActivePinia(createPinia());
+    updaterMocks.getVersion.mockReset().mockResolvedValue("0.1.0");
+    updaterMocks.check.mockReset();
   });
 
   it("shows every character with the current one selected", () => {
@@ -59,5 +77,50 @@ describe("BuddySettings", () => {
     expect((toggle.element as HTMLInputElement).checked).toBe(true);
     await toggle.setValue(false);
     expect(useSettingsStore().animationsEnabled).toBe(false);
+  });
+
+  it("shows the Updates section with the current version", async () => {
+    const wrapper = mount(BuddySettings);
+    await flush();
+    expect(wrapper.text()).toContain("Updates");
+    expect(wrapper.text()).toContain("Version 0.1.0");
+    expect(wrapper.find('[data-testid="check-updates"]').exists()).toBe(true);
+  });
+
+  it("checks for updates and reports up to date", async () => {
+    updaterMocks.check.mockResolvedValue(null);
+    const wrapper = mount(BuddySettings);
+    await wrapper.find('[data-testid="check-updates"]').trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("You're up to date.");
+  });
+
+  it("offers install & restart when an update is available", async () => {
+    updaterMocks.check.mockResolvedValue({
+      version: "0.2.0",
+      downloadAndInstall: vi.fn(),
+    });
+    const wrapper = mount(BuddySettings);
+    await wrapper.find('[data-testid="check-updates"]').trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("Version 0.2.0 is available");
+    expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
+  });
+
+  it("keeps the install button visible for retry after a failure", async () => {
+    // the store keeps `available` after a failed download/install exactly
+    // so the user can retry — the button must not vanish behind the error
+    updaterMocks.check.mockResolvedValue({
+      version: "0.2.0",
+      download: vi.fn().mockRejectedValue("download broke"),
+      install: vi.fn(),
+    });
+    const wrapper = mount(BuddySettings);
+    await wrapper.find('[data-testid="check-updates"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="install-update"]').trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("download broke");
+    expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
   });
 });
