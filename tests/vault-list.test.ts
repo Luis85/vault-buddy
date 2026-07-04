@@ -55,6 +55,22 @@ describe("VaultList", () => {
     expect(wrapper.text()).toContain("D:\\work\\Notes");
   });
 
+  it("disambiguates duplicate names in the accessible action labels too", () => {
+    const wrapper = mountList([
+      { id: "aaa111", name: "Notes", path: "C:\\personal\\Notes" },
+      { id: "bbb222", name: "Notes", path: "D:\\work\\Notes" },
+    ]);
+    // screen-reader users must not hear two identical controls that target
+    // different vaults
+    const labels = wrapper
+      .findAll("button")
+      .map((b) => b.attributes("aria-label"));
+    expect(labels).toContain("Open vault Notes (C:\\personal\\Notes)");
+    expect(labels).toContain(
+      "Open today's daily note in Notes (D:\\work\\Notes)",
+    );
+  });
+
   it("hides the path when vault names are unique", () => {
     const wrapper = mountList(sample);
     expect(wrapper.text()).not.toContain("C:\\vaults\\Personal");

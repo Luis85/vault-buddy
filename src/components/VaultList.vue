@@ -30,6 +30,12 @@ const isAmbiguous = (vault: Vault) =>
 
 const isBusy = (vault: Vault, command: "open_vault" | "open_daily_note") =>
   props.busyVaultId === vault.id && props.busyCommand === command;
+
+// Duplicate-name vaults must also differ in their accessible names, not
+// just visually — screen-reader users would otherwise hear two identical
+// controls that target different vaults.
+const accessibleName = (vault: Vault) =>
+  isAmbiguous(vault) ? `${vault.name} (${vault.path})` : vault.name;
 </script>
 
 <template>
@@ -42,7 +48,7 @@ const isBusy = (vault: Vault, command: "open_vault" | "open_daily_note") =>
           type="button"
           class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50"
           :disabled="busyVaultId !== null"
-          :aria-label="`Open vault ${vault.name}`"
+          :aria-label="`Open vault ${accessibleName(vault)}`"
           @click="$emit('open-vault', vault.id)"
         >
           <span
@@ -73,7 +79,7 @@ const isBusy = (vault: Vault, command: "open_vault" | "open_daily_note") =>
           type="button"
           class="mr-1 shrink-0 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50"
           :disabled="busyVaultId !== null"
-          :aria-label="`Open today's daily note in ${vault.name}`"
+          :aria-label="`Open today's daily note in ${accessibleName(vault)}`"
           title="Open today's daily note"
           @click="$emit('open-daily-note', vault.id)"
         >
