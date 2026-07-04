@@ -40,6 +40,14 @@ pub struct StatusPayload {
     pub paused_since_ms: Option<u64>,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedPayload {
+    pub mp3: String,
+    pub note: Option<String>,
+    pub warning: Option<String>,
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -599,6 +607,50 @@ pub fn pause_capture(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn resume_capture(app: AppHandle) -> Result<(), String> {
     set_paused(&app, false)
+}
+
+#[tauri::command]
+pub fn rename_capture(
+    state: tauri::State<CaptureState>,
+    mp3: String,
+    title: String,
+) -> Result<RenamedPayload, String> {
+    // The prompt dismisses on a new recording (UI rule); this is the
+    // backend guard for the same thing — never shuffle files next to a
+    // directory a live session is writing into.
+    if state.0.lock().unwrap().is_some() {
+        return Err("Cannot rename while a recording is running.".to_string());
+    }
+    // rename_plan re-validates ownership (capture-pattern stems only), so
+    // an arbitrary user mp3 can never be renamed through this command.
+    let plan = capture_paths::rename_plan(Path::new(&mp3), &title)?;
+    if !plan.mp3_from.is_file() {
+        return Err("Recording file not found — was it moved?".to_string());
+    }
+    let stem = plan
+        .mp3_from
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if plan.new_base == stem {
+        // Confirming the unedited prefill: nothing to do, and running the
+        // reservation anyway would mint a pointless " (2)" suffix (the
+        // source itself occupies the target name).
+        return Ok(RenamedPayload {
+            note: plan
+                .note_from
+                .is_file()
+                .then(|| plan.note_from.to_string_lossy().into_owned()),
+            mp3,
+            warning: None,
+        });
+    }
+    let outcome = vault_buddy_capture::rename::execute(&plan)?;
+    Ok(RenamedPayload {
+        mp3: outcome.mp3.to_string_lossy().into_owned(),
+        note: outcome.note.map(|p| p.to_string_lossy().into_owned()),
+        warning: outcome.warning,
+    })
 }
 
 /// Tray menu variants: failures only log — there is no panel to show them.

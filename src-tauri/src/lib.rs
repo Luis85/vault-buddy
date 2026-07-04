@@ -83,7 +83,8 @@ pub fn run() {
             capture_commands::set_capture_config,
             capture_commands::list_audio_devices,
             capture_commands::pause_capture,
-            capture_commands::resume_capture
+            capture_commands::resume_capture,
+            capture_commands::rename_capture
         ])
         .setup(|app| {
             tray::create_tray(app.handle())?;
