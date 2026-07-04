@@ -11,9 +11,31 @@ use vault_buddy_core::{daily_note_uri, discovery, process, uri};
 #[derive(Default)]
 pub struct PanelOffset(pub Mutex<(i32, i32)>);
 
+impl PanelOffset {
+    // All access goes through lock_ignoring_poison: if any thread ever
+    // panics while holding this lock, `.lock().unwrap()` on the main thread
+    // would abort the whole app (a panic across the WebView2 FFI boundary on
+    // Windows). Recovering the poisoned guard degrades to the last value.
+    pub fn set(&self, value: (i32, i32)) {
+        *vault_buddy_core::sync_util::lock_ignoring_poison(&self.0) = value;
+    }
+
+    /// Read and zero the offset in one locked step (used by the restore path
+    /// so the close handler and the quit path can't double-add).
+    pub fn take(&self) -> (i32, i32) {
+        std::mem::take(&mut *vault_buddy_core::sync_util::lock_ignoring_poison(
+            &self.0,
+        ))
+    }
+
+    pub fn get(&self) -> (i32, i32) {
+        *vault_buddy_core::sync_util::lock_ignoring_poison(&self.0)
+    }
+}
+
 #[tauri::command]
 pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
-    *state.0.lock().unwrap() = (x, y);
+    state.set((x, y));
 }
 
 /// Called right before the updater installs and restarts: that path exits

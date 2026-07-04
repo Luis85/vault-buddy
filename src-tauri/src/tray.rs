@@ -28,7 +28,7 @@ pub fn hide_buddy(app: &AppHandle) {
 /// that is what any position save persists. Takes the offset (zeroing it)
 /// so running both the close handler and the quit path can't double-add.
 pub fn restore_home_position(app: &AppHandle) {
-    let (dx, dy) = std::mem::take(&mut *app.state::<PanelOffset>().0.lock().unwrap());
+    let (dx, dy) = app.state::<PanelOffset>().take();
     if (dx, dy) != (0, 0) {
         if let Some(window) = app.get_webview_window("main") {
             if let Ok(pos) = window.outer_position() {
