@@ -1,7 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use vault_buddy_core::crash::{format_crash_record, CrashRecord};
@@ -29,19 +28,22 @@ fn crash_file() -> PathBuf {
     }
 }
 
-// Flipped by `mark_clean_shutdown` on every graceful exit path so the
-// heartbeat below can never re-arm the run marker after a graceful exit
-// began — otherwise a heartbeat tick racing the final stamp could leave
-// "running" as the last word and false-positive the next launch as a crash.
-static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+/// Serializes the marker's check-and-write in both directions: once a
+/// graceful exit stamps "clean" (under this lock), no in-flight heartbeat
+/// can land a stale "running" write after it — the heartbeat's check and
+/// write happen under the same lock. Plain AtomicBool gating was not
+/// enough: it only stopped future heartbeat invocations, not one already
+/// past its check.
+static MARKER_GATE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
 /// Stamp the run marker "clean" and stop the heartbeat from re-arming it.
 /// Called from every graceful exit path (tray/buddy quit, Alt+F4 close,
 /// update install) — a marker still saying "running" at next startup is
-/// therefore a crash/kill by definition. Idempotent and safe to call from a
-/// worker thread (finish_quit runs on `shutdown-finalize`).
+/// therefore a crash/kill by definition. Idempotent; safe from worker
+/// threads.
 pub fn mark_clean_shutdown() {
-    SHUTTING_DOWN.store(true, Ordering::SeqCst);
+    let mut shutting_down = vault_buddy_core::sync_util::lock_ignoring_poison(&MARKER_GATE);
+    *shutting_down = true;
     if let Some(dir) = LOG_DIR.get() {
         if let Err(e) = vault_buddy_core::app_diagnostics::write_clean_marker(dir) {
             log::warn!("could not stamp clean shutdown: {e}");
@@ -53,7 +55,8 @@ pub fn mark_clean_shutdown() {
 /// "clean" (an update install that failed after its pre-exit stamp)
 /// self-heals on the next heartbeat.
 pub fn heartbeat_running_marker() {
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+    let shutting_down = vault_buddy_core::sync_util::lock_ignoring_poison(&MARKER_GATE);
+    if *shutting_down {
         return;
     }
     if let Some(dir) = LOG_DIR.get() {
