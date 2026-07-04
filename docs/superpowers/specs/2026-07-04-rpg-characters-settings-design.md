@@ -66,7 +66,10 @@ next to `LICENSE.md` with the attribution.
   `setCharacter(id)` action that validates against the registry.
 - **`src/components/BuddySettings.vue`** — the settings view: a character
   grid (live animated previews, selected one highlighted) plus the existing
-  animations toggle as a visible control.
+  animations toggle as a visible control, and a dragging toggle
+  (`vault-buddy.dragging`, default on) that pins the buddy in place —
+  `CompanionCharacter` skips the drag gesture entirely so a press stays a
+  plain click, and the cursor/tooltip drop the drag affordance.
 - **`src/components/ActionPanel.vue`** — header gains a gear button that
   switches the panel body between the vault list and the settings view.
 

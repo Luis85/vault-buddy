@@ -32,6 +32,14 @@ describe("BuddySettings", () => {
     ).toBe("true");
   });
 
+  it("mirrors the dragging toggle", async () => {
+    const wrapper = mount(BuddySettings);
+    const toggle = wrapper.find("#dragging-toggle");
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+    await toggle.setValue(false);
+    expect(useSettingsStore().draggingEnabled).toBe(false);
+  });
+
   it("mirrors the animations toggle", async () => {
     const wrapper = mount(BuddySettings);
     const toggle = wrapper.find("#animations-toggle");

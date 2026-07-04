@@ -54,5 +54,20 @@ const settings = useSettingsStore();
         @change="settings.toggleAnimations()"
       />
     </section>
+    <section class="flex items-center justify-between">
+      <label for="dragging-toggle" class="text-sm text-slate-200">
+        Dragging
+        <span class="block text-xs text-slate-500">
+          Off pins the buddy in place
+        </span>
+      </label>
+      <input
+        id="dragging-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+        :checked="settings.draggingEnabled"
+        @change="settings.toggleDragging()"
+      />
+    </section>
   </div>
 </template>

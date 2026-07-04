@@ -27,6 +27,16 @@ describe("settings store", () => {
     expect(useSettingsStore().animationsEnabled).toBe(true);
   });
 
+  it("enables dragging by default", () => {
+    expect(useSettingsStore().draggingEnabled).toBe(true);
+  });
+
+  it("persists the dragging toggle across store instances", () => {
+    useSettingsStore().toggleDragging();
+    setActivePinia(createPinia());
+    expect(useSettingsStore().draggingEnabled).toBe(false);
+  });
+
   it("uses the classic buddy by default", () => {
     expect(useSettingsStore().character).toBe("classic");
   });

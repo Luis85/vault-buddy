@@ -4,8 +4,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import BuddyAvatar from "./BuddyAvatar.vue";
 
 const props = withDefaults(
-  defineProps<{ working: boolean; animated?: boolean; character?: string }>(),
-  { animated: true, character: "classic" },
+  defineProps<{
+    working: boolean;
+    animated?: boolean;
+    character?: string;
+    draggable?: boolean;
+  }>(),
+  { animated: true, character: "classic", draggable: true },
 );
 const emit = defineEmits<{
   (e: "toggle"): void;
@@ -32,6 +37,9 @@ function onPointerDown(e: PointerEvent) {
 }
 
 function onPointerMove(e: PointerEvent) {
+  // Dragging is disabled in the settings — the buddy stays pinned and the
+  // whole press/release stays a plain click, however far the pointer moves.
+  if (!props.draggable) return;
   if (!pressedAt) {
     // A hover move with no press means the native drag is over and any
     // trailing click has already been dispatched. Windows sometimes
@@ -86,10 +94,17 @@ function onContextMenu() {
   <div class="flex flex-col items-center">
     <button
       type="button"
-      class="buddy block cursor-grab focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-      :class="{ working, still: !animated }"
-      aria-label="Vault Buddy — click to open the panel, drag to move"
-      title="Click to open · drag to move"
+      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      :class="[
+        draggable ? 'cursor-grab' : 'cursor-pointer',
+        { working, still: !animated },
+      ]"
+      :aria-label="
+        draggable
+          ? 'Vault Buddy — click to open the panel, drag to move'
+          : 'Vault Buddy — click to open the panel'
+      "
+      :title="draggable ? 'Click to open · drag to move' : 'Click to open'"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerEnd"

@@ -130,6 +130,7 @@ onUnmounted(() => {
         :working="working"
         :animated="settings.animationsEnabled"
         :character="settings.character"
+        :draggable="settings.draggingEnabled"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
       />

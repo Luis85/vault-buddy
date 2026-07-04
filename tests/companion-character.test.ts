@@ -128,6 +128,33 @@ describe("CompanionCharacter", () => {
     expect(wrapper.find("button.buddy").classes()).toContain("still");
   });
 
+  it("never starts a window drag when dragging is disabled", async () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, draggable: false },
+    });
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 120, screenY: 120 });
+    expect(startDragging).not.toHaveBeenCalled();
+    expect(wrapper.emitted("drag-start")).toBeUndefined();
+    // the press stays a plain click and still opens the panel
+    await buddy.trigger("pointerup");
+    await buddy.trigger("click", { detail: 1 });
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  it("drops the grab cursor and drag hint when dragging is disabled", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, draggable: false },
+    });
+    const buddy = wrapper.find("button.buddy");
+    expect(buddy.classes()).toContain("cursor-pointer");
+    expect(buddy.classes()).not.toContain("cursor-grab");
+    expect(buddy.attributes("aria-label")).toBe(
+      "Vault Buddy — click to open the panel",
+    );
+  });
+
   it("toggles again on the click after a completed drag", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     const buddy = wrapper.find("button.buddy");
