@@ -24,6 +24,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # restore the CI Windows job's cache (built on pushes to main) so
+          # tagged release builds start warm
+          shared-key: windows-app
       - run: npm ci
       - name: Build app and publish release
         uses: tauri-apps/tauri-action@v0
