@@ -1,141 +1,54 @@
 # Vault Buddy
 
-An AI-native desktop companion for knowledge work — starting as the best desktop
-companion for Obsidian and evolving into an extensible, local-first desktop
-operating layer.
+An AI-native desktop companion for knowledge work — starting as the best
+desktop companion for Obsidian and evolving into an extensible, local-first
+desktop operating layer.
+
+A small animated character lives on your desktop, always within reach. Click
+it and your Obsidian vaults are one action away — no window hunting, no
+context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Stack:** Tauri 2 · Vue 3 · TypeScript · Rust
-- **Status:** Product Discovery
+- **Status:** Increment 1 — desktop companion with Obsidian vault access
 
-See the full [Product Requirements Document](docs/PRD.md) for vision, principles,
-capabilities, architecture, and roadmap.
+See the [Product Requirements Document](docs/PRD.md) for the full vision,
+principles, capabilities, and roadmap.
 
-## Install (no toolchain needed)
+## Install
 
 Grab the latest installer from the
 [**Releases**](https://github.com/Luis85/vault-buddy/releases) page:
-download `Vault Buddy_*_x64-setup.exe`, run it, done. The installer
-fetches the WebView2 runtime automatically if needed (Windows 11 already
-has it). The installers aren't code-signed yet, so SmartScreen may warn —
-click **More info → Run anyway**.
+download `Vault Buddy_*_x64-setup.exe`, run it, done. The installer fetches
+the WebView2 runtime automatically if needed (Windows 11 already has it).
 
-New releases are published automatically whenever a version tag is pushed:
+> The installers aren't code-signed yet, so SmartScreen may warn — click
+> **More info → Run anyway**.
 
-```bash
-# after bumping the version in tauri.conf.json / package.json / Cargo.toml
-git tag v0.1.0 && git push origin v0.1.0
-```
+## Usage
 
-## Run it from source
+The buddy appears as a small, always-on-top character on your desktop.
 
-### Prerequisites (Windows)
+- **Click** the buddy to open the vault panel. It lists every vault Obsidian
+  knows about; vaults currently open in Obsidian appear first under
+  "Open now" with a green dot.
+- **Click a vault row** to bring that vault up in Obsidian, or hit the
+  **calendar button** to jump straight into today's daily note (created via
+  Obsidian if it doesn't exist yet).
+- **Filter** kicks in automatically above 5 vaults — type to narrow by name
+  or path. Escape clears the filter, then closes the panel.
+- **Drag** the buddy anywhere; its position is remembered across restarts.
+  The panel opens toward free screen space, so edges and corners are fine.
+- **Right-click** the buddy for the menu: toggle the idle **animation**,
+  **hide to tray**, or **quit**.
+- **Tray icon**: Show/Hide the buddy, quit the app.
+- The panel gets out of your way on its own: Escape, clicking the desktop,
+  or launching a vault all close it.
 
-1. [Node.js 22+](https://nodejs.org)
-2. [Rust stable](https://rustup.rs) — the default MSVC toolchain; rustup will
-   prompt you to install the Visual Studio C++ Build Tools if missing
-3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
-   [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+Vault Buddy never writes into your vaults — opening notes and creating
+daily notes is delegated to Obsidian itself via `obsidian://` URIs, and
+every launched URI is logged.
 
-### Check out and run
+## Contributing
 
-```bash
-git clone https://github.com/Luis85/vault-buddy.git
-cd vault-buddy
-
-# to try a branch that isn't merged yet (e.g. a PR branch):
-#   git fetch origin <branch-name>
-#   git checkout <branch-name>
-
-npm install
-npm run tauri   # alias for `tauri dev`
-```
-
-The first `tauri dev` compiles the Rust shell and takes a few minutes; after
-that it's incremental. The companion appears as a small transparent
-always-on-top window; click the character to open the vault panel, and use the
-tray icon (Show/Hide, Quit) to control it.
-
-### Build an installer
-
-```bash
-npx tauri build
-```
-
-Installers land in `src-tauri/target/release/bundle/` (`msi/` and `nsis/`).
-Alternatively, every push through CI builds Windows installers — download the
-`vault-buddy-windows-<sha>` artifact from the
-[Actions](https://github.com/Luis85/vault-buddy/actions) run.
-
-### Tests and checks
-
-```bash
-npm run test                       # Vitest component/store tests
-npm run build                      # vue-tsc typecheck + production build
-cd src-tauri && cargo fmt --check  # Rust formatting (whole workspace)
-cd core && cargo clippy --all-targets -- -D warnings
-cargo test                         # pure Rust core tests (run anywhere)
-```
-
-The Rust code is split in two: `src-tauri/core/` is a pure crate with all
-Obsidian logic (config parsing, daily-note resolution, URI building) and no
-GUI dependencies — it tests on any machine, including CI containers.
-`src-tauri/` is the thin Tauri shell (window, tray, command wrappers) and
-needs platform WebView libraries to compile — on Windows that works out of
-the box; Linux containers can't compile it (no webkit2gtk), which is why CI
-builds the app on a Windows runner.
-
-## Quality pipeline
-
-CI runs on every push to `main` and every pull request
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
-
-| Job | Runner | What it gates |
-| --- | --- | --- |
-| Frontend | Linux | Vitest tests, `vue-tsc` typecheck, production build |
-| Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
-| Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
-
-A separate [release workflow](.github/workflows/release.yml) runs on `v*`
-tags: it builds the Windows installers and publishes them as a GitHub
-Release for end users.
-
-The Windows job only runs after the two fast jobs pass. Desktop behavior that
-can't be asserted in CI (transparency, tray, drag, the real Obsidian
-round-trip) is covered by the manual verification checklist in
-[`docs/superpowers/specs/`](docs/superpowers/specs/).
-
-## Development with Superpowers
-
-This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)
-agentic skills framework directly into [`.claude/skills/`](.claude/skills), rather
-than depending on the plugin marketplace. The skills are checked into version
-control, so every collaborator gets them automatically — no marketplace, install,
-or trust step required.
-
-Included skills:
-
-- `brainstorming` — turn ideas into designs before implementation
-- `writing-plans` / `executing-plans` — plan authoring and execution
-- `test-driven-development` — red/green/refactor discipline
-- `systematic-debugging` — root-cause tracing and defense-in-depth
-- `requesting-code-review` / `receiving-code-review` — review workflows
-- `subagent-driven-development` / `dispatching-parallel-agents` — subagent orchestration
-- `using-git-worktrees` / `finishing-a-development-branch` — branch workflows
-- `verification-before-completion` — pre-completion checks
-- `writing-skills` — authoring new skills
-- `using-superpowers` — meta-skill that coordinates the rest
-
-Claude Code discovers these on the next session (or after `/reload-plugins`).
-Model-invoked skills trigger automatically from their descriptions; you can also
-invoke one explicitly, e.g. `/brainstorming`.
-
-A `SessionStart` hook ([`.claude/hooks/session-start`](.claude/hooks), wired in
-[`.claude/settings.json`](.claude/settings.json)) injects the `using-superpowers`
-meta-skill at the start of every session — so Claude consults the skills library
-proactively rather than only when a description happens to match. The hook is a
-cross-platform polyglot wrapper (`run-hook.cmd`) that runs under both Windows
-(Git Bash) and Unix shells.
-
-To update the vendored copies, re-pull the `skills/` directory from the upstream
-[obra/superpowers](https://github.com/obra/superpowers) repository.
+Building from source, tests, CI, and the release flow are documented in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
