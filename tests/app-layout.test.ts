@@ -191,4 +191,37 @@ describe("App layout geometry", () => {
       vi.useRealTimers();
     }
   });
+
+  it("honors a real desktop click right after a drag (second blur)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(100_000);
+      const wrapper = mount(App);
+      await flush();
+      const store = useVaultsStore();
+      await store.togglePanel();
+
+      const buddy = wrapper.find("button.buddy");
+      await buddy.trigger("pointerdown", {
+        button: 0,
+        screenX: 50,
+        screenY: 50,
+      });
+      await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+
+      // blur #1 is the drag entering the OS move loop — suppressed
+      state.focusHandler?.({ payload: false });
+      await flush();
+      expect(store.panelOpen).toBe(true);
+
+      // blur #2 within the same window is the user clicking the desktop;
+      // the window is unfocused now, so no later focus event will fire —
+      // this one must close the panel or it stays stuck expanded
+      state.focusHandler?.({ payload: false });
+      await flush();
+      expect(store.panelOpen).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

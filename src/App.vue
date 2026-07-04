@@ -19,13 +19,18 @@ const { side, valign } = useCompanionWindow(panelOpen);
 // Dragging the buddy enters the OS window-move loop, which steals focus
 // from the webview. Closing the panel on that focus loss would resize the
 // window mid-drag — Windows then cancels the drag and the buddy lands at
-// the collapsed window's origin (the panel's old top-left corner). Ignore
-// close triggers that arrive right after a drag begins.
+// the collapsed window's origin (the panel's old top-left corner). The
+// drag causes exactly ONE focus loss, so suppress only the first blur in
+// the window after a drag begins: a second blur is the user clicking the
+// desktop, and with the window already unfocused no later focus event
+// would ever close the panel.
 const DRAG_CLOSE_SUPPRESS_MS = 500;
 let dragStartedAt = 0;
+let dragBlurPending = false;
 
 function onDragStart() {
   dragStartedAt = Date.now();
+  dragBlurPending = true;
 }
 
 function dragJustStarted() {
@@ -71,7 +76,16 @@ onMounted(async () => {
     // so the transparent window shrinks out of the way.
     unlistenFocus = await getCurrentWindow().onFocusChanged(
       ({ payload: focused }) => {
-        if (!focused) closePanelUnlessDragging();
+        if (focused) {
+          // the window is back in front — the drag (if any) is over
+          dragBlurPending = false;
+          return;
+        }
+        if (dragBlurPending && dragJustStarted()) {
+          dragBlurPending = false; // consumed the drag's own blur
+          return;
+        }
+        closePanel();
       },
     );
   } catch {
