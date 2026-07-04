@@ -26,3 +26,22 @@ export interface CaptureSaved {
   note: string | null;
   endedEarly: boolean;
 }
+
+export interface CaptureConfig {
+  mode: "meeting" | "voice-note";
+  recordingFolder: string | null;
+  bitrateKbps: number;
+  createNote: boolean;
+  inputDevice: string | null;
+  outputDevice: string | null;
+}
+
+export interface AudioDevice {
+  name: string;
+  isDefault: boolean;
+}
+
+export interface AudioDevices {
+  inputs: AudioDevice[];
+  outputs: AudioDevice[];
+}

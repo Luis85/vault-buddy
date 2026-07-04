@@ -5,6 +5,7 @@ import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
+import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
 
 const store = useVaultsStore();
@@ -46,7 +47,13 @@ function onFilterEscape(event: KeyboardEvent) {
   >
     <div class="mb-2 flex items-center justify-between">
       <h1 class="text-sm font-bold text-slate-100">
-        {{ view === "settings" ? "Buddy settings" : "Vaults" }}
+        {{
+          view === "settings"
+            ? "Buddy settings"
+            : view === "captureSettings"
+              ? "Capture settings"
+              : "Vaults"
+        }}
       </h1>
       <div class="flex items-center gap-2">
         <span
@@ -119,6 +126,15 @@ function onFilterEscape(event: KeyboardEvent) {
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <BuddySettings />
+    </div>
+    <div
+      v-else-if="view === 'captureSettings' && store.captureSettingsVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <CaptureSettings
+        :key="store.captureSettingsVaultId"
+        :vault-id="store.captureSettingsVaultId"
+      />
     </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
