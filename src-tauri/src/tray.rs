@@ -7,9 +7,13 @@ use tauri::{
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 /// Hide the companion; the tray "Show / Hide" brings it back.
-pub fn hide_to_tray(app: &AppHandle) {
-    // The buddy is the recording indicator; hiding it mid-capture would
-    // violate the spec's no-hidden-recordings requirement.
+///
+/// THE single hide chokepoint: the buddy is the recording indicator, and
+/// hiding it mid-capture would violate the spec's no-hidden-recordings
+/// requirement — so this is the only place allowed to call window.hide()
+/// on the buddy, and any future hide path must route through here to
+/// inherit the guard.
+pub fn hide_buddy(app: &AppHandle) {
     if crate::capture_commands::is_recording(app) {
         log::info!("hide ignored: recording in progress");
         return;
@@ -38,8 +42,29 @@ pub fn restore_home_position(app: &AppHandle) {
 /// the buddy's right-click menu.
 pub fn quit(app: &AppHandle) {
     // Mid-meeting quits must save through the normal stop flow, not strand
-    // a .part — block here until any active recording has finalized.
-    crate::capture_commands::finalize_if_recording(app);
+    // a .part. But finalizing can take arbitrarily long (slow vault, stuck
+    // fsync) and this runs inside a native menu callback — waiting here
+    // would freeze the event loop (dead tray, dead buddy) for the whole
+    // encode. Park the wait on a worker thread and let it drive the exit
+    // once the save has landed; the menu callback returns immediately.
+    if crate::capture_commands::is_recording(app) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            crate::capture_commands::finalize_if_recording(&app);
+            finish_quit(&app);
+        });
+        return;
+    }
+    finish_quit(app);
+}
+
+/// Final shutdown steps, shared by the immediate path and the
+/// finalize-first worker thread above. Safe to run off the main thread:
+/// in Tauri 2, Window::destroy and AppHandle::exit proxy their work to the
+/// event loop (tauri-runtime-wry sends destroy through the event-loop
+/// proxy) rather than requiring it, and the window-state plugin reads
+/// positions through the same thread-safe dispatchers.
+fn finish_quit(app: &AppHandle) {
     restore_home_position(app);
     // app.exit bypasses window destruction, which is what the window-state
     // plugin normally saves on — save explicitly.
@@ -124,19 +149,23 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle" => {
                 if let Some(window) = app.get_webview_window("main") {
-                    let visible = window.is_visible().unwrap_or(true);
-                    if visible && crate::capture_commands::is_recording(app) {
-                        return; // indicator must stay visible while recording
-                    }
-                    let _ = if visible {
-                        window.hide()
+                    if window.is_visible().unwrap_or(true) {
+                        // hide_buddy carries the recording guard; the item
+                        // being disabled while recording (tray_menu) is
+                        // belt-and-suspenders on top of it.
+                        hide_buddy(app);
                     } else {
-                        window.show()
-                    };
+                        let _ = window.show();
+                    }
                 }
             }
             "tray-stop-recording" => {
-                crate::capture_commands::stop_from_menu(app);
+                // Stopping waits up to 15s for the finalize — never block
+                // the menu callback (and the event loop) on it.
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    crate::capture_commands::stop_from_menu(&app);
+                });
             }
             "quit" => quit(app),
             _ => {}

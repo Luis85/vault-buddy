@@ -31,11 +31,30 @@ pub fn run() {
         // destruction — restore the unshifted home position first so a
         // panel-open-at-the-edge close can't persist the shifted point.
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                // Alt+F4 / session shutdown bypass tray::quit — finalize any
-                // active recording here too so it never gets stranded.
-                capture_commands::finalize_if_recording(window.app_handle());
-                tray::restore_home_position(window.app_handle());
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                if capture_commands::is_recording(app) {
+                    // Alt+F4 / session shutdown bypass tray::quit — the
+                    // recording must still finalize, but that wait is
+                    // unbounded and this callback runs on the event loop:
+                    // blocking would freeze the UI for the whole encode.
+                    // Hold this close, finalize on a worker thread, then
+                    // re-trigger it via the app handle.
+                    api.prevent_close();
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        capture_commands::finalize_if_recording(&app);
+                        // The recording is finalized, so is_recording is
+                        // now false and the re-triggered CloseRequested
+                        // takes the else branch below (restore + pass
+                        // through to destruction) — no loop.
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.close();
+                        }
+                    });
+                } else {
+                    tray::restore_home_position(app);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -55,7 +74,7 @@ pub fn run() {
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {
-                "buddy-hide" => tray::hide_to_tray(app),
+                "buddy-hide" => tray::hide_buddy(app),
                 "buddy-quit" => tray::quit(app),
                 // the animation/dragging settings live in the frontend
                 // (localStorage); hand the toggles back to it

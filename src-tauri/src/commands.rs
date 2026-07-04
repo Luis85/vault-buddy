@@ -69,7 +69,7 @@ pub fn show_buddy_menu(
     )
     .map_err(|e| e.to_string())?;
     let separator = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
-    // Hide stays enabled even while recording: hide_to_tray guards it
+    // Hide stays enabled even while recording: hide_buddy guards it
     // downstream and silently no-ops mid-capture (the buddy is the
     // recording indicator and must stay visible).
     let hide = MenuItem::with_id(&app, "buddy-hide", "Hide to tray", true, None::<&str>)

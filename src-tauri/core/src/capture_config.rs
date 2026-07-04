@@ -20,6 +20,15 @@ impl RecordingMode {
             RecordingMode::VoiceNote => "Voice Note",
         }
     }
+
+    /// Desktop-audio (loopback) capture is part of this mode. Exhaustive
+    /// match: a new mode variant must decide this explicitly.
+    pub fn uses_loopback(&self) -> bool {
+        match self {
+            RecordingMode::Meeting => true,
+            RecordingMode::VoiceNote => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,5 +205,11 @@ mod tests {
     fn mode_labels() {
         assert_eq!(RecordingMode::Meeting.label(), "Meeting");
         assert_eq!(RecordingMode::VoiceNote.label(), "Voice Note");
+    }
+
+    #[test]
+    fn loopback_is_an_explicit_per_mode_decision() {
+        assert!(RecordingMode::Meeting.uses_loopback());
+        assert!(!RecordingMode::VoiceNote.uses_loopback());
     }
 }
