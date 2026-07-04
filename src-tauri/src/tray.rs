@@ -30,6 +30,12 @@ pub fn quit(app: &AppHandle) {
     // app.exit bypasses window destruction, which is what the window-state
     // plugin normally saves on — save explicitly.
     let _ = app.save_window_state(StateFlags::POSITION);
+    // Destroy the webview before exiting so WebView2 can unregister its
+    // window class in order — otherwise dev consoles log a harmless
+    // "Failed to unregister class Chrome_WidgetWin_0" (ERROR_CLASS_HAS_WINDOWS).
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.destroy();
+    }
     app.exit(0);
 }
 
