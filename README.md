@@ -51,4 +51,5 @@ every launched URI is logged.
 ## Contributing
 
 Building from source, tests, CI, and the release flow are documented in
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Coding agents should start with
+[AGENTS.md](AGENTS.md).

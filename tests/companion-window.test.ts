@@ -54,6 +54,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import {
   useCompanionWindow,
+  panelTransitionsSettled,
   COLLAPSED,
   EXPANDED,
 } from "../src/composables/useCompanionWindow";
@@ -133,6 +134,43 @@ describe("useCompanionWindow", () => {
 
     // the stale open must not expand after the close collapsed the window
     expect(lastResize()).toBe(String(COLLAPSED.width));
+  });
+
+  it("panelTransitionsSettled resolves only after the close reported offset 0", async () => {
+    // the updater awaits this before handing off to the installer: the
+    // close must have moved the window home AND reset the Rust-side offset,
+    // or prepare_update_install races it and double-shifts the position
+    state.monitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+    };
+    state.pos = { x: 1780, y: 100 };
+
+    const open = ref(false);
+    useCompanionWindow(open);
+
+    open.value = true;
+    await nextTick();
+    await flush(); // open finished — window shifted, offset reported
+
+    state.deferOuter = true;
+    open.value = false;
+    let settled = false;
+    const wait = panelTransitionsSettled().then(() => {
+      settled = true;
+    });
+    await nextTick();
+    await flush();
+    // the close is still awaiting outerPosition — not settled yet
+    expect(settled).toBe(false);
+
+    state.deferOuter = false;
+    resolveOuter();
+    await wait;
+
+    // by the time the wait resolves, Rust has been told the offset is gone
+    expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
+    expect(state.pos).toEqual({ x: 1780, y: 100 });
   });
 
   it("restores the original position after open→close→open at a screen edge", async () => {

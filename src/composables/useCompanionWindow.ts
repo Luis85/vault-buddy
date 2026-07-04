@@ -1,4 +1,4 @@
-import { ref, watch, type Ref } from "vue";
+import { nextTick, ref, watch, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   getCurrentWindow,
@@ -31,6 +31,19 @@ function monitorRect(monitor: MonitorLike | null): Rect | null {
   };
 }
 
+// Tail of the transition queue. The updater awaits this before handing off
+// to the installer, so the close transition — including the offset reset
+// reported to Rust — has fully landed and prepare_update_install can't
+// race it into a double-shifted position.
+let transitionsTail: Promise<void> = Promise.resolve();
+
+export async function panelTransitionsSettled(): Promise<void> {
+  // the watcher that extends the queue runs on the pre-flush tick — let it
+  // fire first, or a just-toggled close would be missed
+  await nextTick();
+  await transitionsTail;
+}
+
 /**
  * Grows the transparent window when the panel opens and shrinks it back when
  * it closes, so the invisible window never blocks clicks on the desktop
@@ -53,12 +66,12 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
   // Mirror the offset to the Rust side: quitting from the tray saves the
   // window position, and it must save the unshifted home position even if
   // the panel is open at that moment.
-  function reportOffset() {
-    void invoke("set_panel_offset", { x: offset.x, y: offset.y }).catch(
+  function reportOffset(): Promise<void> {
+    return invoke("set_panel_offset", { x: offset.x, y: offset.y }).catch(
       () => {
         // not running under Tauri (unit tests) — nothing to report to
       },
-    );
+    ) as Promise<void>;
   }
 
   // A transition was superseded when the panel state changed while its
@@ -105,7 +118,7 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
       // Record before moving: if we're superseded right after the move,
       // the close transition still knows what to undo.
       offset = placement.offset;
-      reportOffset();
+      void reportOffset();
       side.value = placement.side;
       valign.value = placement.valign;
       await setGeometry(
@@ -143,7 +156,9 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
     }
     if (offset.x !== 0 || offset.y !== 0) {
       offset = { x: 0, y: 0 };
-      reportOffset();
+      // awaited so the transition queue settles only once Rust knows the
+      // offset is gone — the updater relies on this ordering
+      await reportOffset();
     }
     side.value = "right";
     valign.value = "down";
@@ -162,6 +177,7 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
       .catch(() => {
         // a failed transition must not wedge the queue
       });
+    transitionsTail = queue;
   });
 
   return { side, valign };

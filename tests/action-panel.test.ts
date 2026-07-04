@@ -148,6 +148,18 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Personal");
   });
 
+  it("mounts on the settings view when the store says so", () => {
+    // an install failure reopens the destroyed panel directly on settings,
+    // where the update error and retry button live
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.showSettings = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.text()).toContain("Buddy settings");
+    expect(wrapper.text()).not.toContain("Personal");
+  });
+
   it("hides the filter and count badge while settings are open", async () => {
     const store = useVaultsStore();
     store.vaults = manyVaults;

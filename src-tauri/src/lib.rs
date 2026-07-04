@@ -14,6 +14,11 @@ pub fn run() {
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
                 .build(),
         )
+        // In-app updates: the settings panel checks GitHub Releases'
+        // latest.json and installs signed updates; process gives it the
+        // relaunch after install.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(commands::PanelOffset::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
@@ -28,6 +33,7 @@ pub fn run() {
             commands::list_vaults,
             commands::open_vault,
             commands::open_daily_note,
+            commands::prepare_update_install,
             commands::set_panel_offset,
             commands::set_window_geometry,
             commands::show_buddy_menu
