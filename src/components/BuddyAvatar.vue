@@ -19,13 +19,16 @@ const sheet = computed(() => {
 });
 
 // A constant idle loop reads as fidgeting no matter the speed. Instead the
-// sprite stands still and plays ONE quick idle cycle at random moments —
-// like a creature that occasionally shifts its weight. The jitter keeps
-// multiple avatars (companion + settings previews) from blinking in sync.
+// sprite stands still and, at random moments, either plays ONE quick idle
+// cycle or glances the other way (a scaleX(-1) mirror — the cheapest
+// possible "looking around"). The jitter keeps multiple avatars
+// (companion + settings previews) from acting in sync.
 const IDLE_MIN_DELAY_MS = 3000;
 const IDLE_DELAY_JITTER_MS = 4000;
+const IDLE_FLIP_CHANCE = 0.5;
 
 const idlePlaying = ref(false);
+const facing = ref<1 | -1>(1);
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
 const idleEligible = computed(
@@ -35,11 +38,19 @@ const idleEligible = computed(
 function scheduleIdleBurst() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(
-    () => {
-      idlePlaying.value = true;
-    },
+    fireIdleBurst,
     IDLE_MIN_DELAY_MS + Math.random() * IDLE_DELAY_JITTER_MS,
   );
+}
+
+function fireIdleBurst() {
+  if (Math.random() < IDLE_FLIP_CHANCE) {
+    // instant turn — pixel-art characters snap around, no tween needed
+    facing.value = facing.value === 1 ? -1 : 1;
+    scheduleIdleBurst();
+  } else {
+    idlePlaying.value = true; // animationend re-arms
+  }
 }
 
 function onSheetAnimationEnd() {
@@ -56,6 +67,15 @@ watch(
     if (eligible) scheduleIdleBurst();
   },
   { immediate: true },
+);
+
+// animations off means "canonical pose" — face forward-right again so the
+// frozen buddy isn't stuck looking off to the side
+watch(
+  () => props.animated,
+  (on) => {
+    if (!on) facing.value = 1;
+  },
 );
 
 onUnmounted(() => clearTimeout(idleTimer));
@@ -96,7 +116,7 @@ onUnmounted(() => clearTimeout(idleTimer));
   >
     <div
       class="sheet"
-      :class="{ running: working, playing: idlePlaying }"
+      :class="{ running: working, playing: idlePlaying, flipped: facing === -1 }"
       :style="{ backgroundImage: `url(${sheet})` }"
       @animationend="onSheetAnimationEnd"
     />
@@ -151,6 +171,10 @@ onUnmounted(() => clearTimeout(idleTimer));
    animationend, so the scheduler stays out of the way) */
 .sheet.running {
   animation: frames 0.45s steps(4) infinite;
+}
+/* glancing the other way — mirrors idle bursts and the run loop alike */
+.sheet.flipped {
+  transform: scaleX(-1);
 }
 @keyframes frames {
   from {

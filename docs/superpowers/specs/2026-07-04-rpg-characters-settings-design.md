@@ -56,9 +56,11 @@ next to `LICENSE.md` with the attribution.
   the companion and the settings previews. Renders the classic SVG or a
   sprite `<div>` animated via CSS `steps(4)` over the strip
   (`image-rendering: pixelated`, 2× scale → 32×56). Idle is not a constant
-  loop: the sprite stands still and plays one quick cycle at random moments
-  (3 s minimum delay + up to 4 s jitter, re-armed via `animationend`), so it
-  reads as a creature shifting its weight rather than fidgeting. `working`
+  loop: the sprite stands still and, at random moments (3 s minimum delay +
+  up to 4 s jitter), either plays one quick cycle (re-armed via
+  `animationend`) or glances the other way via a `scaleX(-1)` mirror — so it
+  reads as a creature shifting its weight and looking around rather than
+  fidgeting. Turning animations off resets the facing to canonical. `working`
   swaps to a continuous run loop; `animated: false` freezes everything
   (existing "still" behavior, sprites frozen on frame 0).
 - **`src/components/CompanionCharacter.vue`** — keeps all gesture logic

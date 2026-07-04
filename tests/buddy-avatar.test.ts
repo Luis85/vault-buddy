@@ -55,10 +55,14 @@ describe("BuddyAvatar", () => {
   describe("random idle bursts", () => {
     beforeEach(() => {
       vi.useFakeTimers();
+      // the scheduler draws for the delay AND for the burst action
+      // (play vs. glance); >= 0.5 deterministically picks "play"
+      vi.spyOn(Math, "random").mockReturnValue(0.75);
     });
 
     afterEach(() => {
       vi.useRealTimers();
+      vi.restoreAllMocks();
     });
 
     it("stands still at first, then plays one idle cycle and re-arms", async () => {
@@ -124,6 +128,40 @@ describe("BuddyAvatar", () => {
       vi.advanceTimersByTime(MAX_IDLE_DELAY_MS);
       await nextTick();
       expect(wrapper.find(".sprite .sheet").classes()).toContain("playing");
+    });
+
+    it("glances the other way instead of playing, then turns back", async () => {
+      // < 0.5 deterministically picks the mirror "glance" action, and
+      // makes each delay exactly 3000 + 0.25 × 4000 = 4000ms
+      vi.spyOn(Math, "random").mockReturnValue(0.25);
+      const FLIP_DELAY_MS = 4000;
+      const wrapper = mount(BuddyAvatar, { props: { characterId: "knight" } });
+      const sheet = wrapper.find(".sprite .sheet");
+      expect(sheet.classes()).not.toContain("flipped");
+
+      vi.advanceTimersByTime(FLIP_DELAY_MS);
+      await nextTick();
+      expect(sheet.classes()).toContain("flipped");
+      // a glance is not a strip animation
+      expect(sheet.classes()).not.toContain("playing");
+
+      // the glance re-arms the scheduler directly; next draw turns back
+      vi.advanceTimersByTime(FLIP_DELAY_MS);
+      await nextTick();
+      expect(sheet.classes()).not.toContain("flipped");
+    });
+
+    it("faces forward again when animations are turned off", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.25);
+      const wrapper = mount(BuddyAvatar, { props: { characterId: "elf" } });
+      vi.advanceTimersByTime(MAX_IDLE_DELAY_MS);
+      await nextTick();
+      expect(wrapper.find(".sprite .sheet").classes()).toContain("flipped");
+
+      await wrapper.setProps({ animated: false });
+      expect(wrapper.find(".sprite .sheet").classes()).not.toContain(
+        "flipped",
+      );
     });
   });
 });
