@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { panelTransitionsSettled } from "../composables/useCompanionWindow";
 import { useVaultsStore } from "./vaults";
 
 export type UpdatePhase =
@@ -72,7 +73,15 @@ export const useUpdatesStore = defineStore("updates", {
         // backstop, so installing with the panel open at a screen edge
         // can't persist the shifted point.
         vaults.panelOpen = false;
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        // Wait until the close transition has actually landed — geometry
+        // moved home AND the offset reset reported to Rust — so the
+        // prepare_update_install backstop can't race it and double-shift
+        // the position. The timeout keeps a wedged transition from
+        // blocking the install forever.
+        await Promise.race([
+          panelTransitionsSettled(),
+          new Promise((resolve) => setTimeout(resolve, 1000)),
+        ]);
         await invoke("prepare_update_install").catch(() => {});
         await this.available.install();
         // Tauri's signature check has already verified the payload; hand
