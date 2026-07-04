@@ -113,7 +113,13 @@ function onFilterEscape(event: KeyboardEvent) {
       :saving="capture.status === 'saving'"
       :starting="capture.status === 'starting'"
       :warning="capture.warning"
+      :paused="capture.paused"
+      :paused-total-ms="capture.pausedTotalMs"
+      :paused-since-ms="capture.pausedSinceMs"
+      :level="capture.level"
       @stop="capture.stop()"
+      @pause="capture.pause()"
+      @resume="capture.resume()"
     />
     <p
       v-if="view === 'list' && capture.error"

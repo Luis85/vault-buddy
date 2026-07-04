@@ -141,6 +141,7 @@ onUnmounted(() => {
         :draggable="settings.draggingEnabled"
         :facing="settings.facing"
         :recording="capture.status === 'recording' || capture.status === 'saving'"
+        :paused="capture.paused"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
       />
