@@ -5,3 +5,15 @@ export interface Vault {
   /** Currently open in Obsidian (from obsidian.json's `open` flag). */
   open: boolean;
 }
+
+export interface CaptureStatus {
+  recording: boolean;
+  vaultId: string | null;
+  startedAtMs: number | null;
+}
+
+export interface CaptureSaved {
+  mp3: string;
+  note: string | null;
+  endedEarly: boolean;
+}
