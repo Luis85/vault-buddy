@@ -10,7 +10,9 @@ export const useVaultsStore = defineStore("vaults", {
     // Which panel view is showing. Lives here (not in ActionPanel) because
     // the panel is destroyed while closed — a failed update install must be
     // able to reopen it directly on settings, where the error UI lives.
-    showSettings: false,
+    view: "list" as "list" | "settings" | "captureSettings",
+    // Which vault the captureSettings view edits.
+    captureSettingsVaultId: null as string | null,
     busyVaultId: null as string | null,
     busyCommand: null as "open_vault" | "open_daily_note" | null,
     error: null as string | null,
@@ -34,7 +36,7 @@ export const useVaultsStore = defineStore("vaults", {
       // saw the empty state, then opened Obsidian, must not stay stuck on
       // the cached result until the app restarts.
       if (this.panelOpen) {
-        this.showSettings = false;
+        this.showList();
         await this.loadVaults();
       }
     },
@@ -55,6 +57,17 @@ export const useVaultsStore = defineStore("vaults", {
         this.busyVaultId = null;
         this.busyCommand = null;
       }
+    },
+    showList() {
+      this.view = "list";
+      this.captureSettingsVaultId = null;
+    },
+    openSettings() {
+      this.view = "settings";
+    },
+    openCaptureSettings(vaultId: string) {
+      this.view = "captureSettings";
+      this.captureSettingsVaultId = vaultId;
     },
   },
 });

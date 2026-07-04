@@ -143,12 +143,12 @@ describe("updates store", () => {
     const install = vi.fn().mockImplementation(async () => {
       // whatever the view state was when the process was about to exit,
       // the reopened panel must land on settings
-      vaults.showSettings = false;
+      vaults.view = "list";
       throw "install broke";
     });
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
     vaults.panelOpen = true;
-    vaults.showSettings = true; // installs start from the settings view
+    vaults.view = "settings"; // installs start from the settings view
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
@@ -158,7 +158,7 @@ describe("updates store", () => {
     // the panel remounts on reopen — it must land on settings, where the
     // update error and retry button live, not on the vault list
     expect(vaults.panelOpen).toBe(true);
-    expect(vaults.showSettings).toBe(true);
+    expect(vaults.view).toBe("settings");
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 

@@ -38,16 +38,19 @@ describe("vaults store", () => {
     expect(store.vaults).toEqual(sampleVaults);
   });
 
-  it("reopening the panel lands on the vault list, not settings", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "list_vaults") return sampleVaults;
-    });
+  it("reopening the panel always lands on the vault list", async () => {
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();
-    await store.togglePanel();
-    store.showSettings = true;
-    await store.togglePanel(); // close while on settings
-    await store.togglePanel(); // reopen
-    expect(store.showSettings).toBe(false);
+    store.openSettings();
+    expect(store.view).toBe("settings");
+    await store.togglePanel(); // open
+    expect(store.view).toBe("list");
+    store.openCaptureSettings("v1");
+    expect(store.view).toBe("captureSettings");
+    expect(store.captureSettingsVaultId).toBe("v1");
+    store.showList();
+    expect(store.view).toBe("list");
+    expect(store.captureSettingsVaultId).toBeNull();
   });
 
   it("runAction passes the vault id and tracks busy state", async () => {

@@ -12,14 +12,14 @@ const capture = useCaptureStore();
 
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
-const { showSettings } = storeToRefs(store);
+const { view } = storeToRefs(store);
 
 const filter = ref("");
 // A short list is scannable at a glance; only offer filtering when the
 // list is long enough that scanning stops working.
 const FILTER_THRESHOLD = 5;
 const showFilter = computed(
-  () => !showSettings.value && store.vaults.length > FILTER_THRESHOLD,
+  () => view.value === "list" && store.vaults.length > FILTER_THRESHOLD,
 );
 const filtered = computed(() => {
   const query = filter.value.trim().toLowerCase();
@@ -46,11 +46,11 @@ function onFilterEscape(event: KeyboardEvent) {
   >
     <div class="mb-2 flex items-center justify-between">
       <h1 class="text-sm font-bold text-slate-100">
-        {{ showSettings ? "Buddy settings" : "Vaults" }}
+        {{ view === "settings" ? "Buddy settings" : "Vaults" }}
       </h1>
       <div class="flex items-center gap-2">
         <span
-          v-if="!showSettings && store.vaults.length > 0"
+          v-if="view === 'list' && store.vaults.length > 0"
           class="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
         >
           {{ store.vaults.length }}
@@ -58,12 +58,12 @@ function onFilterEscape(event: KeyboardEvent) {
         <button
           type="button"
           class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="{ 'text-violet-300': showSettings }"
-          :aria-label="showSettings ? 'Back to vaults' : 'Buddy settings'"
-          :aria-pressed="showSettings"
-          :title="showSettings ? 'Back to vaults' : 'Buddy settings'"
+          :class="{ 'text-violet-300': view === 'settings' }"
+          :aria-label="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
+          :aria-pressed="view === 'settings'"
+          :title="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
           data-testid="settings-toggle"
-          @click="showSettings = !showSettings"
+          @click="view === 'list' ? store.openSettings() : store.showList()"
         >
           <svg
             width="16"
@@ -94,13 +94,13 @@ function onFilterEscape(event: KeyboardEvent) {
       @keydown.escape="onFilterEscape"
     />
     <p
-      v-if="!showSettings && store.error"
+      v-if="view === 'list' && store.error"
       class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ store.error }}
     </p>
     <RecordingBar
-      v-if="!showSettings && capture.status !== 'idle'"
+      v-if="view === 'list' && capture.status !== 'idle'"
       class="mb-2"
       :started-at-ms="capture.startedAtMs"
       :saving="capture.status === 'saving'"
@@ -109,13 +109,13 @@ function onFilterEscape(event: KeyboardEvent) {
       @stop="capture.stop()"
     />
     <p
-      v-if="!showSettings && capture.error"
+      v-if="view === 'list' && capture.error"
       class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ capture.error }}
     </p>
     <div
-      v-if="showSettings"
+      v-if="view === 'settings'"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <BuddySettings />

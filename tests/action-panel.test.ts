@@ -154,7 +154,7 @@ describe("ActionPanel", () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
-    store.showSettings = true;
+    store.view = "settings";
     const wrapper = mount(ActionPanel);
     expect(wrapper.text()).toContain("Buddy settings");
     expect(wrapper.text()).not.toContain("Personal");
