@@ -57,6 +57,26 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     out
 }
 
+/// Rewrite exactly the `![[old]]` embed line(s) to point at the new file
+/// name. Line-anchored on purpose: the user may have written prose
+/// mentioning the old name, and only the embed our own render_note wrote
+/// may change.
+pub fn retarget_embed(note: &str, old_mp3: &str, new_mp3: &str) -> String {
+    let old_line = format!("![[{old_mp3}]]");
+    let new_line = format!("![[{new_mp3}]]");
+    let mut out = String::with_capacity(note.len());
+    for line in note.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        if body == old_line {
+            out.push_str(&new_line);
+            out.push_str(&line[body.len()..]);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// Ownership marker for our note temp files: recovery's cleanup filter
 /// deletes ONLY temps carrying this suffix — never another tool's
 /// `.md.tmp` that happens to live in a recording folder.
@@ -255,5 +275,36 @@ mod tests {
         assert_eq!(written, dir.path().join("n (2).md"));
         assert_eq!(std::fs::read_to_string(&written).unwrap(), "content");
         assert_eq!(std::fs::read_to_string(&note).unwrap(), "taken");
+    }
+
+    #[test]
+    fn retarget_rewrites_only_the_embed_line() {
+        let note = "---\nvault: \"W\"\n---\n\nSee old.mp3 in prose.\n![[old.mp3]]\n";
+        let out = retarget_embed(note, "old.mp3", "new.mp3");
+        assert!(out.contains("![[new.mp3]]"));
+        assert!(!out.contains("![[old.mp3]]"));
+        assert!(
+            out.contains("See old.mp3 in prose."),
+            "prose mention untouched: {out}"
+        );
+    }
+
+    #[test]
+    fn retarget_preserves_crlf_line_endings() {
+        let note = "a\r\n![[old.mp3]]\r\nb\r\n";
+        let out = retarget_embed(note, "old.mp3", "new.mp3");
+        assert_eq!(out, "a\r\n![[new.mp3]]\r\nb\r\n");
+    }
+
+    #[test]
+    fn retarget_without_a_match_returns_the_note_unchanged() {
+        let note = "no embed here\n![[other.mp3]]\n";
+        assert_eq!(retarget_embed(note, "old.mp3", "new.mp3"), note);
+    }
+
+    #[test]
+    fn retarget_handles_a_note_without_trailing_newline() {
+        let out = retarget_embed("![[old.mp3]]", "old.mp3", "new.mp3");
+        assert_eq!(out, "![[new.mp3]]");
     }
 }
