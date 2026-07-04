@@ -1,7 +1,7 @@
 use chrono::Local;
 use std::path::Path;
 use std::sync::Mutex;
-use vault_buddy_core::{daily_note_uri, discovery, uri};
+use vault_buddy_core::{daily_note_uri, discovery, process, uri};
 
 /// Physical pixels the frontend subtracted from the window position while
 /// the panel is open (so it can unfold toward free screen space). The quit
@@ -104,7 +104,17 @@ fn find_vault(id: &str) -> Result<discovery::Vault, String> {
 
 #[tauri::command]
 pub fn list_vaults() -> Vec<discovery::Vault> {
-    discovery::discover_vaults()
+    let mut vaults = discovery::discover_vaults();
+    // obsidian.json keeps `open: true` across a full Obsidian quit (that's
+    // how Obsidian restores vaults on relaunch) — only trust the flags
+    // while an Obsidian process actually exists, or the "Open now" group
+    // shows vaults that were merely open last session.
+    if !process::obsidian_running() {
+        for vault in &mut vaults {
+            vault.open = false;
+        }
+    }
+    vaults
 }
 
 #[tauri::command]
