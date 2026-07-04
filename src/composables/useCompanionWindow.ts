@@ -4,22 +4,11 @@ import {
   getCurrentWindow,
   currentMonitor,
   LogicalSize,
-  PhysicalPosition,
 } from "@tauri-apps/api/window";
-import {
-  planPanelPlacement,
-  type PanelPlacement,
-  type Rect,
-} from "./companionPlacement";
+import { planPanelPlacement, type Rect } from "./companionPlacement";
 
 export const COLLAPSED = { width: 88, height: 88 };
 export const EXPANDED = { width: 440, height: 340 };
-
-const STAY: PanelPlacement = {
-  side: "right",
-  valign: "down",
-  offset: { x: 0, y: 0 },
-};
 
 interface MonitorLike {
   position: { x: number; y: number };
@@ -76,9 +65,23 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
   // window calls were still in flight (e.g. a quick double-click).
   const stale = (expected: boolean) => panelOpen.value !== expected;
 
+  // Position and size must change in ONE native call: applying them as two
+  // IPC round-trips painted an intermediate geometry — the buddy flashed to
+  // a corner whenever the panel opened shifted (left/up placements).
+  function setGeometry(
+    pos: { x: number; y: number },
+    size: { width: number; height: number },
+  ): Promise<void> {
+    return invoke("set_window_geometry", {
+      x: pos.x,
+      y: pos.y,
+      width: size.width,
+      height: size.height,
+    });
+  }
+
   async function applyOpen(): Promise<void> {
     const win = getCurrentWindow();
-    let placement = STAY;
     try {
       const [pos, scale, monitor] = await Promise.all([
         win.outerPosition(),
@@ -92,7 +95,7 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
       // room and reset the pending offset — the following close would then
       // never move the buddy back to where the user left it.
       const home = { x: pos.x + offset.x, y: pos.y + offset.y };
-      placement = planPanelPlacement(
+      const placement = planPanelPlacement(
         home,
         monitorRect(monitor),
         scale,
@@ -103,36 +106,42 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
       // the close transition still knows what to undo.
       offset = placement.offset;
       reportOffset();
-      const target = {
-        x: home.x - placement.offset.x,
-        y: home.y - placement.offset.y,
-      };
-      if (target.x !== pos.x || target.y !== pos.y) {
-        await win.setPosition(new PhysicalPosition(target.x, target.y));
-      }
+      side.value = placement.side;
+      valign.value = placement.valign;
+      await setGeometry(
+        {
+          x: home.x - placement.offset.x,
+          y: home.y - placement.offset.y,
+        },
+        EXPANDED,
+      );
     } catch {
-      // No monitor info — grow right/down. Leave any recorded offset
-      // untouched so a pending shift is still undone on close.
-      placement = STAY;
+      // No window/monitor info — grow right/down in place. Leave any
+      // recorded offset untouched so a pending shift is still undone on
+      // close.
+      side.value = "right";
+      valign.value = "down";
+      await win
+        .setSize(new LogicalSize(EXPANDED.width, EXPANDED.height))
+        .catch(() => {});
     }
-    if (stale(true)) return;
-    side.value = placement.side;
-    valign.value = placement.valign;
-    await win.setSize(new LogicalSize(EXPANDED.width, EXPANDED.height));
   }
 
   async function applyClose(): Promise<void> {
     const win = getCurrentWindow();
-    await win.setSize(new LogicalSize(COLLAPSED.width, COLLAPSED.height));
+    try {
+      const pos = await win.outerPosition();
+      await setGeometry(
+        { x: pos.x + offset.x, y: pos.y + offset.y },
+        COLLAPSED,
+      );
+    } catch {
+      // window may be gone during shutdown — best-effort collapse
+      await win
+        .setSize(new LogicalSize(COLLAPSED.width, COLLAPSED.height))
+        .catch(() => {});
+    }
     if (offset.x !== 0 || offset.y !== 0) {
-      try {
-        const pos = await win.outerPosition();
-        await win.setPosition(
-          new PhysicalPosition(pos.x + offset.x, pos.y + offset.y),
-        );
-      } catch {
-        // window may be gone during shutdown; nothing to restore
-      }
       offset = { x: 0, y: 0 };
       reportOffset();
     }

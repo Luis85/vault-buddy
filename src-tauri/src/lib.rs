@@ -18,6 +18,7 @@ pub fn run() {
             commands::open_vault,
             commands::open_daily_note,
             commands::set_panel_offset,
+            commands::set_window_geometry,
             commands::show_buddy_menu
         ])
         .setup(|app| {

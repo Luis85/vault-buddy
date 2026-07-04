@@ -31,7 +31,7 @@ function onFilterEscape(event: KeyboardEvent) {
 
 <template>
   <div
-    class="flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-2xl backdrop-blur"
+    class="flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
   >
     <div class="mb-2 flex items-center justify-between">
       <h1 class="text-sm font-bold text-slate-100">Vaults</h1>

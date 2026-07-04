@@ -16,6 +16,26 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
     *state.0.lock().unwrap() = (x, y);
 }
 
+/// Applies position and size in one native call. The frontend used to issue
+/// setPosition and setSize as two IPC round-trips, and the intermediate
+/// geometry got painted — the buddy visibly flashed to a corner whenever the
+/// panel opened with a shifted placement.
+#[tauri::command]
+pub fn set_window_geometry(
+    window: tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())
+}
+
 /// Native context menu for the buddy. The collapsed window is far too small
 /// to host an HTML menu; the OS popup renders outside the window bounds and
 /// matches the tray menu. Item events are handled in `lib.rs`.

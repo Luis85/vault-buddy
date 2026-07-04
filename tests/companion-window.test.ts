@@ -62,8 +62,16 @@ const flush = () => new Promise((r) => setTimeout(r));
 const resolveOuter = () => {
   for (const resolve of state.pendingOuter.splice(0)) resolve();
 };
-const lastResize = () =>
-  state.calls.filter((c) => c.startsWith("setSize")).pop();
+// window size changes arrive as setGeometry (normal path) or setSize
+// (fallback when window info is unavailable)
+const lastResize = () => {
+  const entry = state.calls
+    .filter((c) => c.startsWith("setGeometry") || c.startsWith("setSize"))
+    .pop();
+  if (!entry) return undefined;
+  if (entry.startsWith("setSize")) return entry.split(":")[1];
+  return entry.split(",")[2];
+};
 
 describe("useCompanionWindow", () => {
   beforeEach(() => {
@@ -76,6 +84,15 @@ describe("useCompanionWindow", () => {
       if (cmd === "set_panel_offset") {
         const { x, y } = args as { x: number; y: number };
         state.calls.push(`reportOffset:${x},${y}`);
+      }
+      if (cmd === "set_window_geometry") {
+        const { x, y, width } = args as {
+          x: number;
+          y: number;
+          width: number;
+        };
+        state.pos = { x, y };
+        state.calls.push(`setGeometry:${x},${y},${width}`);
       }
     });
   });
@@ -91,12 +108,12 @@ describe("useCompanionWindow", () => {
     open.value = true;
     await nextTick();
     await flush();
-    expect(state.calls).toContain(`setSize:${EXPANDED.width}`);
+    expect(lastResize()).toBe(String(EXPANDED.width));
 
     open.value = false;
     await nextTick();
     await flush();
-    expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
+    expect(lastResize()).toBe(String(COLLAPSED.width));
   });
 
   it("never leaves the window expanded when close arrives mid-open", async () => {
@@ -115,7 +132,7 @@ describe("useCompanionWindow", () => {
     await flush();
 
     // the stale open must not expand after the close collapsed the window
-    expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
+    expect(lastResize()).toBe(String(COLLAPSED.width));
   });
 
   it("restores the original position after open→close→open at a screen edge", async () => {
@@ -159,7 +176,7 @@ describe("useCompanionWindow", () => {
 
     // closing puts the buddy back exactly where the user left it
     expect(state.pos).toEqual({ x: 1780, y: 100 });
-    expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
+    expect(lastResize()).toBe(String(COLLAPSED.width));
     expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
   });
 });
