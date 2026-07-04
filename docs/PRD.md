@@ -444,6 +444,8 @@ Vault Buddy acts as the orchestrator.
 - Move
 - Recurring Tasks
 
+See the [Task Management capability PRD](prds/task-management.md) for the detailed requirements.
+
 ### Search
 
 - Notes
