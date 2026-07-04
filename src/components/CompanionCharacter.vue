@@ -2,7 +2,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 defineProps<{ working: boolean }>();
-const emit = defineEmits<{ (e: "toggle"): void }>();
+const emit = defineEmits<{
+  (e: "toggle"): void;
+  (e: "drag-start"): void;
+}>();
 
 // The buddy is both the click target (toggle panel) and the drag handle
 // (move window). A tauri drag region would swallow clicks, so distinguish
@@ -33,6 +36,7 @@ function onPointerMove(e: PointerEvent) {
   (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(
     e.pointerId,
   );
+  emit("drag-start");
   void getCurrentWindow().startDragging();
 }
 

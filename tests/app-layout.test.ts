@@ -131,4 +131,38 @@ describe("App layout geometry", () => {
     await flush();
     expect(store.panelOpen).toBe(false);
   });
+
+  it("keeps the panel open when the focus loss comes from a buddy drag", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(100_000);
+      const wrapper = mount(App);
+      await flush();
+      const store = useVaultsStore();
+      await store.togglePanel();
+      expect(store.panelOpen).toBe(true);
+
+      // dragging the buddy enters the OS move loop, which steals focus;
+      // collapsing the window mid-drag would cancel the drag and dump the
+      // buddy at the panel's old top-left corner
+      const buddy = wrapper.find("button.buddy");
+      await buddy.trigger("pointerdown", {
+        button: 0,
+        screenX: 50,
+        screenY: 50,
+      });
+      await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+      state.focusHandler?.({ payload: false });
+      await flush();
+      expect(store.panelOpen).toBe(true); // still open — drag in progress
+
+      // a focus loss well after the drag started is a real one
+      vi.setSystemTime(100_000 + 5_000);
+      state.focusHandler?.({ payload: false });
+      await flush();
+      expect(store.panelOpen).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -3,6 +3,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager,
 };
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
@@ -28,7 +29,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     };
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                // app.exit bypasses window destruction, which is what the
+                // window-state plugin normally saves on — save explicitly.
+                let _ = app.save_window_state(StateFlags::POSITION);
+                app.exit(0);
+            }
             _ => {}
         })
         .build(app)?;

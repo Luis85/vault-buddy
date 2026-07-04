@@ -22,6 +22,12 @@ Setup: `npm install`, then `npm run tauri dev`.
 - [ ] Open the panel near the right edge, drag the window somewhere else
       while it is open, close the panel: the buddy stays where it was
       dropped (no teleporting).
+- [ ] With the panel open, drag the buddy: the panel stays open and moves
+      along; the drag is not cancelled and the buddy does not jump to the
+      panel's old corner.
+- [ ] Move the buddy somewhere distinctive, quit via the tray, relaunch:
+      the buddy reappears where it was left (position persists; window size
+      starts collapsed regardless of how it was closed).
 - [ ] Clicking the character grows the window and shows the dark panel listing
       your real vaults (names match Obsidian's vault switcher) with a count
       badge and an avatar initial per row.

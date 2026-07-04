@@ -13,8 +13,28 @@ const working = computed(() => busyVaultId.value !== null);
 
 const { side, valign } = useCompanionWindow(panelOpen);
 
+// Dragging the buddy enters the OS window-move loop, which steals focus
+// from the webview. Closing the panel on that focus loss would resize the
+// window mid-drag — Windows then cancels the drag and the buddy lands at
+// the collapsed window's origin (the panel's old top-left corner). Ignore
+// close triggers that arrive right after a drag begins.
+const DRAG_CLOSE_SUPPRESS_MS = 500;
+let dragStartedAt = 0;
+
+function onDragStart() {
+  dragStartedAt = Date.now();
+}
+
+function dragJustStarted() {
+  return Date.now() - dragStartedAt < DRAG_CLOSE_SUPPRESS_MS;
+}
+
 function closePanel() {
   if (store.panelOpen) void store.togglePanel();
+}
+
+function closePanelUnlessDragging() {
+  if (!dragJustStarted()) closePanel();
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -30,7 +50,7 @@ onMounted(async () => {
     // so the transparent window shrinks out of the way.
     unlistenFocus = await getCurrentWindow().onFocusChanged(
       ({ payload: focused }) => {
-        if (!focused) closePanel();
+        if (!focused) closePanelUnlessDragging();
       },
     );
   } catch {
@@ -63,18 +83,22 @@ onUnmounted(() => {
       side === 'left' ? 'flex-row-reverse' : 'flex-row',
       valign === 'up' ? 'items-end' : 'items-start',
     ]"
-    @click.self="closePanel"
+    @click.self="closePanelUnlessDragging"
   >
     <div
       data-testid="buddy-cell"
       class="flex h-[88px] w-[88px] shrink-0 items-start justify-start p-2"
     >
-      <CompanionCharacter :working="working" @toggle="store.togglePanel()" />
+      <CompanionCharacter
+        :working="working"
+        @toggle="store.togglePanel()"
+        @drag-start="onDragStart"
+      />
     </div>
     <div
       v-if="panelOpen"
       class="min-w-0 flex-1 self-stretch p-2"
-      @click.self="closePanel"
+      @click.self="closePanelUnlessDragging"
     >
       <ActionPanel />
     </div>

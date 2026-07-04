@@ -29,6 +29,8 @@ describe("CompanionCharacter", () => {
     await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
     await buddy.trigger("pointermove", { screenX: 70, screenY: 60 });
     expect(startDragging).toHaveBeenCalledTimes(1);
+    // App needs to know so it can ignore the drag-induced focus loss
+    expect(wrapper.emitted("drag-start")).toHaveLength(1);
     // the OS drag consumed the gesture — a trailing click must not toggle
     await buddy.trigger("click");
     expect(wrapper.emitted("toggle")).toBeUndefined();
