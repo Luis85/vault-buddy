@@ -2,7 +2,11 @@
 import { computed } from "vue";
 import type { Vault } from "../types";
 
-const props = defineProps<{ vaults: Vault[]; busyVaultId: string | null }>();
+const props = defineProps<{
+  vaults: Vault[];
+  busyVaultId: string | null;
+  busyCommand: "open_vault" | "open_daily_note" | null;
+}>();
 defineEmits<{
   (e: "open-vault", id: string): void;
   (e: "open-daily-note", id: string): void;
@@ -23,39 +27,76 @@ const duplicatedNames = computed(() => {
 
 const isAmbiguous = (vault: Vault) =>
   duplicatedNames.value.has(vault.name.toLowerCase());
+
+const isBusy = (vault: Vault, command: "open_vault" | "open_daily_note") =>
+  props.busyVaultId === vault.id && props.busyCommand === command;
 </script>
 
 <template>
-  <ul class="space-y-2">
-    <li
-      v-for="vault in vaults"
-      :key="vault.id"
-      class="rounded-lg bg-white/90 px-3 py-2 shadow"
-      :title="vault.path"
-    >
-      <div class="text-sm font-semibold text-slate-800">{{ vault.name }}</div>
+  <ul class="space-y-1">
+    <li v-for="vault in vaults" :key="vault.id" :title="vault.path">
       <div
-        v-if="isAmbiguous(vault)"
-        class="truncate text-xs text-slate-500"
+        class="flex items-center gap-1 rounded-lg transition-colors hover:bg-white/10"
       >
-        {{ vault.path }}
-      </div>
-      <div class="mt-1 flex gap-2">
         <button
           type="button"
-          class="rounded bg-violet-600 px-2 py-1 text-xs text-white hover:bg-violet-500 disabled:opacity-50"
+          class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50"
           :disabled="busyVaultId !== null"
+          :aria-label="`Open vault ${vault.name}`"
           @click="$emit('open-vault', vault.id)"
         >
-          Open vault
+          <span
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-600/80 text-xs font-bold text-white"
+            aria-hidden="true"
+          >
+            {{ vault.name.charAt(0).toUpperCase() }}
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-sm font-medium text-slate-100">
+              {{ vault.name }}
+            </span>
+            <span
+              v-if="isAmbiguous(vault)"
+              class="block truncate text-xs text-slate-400"
+            >
+              {{ vault.path }}
+            </span>
+          </span>
+          <span
+            v-if="isBusy(vault, 'open_vault')"
+            class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white"
+            role="status"
+            aria-label="Opening vault…"
+          ></span>
         </button>
         <button
           type="button"
-          class="rounded bg-violet-600 px-2 py-1 text-xs text-white hover:bg-violet-500 disabled:opacity-50"
+          class="mr-1 shrink-0 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50"
           :disabled="busyVaultId !== null"
+          :aria-label="`Open today's daily note in ${vault.name}`"
+          title="Open today's daily note"
           @click="$emit('open-daily-note', vault.id)"
         >
-          Open today's daily note
+          <span
+            v-if="isBusy(vault, 'open_daily_note')"
+            class="block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"
+            role="status"
+            aria-label="Opening daily note…"
+          ></span>
+          <svg
+            v-else
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="5" width="18" height="16" rx="2" />
+            <path d="M8 3v4M16 3v4M3 11h18" />
+          </svg>
         </button>
       </div>
     </li>

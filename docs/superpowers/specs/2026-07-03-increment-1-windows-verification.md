@@ -22,11 +22,21 @@ Setup: `npm install`, then `npm run tauri dev`.
 - [ ] Open the panel near the right edge, drag the window somewhere else
       while it is open, close the panel: the buddy stays where it was
       dropped (no teleporting).
-- [ ] Clicking the character grows the window and shows the panel listing your
-      real vaults (names match Obsidian's vault switcher).
-- [ ] "Open vault" brings that vault up in Obsidian.
-- [ ] "Open today's daily note" with an existing note opens it in the right
+- [ ] Clicking the character grows the window and shows the dark panel listing
+      your real vaults (names match Obsidian's vault switcher) with a count
+      badge and an avatar initial per row.
+- [ ] Clicking a vault row brings that vault up in Obsidian; a spinner shows
+      on the row while it launches, then the panel closes by itself.
+- [ ] The calendar button with an existing daily note opens it in the right
       vault.
+- [ ] With more than 5 vaults a "Filter vaults…" box appears; typing narrows
+      the list by name and path; Escape clears the filter first, a second
+      Escape closes the panel.
+- [ ] Escape closes the panel; clicking anywhere on the desktop (window loses
+      focus) also closes it.
+- [ ] With Windows "reduced motion" enabled (Settings > Accessibility >
+      Visual effects > Animation effects off), the buddy stops bobbing and
+      blinking.
 - [ ] Delete/rename today's note, retry: Obsidian creates it (empty — template
       not applied is a known limitation).
 - [ ] Vault with a custom daily-note folder/format (e.g. `Journal`,

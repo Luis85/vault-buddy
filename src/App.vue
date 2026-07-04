@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import CompanionCharacter from "./components/CompanionCharacter.vue";
 import ActionPanel from "./components/ActionPanel.vue";
 import { useCompanionWindow } from "./composables/useCompanionWindow";
@@ -11,12 +12,42 @@ const { panelOpen, busyVaultId } = storeToRefs(store);
 const working = computed(() => busyVaultId.value !== null);
 
 const { side, valign } = useCompanionWindow(panelOpen);
+
+function closePanel() {
+  if (store.panelOpen) void store.togglePanel();
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") closePanel();
+}
+
+let unlistenFocus: (() => void) | undefined;
+
+onMounted(async () => {
+  window.addEventListener("keydown", onKeydown);
+  try {
+    // Clicking the desktop takes focus off the companion — close the panel
+    // so the transparent window shrinks out of the way.
+    unlistenFocus = await getCurrentWindow().onFocusChanged(
+      ({ payload: focused }) => {
+        if (!focused) closePanel();
+      },
+    );
+  } catch {
+    // not running under Tauri (unit tests)
+  }
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown);
+  unlistenFocus?.();
+});
 </script>
 
 <template>
   <!--
     The buddy lives in a fixed cell with the exact collapsed-window size
-    (140x170). When the window grows by the size delta and the layout
+    (88x88). When the window grows by the size delta and the layout
     mirrors, the cell lands precisely where the collapsed window was, so
     the character never visibly moves — the placement offset in
     useCompanionWindow assumes exactly this geometry.
@@ -30,7 +61,7 @@ const { side, valign } = useCompanionWindow(panelOpen);
   >
     <div
       data-testid="buddy-cell"
-      class="flex h-[170px] w-[140px] shrink-0 items-start justify-start p-2"
+      class="flex h-[88px] w-[88px] shrink-0 items-start justify-start p-2"
     >
       <CompanionCharacter :working="working" @toggle="store.togglePanel()" />
     </div>

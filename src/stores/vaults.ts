@@ -8,6 +8,7 @@ export const useVaultsStore = defineStore("vaults", {
     loaded: false,
     panelOpen: false,
     busyVaultId: null as string | null,
+    busyCommand: null as "open_vault" | "open_daily_note" | null,
     error: null as string | null,
   }),
   actions: {
@@ -37,13 +38,17 @@ export const useVaultsStore = defineStore("vaults", {
       vaultId: string,
     ) {
       this.busyVaultId = vaultId;
+      this.busyCommand = command;
       this.error = null;
       try {
         await invoke(command, { id: vaultId });
+        // Obsidian is taking over — get out of the way.
+        this.panelOpen = false;
       } catch (e) {
         this.error = String(e);
       } finally {
         this.busyVaultId = null;
+        this.busyCommand = null;
       }
     },
   },

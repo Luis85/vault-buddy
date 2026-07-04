@@ -11,7 +11,7 @@ import {
   type Rect,
 } from "./companionPlacement";
 
-export const COLLAPSED = { width: 140, height: 170 };
+export const COLLAPSED = { width: 88, height: 88 };
 export const EXPANDED = { width: 440, height: 340 };
 
 const STAY: PanelPlacement = {

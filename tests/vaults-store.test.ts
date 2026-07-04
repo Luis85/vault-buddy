@@ -47,7 +47,27 @@ describe("vaults store", () => {
     await store.runAction("open_daily_note", "a1b2c3");
     expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "a1b2c3" } }]);
     expect(store.busyVaultId).toBe(null);
+    expect(store.busyCommand).toBe(null);
     expect(store.error).toBe(null);
+  });
+
+  it("closes the panel after a successful action", async () => {
+    mockIPC(() => undefined);
+    const store = useVaultsStore();
+    store.panelOpen = true;
+    await store.runAction("open_vault", "a1b2c3");
+    expect(store.panelOpen).toBe(false);
+  });
+
+  it("keeps the panel open when an action fails", async () => {
+    mockIPC(() => {
+      throw "vault not found: nope";
+    });
+    const store = useVaultsStore();
+    store.panelOpen = true;
+    await store.runAction("open_vault", "nope");
+    expect(store.panelOpen).toBe(true);
+    expect(store.error).toContain("vault not found");
   });
 
   it("runAction surfaces command errors", async () => {

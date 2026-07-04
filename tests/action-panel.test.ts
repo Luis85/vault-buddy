@@ -10,6 +10,12 @@ const sampleVaults = [
   { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work" },
 ];
 
+const manyVaults = Array.from({ length: 8 }, (_, i) => ({
+  id: `id${i}`,
+  name: `Vault ${i}`,
+  path: `C:\\vaults\\Vault ${i}`,
+}));
+
 describe("ActionPanel", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -19,15 +25,16 @@ describe("ActionPanel", () => {
     clearMocks();
   });
 
-  it("lists each vault with both actions", () => {
+  it("lists each vault with both actions and a count badge", () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
     const wrapper = mount(ActionPanel);
     expect(wrapper.text()).toContain("Personal");
     expect(wrapper.text()).toContain("Work");
+    expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll("button");
-    expect(buttons).toHaveLength(4); // 2 vaults × 2 actions
+    expect(buttons).toHaveLength(4); // 2 vaults × (row + daily note)
   });
 
   it("dispatches open_daily_note with the vault id", async () => {
@@ -39,11 +46,51 @@ describe("ActionPanel", () => {
     store.vaults = sampleVaults;
     store.loaded = true;
     const wrapper = mount(ActionPanel);
-    const dailyButtons = wrapper
-      .findAll("button")
-      .filter((b) => b.text().includes("daily note"));
-    await dailyButtons[0].trigger("click");
+    await wrapper
+      .find('[aria-label="Open today\'s daily note in Personal"]')
+      .trigger("click");
     expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "d4e5f6" } }]);
+  });
+
+  it("hides the filter for short lists", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('input[type="search"]').exists()).toBe(false);
+  });
+
+  it("filters long lists by name and path", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const input = wrapper.find('input[type="search"]');
+    expect(input.exists()).toBe(true);
+    await input.setValue("Vault 3");
+    expect(wrapper.text()).toContain("Vault 3");
+    expect(wrapper.text()).not.toContain("Vault 5");
+  });
+
+  it("shows a friendly message when nothing matches the filter", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper.find('input[type="search"]').setValue("zzz");
+    expect(wrapper.text()).toContain('No vaults match "zzz"');
+  });
+
+  it("clears the filter on Escape instead of closing", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const input = wrapper.find('input[type="search"]');
+    await input.setValue("Vault 3");
+    await input.trigger("keydown", { key: "Escape" });
+    expect((input.element as HTMLInputElement).value).toBe("");
+    expect(wrapper.text()).toContain("Vault 5"); // list unfiltered again
   });
 
   it("shows the friendly empty state when no vaults were found", () => {
@@ -70,6 +117,7 @@ describe("ActionPanel", () => {
     store.vaults = sampleVaults;
     store.loaded = true;
     store.busyVaultId = "a1b2c3";
+    store.busyCommand = "open_vault";
     const wrapper = mount(ActionPanel);
     const buttons = wrapper.findAll("button");
     expect(buttons).toHaveLength(4);

@@ -55,7 +55,7 @@ function onClick() {
       @pointercancel="onPointerEnd"
       @click="onClick"
     >
-      <svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true">
+      <svg width="64" height="64" viewBox="0 0 96 96" aria-hidden="true">
         <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />
         <circle class="eye" cx="38" cy="46" r="5" fill="#fff" />
         <circle class="eye" cx="58" cy="46" r="5" fill="#fff" />

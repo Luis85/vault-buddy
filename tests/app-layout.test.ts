@@ -10,6 +10,9 @@ const state = vi.hoisted(() => ({
     position: { x: 0, y: 0 },
     size: { width: 1920, height: 1080 },
   },
+  focusHandler: null as
+    | ((event: { payload: boolean }) => void)
+    | null,
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -22,6 +25,12 @@ vi.mock("@tauri-apps/api/window", () => ({
     },
     setSize: () => Promise.resolve(),
     startDragging: () => Promise.resolve(),
+    onFocusChanged: (handler: (event: { payload: boolean }) => void) => {
+      state.focusHandler = handler;
+      return Promise.resolve(() => {
+        state.focusHandler = null;
+      });
+    },
   }),
   currentMonitor: () => Promise.resolve(state.monitor),
   LogicalSize: class {
@@ -60,11 +69,11 @@ describe("App layout geometry", () => {
   it("keeps the buddy in a fixed cell with the collapsed-window size", () => {
     // the placement offset math assumes this exact cell geometry; if the
     // cell size drifts from COLLAPSED the buddy will jump when flipping
-    expect(COLLAPSED).toEqual({ width: 140, height: 170 });
+    expect(COLLAPSED).toEqual({ width: 88, height: 88 });
     const wrapper = mount(App);
     const cell = wrapper.find('[data-testid="buddy-cell"]');
-    expect(cell.classes()).toContain("w-[140px]");
-    expect(cell.classes()).toContain("h-[170px]");
+    expect(cell.classes()).toContain("w-[88px]");
+    expect(cell.classes()).toContain("h-[88px]");
     expect(cell.classes()).toContain("shrink-0");
   });
 
@@ -87,5 +96,26 @@ describe("App layout geometry", () => {
     await nextTick();
     expect(wrapper.find("main").classes()).toContain("flex-row-reverse");
     expect(wrapper.find("main").classes()).toContain("items-end");
+  });
+
+  it("closes the panel on Escape", async () => {
+    mount(App);
+    const store = useVaultsStore();
+    await store.togglePanel();
+    expect(store.panelOpen).toBe(true);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flush();
+    expect(store.panelOpen).toBe(false);
+  });
+
+  it("closes the panel when the window loses focus", async () => {
+    mount(App);
+    await flush(); // let onMounted register the focus listener
+    const store = useVaultsStore();
+    await store.togglePanel();
+    expect(store.panelOpen).toBe(true);
+    state.focusHandler?.({ payload: false });
+    await flush();
+    expect(store.panelOpen).toBe(false);
   });
 });
