@@ -104,6 +104,112 @@ pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
     }
 }
 
+/// Serializes set_capture_config's read-modify-write of config.json —
+/// concurrent saves for different vaults must not lose each other's
+/// fields (the write path itself is lock-free by design).
+#[derive(Default)]
+pub struct ConfigWriteLock(pub Mutex<()>);
+
+pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureConfigDto {
+    pub mode: String,
+    pub recording_folder: Option<String>,
+    pub bitrate_kbps: u32,
+    pub create_note: bool,
+    pub input_device: Option<String>,
+    pub output_device: Option<String>,
+}
+
+impl CaptureConfigDto {
+    fn from_config(v: &capture_config::VaultCaptureConfig) -> Self {
+        Self {
+            mode: v.mode.as_key().to_string(),
+            recording_folder: v.recording_folder.clone(),
+            bitrate_kbps: v.bitrate_kbps,
+            create_note: v.create_note,
+            input_device: v.input_device.clone(),
+            output_device: v.output_device.clone(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_capture_config(id: String) -> CaptureConfigDto {
+    // Unknown vaults return the defaults — exactly what a fresh form shows.
+    CaptureConfigDto::from_config(&capture_config::vault_config(
+        &capture_config::load_config(),
+        &id,
+    ))
+}
+
+#[tauri::command]
+pub fn set_capture_config(
+    lock: tauri::State<ConfigWriteLock>,
+    id: String,
+    cfg: CaptureConfigDto,
+) -> Result<(), String> {
+    let mode = capture_config::RecordingMode::from_key(&cfg.mode)
+        .ok_or_else(|| format!("Unknown recording mode: {}", cfg.mode))?;
+    if !BITRATES_KBPS.contains(&cfg.bitrate_kbps) {
+        return Err(format!("Bitrate must be one of {BITRATES_KBPS:?} kbps"));
+    }
+    // Validate the folder against the real vault path BEFORE writing —
+    // an invalid folder is an inline field error, nothing gets written.
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let folder = cfg
+        .recording_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
+    if let Some(folder) = &folder {
+        capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
+    }
+    let value = capture_config::VaultCaptureConfig {
+        mode,
+        recording_folder: folder,
+        bitrate_kbps: cfg.bitrate_kbps,
+        create_note: cfg.create_note,
+        input_device: cfg.input_device.clone().filter(|d| !d.is_empty()),
+        output_device: cfg.output_device.clone().filter(|d| !d.is_empty()),
+    };
+    let _guard = lock.0.lock().unwrap();
+    capture_config::update_vault_config(&id, value)
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceInfoDto {
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceListDto {
+    pub inputs: Vec<DeviceInfoDto>,
+    pub outputs: Vec<DeviceInfoDto>,
+}
+
+#[tauri::command]
+pub fn list_audio_devices() -> DeviceListDto {
+    let list = vault_buddy_capture::devices::list_devices();
+    let map = |d: vault_buddy_capture::devices::DeviceInfo| DeviceInfoDto {
+        name: d.name,
+        is_default: d.is_default,
+    };
+    DeviceListDto {
+        inputs: list.inputs.into_iter().map(map).collect(),
+        outputs: list.outputs.into_iter().map(map).collect(),
+    }
+}
+
 #[tauri::command]
 pub fn start_capture(
     app: AppHandle,

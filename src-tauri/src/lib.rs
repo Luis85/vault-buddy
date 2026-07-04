@@ -36,6 +36,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
+        .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction — restore the unshifted home position first so a
@@ -77,7 +78,10 @@ pub fn run() {
             commands::show_buddy_menu,
             capture_commands::start_capture,
             capture_commands::stop_capture,
-            capture_commands::capture_status
+            capture_commands::capture_status,
+            capture_commands::get_capture_config,
+            capture_commands::set_capture_config,
+            capture_commands::list_audio_devices
         ])
         .setup(|app| {
             tray::create_tray(app.handle())?;
