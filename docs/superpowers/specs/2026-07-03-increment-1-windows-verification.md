@@ -64,6 +64,9 @@ Setup: `npm install`, then `npm run tauri dev`.
       "Animation" item, "Hide to tray" and "Quit Vault Buddy"; Hide makes
       the companion disappear and tray "Show / Hide" brings it back; Quit
       exits (and still saves position).
+- [ ] The right-click menu opens promptly even when another app has focus
+      (click into another window first, then right-click the buddy — no
+      prior left-click needed).
 - [ ] Unchecking "Animation" stops the bobbing/blinking immediately (also
       while hovering and during actions); the menu shows it unchecked on the
       next right-click, and the choice survives an app restart.

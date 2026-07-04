@@ -64,6 +64,10 @@ pub fn show_buddy_menu(
         .map_err(|e| e.to_string())?;
     let menu = Menu::with_items(&app, &[&animation, &separator, &hide, &quit])
         .map_err(|e| e.to_string())?;
+    // Win32 popup menus require the owning window to be foreground —
+    // without this the menu is delayed or silently ignored until the user
+    // left-clicks the (unfocused) buddy first.
+    let _ = window.set_focus();
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
