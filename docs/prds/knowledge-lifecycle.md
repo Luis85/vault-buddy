@@ -4,6 +4,8 @@
 - **Version:** 1.0
 - **Parent Product:** Vault Buddy
 
+Together with [AI Platform & Agent Runtime](ai-platform.md), this document forms one of the two foundational pillars of Vault Buddy: the Knowledge Lifecycle answers *what happens to knowledge*, while the AI Platform & Agent Runtime answers *how humans, workflows and agents access those capabilities*.
+
 ---
 
 ## Executive Summary
@@ -246,7 +248,7 @@ The lifecycle naturally decomposes Vault Buddy into bounded domains.
 - **Task Management** — Responsible for creating and managing actionable work. See the [Task Management capability PRD](task-management.md).
 - **Knowledge Retrieval** — Responsible for finding and exploring knowledge.
 - **Workflow Engine** — Responsible for orchestrating repeatable processes.
-- **AI Platform** — Responsible for intelligent reasoning and agent orchestration.
+- **AI Platform** — Responsible for intelligent reasoning and agent orchestration. See the [AI Platform & Agent Runtime PRD](ai-platform.md).
 - **Skills Platform** — Responsible for integrating external tools and services.
 
 ## Product Roadmap

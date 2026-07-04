@@ -7,7 +7,10 @@
 - **Technology Stack:** Tauri 2 · Vue 3 · TypeScript · Rust
 - **Product Owner:** TBD
 
-See [The Knowledge Lifecycle](prds/knowledge-lifecycle.md) for the core product vision underpinning this PRD.
+This PRD is underpinned by two foundational vision documents:
+
+- [The Knowledge Lifecycle](prds/knowledge-lifecycle.md) — what happens to knowledge as it moves through Vault Buddy.
+- [AI Platform & Agent Runtime](prds/ai-platform.md) — how humans, workflows and AI agents access those capabilities.
 
 ---
 
