@@ -238,4 +238,26 @@ describe("App layout geometry", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows a greeting bubble on launch", async () => {
+    const wrapper = mount(App);
+    await flush();
+    await nextTick();
+    const bubble = wrapper.find('[data-testid="speech-bubble"]');
+    expect(bubble.exists()).toBe(true);
+    expect(bubble.text().length).toBeGreaterThan(0);
+  });
+
+  it("hides the greeting bubble once the panel opens", async () => {
+    const wrapper = mount(App);
+    await flush();
+    await nextTick();
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(true);
+
+    const store = useVaultsStore();
+    await store.togglePanel();
+    await flush();
+    await nextTick();
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(false);
+  });
 });
