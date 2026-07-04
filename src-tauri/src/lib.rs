@@ -1,6 +1,8 @@
 mod commands;
 mod tray;
 
+use tauri::Manager;
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
@@ -29,6 +31,21 @@ pub fn run() {
                 "buddy-hide" => tray::hide_to_tray(app),
                 "buddy-quit" => tray::quit(app),
                 _ => {}
+            });
+            // Windows re-shuffles the topmost band when other topmost
+            // windows appear (taskbar previews, flyouts), which can drop the
+            // buddy behind the taskbar. No event reaches us when that
+            // happens, so periodically re-assert always-on-top — a cheap
+            // z-order-only SetWindowPos that never moves, resizes, or
+            // steals focus.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if let Some(window) = handle.get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.set_always_on_top(true);
+                    }
+                }
             });
             Ok(())
         })

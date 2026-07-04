@@ -25,6 +25,9 @@ Setup: `npm install`, then `npm run tauri dev`.
 - [ ] With the panel open, drag the buddy: the panel stays open and moves
       along; the drag is not cancelled and the buddy does not jump to the
       panel's old corner.
+- [ ] Park the buddy over/near the taskbar, hover a taskbar item until the
+      window preview opens, close it: if the buddy dropped behind the
+      taskbar it comes back on top within about a second.
 - [ ] Move the buddy somewhere distinctive, quit via the tray, relaunch:
       the buddy reappears where it was left (position persists; window size
       starts collapsed regardless of how it was closed).
