@@ -79,8 +79,9 @@ export const useUpdatesStore = defineStore("updates", {
         // over to the new version.
         await relaunch();
       } catch (e) {
-        // reopen the panel so the error is visible; keep `available` so
-        // the user can retry the install
+        // reopen the panel on the settings view so the error is visible;
+        // keep `available` so the user can retry the install
+        vaults.showSettings = true;
         vaults.panelOpen = true;
         this.error = String(e);
         this.phase = "error";

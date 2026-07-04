@@ -137,19 +137,28 @@ describe("updates store", () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
-  it("reopens the panel when the install fails after the download", async () => {
-    const download = vi.fn().mockResolvedValue(undefined);
-    const install = vi.fn().mockRejectedValue("install broke");
-    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+  it("reopens the panel on the settings view when the install fails", async () => {
     const vaults = useVaultsStore();
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockImplementation(async () => {
+      // whatever the view state was when the process was about to exit,
+      // the reopened panel must land on settings
+      vaults.showSettings = false;
+      throw "install broke";
+    });
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
     vaults.panelOpen = true;
+    vaults.showSettings = true; // installs start from the settings view
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
     expect(store.phase).toBe("error");
     expect(store.error).toContain("install broke");
     expect(store.available).not.toBeNull(); // retry stays possible
-    expect(vaults.panelOpen).toBe(true); // the error stays visible
+    // the panel remounts on reopen — it must land on settings, where the
+    // update error and retry button live, not on the vault list
+    expect(vaults.panelOpen).toBe(true);
+    expect(vaults.showSettings).toBe(true);
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 

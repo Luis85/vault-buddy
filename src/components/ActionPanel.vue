@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { storeToRefs } from "pinia";
 import { useVaultsStore } from "../stores/vaults";
 import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
 
 const store = useVaultsStore();
 
-const showSettings = ref(false);
+// store-backed so a failed update install can reopen the (destroyed)
+// panel directly on the settings view
+const { showSettings } = storeToRefs(store);
 
 const filter = ref("");
 // A short list is scannable at a glance; only offer filtering when the
