@@ -427,6 +427,13 @@ Obsidian is only responsible for consuming the resulting files.
 - AI processing adoption
 - Reduction in manual capture workflow
 
+Consistent with the Security requirements (local-only processing, no
+telemetry), these metrics are never collected or transmitted
+automatically. They are measured through local-only means the user
+controls — on-device logs and counters the user can inspect, manual
+benchmarks, and explicit user feedback — or through opt-in research
+sessions.
+
 ---
 
 ## Long-Term Vision

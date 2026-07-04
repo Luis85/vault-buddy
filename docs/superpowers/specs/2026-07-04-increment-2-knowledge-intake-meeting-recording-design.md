@@ -164,7 +164,11 @@ the existing `discovery`/`daily_notes`/`uri` style.
    in the target folder — an unrecovered orphan `.part` from a same-minute
    crash just advances the suffix. If anything fails after the `.part`
    exists but before recording begins, the empty `.part` is deleted as
-   part of the failure path.
+   part of the failure path. Recovery applies the same rule from the
+   other side: a `.part` containing no complete MP3 frame (e.g. a crash
+   landed between file creation and the first flush) is deleted and
+   logged rather than "recovered" into a bogus zero-byte recording and
+   note — there is no audio in it to lose.
 2. Worker thread pulls both ring buffers → mixer → encoder → file, flushed
    to the OS every second and `fsync`ed to disk roughly every 30 seconds
    (per-second flush protects against app crashes; the periodic fsync
