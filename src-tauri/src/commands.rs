@@ -22,11 +22,23 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
 /// open at a screen edge would persist the shifted point for next launch.
 #[tauri::command]
 pub fn prepare_update_install(app: tauri::AppHandle) {
+    use tauri::Manager;
     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
     crate::tray::restore_home_position(&app);
     // the installer exits without window destruction, which is what the
-    // window-state plugin saves on — persist explicitly, like the quit path
-    let _ = app.save_window_state(StateFlags::POSITION);
+    // window-state plugin saves on — persist explicitly, like the quit path.
+    // Logged on both sides: this save silently failing is exactly how a
+    // buddy loses its position across an update, and the process is dead
+    // moments later — the log line is the only evidence that survives.
+    if let Some(pos) = app
+        .get_webview_window("main")
+        .and_then(|w| w.outer_position().ok())
+    {
+        log::info!("update install: saving window position {},{}", pos.x, pos.y);
+    }
+    if let Err(e) = app.save_window_state(StateFlags::POSITION) {
+        log::error!("update install: saving window state failed: {e}");
+    }
 }
 
 /// Applies position and size in one native call. The frontend used to issue

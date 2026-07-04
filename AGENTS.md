@@ -77,6 +77,10 @@ undone before any position is persisted. Invariants:
 - Panel open/close transitions are serialized in a queue;
   `panelTransitionsSettled()` exposes its tail. The updater awaits it before
   installing — never replace that with a sleep (it races; see git history).
+- The 1s background loop in `lib.rs` (always-on-top re-assert) also
+  checkpoints the parked position to the window-state file whenever it
+  changed — but only while the offset is zero. Exit-time saves alone proved
+  lossy (the updater kills the process via `std::process::exit`).
 
 ### Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
 
