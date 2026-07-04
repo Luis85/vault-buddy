@@ -248,6 +248,7 @@ pub fn start_capture(
     app: AppHandle,
     state: tauri::State<CaptureState>,
     id: String,
+    mode: Option<String>,
 ) -> Result<StatusPayload, String> {
     // Everything fallible-but-cheap (discovery, config, path validation)
     // runs BEFORE the state lock is touched — the mutex must never be held
@@ -261,7 +262,19 @@ pub fn start_capture(
         return Err(format!("Vault folder not found: {}", vault.path));
     }
 
-    let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    let mut cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    // Per-recording override from the mode chooser: the config only
+    // supplies the DEFAULT. Overriding cfg.mode up front keeps every
+    // downstream decision (loopback, label, folder default, note type)
+    // consistent with the user's pick.
+    if let Some(key) = &mode {
+        cfg.mode = capture_config::RecordingMode::from_key(key)
+            .ok_or_else(|| format!("Unknown recording mode: {key}"))?;
+        log::info!(
+            "capture: mode override for this recording: {}",
+            cfg.mode.label()
+        );
+    }
     let uses_loopback = cfg.mode.uses_loopback();
     let label = cfg.mode.label();
     // Hand-editable config must never escape the vault (PRD guarantee).
