@@ -1,4 +1,5 @@
 pub mod capture_config;
+pub mod capture_paths;
 pub mod daily_notes;
 pub mod discovery;
 pub mod uri;
