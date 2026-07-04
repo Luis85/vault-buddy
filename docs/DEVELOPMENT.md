@@ -121,3 +121,23 @@ happens to match. The hook is a cross-platform polyglot wrapper
 
 To update the vendored copies, re-pull the `skills/` directory from the
 upstream [obra/superpowers](https://github.com/obra/superpowers) repository.
+
+## Capture configuration
+
+Per-vault capture settings live app-side in `%APPDATA%\vault-buddy\config.json`
+(keyed by Obsidian vault ID — the key from `obsidian.json`). The file is
+optional; missing files, entries, or fields fall back to defaults. Nothing is
+ever written into your vaults except recordings and their notes.
+
+```json
+{
+  "vaults": {
+    "<vault-id>": {
+      "mode": "meeting",          // "meeting" (mic + desktop audio) | "voice-note" (mic only)
+      "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
+      "bitrateKbps": 128,          // 128 | 160 | 192
+      "createNote": true           // companion .md with metadata + embed
+    }
+  }
+}
+```
