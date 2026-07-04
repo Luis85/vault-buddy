@@ -98,7 +98,9 @@ const sheet = computed(() => {
   /* 64×28 strip at 2× — 4 frames of 32×56 */
   background-size: 128px 56px;
   image-rendering: pixelated;
-  animation: frames 0.65s steps(4) infinite;
+  /* idle is a calm breathing loop (~3 fps) — anything faster reads as
+     jittery for a character that just stands around on the desktop */
+  animation: frames 1.3s steps(4) infinite;
 }
 /* working — the run cycle, a touch faster than idle */
 .sheet.running {
