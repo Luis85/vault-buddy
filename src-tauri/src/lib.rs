@@ -73,11 +73,40 @@ pub fn run() {
             // z-order-only SetWindowPos that never moves, resizes, or
             // steals focus.
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Some(window) = handle.get_webview_window("main") {
-                    if window.is_visible().unwrap_or(false) {
-                        let _ = window.set_always_on_top(true);
+            std::thread::spawn(move || {
+                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+                // Checkpoint of the buddy's parked position. Exit paths that
+                // save state can silently fail or be bypassed (the updater
+                // kills the process via std::process::exit) — persisting
+                // within a second of any move means the state file always
+                // holds a recent correct position, whatever the exit path.
+                let mut last_pos: Option<(i32, i32)> = None;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let Some(window) = handle.get_webview_window("main") else {
+                        continue;
+                    };
+                    if !window.is_visible().unwrap_or(false) {
+                        continue;
+                    }
+                    let _ = window.set_always_on_top(true);
+                    // Never persist while the panel has the window shifted —
+                    // only the unshifted home position may reach disk.
+                    let offset = *handle.state::<commands::PanelOffset>().0.lock().unwrap();
+                    if offset != (0, 0) {
+                        continue;
+                    }
+                    if let Ok(pos) = window.outer_position() {
+                        let pos = (pos.x, pos.y);
+                        // First tick only records a baseline: writing before
+                        // the window-state plugin has restored would poison
+                        // its cache with the pre-restore default position.
+                        if last_pos.is_some() && last_pos != Some(pos) {
+                            if let Err(e) = handle.save_window_state(StateFlags::POSITION) {
+                                log::warn!("position checkpoint failed: {e}");
+                            }
+                        }
+                        last_pos = Some(pos);
                     }
                 }
             });

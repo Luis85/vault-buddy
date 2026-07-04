@@ -4685,6 +4685,7 @@ name = "vault-buddy"
 version = "0.1.2"
 dependencies = [
  "chrono",
+ "log",
  "serde",
  "serde_json",
  "tauri",
