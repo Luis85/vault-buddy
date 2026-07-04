@@ -222,13 +222,22 @@ pub fn run() {
                 .expect("failed to spawn topmost-checkpoint thread");
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
             // The run loop failing to start is fatal, but `.expect` would
             // panic with no persisted reason — log it first so the cause
             // survives in the app log.
             log::error!("fatal: Tauri run loop exited: {e}");
             std::process::exit(1);
+        })
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Every event-loop exit — whatever future path triggered it —
+                // stamps clean. The enumerated stamps on quit/close/update
+                // remain for the std::process::exit path that bypasses this.
+                log::info!("clean shutdown (event loop exit)");
+                diagnostics::mark_clean_shutdown();
+            }
         });
 }
 
