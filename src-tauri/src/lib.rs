@@ -15,6 +15,15 @@ pub fn run() {
                 .build(),
         )
         .manage(commands::PanelOffset::default())
+        // Alt+F4 / session shutdown destroy the window without going through
+        // tray::quit, and the window-state plugin saves POSITION on
+        // destruction — restore the unshifted home position first so a
+        // panel-open-at-the-edge close can't persist the shifted point.
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                tray::restore_home_position(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_vaults,
             commands::open_vault,

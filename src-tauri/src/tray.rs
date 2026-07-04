@@ -13,13 +13,12 @@ pub fn hide_to_tray(app: &AppHandle) {
     }
 }
 
-/// Persist the buddy's home position and exit. Shared by the tray menu and
-/// the buddy's right-click menu.
-pub fn quit(app: &AppHandle) {
-    // If the panel is open the frontend may have shifted the window to
-    // unfold toward free screen space; move back to the unshifted home
-    // position so that is what gets saved.
-    let (dx, dy) = *app.state::<PanelOffset>().0.lock().unwrap();
+/// If the panel is open the frontend may have shifted the window to unfold
+/// toward free screen space; move back to the unshifted home position so
+/// that is what any position save persists. Takes the offset (zeroing it)
+/// so running both the close handler and the quit path can't double-add.
+pub fn restore_home_position(app: &AppHandle) {
+    let (dx, dy) = std::mem::take(&mut *app.state::<PanelOffset>().0.lock().unwrap());
     if (dx, dy) != (0, 0) {
         if let Some(window) = app.get_webview_window("main") {
             if let Ok(pos) = window.outer_position() {
@@ -27,6 +26,12 @@ pub fn quit(app: &AppHandle) {
             }
         }
     }
+}
+
+/// Persist the buddy's home position and exit. Shared by the tray menu and
+/// the buddy's right-click menu.
+pub fn quit(app: &AppHandle) {
+    restore_home_position(app);
     // app.exit bypasses window destruction, which is what the window-state
     // plugin normally saves on — save explicitly.
     let _ = app.save_window_state(StateFlags::POSITION);
