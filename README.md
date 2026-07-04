@@ -11,7 +11,23 @@ operating layer.
 See the full [Product Requirements Document](docs/PRD.md) for vision, principles,
 capabilities, architecture, and roadmap.
 
-## Run it on your machine
+## Install (no toolchain needed)
+
+Grab the latest installer from the
+[**Releases**](https://github.com/Luis85/vault-buddy/releases) page:
+download `Vault Buddy_*_x64-setup.exe`, run it, done. The installer
+fetches the WebView2 runtime automatically if needed (Windows 11 already
+has it). The installers aren't code-signed yet, so SmartScreen may warn —
+click **More info → Run anyway**.
+
+New releases are published automatically whenever a version tag is pushed:
+
+```bash
+# after bumping the version in tauri.conf.json / package.json / Cargo.toml
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+## Run it from source
 
 ### Prerequisites (Windows)
 
@@ -79,6 +95,10 @@ CI runs on every push to `main` and every pull request
 | Frontend | Linux | Vitest tests, `vue-tsc` typecheck, production build |
 | Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
 | Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
+
+A separate [release workflow](.github/workflows/release.yml) runs on `v*`
+tags: it builds the Windows installers and publishes them as a GitHub
+Release for end users.
 
 The Windows job only runs after the two fast jobs pass. Desktop behavior that
 can't be asserted in CI (transparency, tray, drag, the real Obsidian
