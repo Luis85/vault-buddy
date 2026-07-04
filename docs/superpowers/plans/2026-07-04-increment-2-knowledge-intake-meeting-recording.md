@@ -1660,7 +1660,17 @@ fn run_worker(
     sources: Vec<SourceInput>,
     stop_rx: Receiver<()>,
 ) -> Result<Outcome, String> {
-    let mut encoder = Mp3Encoder::new(TARGET_RATE, params.bitrate_kbps)?;
+    let mut encoder = match Mp3Encoder::new(TARGET_RATE, params.bitrate_kbps) {
+        Ok(enc) => enc,
+        Err(e) => {
+            // Setup failed after the exclusive create — honor the
+            // start-failure rule: no file left behind before the first
+            // MP3 frame exists.
+            drop(file);
+            let _ = std::fs::remove_file(&params.part);
+            return Err(e);
+        }
+    };
     let mut states: Vec<SourceState> = sources
         .into_iter()
         .map(|input| SourceState { input, buffer: Vec::new(), alive: true })
@@ -2229,8 +2239,13 @@ pub fn start_capture(
                 }
             }
         }
+        // Stop the session while the streams are still alive: dropping
+        // them first disconnects every source channel, and the worker
+        // could mistake an ordinary stop for all-sources-lost (bogus
+        // ended_early + source-loss warnings in the toast and note).
+        let outcome = session.stop();
         drop(streams);
-        let _ = done_tx.send(session.stop());
+        let _ = done_tx.send(outcome);
     });
 
     match ready_rx.recv_timeout(Duration::from_secs(10)) {
@@ -2307,22 +2322,34 @@ pub fn start_capture(
 
 /// Ask the device thread to stop and wait until the monitor thread has
 /// cleared the state (i.e. the outcome landed and events were emitted).
-/// Shutdown paths rely on this wait so the app exits only after the save.
-fn request_stop_and_wait(app: &AppHandle, wait: Duration) {
+/// `wait: None` means wait forever — shutdown paths use it so the app can
+/// never exit while a recording is still finalizing (a slow vault or a
+/// stuck fsync must not strand the capture as .part).
+fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
     let stop_tx = {
         let guard = app.state::<CaptureState>().0.lock().unwrap();
         guard.as_ref().map(|active| active.stop_tx.clone())
     };
     let Some(stop_tx) = stop_tx else { return };
     let _ = stop_tx.send(StopReason::User);
-    let deadline = std::time::Instant::now() + wait;
-    while std::time::Instant::now() < deadline {
+    let started = std::time::Instant::now();
+    let mut last_log = std::time::Instant::now();
+    loop {
         if app.state::<CaptureState>().0.lock().unwrap().is_none() {
             return;
         }
+        if let Some(limit) = wait {
+            if started.elapsed() >= limit {
+                log::warn!("capture: stop wait timed out");
+                return;
+            }
+        }
+        if last_log.elapsed() >= Duration::from_secs(15) {
+            log::warn!("capture: still finalizing…");
+            last_log = std::time::Instant::now();
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
-    log::warn!("capture: stop wait timed out");
 }
 
 #[tauri::command]
@@ -2330,7 +2357,7 @@ pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result
     if state.0.lock().unwrap().is_none() {
         return Err("No recording is running.".to_string());
     }
-    request_stop_and_wait(&app, Duration::from_secs(15));
+    request_stop_and_wait(&app, Some(Duration::from_secs(15)));
     Ok(())
 }
 
@@ -2343,7 +2370,9 @@ pub fn is_recording(app: &AppHandle) -> bool {
 pub fn finalize_if_recording(app: &AppHandle) {
     if is_recording(app) {
         log::info!("capture: finalizing active recording before shutdown");
-        request_stop_and_wait(app, Duration::from_secs(15));
+        // Unbounded: quitting must block until the save lands — exiting
+        // on a timeout would kill the worker and strand the .part.
+        request_stop_and_wait(app, None);
     }
 }
 
@@ -2459,7 +2488,7 @@ git commit -m "feat(app): capture commands, events, notifications, startup recov
 ```rust
 /// Stop triggered from a native menu (tray or buddy) rather than the panel.
 pub fn stop_from_menu(app: &AppHandle) {
-    request_stop_and_wait(app, Duration::from_secs(15));
+    request_stop_and_wait(app, Some(std::time::Duration::from_secs(15)));
 }
 ```
 
@@ -2837,7 +2866,7 @@ git commit -m "feat(ui): capture store with event-driven lifecycle"
 - Produces:
   - `VaultList.vue` new prop `captureDisabled: boolean` and new emit `(e: "capture", id: string)`; the capture button carries `aria-label` `` `Capture knowledge in ${accessibleName(vault)}` ``.
   - `RecordingBar.vue` props `{ startedAtMs: number | null; saving: boolean; warning: string | null }`, emit `(e: "stop")`; shows elapsed `M:SS` (frontend-computed, 1 s interval) + pulsing red dot + Stop button (`aria-label="Stop recording"`), or "Saving…" while saving.
-  - `CompanionCharacter.vue` new optional prop `recording?: boolean`; adds class `recording` (red pulsing ring via CSS `box-shadow` animation and a small red dot overlay `<circle class="rec-dot" …>` in the SVG shown only when recording).
+  - `CompanionCharacter.vue` new optional prop `recording?: boolean`; adds class `recording` and a structural red-dot overlay (`.rec-dot`) positioned over the sprite `BuddyAvatar` — visible for every character and with animations off; pulses only when animations are on. **Main's PR #5 rewrote this component (sprites, BuddySettings, expanded settings store) — read the current `CompanionCharacter.vue`/`ActionPanel.vue`/`App.vue` before editing; the surrounding markup in this task is indicative, the interfaces (prop names, emits, `.rec-dot` presence) are binding.**
 
 - [ ] **Step 1: Write the failing RecordingBar test**
 
@@ -3037,24 +3066,30 @@ And extend the `<VaultList …>` usage:
 
 - [ ] **Step 6: CompanionCharacter recording state + App wiring**
 
-`CompanionCharacter.vue`: extend props to `defineProps<{ working: boolean; animated?: boolean; recording?: boolean }>()` (default `recording: false` via `withDefaults`). Add `recording` to the button's class binding: `:class="{ working, still: !animated, recording }"`. Inside the SVG after the mouth path add:
+`CompanionCharacter.vue` was rewritten on main (PR #5) around sprite characters: it now renders a `<BuddyAvatar>` inside the button and takes `working / animated / character / draggable / facing` props. Read the current file first, then:
+
+1. Add `recording?: boolean` to the props (default `false` in the existing `withDefaults` call).
+2. Add `recording` to the button's class array binding alongside its existing entries.
+3. Wrap the `<BuddyAvatar …>` in a relative container with a structural (non-animated) red dot overlay, so it works for every character sprite and survives animations-off:
 
 ```vue
-        <circle v-if="recording" class="rec-dot" cx="78" cy="18" r="9" fill="#e02e2e" />
+      <span class="relative inline-block">
+        <BuddyAvatar
+          ...existing bindings unchanged...
+        />
+        <span
+          v-if="recording"
+          class="rec-dot absolute -right-1 -top-1 h-3 w-3 rounded-full bg-red-500 ring-2 ring-slate-900"
+          aria-hidden="true"
+        ></span>
+      </span>
 ```
 
-And in the style block:
+4. In the style block add a pulse that only applies while animations are on (the dot itself stays visible regardless — `v-if` is structural):
 
 ```css
-.buddy.recording {
-  animation: rec-pulse 1.2s ease-in-out infinite;
-}
-.buddy.recording .rec-dot {
+.buddy.recording:not(.still) .rec-dot {
   animation: rec-blink 1.2s ease-in-out infinite;
-}
-@keyframes rec-pulse {
-  0%, 100% { filter: drop-shadow(0 0 0 rgba(224, 46, 46, 0.0)); }
-  50% { filter: drop-shadow(0 0 6px rgba(224, 46, 46, 0.8)); }
 }
 @keyframes rec-blink {
   0%, 100% { opacity: 1; }
@@ -3062,7 +3097,7 @@ And in the style block:
 }
 ```
 
-Note: the `.still` rule already kills all animations; recording visibility must survive it, so `v-if="recording"` on the dot (structural, not animated) is the guarantee — the dot stays visible even with animations off.
+(If the current component no longer uses a `.still` class for animations-off, gate the animation on whatever the current mechanism is — the invariant to preserve: dot always visible while recording, pulse only when animations are enabled.)
 
 `App.vue`: import and init the capture store next to the existing stores, call `capture.init()` where the app does its startup work (e.g. in `onMounted`), and pass `:recording="capture.status === 'recording'"` to `<CompanionCharacter …>`. Check `src/App.vue` for the exact mount point — it already passes `working` and `animated` props.
 
