@@ -3,6 +3,7 @@ import { CHARACTERS } from "../characters";
 import { useSettingsStore } from "../stores/settings";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import UpdateSettings from "./UpdateSettings.vue";
+import DiagnosticsSettings from "./DiagnosticsSettings.vue";
 
 const settings = useSettingsStore();
 </script>
@@ -93,5 +94,6 @@ const settings = useSettingsStore();
       />
     </section>
     <UpdateSettings />
+    <DiagnosticsSettings />
   </div>
 </template>

@@ -1,9 +1,11 @@
 pub mod capture_config;
 pub mod capture_note;
 pub mod capture_paths;
+pub mod crash;
 pub mod daily_notes;
 pub mod discovery;
 pub mod process;
+pub mod sync_util;
 pub mod uri;
 
 use chrono::NaiveDate;

@@ -28,7 +28,7 @@ pub fn hide_buddy(app: &AppHandle) {
 /// that is what any position save persists. Takes the offset (zeroing it)
 /// so running both the close handler and the quit path can't double-add.
 pub fn restore_home_position(app: &AppHandle) {
-    let (dx, dy) = std::mem::take(&mut *app.state::<PanelOffset>().0.lock().unwrap());
+    let (dx, dy) = app.state::<PanelOffset>().take();
     if (dx, dy) != (0, 0) {
         if let Some(window) = app.get_webview_window("main") {
             if let Ok(pos) = window.outer_position() {
@@ -125,6 +125,7 @@ fn buddy_icon(state: TrayCaptureState) -> tauri::image::Image<'static> {
 fn tray_menu(app: &AppHandle, state: TrayCaptureState) -> tauri::Result<Menu<tauri::Wry>> {
     let active = state != TrayCaptureState::Idle;
     let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", !active, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "open-logs", "Open logs folder", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Vault Buddy", true, None::<&str>)?;
     if active {
         let pause_resume = if state == TrayCaptureState::Paused {
@@ -151,9 +152,9 @@ fn tray_menu(app: &AppHandle, state: TrayCaptureState) -> tauri::Result<Menu<tau
             true,
             None::<&str>,
         )?;
-        Menu::with_items(app, &[&pause_resume, &stop, &toggle, &quit_item])
+        Menu::with_items(app, &[&pause_resume, &stop, &toggle, &logs, &quit_item])
     } else {
-        Menu::with_items(app, &[&toggle, &quit_item])
+        Menu::with_items(app, &[&toggle, &logs, &quit_item])
     }
 }
 
@@ -203,6 +204,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "tray-pause-recording" => crate::capture_commands::pause_from_menu(app),
             "tray-resume-recording" => crate::capture_commands::resume_from_menu(app),
+            "open-logs" => crate::diagnostics::open_log_dir(app),
             "quit" => quit(app),
             _ => {}
         })
