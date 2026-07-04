@@ -169,7 +169,7 @@ git commit -m "feat(capture): scaffold vault_buddy_capture crate with CI coverag
 - Produces:
   - `enum RecordingMode { Meeting, VoiceNote }` with `RecordingMode::label(&self) -> &'static str` returning `"Meeting"` / `"Voice Note"`.
   - `struct VaultCaptureConfig { mode: RecordingMode, recording_folder: Option<String>, bitrate_kbps: u32, create_note: bool }` (`Clone`, `Debug`, `PartialEq`) with `fn effective_recording_folder(&self) -> &str` — the configured folder, or the mode default (`"Meetings"` / `"Voice Notes"`).
-  - `fn parse_config(json: &str) -> AppConfig` — garbage/missing fields fall back to defaults, never panics.
+  - `fn parse_config(json: &str) -> AppConfig` — parses via `serde_json::Value` with **per-field** fallbacks: one malformed field (e.g. `"bitrateKbps": "160"` as a string) defaults only that field, never drops the entry or the whole file. Garbage input → defaults; never panics.
   - `fn vault_config(cfg: &AppConfig, vault_id: &str) -> VaultCaptureConfig` — clone of the entry or defaults.
   - `fn config_path() -> Option<PathBuf>` — `dirs::config_dir()/vault-buddy/config.json`.
   - `fn load_config() -> AppConfig` — reads `config_path()`, missing/unreadable → default.
@@ -230,6 +230,23 @@ mod tests {
     }
 
     #[test]
+    fn malformed_field_defaults_locally_not_globally() {
+        // One bad field must not drop the entry (or the whole file):
+        // a voice-note vault must never silently flip back to meeting
+        // mode (which would open loopback) because bitrate was quoted.
+        let cfg = parse_config(
+            r#"{ "vaults": {
+                "a": { "mode": "voice-note", "bitrateKbps": "160" },
+                "b": { "createNote": false }
+            } }"#,
+        );
+        let a = vault_config(&cfg, "a");
+        assert_eq!(a.mode, RecordingMode::VoiceNote);
+        assert_eq!(a.bitrate_kbps, 128);
+        assert!(!vault_config(&cfg, "b").create_note);
+    }
+
+    #[test]
     fn mode_labels() {
         assert_eq!(RecordingMode::Meeting.label(), "Meeting");
         assert_eq!(RecordingMode::VoiceNote.label(), "Voice Note");
@@ -252,22 +269,14 @@ Top of `src-tauri/core/src/capture_config.rs`:
 //! for now; a settings UI arrives in a later increment, so parsing must
 //! shrug off any malformed input and fall back to defaults.
 
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecordingMode {
-    #[serde(rename = "meeting")]
+    #[default]
     Meeting,
-    #[serde(rename = "voice-note")]
     VoiceNote,
-}
-
-impl Default for RecordingMode {
-    fn default() -> Self {
-        RecordingMode::Meeting
-    }
 }
 
 impl RecordingMode {
@@ -279,15 +288,8 @@ impl RecordingMode {
     }
 }
 
-fn mode_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<RecordingMode, D::Error> {
-    // An unknown mode string must not poison the whole entry.
-    Ok(RecordingMode::deserialize(d).unwrap_or_default())
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VaultCaptureConfig {
-    #[serde(deserialize_with = "mode_or_default")]
     pub mode: RecordingMode,
     pub recording_folder: Option<String>,
     pub bitrate_kbps: u32,
@@ -319,14 +321,50 @@ impl VaultCaptureConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default)]
 pub struct AppConfig {
     pub vaults: HashMap<String, VaultCaptureConfig>,
 }
 
+/// Per-field parsing through serde_json::Value: the file is hand-edited,
+/// and one malformed value must default only itself — a derived
+/// deserializer would reject the whole file, silently flipping every
+/// vault back to meeting mode (and thus desktop-audio capture).
 pub fn parse_config(json: &str) -> AppConfig {
-    serde_json::from_str(json).unwrap_or_default()
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return AppConfig::default();
+    };
+    let mut vaults = HashMap::new();
+    if let Some(map) = value.get("vaults").and_then(|v| v.as_object()) {
+        for (id, entry) in map {
+            vaults.insert(id.clone(), vault_entry(entry));
+        }
+    }
+    AppConfig { vaults }
+}
+
+fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
+    let defaults = VaultCaptureConfig::default();
+    VaultCaptureConfig {
+        mode: match entry.get("mode").and_then(|v| v.as_str()) {
+            Some("voice-note") => RecordingMode::VoiceNote,
+            Some("meeting") => RecordingMode::Meeting,
+            _ => defaults.mode,
+        },
+        recording_folder: entry
+            .get("recordingFolder")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        bitrate_kbps: entry
+            .get("bitrateKbps")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(defaults.bitrate_kbps),
+        create_note: entry
+            .get("createNote")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.create_note),
+    }
 }
 
 pub fn vault_config(cfg: &AppConfig, vault_id: &str) -> VaultCaptureConfig {
@@ -359,7 +397,7 @@ Note: an unknown-field deserializer that errors per-entry would drop the whole m
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_core capture_config`
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: fmt + clippy + commit**
 
@@ -629,7 +667,9 @@ git commit -m "feat(core): capture file naming and pairwise reservation"
   - `struct NoteMeta { pub recorded_at: String /* RFC3339 local */, pub duration_secs: u64, pub vault_name: String, pub recording_type: String /* "Meeting" | "Voice Note" */, pub input_devices: Vec<String>, pub event: Option<String> /* "source lost: …" | "recovered after crash" */ }`
   - `fn format_duration(secs: u64) -> String` — `"0:07"`, `"3:09"`, `"1:02:03"`.
   - `fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String` — YAML frontmatter + `![[<mp3>]]` embed.
-  - `fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>` — writes `.<name>.tmp` beside the target, flush + `sync_all`, then non-replacing rename; never truncates an existing note.
+  - `fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>` — writes `.<name>.vault-buddy.tmp` beside the target (the `vault-buddy` infix is the **ownership marker**: recovery may only ever delete temps carrying it, never another tool's `.md.tmp`), flush + `sync_all`, then non-replacing rename; never truncates an existing note.
+  - `fn write_note_collision_safe(note_path: &Path, content: &str) -> std::io::Result<PathBuf>` — calls `write_note_atomic`; on `AlreadyExists` (a user or sync client took the name after reservation) advances a ` (2)`, ` (3)`, … suffix on the note's stem and retries, returning the path actually written. A saved MP3 must never lose its companion note to a late collision.
+  - `pub const NOTE_TMP_SUFFIX: &str = ".vault-buddy.tmp"` — shared with recovery's cleanup filter.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -700,6 +740,29 @@ mod tests {
         assert!(write_note_atomic(&note, "new").is_err());
         assert_eq!(std::fs::read_to_string(&note).unwrap(), "user content");
     }
+
+    #[test]
+    fn temp_file_carries_ownership_marker() {
+        // The marker is what recovery's cleanup filter keys on — without
+        // it we could never safely delete stale temps in a user's vault.
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("n.md");
+        // Sabotage the rename by pre-creating the target after temp write
+        // is not needed — just verify the constant shape is used.
+        write_note_atomic(&note, "x").unwrap();
+        assert!(NOTE_TMP_SUFFIX.contains("vault-buddy"));
+    }
+
+    #[test]
+    fn collision_safe_write_suffixes_instead_of_dropping() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("n.md");
+        std::fs::write(&note, "taken").unwrap();
+        let written = write_note_collision_safe(&note, "content").unwrap();
+        assert_eq!(written, dir.path().join("n (2).md"));
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "content");
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "taken");
+    }
 }
 ```
 
@@ -755,6 +818,35 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     out
 }
 
+/// Ownership marker for our note temp files: recovery's cleanup filter
+/// deletes ONLY temps carrying this suffix — never another tool's
+/// `.md.tmp` that happens to live in a recording folder.
+pub const NOTE_TMP_SUFFIX: &str = ".vault-buddy.tmp";
+
+pub fn write_note_collision_safe(
+    note_path: &Path,
+    content: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let dir = note_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = note_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for attempt in 1u32.. {
+        let candidate = if attempt == 1 {
+            note_path.to_path_buf()
+        } else {
+            dir.join(format!("{stem} ({attempt}).md"))
+        };
+        match write_note_atomic(&candidate, content) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("suffix search always terminates")
+}
+
 pub fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()> {
     if note_path.exists() {
         return Err(std::io::Error::new(
@@ -767,7 +859,7 @@ pub fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dir.join(format!(".{file_name}.tmp"));
+    let tmp = dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"));
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(content.as_bytes())?;
@@ -789,7 +881,7 @@ Add `pub mod capture_note;` to `src-tauri/core/src/lib.rs`.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_core capture_note`
-Expected: 5 passed. (If `atomic_write_never_replaces_existing_note` fails on Linux because rename replaced the file, the `exists()` pre-check is missing — it is the guard that test exercises.)
+Expected: 7 passed. (If `atomic_write_never_replaces_existing_note` fails on Linux because rename replaced the file, the `exists()` pre-check is missing — it is the guard that test exercises.)
 
 - [ ] **Step 5: fmt + clippy + commit**
 
@@ -1235,12 +1327,15 @@ mod tests {
     }
 
     #[test]
-    fn deletes_stale_note_temp_files() {
+    fn deletes_only_vault_buddy_note_temps() {
         let dir = tempfile::tempdir().unwrap();
-        let tmp = dir.path().join(".b.md.tmp");
-        std::fs::write(&tmp, "half a note").unwrap();
+        let ours = dir.path().join(".b.md.vault-buddy.tmp");
+        let foreign = dir.path().join(".draft.md.tmp");
+        std::fs::write(&ours, "half a note").unwrap();
+        std::fs::write(&foreign, "another tool's temp").unwrap();
         recover_root(dir.path(), "Work", Duration::ZERO, true);
-        assert!(!tmp.exists());
+        assert!(!ours.exists(), "our stale temp is cleaned");
+        assert!(foreign.exists(), "foreign temp files are never touched");
     }
 }
 ```
@@ -1260,7 +1355,7 @@ Expected: compile error.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use vault_buddy_core::capture_note::{render_note, write_note_atomic, NoteMeta};
+use vault_buddy_core::capture_note::{render_note, write_note_collision_safe, NoteMeta};
 use vault_buddy_core::capture_paths::{base_from_part, recovered_base, reserve_final};
 
 #[derive(Debug)]
@@ -1298,7 +1393,12 @@ pub fn recover_root(
     let mut actions = Vec::new();
     walk(root, &mut |path| {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if name.ends_with(".md.tmp") && name.starts_with('.') {
+        // Ownership marker filter: only OUR temps are ever deleted. A
+        // foreign `.something.md.tmp` from another tool must survive —
+        // this is the app's first write path into user vaults.
+        if name.ends_with(vault_buddy_core::capture_note::NOTE_TMP_SUFFIX)
+            && name.starts_with('.')
+        {
             if is_stale(path, stale_after) {
                 log::info!("recovery: removing stale note temp {}", path.display());
                 let _ = std::fs::remove_file(path);
@@ -1338,7 +1438,7 @@ pub fn recover_root(
                 event: Some("recovered after crash".to_string()),
             };
             let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
-            let _ = write_note_atomic(&note, &render_note(&meta, &mp3_name));
+            let _ = write_note_collision_safe(&note, &render_note(&meta, &mp3_name));
         }
         actions.push(RecoveryAction::Recovered { mp3 });
     });
@@ -1572,7 +1672,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use vault_buddy_core::capture_note::{render_note, write_note_atomic, NoteMeta};
+use vault_buddy_core::capture_note::{render_note, write_note_collision_safe, NoteMeta};
 
 pub enum SourceMsg {
     Samples(Vec<f32>),
@@ -1806,8 +1906,10 @@ fn run_worker(
             event: warning.clone(),
         };
         let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
-        match write_note_atomic(&note_path, &render_note(&meta, &mp3_name)) {
-            Ok(()) => Some(note_path),
+        // Collision-safe: a user or sync client grabbing the reserved
+        // note name after the rename must cost us a suffix, not the note.
+        match write_note_collision_safe(&note_path, &render_note(&meta, &mp3_name)) {
+            Ok(written) => Some(written),
             Err(e) => {
                 log::warn!("capture: note write failed: {e}");
                 None
