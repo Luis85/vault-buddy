@@ -184,7 +184,11 @@ the existing `discovery`/`daily_notes`/`uri` style.
    the stop or stranding the `.part`). This stop-time check covers only
    the final destinations — the session's own `.mp3.part` is exempt, so
    an ordinary no-collision save keeps its original base name instead of
-   suffixing against its own temp file → rename to the final name →
+   suffixing against its own temp file. The rename itself uses a
+   non-replacing operation and is the true arbiter: if it reports the
+   destination exists (created in the window after the check), the stop
+   path advances the suffix and retries the rename rather than failing
+   or stranding the `.part` → rename to the final name →
    write the `.md` note **if
    enabled in the vault's config** (the same toggle governs recovery's
    note) → emit `capture:saved` + toast. Streaming encode makes stop
