@@ -20,4 +20,4 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 vault_buddy_core = { path = "core" }
 
 [workspace]
-members = ["core"]
+members = ["core", "capture"]
