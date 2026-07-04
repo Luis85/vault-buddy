@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
@@ -7,6 +7,7 @@ import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
+import RenamePrompt from "./RenamePrompt.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -39,6 +40,9 @@ function onFilterEscape(event: KeyboardEvent) {
     event.stopPropagation();
   }
 }
+
+// The panel component is destroyed on close — that IS the close signal.
+onUnmounted(() => capture.dismissRename());
 </script>
 
 <template>
@@ -127,6 +131,14 @@ function onFilterEscape(event: KeyboardEvent) {
     >
       {{ capture.error }}
     </p>
+    <RenamePrompt
+      v-if="view === 'list' && capture.lastSaved"
+      class="mb-2"
+      :saved-mp3="capture.lastSaved.mp3"
+      :error="capture.renameError"
+      @rename="capture.rename($event)"
+      @dismiss="capture.dismissRename()"
+    />
     <div
       v-if="view === 'settings'"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"

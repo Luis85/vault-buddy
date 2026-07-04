@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import ActionPanel from "../src/components/ActionPanel.vue";
 import { useVaultsStore } from "../src/stores/vaults";
+import { useCaptureStore } from "../src/stores/capture";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
@@ -190,5 +191,16 @@ describe("ActionPanel", () => {
       .trigger("click");
     expect(store.view).toBe("captureSettings");
     expect(store.captureSettingsVaultId).toBe("d4e5f6");
+  });
+
+  it("shows the rename prompt after a save and hides it on dismiss", async () => {
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
+    capture.lastSaved = null;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).not.toContain("name this recording");
   });
 });
