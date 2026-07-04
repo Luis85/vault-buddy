@@ -666,7 +666,7 @@ git commit -m "feat(core): capture file naming and pairwise reservation"
 - Produces:
   - `struct NoteMeta { pub recorded_at: String /* RFC3339 local */, pub duration_secs: u64, pub vault_name: String, pub recording_type: String /* "Meeting" | "Voice Note" */, pub input_devices: Vec<String>, pub event: Option<String> /* "source lost: …" | "recovered after crash" */ }`
   - `fn format_duration(secs: u64) -> String` — `"0:07"`, `"3:09"`, `"1:02:03"`.
-  - `fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String` — YAML frontmatter + `![[<mp3>]]` embed.
+  - `fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String` — YAML frontmatter + `![[<mp3>]]` embed. **Every scalar value is double-quoted** with `\` and `"` escaped and newlines flattened to spaces (private `yaml_quote` helper): vault and device names are user/system-controlled and may contain `:` or quotes, and an unquoted `1:02:03` duration would even parse as YAML sexagesimal.
   - `fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>` — writes `.<name>.vault-buddy.tmp` beside the target (the `vault-buddy` infix is the **ownership marker**: recovery may only ever delete temps carrying it, never another tool's `.md.tmp`), flush + `sync_all`, then non-replacing rename; never truncates an existing note.
   - `fn write_note_collision_safe(note_path: &Path, content: &str) -> std::io::Result<PathBuf>` — calls `write_note_atomic`; on `AlreadyExists` (a user or sync client took the name after reservation) advances a ` (2)`, ` (3)`, … suffix on the note's stem and retries, returning the path actually written. A saved MP3 must never lose its companion note to a late collision.
   - `pub const NOTE_TMP_SUFFIX: &str = ".vault-buddy.tmp"` — shared with recovery's cleanup filter.
@@ -702,11 +702,11 @@ mod tests {
     fn note_contains_frontmatter_and_embed() {
         let note = render_note(&meta(), "2026-07-04 1405 Meeting.mp3");
         assert!(note.starts_with("---\n"), "frontmatter first: {note}");
-        assert!(note.contains("recorded: 2026-07-04T14:05:00+02:00"));
-        assert!(note.contains("duration: 1:02:03"));
-        assert!(note.contains("vault: Work"));
-        assert!(note.contains("type: Meeting"));
-        assert!(note.contains("- Headset Mic"));
+        assert!(note.contains(r#"recorded: "2026-07-04T14:05:00+02:00""#));
+        assert!(note.contains(r#"duration: "1:02:03""#));
+        assert!(note.contains(r#"vault: "Work""#));
+        assert!(note.contains(r#"type: "Meeting""#));
+        assert!(note.contains(r#"- "Headset Mic""#));
         assert!(note.contains("![[2026-07-04 1405 Meeting.mp3]]"));
         assert!(!note.contains("event:"), "no event line when None");
     }
@@ -715,7 +715,19 @@ mod tests {
     fn note_includes_event_when_present() {
         let mut m = meta();
         m.event = Some("recovered after crash".into());
-        assert!(render_note(&m, "x.mp3").contains("event: recovered after crash"));
+        assert!(render_note(&m, "x.mp3").contains(r#"event: "recovered after crash""#));
+    }
+
+    #[test]
+    fn yaml_special_characters_are_escaped() {
+        // Vault and device names are user/system input: colons, quotes and
+        // newlines must not break the frontmatter or inject fields.
+        let mut m = meta();
+        m.vault_name = "Work: \"Client\" Vault".into();
+        m.input_devices = vec!["Mic\nInjected: true".into()];
+        let note = render_note(&m, "x.mp3");
+        assert!(note.contains(r#"vault: "Work: \"Client\" Vault""#));
+        assert!(!note.contains("\nInjected:"), "newline must not inject a field");
     }
 
     #[test]
@@ -800,18 +812,33 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
+/// Double-quote a YAML scalar, escaping `\` and `"` and flattening
+/// newlines to spaces. Vault and device names are user/system input;
+/// unquoted they could break the frontmatter or inject fields — and an
+/// unquoted `1:02:03` duration even parses as YAML sexagesimal.
+fn yaml_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\n', '\r'], " ");
+    format!("\"{escaped}\"")
+}
+
 pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     let mut out = String::from("---\n");
-    out.push_str(&format!("recorded: {}\n", meta.recorded_at));
-    out.push_str(&format!("duration: {}\n", format_duration(meta.duration_secs)));
-    out.push_str(&format!("vault: {}\n", meta.vault_name));
-    out.push_str(&format!("type: {}\n", meta.recording_type));
+    out.push_str(&format!("recorded: {}\n", yaml_quote(&meta.recorded_at)));
+    out.push_str(&format!(
+        "duration: {}\n",
+        yaml_quote(&format_duration(meta.duration_secs))
+    ));
+    out.push_str(&format!("vault: {}\n", yaml_quote(&meta.vault_name)));
+    out.push_str(&format!("type: {}\n", yaml_quote(&meta.recording_type)));
     out.push_str("inputs:\n");
     for device in &meta.input_devices {
-        out.push_str(&format!("  - {device}\n"));
+        out.push_str(&format!("  - {}\n", yaml_quote(device)));
     }
     if let Some(event) = &meta.event {
-        out.push_str(&format!("event: {event}\n"));
+        out.push_str(&format!("event: {}\n", yaml_quote(event)));
     }
     out.push_str("created-by: Vault Buddy\n---\n\n");
     out.push_str(&format!("![[{mp3_file_name}]]\n"));
@@ -881,7 +908,7 @@ Add `pub mod capture_note;` to `src-tauri/core/src/lib.rs`.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_core capture_note`
-Expected: 7 passed. (If `atomic_write_never_replaces_existing_note` fails on Linux because rename replaced the file, the `exists()` pre-check is missing — it is the guard that test exercises.)
+Expected: 8 passed. (If `atomic_write_never_replaces_existing_note` fails on Linux because rename replaced the file, the `exists()` pre-check is missing — it is the guard that test exercises.)
 
 - [ ] **Step 5: fmt + clippy + commit**
 
@@ -1212,7 +1239,8 @@ git commit -m "feat(capture): streaming LAME MP3 encoder wrapper"
   - `fn has_mp3_frame(bytes: &[u8]) -> bool` — true if an MP3 sync word (`0xFF` followed by a byte whose top 3 bits are set) appears.
   - `enum RecoveryAction { Recovered { mp3: PathBuf }, DeletedEmpty(PathBuf), Fresh(PathBuf) }`
   - `fn rename_into_reserved(from: &Path, dir: &Path, base: &str) -> Result<(PathBuf, PathBuf), String>` — shared finalize primitive: loops `reserve_final` + non-replacing rename, retrying with an advanced suffix when the destination appears in the check→rename window. Task 8's session finalize uses this too.
-  - `fn recover_root(root: &Path, vault_name: &str, stale_after: Duration, write_note: bool) -> Vec<RecoveryAction>` — recursively walks `root` for `.…mp3.part` files and stale `.….md.tmp` note temps; fresh `.part`s are reported as `Fresh` (caller schedules a rescan), zero-frame `.part`s are deleted, others are renamed to `<base> (recovered).mp3` via `reserve_final` + rename-retry, with an optional note (`event: recovered after crash`). Stale `.md.tmp` files are deleted.
+  - `fn recover_root(root: &Path, vault_name: &str, stale_after: Duration, write_note: bool) -> Vec<RecoveryAction>` — recursively walks `root` for `.…mp3.part` files and stale note temps; fresh `.part`s are reported as `Fresh` (caller schedules a rescan), zero-frame `.part`s are deleted, others are renamed to `<base> (recovered).mp3` via `rename_into_reserved`, with an optional note (`event: recovered after crash`).
+  - **Ownership filters — recovery may only ever touch Vault Buddy's own files:** a `.mp3.part` is processed only when its base matches the capture timestamp pattern `YYYY-MM-DD HHmm …` (private `is_capture_base` check) — another tool's `.download.mp3.part` is never deleted or renamed; note temps are cleaned only when they end with `capture_note::NOTE_TMP_SUFFIX` (the `.vault-buddy.tmp` marker).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1264,37 +1292,41 @@ mod tests {
                 let note = dir.path().join("2026-07-04 1405 Meeting (recovered).md");
                 assert!(note.exists(), "recovery note written");
                 let text = std::fs::read_to_string(note).unwrap();
-                assert!(text.contains("event: recovered after crash"));
+                assert!(text.contains(r#"event: "recovered after crash""#));
             }
             other => panic!("expected Recovered, got {other:?}"),
         }
     }
 
+    // All bases below use the capture timestamp pattern — recovery's
+    // ownership filter ignores anything else.
+    const BASE: &str = "2026-07-04 1405 Voice Note";
+
     #[test]
     fn respects_note_toggle() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(".b.mp3.part");
+        let part = dir.path().join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
         recover_root(dir.path(), "Work", Duration::ZERO, false);
-        assert!(!dir.path().join("b (recovered).md").exists());
-        assert!(dir.path().join("b (recovered).mp3").exists());
+        assert!(!dir.path().join(format!("{BASE} (recovered).md")).exists());
+        assert!(dir.path().join(format!("{BASE} (recovered).mp3")).exists());
     }
 
     #[test]
     fn deletes_zero_frame_part() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(".b.mp3.part");
+        let part = dir.path().join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, [0u8; 64]).unwrap();
         let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
         assert!(matches!(actions[0], RecoveryAction::DeletedEmpty(_)));
         assert!(!part.exists());
-        assert!(!dir.path().join("b (recovered).mp3").exists());
+        assert!(!dir.path().join(format!("{BASE} (recovered).mp3")).exists());
     }
 
     #[test]
     fn reports_fresh_part_without_touching_it() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(".b.mp3.part");
+        let part = dir.path().join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
         let actions = recover_root(dir.path(), "Work", Duration::from_secs(3600), true);
         assert!(matches!(actions[0], RecoveryAction::Fresh(_)));
@@ -1307,23 +1339,36 @@ mod tests {
         let month = dir.path().join("2026").join("06");
         std::fs::create_dir_all(&month).unwrap();
         // an earlier recovered capture already claimed the recovered name
-        std::fs::write(month.join("b (recovered).mp3"), "earlier").unwrap();
-        std::fs::write(month.join(".b.mp3.part"), mp3_bytes()).unwrap();
+        std::fs::write(month.join(format!("{BASE} (recovered).mp3")), "earlier").unwrap();
+        std::fs::write(month.join(format!(".{BASE}.mp3.part")), mp3_bytes()).unwrap();
         let actions = recover_root(dir.path(), "Work", Duration::ZERO, false);
         match &actions[0] {
             RecoveryAction::Recovered { mp3 } => {
                 assert_eq!(
                     mp3.file_name().unwrap().to_string_lossy(),
-                    "b (recovered) (2).mp3"
+                    format!("{BASE} (recovered) (2).mp3")
                 );
                 assert_eq!(
-                    std::fs::read_to_string(month.join("b (recovered).mp3")).unwrap(),
+                    std::fs::read_to_string(month.join(format!("{BASE} (recovered).mp3")))
+                        .unwrap(),
                     "earlier",
                     "earlier recovery untouched"
                 );
             }
             other => panic!("expected Recovered, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn foreign_mp3_parts_are_never_touched() {
+        // Another tool's hidden partial download must survive recovery
+        // untouched — even a zero-frame one must NOT be deleted.
+        let dir = tempfile::tempdir().unwrap();
+        let foreign = dir.path().join(".download.mp3.part");
+        std::fs::write(&foreign, [0u8; 64]).unwrap();
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        assert!(actions.is_empty(), "foreign part produced actions: {actions:?}");
+        assert!(foreign.exists());
     }
 
     #[test]
@@ -1371,6 +1416,25 @@ pub fn has_mp3_frame(bytes: &[u8]) -> bool {
         .any(|w| w[0] == 0xFF && (w[1] & 0xE0) == 0xE0)
 }
 
+/// Ownership check for .mp3.part files: only bases matching Vault Buddy's
+/// capture pattern `YYYY-MM-DD HHmm <label>` are ours to delete or rename.
+/// Another tool's `.download.mp3.part` in a vault must never be touched.
+fn is_capture_base(base: &str) -> bool {
+    let b: Vec<char> = base.chars().collect();
+    if b.len() < 17 {
+        return false;
+    }
+    let digit = |i: usize| b[i].is_ascii_digit();
+    (0..4).all(digit)
+        && b[4] == '-'
+        && (5..7).all(digit)
+        && b[7] == '-'
+        && (8..10).all(digit)
+        && b[10] == ' '
+        && (11..15).all(digit)
+        && b[15] == ' '
+}
+
 fn is_stale(path: &Path, stale_after: Duration) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
@@ -1408,6 +1472,9 @@ pub fn recover_root(
         let Some(base) = base_from_part(&name) else {
             return;
         };
+        if !is_capture_base(&base) {
+            return; // not ours — never delete or rename foreign files
+        }
         if !is_stale(path, stale_after) {
             actions.push(RecoveryAction::Fresh(path.to_path_buf()));
             return;
@@ -1488,7 +1555,7 @@ Add `pub mod recovery;` to `src-tauri/capture/src/lib.rs`.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_capture recovery`
-Expected: 7 passed.
+Expected: 8 passed.
 
 - [ ] **Step 5: fmt + clippy + commit**
 
