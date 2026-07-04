@@ -16,9 +16,12 @@ pub fn obsidian_running() -> bool {
 
 /// Matches the Obsidian executable across platforms — `Obsidian.exe` on
 /// Windows, `obsidian` on Linux, `Obsidian` (and its Electron helpers,
-/// e.g. "Obsidian Helper (Renderer)") on macOS.
+/// e.g. "Obsidian Helper (Renderer)") on macOS. Exact name or a real
+/// delimiter only: community tools like `obsidian-sync` running while
+/// Obsidian is closed must not count as the app being open.
 pub fn is_obsidian_process_name(name: &str) -> bool {
-    name.to_ascii_lowercase().starts_with("obsidian")
+    let name = name.to_ascii_lowercase();
+    name == "obsidian" || name == "obsidian.exe" || name.starts_with("obsidian ")
 }
 
 #[cfg(test)]
@@ -37,9 +40,13 @@ mod tests {
     fn does_not_match_other_processes() {
         assert!(!is_obsidian_process_name("vault-buddy"));
         assert!(!is_obsidian_process_name("explorer.exe"));
-        // prefix match, not substring — a hypothetical "my-obsidian-sync"
-        // daemon must not count as the app being open
         assert!(!is_obsidian_process_name("my-obsidian-sync"));
+        // a bare prefix is not enough — community tools like obsidian-sync
+        // or obsidian-export running while Obsidian is closed must not keep
+        // the stale "Open now" flags alive
+        assert!(!is_obsidian_process_name("obsidian-sync"));
+        assert!(!is_obsidian_process_name("obsidian-export.exe"));
+        assert!(!is_obsidian_process_name("obsidiand"));
     }
 
     #[test]
