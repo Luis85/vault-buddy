@@ -108,6 +108,19 @@ describe("App layout geometry", () => {
     expect(store.panelOpen).toBe(false);
   });
 
+  it("closes the panel when the transparent gutter is clicked", async () => {
+    const wrapper = mount(App);
+    const store = useVaultsStore();
+    await store.togglePanel();
+    await flush();
+    expect(store.panelOpen).toBe(true);
+    // a click that lands on <main> itself is in the invisible gutter —
+    // the user thinks they clicked the desktop
+    await wrapper.find("main").trigger("click");
+    await flush();
+    expect(store.panelOpen).toBe(false);
+  });
+
   it("closes the panel when the window loses focus", async () => {
     mount(App);
     await flush(); // let onMounted register the focus listener

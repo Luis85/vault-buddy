@@ -52,12 +52,18 @@ onUnmounted(() => {
     the character never visibly moves — the placement offset in
     useCompanionWindow assumes exactly this geometry.
   -->
+  <!--
+    Clicks that land on <main> or the panel wrapper itself hit the invisible
+    gutter of the expanded window — the user believes they clicked the
+    desktop, so close the panel and get out of the way.
+  -->
   <main
     class="flex h-screen w-screen"
     :class="[
       side === 'left' ? 'flex-row-reverse' : 'flex-row',
       valign === 'up' ? 'items-end' : 'items-start',
     ]"
+    @click.self="closePanel"
   >
     <div
       data-testid="buddy-cell"
@@ -65,7 +71,11 @@ onUnmounted(() => {
     >
       <CompanionCharacter :working="working" @toggle="store.togglePanel()" />
     </div>
-    <div v-if="panelOpen" class="min-w-0 flex-1 self-stretch p-2">
+    <div
+      v-if="panelOpen"
+      class="min-w-0 flex-1 self-stretch p-2"
+      @click.self="closePanel"
+    >
       <ActionPanel />
     </div>
   </main>
