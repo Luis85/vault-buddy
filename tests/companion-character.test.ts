@@ -164,4 +164,17 @@ describe("CompanionCharacter", () => {
     await buddy.trigger("click", { detail: 1 }); // genuine follow-up click
     expect(wrapper.emitted("toggle")).toHaveLength(1);
   });
+
+  it("shows the recording dot when recording", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, recording: true },
+    });
+    expect(wrapper.find(".rec-dot").exists()).toBe(true);
+    expect(wrapper.get("button").classes()).toContain("recording");
+  });
+
+  it("hides the recording dot when idle", () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    expect(wrapper.find(".rec-dot").exists()).toBe(false);
+  });
 });

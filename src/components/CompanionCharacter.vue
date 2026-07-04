@@ -10,8 +10,15 @@ const props = withDefaults(
     character?: string;
     draggable?: boolean;
     facing?: "right" | "left";
+    recording?: boolean;
   }>(),
-  { animated: true, character: "classic", draggable: true, facing: "right" },
+  {
+    animated: true,
+    character: "classic",
+    draggable: true,
+    facing: "right",
+    recording: false,
+  },
 );
 const emit = defineEmits<{
   (e: "toggle"): void;
@@ -101,7 +108,7 @@ function onContextMenu() {
       class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
       :class="[
         draggable ? 'cursor-grab' : 'cursor-pointer',
-        { working, still: !animated },
+        { working, still: !animated, recording },
       ]"
       :aria-label="
         draggable
@@ -116,12 +123,34 @@ function onContextMenu() {
       @click="onClick"
       @contextmenu.prevent="onContextMenu"
     >
-      <BuddyAvatar
-        :character-id="character"
-        :working="working"
-        :animated="animated"
-        :facing="facing"
-      />
+      <span class="relative inline-block">
+        <BuddyAvatar
+          :character-id="character"
+          :working="working"
+          :animated="animated"
+          :facing="facing"
+        />
+        <span
+          v-if="recording"
+          class="rec-dot absolute -right-1 -top-1 h-3 w-3 rounded-full bg-red-500 ring-2 ring-slate-900"
+          aria-hidden="true"
+        ></span>
+      </span>
     </button>
   </div>
 </template>
+
+<style scoped>
+.buddy.recording:not(.still) .rec-dot {
+  animation: rec-blink 1.2s ease-in-out infinite;
+}
+@keyframes rec-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+</style>
