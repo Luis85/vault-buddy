@@ -28,7 +28,11 @@ naming, crash recovery, and full audit logging.
    (pulsing red mic badge); the tray icon switches to a recording variant;
    the panel shows a recording bar with elapsed time and **Stop**. Other
    vaults' Capture buttons are disabled while a recording is active (one
-   recording at a time).
+   recording at a time). The indicator can never disappear mid-capture:
+   starting a recording shows the buddy if it was hidden, the
+   hide-to-tray / Show-Hide paths are disabled while recording, and the
+   tray menu gains a **Stop recording** item as a secondary,
+   always-reachable control.
 3. **Audio pipeline** — cpal microphone stream + WASAPI loopback stream →
    resample/mix to 44.1 kHz stereo with soft-clip limiting → stream-encode
    128 kbps MP3 (LAME) into a hidden `.part` file inside the target folder,
@@ -67,7 +71,11 @@ naming, crash recovery, and full audit logging.
    Recovered files go through the **same pairwise mp3+md collision
    suffixing and exclusive-create logic** as normal saves
    (`… (recovered).mp3`, `… (recovered) (2).mp3`, …) so a rename never
-   fails against — or replaces — an earlier recovered capture.
+   fails against — or replaces — an earlier recovered capture. If the
+   startup scan finds a `.part` that is still too fresh (crash followed by
+   an immediate relaunch), it is not skipped for good: the scan schedules
+   a rescan after the staleness window elapses (~90 s) and recovers it
+   then — single-instance enforcement guarantees no live session owns it.
 
 ### Out of scope (deferred)
 
@@ -140,7 +148,9 @@ the existing `discovery`/`daily_notes`/`uri` style.
    before recording begins, the empty `.part` is deleted as part of the
    failure path.
 2. Worker thread pulls both ring buffers → mixer → encoder → file, flushed
-   every second.
+   to the OS every second and `fsync`ed to disk roughly every 30 seconds
+   (per-second flush protects against app crashes; the periodic fsync
+   bounds power-loss data loss to ~30 s without hammering the disk).
 3. `stop_capture()` → flush encoder → fsync → rename to the final name →
    write the `.md` note → emit `capture:saved` + toast. Streaming encode
    makes stop near-instant regardless of meeting length.
@@ -169,7 +179,8 @@ Guiding rule: **never lose captured audio.**
 - **Disk full / write error mid-recording** — stop streams, attempt to
   finalize what is flushed, surface the error.
 - **App crash / power loss** — the `.part` file contains valid MP3 frames
-  up to the last flush. The startup recovery scan finalizes orphans as
+  up to the last per-second flush after an app crash, and up to the last
+  ~30 s `fsync` after power loss. The startup recovery scan finalizes orphans as
   `… (recovered).mp3` (+ note + toast). Recovery only ever renames — it
   never deletes — and only acts on `.part` files with a stale mtime
   (≥60 s), backed by single-instance enforcement, so it can never grab a
