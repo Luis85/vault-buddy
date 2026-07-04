@@ -4,3 +4,4 @@
 
 pub mod encoder;
 pub mod mixer;
+pub mod recovery;
