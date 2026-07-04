@@ -39,10 +39,13 @@ pub fn run() {
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "buddy-hide" => tray::hide_to_tray(app),
                 "buddy-quit" => tray::quit(app),
-                // the animation setting lives in the frontend (localStorage);
-                // hand the toggle back to it
+                // the animation/dragging settings live in the frontend
+                // (localStorage); hand the toggles back to it
                 "buddy-animation" => {
                     let _ = app.emit("buddy-toggle-animation", ());
+                }
+                "buddy-dragging" => {
+                    let _ = app.emit("buddy-toggle-dragging", ());
                 }
                 _ => {}
             });

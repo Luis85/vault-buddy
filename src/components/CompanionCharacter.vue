@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import BuddyAvatar from "./BuddyAvatar.vue";
 
 const props = withDefaults(
-  defineProps<{ working: boolean; animated?: boolean }>(),
-  { animated: true },
+  defineProps<{
+    working: boolean;
+    animated?: boolean;
+    character?: string;
+    draggable?: boolean;
+    facing?: "right" | "left";
+  }>(),
+  { animated: true, character: "classic", draggable: true, facing: "right" },
 );
 const emit = defineEmits<{
   (e: "toggle"): void;
@@ -31,6 +38,9 @@ function onPointerDown(e: PointerEvent) {
 }
 
 function onPointerMove(e: PointerEvent) {
+  // Dragging is disabled in the settings — the buddy stays pinned and the
+  // whole press/release stays a plain click, however far the pointer moves.
+  if (!props.draggable) return;
   if (!pressedAt) {
     // A hover move with no press means the native drag is over and any
     // trailing click has already been dispatched. Windows sometimes
@@ -74,8 +84,11 @@ function onClick(e: MouseEvent) {
 function onContextMenu() {
   // Native OS popup — the collapsed window is far too small to host an
   // HTML menu, and the OS menu matches the tray menu's look. The current
-  // animation state drives the menu's checkmark.
-  void invoke("show_buddy_menu", { animated: props.animated }).catch(() => {
+  // animation/dragging states drive the menu's checkmarks.
+  void invoke("show_buddy_menu", {
+    animated: props.animated,
+    dragging: props.draggable,
+  }).catch(() => {
     // not running under Tauri (unit tests)
   });
 }
@@ -85,10 +98,17 @@ function onContextMenu() {
   <div class="flex flex-col items-center">
     <button
       type="button"
-      class="buddy block cursor-grab focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-      :class="{ working, still: !animated }"
-      aria-label="Vault Buddy — click to open the panel, drag to move"
-      title="Click to open · drag to move"
+      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      :class="[
+        draggable ? 'cursor-grab' : 'cursor-pointer',
+        { working, still: !animated },
+      ]"
+      :aria-label="
+        draggable
+          ? 'Vault Buddy — click to open the panel, drag to move'
+          : 'Vault Buddy — click to open the panel'
+      "
+      :title="draggable ? 'Click to open · drag to move' : 'Click to open'"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerEnd"
@@ -96,81 +116,12 @@ function onContextMenu() {
       @click="onClick"
       @contextmenu.prevent="onContextMenu"
     >
-      <svg width="64" height="64" viewBox="0 0 96 96" aria-hidden="true">
-        <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />
-        <circle class="eye" cx="38" cy="46" r="5" fill="#fff" />
-        <circle class="eye" cx="58" cy="46" r="5" fill="#fff" />
-        <path
-          d="M40 62 Q48 70 56 62"
-          stroke="#fff"
-          stroke-width="3"
-          fill="none"
-          stroke-linecap="round"
-        />
-      </svg>
+      <BuddyAvatar
+        :character-id="character"
+        :working="working"
+        :animated="animated"
+        :facing="facing"
+      />
     </button>
   </div>
 </template>
-
-<style scoped>
-/* idle */
-.buddy {
-  animation: bob 3s ease-in-out infinite;
-}
-/* greeting */
-.buddy:hover:not(.working) {
-  animation: wiggle 0.6s ease-in-out infinite;
-}
-/* working */
-.buddy.working {
-  animation: pulse 0.9s ease-in-out infinite;
-}
-.buddy .eye {
-  animation: blink 4s infinite;
-  transform-origin: center;
-  transform-box: fill-box;
-}
-/* user turned the animation off (right-click menu) — overrides idle,
-   hover and working states alike */
-.buddy.still,
-.buddy.still .eye {
-  animation: none !important;
-}
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
-}
-@keyframes wiggle {
-  0%,
-  100% {
-    transform: rotate(-4deg);
-  }
-  50% {
-    transform: rotate(4deg);
-  }
-}
-@keyframes pulse {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(0.94);
-  }
-}
-@keyframes blink {
-  0%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  96% {
-    transform: scaleY(0.1);
-  }
-}
-</style>
