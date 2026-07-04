@@ -49,10 +49,13 @@ pub fn quit(app: &AppHandle) {
     // once the save has landed; the menu callback returns immediately.
     if crate::capture_commands::is_recording(app) {
         let app = app.clone();
-        std::thread::spawn(move || {
-            crate::capture_commands::finalize_if_recording(&app);
-            finish_quit(&app);
-        });
+        std::thread::Builder::new()
+            .name("shutdown-finalize".into())
+            .spawn(move || {
+                crate::capture_commands::finalize_if_recording(&app);
+                finish_quit(&app);
+            })
+            .expect("failed to spawn shutdown-finalize thread");
         return;
     }
     finish_quit(app);
@@ -198,9 +201,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 // Stopping waits up to 15s for the finalize — never block
                 // the menu callback (and the event loop) on it.
                 let app = app.clone();
-                std::thread::spawn(move || {
-                    crate::capture_commands::stop_from_menu(&app);
-                });
+                std::thread::Builder::new()
+                    .name("tray-stop".into())
+                    .spawn(move || {
+                        crate::capture_commands::stop_from_menu(&app);
+                    })
+                    .expect("failed to spawn tray-stop thread");
             }
             "tray-pause-recording" => crate::capture_commands::pause_from_menu(app),
             "tray-resume-recording" => crate::capture_commands::resume_from_menu(app),

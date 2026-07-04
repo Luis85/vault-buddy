@@ -101,8 +101,12 @@ impl CaptureSession {
             .create_new(true)
             .open(&params.part)?;
         let (control_tx, control_rx) = mpsc::channel();
-        let handle =
-            std::thread::spawn(move || run_worker(file, encoder, params, sources, control_rx));
+        // Named so a crash record on this thread is attributable; spawn
+        // failure is a real `?` path here (unlike the shell's `.expect`
+        // sites) because `start` already returns `std::io::Result`.
+        let handle = std::thread::Builder::new()
+            .name("capture-worker".into())
+            .spawn(move || run_worker(file, encoder, params, sources, control_rx))?;
         Ok(CaptureSession { control_tx, handle })
     }
 

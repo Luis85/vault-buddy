@@ -80,16 +80,19 @@ pub fn run() {
                     // re-trigger it via the app handle.
                     api.prevent_close();
                     let app = app.clone();
-                    std::thread::spawn(move || {
-                        capture_commands::finalize_if_recording(&app);
-                        // The recording is finalized, so is_recording is
-                        // now false and the re-triggered CloseRequested
-                        // takes the else branch below (restore + pass
-                        // through to destruction) — no loop.
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.close();
-                        }
-                    });
+                    std::thread::Builder::new()
+                        .name("close-finalize".into())
+                        .spawn(move || {
+                            capture_commands::finalize_if_recording(&app);
+                            // The recording is finalized, so is_recording is
+                            // now false and the re-triggered CloseRequested
+                            // takes the else branch below (restore + pass
+                            // through to destruction) — no loop.
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.close();
+                            }
+                        })
+                        .expect("failed to spawn close-finalize thread");
                 } else {
                     tray::restore_home_position(app);
                 }
@@ -153,19 +156,22 @@ pub fn run() {
             let mut last_pos: Option<(i32, i32)> = None;
             let mut ticks: u32 = 0;
             let mut saved_once = false;
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                // One bad tick must never permanently kill always-on-top
-                // re-assertion + position checkpointing. Isolate each tick: a
-                // panic here is captured by the crash hook and this line, and
-                // the loop keeps running.
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
-                }));
-                if outcome.is_err() {
-                    log::error!("background checkpoint tick panicked; continuing");
-                }
-            });
+            std::thread::Builder::new()
+                .name("topmost-checkpoint".into())
+                .spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    // One bad tick must never permanently kill always-on-top
+                    // re-assertion + position checkpointing. Isolate each tick: a
+                    // panic here is captured by the crash hook and this line, and
+                    // the loop keeps running.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
+                    }));
+                    if outcome.is_err() {
+                        log::error!("background checkpoint tick panicked; continuing");
+                    }
+                })
+                .expect("failed to spawn topmost-checkpoint thread");
             Ok(())
         })
         .run(tauri::generate_context!())

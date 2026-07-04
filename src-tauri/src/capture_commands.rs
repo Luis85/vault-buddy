@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 
 pub struct ActiveCapture {
@@ -72,7 +73,7 @@ fn emit_failed(app: &AppHandle, message: &str) {
 /// go through here, or stop-waiters sleep until their next timeout.
 fn clear_active(app: &AppHandle) {
     let state = app.state::<CaptureState>();
-    *state.0.lock().unwrap() = None;
+    *lock_ignoring_poison(&state.0) = None;
     state.1.notify_all();
 }
 
@@ -102,7 +103,7 @@ fn emit_saved(app: &AppHandle, outcome: &Outcome) {
 
 #[tauri::command]
 pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
-    let guard = state.0.lock().unwrap();
+    let guard = lock_ignoring_poison(&state.0);
     match guard.as_ref() {
         Some(active) => StatusPayload {
             recording: true,
@@ -198,7 +199,7 @@ pub fn set_capture_config(
         input_device: cfg.input_device.clone().filter(|d| !d.is_empty()),
         output_device: cfg.output_device.clone().filter(|d| !d.is_empty()),
     };
-    let _guard = lock.0.lock().unwrap();
+    let _guard = lock_ignoring_poison(&lock.0);
     capture_config::update_vault_config(&id, value)
 }
 
@@ -265,7 +266,7 @@ pub fn start_capture(
     // check plus the insert, which closes the double-start window without
     // serializing device setup (or any I/O) under the mutex.
     {
-        let mut guard = state.0.lock().unwrap();
+        let mut guard = lock_ignoring_poison(&state.0);
         if guard.is_some() {
             return Err("A recording is already running.".to_string());
         }
@@ -286,105 +287,114 @@ pub fn start_capture(
     // Live source-loss warnings: forwarded to the panel while recording.
     let (warn_tx, warn_rx) = mpsc::channel::<String>();
     let app_warn = app.clone();
-    std::thread::spawn(move || {
-        while let Ok(message) = warn_rx.recv() {
-            let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
-        }
-    });
+    std::thread::Builder::new()
+        .name("capture-warn".into())
+        .spawn(move || {
+            while let Ok(message) = warn_rx.recv() {
+                let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
+            }
+        })
+        .expect("failed to spawn capture-warn thread");
 
     // Advisory level meter: forward the worker's ~5 Hz peaks to the panel.
     let (level_tx, level_rx) = mpsc::channel::<f32>();
     let app_level = app.clone();
-    std::thread::spawn(move || {
-        while let Ok(peak) = level_rx.recv() {
-            let _ = app_level.emit("capture:level", serde_json::json!({ "peak": peak }));
-        }
-    });
+    std::thread::Builder::new()
+        .name("capture-level".into())
+        .spawn(move || {
+            while let Ok(peak) = level_rx.recv() {
+                let _ = app_level.emit("capture:level", serde_json::json!({ "peak": peak }));
+            }
+        })
+        .expect("failed to spawn capture-level thread");
 
-    std::thread::spawn(move || {
-        let open = match vault_buddy_capture::devices::open_sources(
-            uses_loopback,
-            cfg.input_device.as_deref(),
-            cfg.output_device.as_deref(),
-        ) {
-            Ok(o) => o,
-            Err(e) => {
+    std::thread::Builder::new()
+        .name("capture-device".into())
+        .spawn(move || {
+            let open = match vault_buddy_capture::devices::open_sources(
+                uses_loopback,
+                cfg.input_device.as_deref(),
+                cfg.output_device.as_deref(),
+            ) {
+                Ok(o) => o,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
+            // Stale-device fallbacks: surface live (capture:warning via the
+            // forwarder) AND seed the session so the note metadata records it.
+            for w in &open.warnings {
+                let _ = warn_tx.send(w.clone());
+            }
+            let start_warning = (!open.warnings.is_empty()).then(|| open.warnings.join("; "));
+            let now = chrono::Local::now();
+            use chrono::Timelike;
+            let date = now.date_naive();
+            let dir = capture_paths::dated_folder(&root, date);
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                let _ = ready_tx.send(Err(format!("Cannot create recording folder: {e}")));
+                return;
+            }
+            // A pre-existing symlink/junction at the recording folder must
+            // not carry writes outside the vault (lexical check can't see it).
+            if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path2, &dir) {
                 let _ = ready_tx.send(Err(e));
                 return;
             }
-        };
-        // Stale-device fallbacks: surface live (capture:warning via the
-        // forwarder) AND seed the session so the note metadata records it.
-        for w in &open.warnings {
-            let _ = warn_tx.send(w.clone());
-        }
-        let start_warning = (!open.warnings.is_empty()).then(|| open.warnings.join("; "));
-        let now = chrono::Local::now();
-        use chrono::Timelike;
-        let date = now.date_naive();
-        let dir = capture_paths::dated_folder(&root, date);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            let _ = ready_tx.send(Err(format!("Cannot create recording folder: {e}")));
-            return;
-        }
-        // A pre-existing symlink/junction at the recording folder must
-        // not carry writes outside the vault (lexical check can't see it).
-        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path2, &dir) {
-            let _ = ready_tx.send(Err(e));
-            return;
-        }
-        let base = capture_paths::base_name(date, now.hour(), now.minute(), label);
-        let names = capture_paths::reserve_names(&dir, &base);
-        let params = SessionParams {
-            dir: dir.clone(),
-            base: names.base.clone(),
-            part: names.part.clone(),
-            bitrate_kbps: cfg.bitrate_kbps,
-            vault_name: vault_name.clone(),
-            recording_type: label.to_string(),
-            create_note: cfg.create_note,
-            recorded_at: now.to_rfc3339(),
-            flush_every: Duration::from_secs(1),
-            fsync_every: Duration::from_secs(30),
-            warn_tx: Some(warn_tx),
-            level_tx: Some(level_tx),
-            start_warning,
-        };
-        let session = match CaptureSession::start(params, open.inputs) {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = ready_tx.send(Err(format!("Could not start recording: {e}")));
-                return;
-            }
-        };
-        log::info!(
-            "capture: started in vault '{vault_name}' → {}",
-            names.part.display()
-        );
-        let _ = ready_tx.send(Ok(names.part.clone()));
+            let base = capture_paths::base_name(date, now.hour(), now.minute(), label);
+            let names = capture_paths::reserve_names(&dir, &base);
+            let params = SessionParams {
+                dir: dir.clone(),
+                base: names.base.clone(),
+                part: names.part.clone(),
+                bitrate_kbps: cfg.bitrate_kbps,
+                vault_name: vault_name.clone(),
+                recording_type: label.to_string(),
+                create_note: cfg.create_note,
+                recorded_at: now.to_rfc3339(),
+                flush_every: Duration::from_secs(1),
+                fsync_every: Duration::from_secs(30),
+                warn_tx: Some(warn_tx),
+                level_tx: Some(level_tx),
+                start_warning,
+            };
+            let session = match CaptureSession::start(params, open.inputs) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(format!("Could not start recording: {e}")));
+                    return;
+                }
+            };
+            log::info!(
+                "capture: started in vault '{vault_name}' → {}",
+                names.part.display()
+            );
+            let _ = ready_tx.send(Ok(names.part.clone()));
 
-        // Own the streams here; poll for control or self-finalization.
-        let streams = open.streams;
-        loop {
-            match control_rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => break,
-                Ok(Control::Pause) => session.pause(),
-                Ok(Control::Resume) => session.resume(),
-                Err(RecvTimeoutError::Timeout) => {
-                    if !session.is_running() {
-                        break; // sources died; worker self-finalized
+            // Own the streams here; poll for control or self-finalization.
+            let streams = open.streams;
+            loop {
+                match control_rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => break,
+                    Ok(Control::Pause) => session.pause(),
+                    Ok(Control::Resume) => session.resume(),
+                    Err(RecvTimeoutError::Timeout) => {
+                        if !session.is_running() {
+                            break; // sources died; worker self-finalized
+                        }
                     }
                 }
             }
-        }
-        // Stop the session while the streams are still alive: dropping
-        // them first disconnects every source channel, and the worker
-        // could mistake an ordinary stop for all-sources-lost (bogus
-        // ended_early + source-loss warnings in the toast and note).
-        let outcome = session.stop();
-        drop(streams);
-        let _ = done_tx.send(outcome);
-    });
+            // Stop the session while the streams are still alive: dropping
+            // them first disconnects every source channel, and the worker
+            // could mistake an ordinary stop for all-sources-lost (bogus
+            // ended_early + source-loss warnings in the toast and note).
+            let outcome = session.stop();
+            drop(streams);
+            let _ = done_tx.send(outcome);
+        })
+        .expect("failed to spawn capture-device thread");
 
     // Wait for device readiness WITHOUT the lock — concurrent starts are
     // already rejected by the reservation above.
@@ -395,7 +405,7 @@ pub fn start_capture(
             // now that device setup is done — that is what the UI timer
             // should count from.
             let started_at_ms = now_ms();
-            if let Some(active) = state.0.lock().unwrap().as_mut() {
+            if let Some(active) = lock_ignoring_poison(&state.0).as_mut() {
                 active.part = Some(part);
                 active.started_at_ms = started_at_ms;
             }
@@ -423,32 +433,35 @@ pub fn start_capture(
             let msg = "Recording did not start in time.".to_string();
             let _ = control_tx.send(Control::Stop);
             let app4 = app.clone();
-            std::thread::spawn(move || {
-                if let Ok(Ok(part)) = ready_rx.recv() {
-                    log::warn!(
-                        "capture: late start after timeout — stopping and draining {}",
-                        part.display()
-                    );
-                    match done_rx.recv() {
-                        Ok(Ok(outcome)) => emit_saved(&app4, &outcome),
-                        Ok(Err(e)) => {
-                            // A late-start finalize failure must reach the
-                            // UI, not just the log file.
-                            log::warn!("capture: late-start cleanup failed: {e}");
-                            emit_failed(&app4, &e);
-                        }
-                        Err(_) => {
-                            log::warn!("capture: late-start cleanup: worker vanished");
-                            emit_failed(&app4, "capture thread vanished");
+            std::thread::Builder::new()
+                .name("capture-janitor".into())
+                .spawn(move || {
+                    if let Ok(Ok(part)) = ready_rx.recv() {
+                        log::warn!(
+                            "capture: late start after timeout — stopping and draining {}",
+                            part.display()
+                        );
+                        match done_rx.recv() {
+                            Ok(Ok(outcome)) => emit_saved(&app4, &outcome),
+                            Ok(Err(e)) => {
+                                // A late-start finalize failure must reach the
+                                // UI, not just the log file.
+                                log::warn!("capture: late-start cleanup failed: {e}");
+                                emit_failed(&app4, &e);
+                            }
+                            Err(_) => {
+                                log::warn!("capture: late-start cleanup: worker vanished");
+                                emit_failed(&app4, "capture thread vanished");
+                            }
                         }
                     }
-                }
-                // worker replied Err (or vanished): nothing was created,
-                // but the reservation installed above still needs clearing
-                // either way, or a real recording could never start again.
-                clear_active(&app4);
-                crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
-            });
+                    // worker replied Err (or vanished): nothing was created,
+                    // but the reservation installed above still needs clearing
+                    // either way, or a real recording could never start again.
+                    clear_active(&app4);
+                    crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
+                })
+                .expect("failed to spawn capture-janitor thread");
             emit_failed(&app, &msg);
             return Err(msg);
         }
@@ -467,20 +480,23 @@ pub fn start_capture(
     // user/menu/shutdown stops AND self-finalization (all sources lost) —
     // the state clears and the outcome surfaces no matter who ended it.
     let app3 = app.clone();
-    std::thread::spawn(move || {
-        let result = done_rx
-            .recv()
-            .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
-        clear_active(&app3);
-        match result {
-            Ok(outcome) => emit_saved(&app3, &outcome),
-            Err(e) => {
-                log::error!("capture: finalize failed: {e}");
-                emit_failed(&app3, &e);
+    std::thread::Builder::new()
+        .name("capture-monitor".into())
+        .spawn(move || {
+            let result = done_rx
+                .recv()
+                .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
+            clear_active(&app3);
+            match result {
+                Ok(outcome) => emit_saved(&app3, &outcome),
+                Err(e) => {
+                    log::error!("capture: finalize failed: {e}");
+                    emit_failed(&app3, &e);
+                }
             }
-        }
-        crate::tray::set_capture_state(&app3, crate::tray::TrayCaptureState::Idle);
-    });
+            crate::tray::set_capture_state(&app3, crate::tray::TrayCaptureState::Idle);
+        })
+        .expect("failed to spawn capture-monitor thread");
 
     // Indicator hardening: recording buddy must be visible.
     if let Some(window) = app.get_webview_window("main") {
@@ -502,7 +518,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
     // `app.state::<CaptureState>()` is otherwise a temporary that would be
     // dropped at the end of the `let guard = …;` statement.
     let capture_state = app.state::<CaptureState>();
-    let mut guard = capture_state.0.lock().unwrap();
+    let mut guard = lock_ignoring_poison(&capture_state.0);
     let Some(active) = guard.as_ref() else { return };
     let _ = active.control_tx.send(Control::Stop);
     let deadline = wait.map(|limit| std::time::Instant::now() + limit);
@@ -514,10 +530,13 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
                     log::warn!("capture: stop wait timed out");
                     return;
                 }
+                // A poisoned condvar wait must recover the same way the
+                // mutex does: recovering the pair keeps shutdown waiting
+                // instead of panicking mid-finalize.
                 guard = capture_state
                     .1
                     .wait_timeout(guard, deadline - now)
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .0;
             }
             None => {
@@ -526,7 +545,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
                 let (g, timeout) = capture_state
                     .1
                     .wait_timeout(guard, Duration::from_secs(15))
-                    .unwrap();
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard = g;
                 if timeout.timed_out() && guard.is_some() {
                     log::warn!("capture: still finalizing…");
@@ -538,7 +557,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
 
 #[tauri::command]
 pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result<(), String> {
-    if state.0.lock().unwrap().is_none() {
+    if lock_ignoring_poison(&state.0).is_none() {
         return Err("No recording is running.".to_string());
     }
     request_stop_and_wait(&app, Some(Duration::from_secs(15)));
@@ -551,7 +570,7 @@ pub fn stop_from_menu(app: &AppHandle) {
 }
 
 pub fn is_recording(app: &AppHandle) -> bool {
-    app.state::<CaptureState>().0.lock().unwrap().is_some()
+    lock_ignoring_poison(&app.state::<CaptureState>().0).is_some()
 }
 
 /// Shared by the IPC commands and the tray menu items. Errors are typed
@@ -559,7 +578,7 @@ pub fn is_recording(app: &AppHandle) -> bool {
 /// but the tray can always race, so every precondition re-checks here.
 fn set_paused(app: &AppHandle, pause: bool) -> Result<(), String> {
     let state = app.state::<CaptureState>();
-    let mut guard = state.0.lock().unwrap();
+    let mut guard = lock_ignoring_poison(&state.0);
     let Some(active) = guard.as_mut() else {
         return Err("No recording is running.".to_string());
     };
@@ -618,7 +637,7 @@ pub fn rename_capture(
     // The prompt dismisses on a new recording (UI rule); this is the
     // backend guard for the same thing — never shuffle files next to a
     // directory a live session is writing into.
-    if state.0.lock().unwrap().is_some() {
+    if lock_ignoring_poison(&state.0).is_some() {
         return Err("Cannot rename while a recording is running.".to_string());
     }
     // rename_plan re-validates ownership (capture-pattern stems only), so
@@ -685,95 +704,98 @@ pub fn finalize_if_recording(app: &AppHandle) {
 /// recording) retries every 90s, bounded at ~24h of attempts.
 pub fn run_recovery(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        let pass = |stale: Duration| -> bool {
-            // A live recording's .part should never be caught by a recovery
-            // pass in practice: a clock jump could give the live .part a
-            // future mtime that makes it look stale, and it would be
-            // "recovered" out from under the encoder. recover_root has no
-            // notion of the active session, so postpone the whole pass
-            // while a recording is active — returning true keeps the pass
-            // retrying every 90s while work is pending, rather than only
-            // running again at next launch. Coarse, but safe in practice
-            // (this is-recording check runs once per pass, not once per
-            // file recover_root scans).
-            {
-                let state = app.state::<CaptureState>();
-                let guard = state.0.lock().unwrap();
-                if let Some(active) = guard.as_ref() {
-                    log::info!(
-                        "recovery: postponed while a recording is active (live part: {})",
-                        active
-                            .part
-                            .as_deref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| "not yet reserved".to_string())
-                    );
-                    return true;
+    std::thread::Builder::new()
+        .name("capture-recovery".into())
+        .spawn(move || {
+            let pass = |stale: Duration| -> bool {
+                // A live recording's .part should never be caught by a recovery
+                // pass in practice: a clock jump could give the live .part a
+                // future mtime that makes it look stale, and it would be
+                // "recovered" out from under the encoder. recover_root has no
+                // notion of the active session, so postpone the whole pass
+                // while a recording is active — returning true keeps the pass
+                // retrying every 90s while work is pending, rather than only
+                // running again at next launch. Coarse, but safe in practice
+                // (this is-recording check runs once per pass, not once per
+                // file recover_root scans).
+                {
+                    let state = app.state::<CaptureState>();
+                    let guard = lock_ignoring_poison(&state.0);
+                    if let Some(active) = guard.as_ref() {
+                        log::info!(
+                            "recovery: postponed while a recording is active (live part: {})",
+                            active
+                                .part
+                                .as_deref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_else(|| "not yet reserved".to_string())
+                        );
+                        return true;
+                    }
                 }
-            }
-            let cfg = capture_config::load_config();
-            let mut fresh_found = false;
-            for vault in discovery::discover_vaults() {
-                let v = capture_config::vault_config(&cfg, &vault.id);
-                // Configured folder, or BOTH mode defaults when no config
-                // entry exists — a first-ever crash may have used either.
-                let roots: Vec<String> = match &v.recording_folder {
-                    Some(folder) => vec![folder.clone()],
-                    None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
-                };
-                for folder in roots {
-                    let Ok(root) =
-                        capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
-                    else {
-                        log::warn!("recovery: skipping unsafe configured folder {folder:?}");
-                        continue;
+                let cfg = capture_config::load_config();
+                let mut fresh_found = false;
+                for vault in discovery::discover_vaults() {
+                    let v = capture_config::vault_config(&cfg, &vault.id);
+                    // Configured folder, or BOTH mode defaults when no config
+                    // entry exists — a first-ever crash may have used either.
+                    let roots: Vec<String> = match &v.recording_folder {
+                        Some(folder) => vec![folder.clone()],
+                        None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
                     };
-                    if !root.is_dir() {
-                        continue;
-                    }
-                    if let Err(e) =
-                        capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root)
-                    {
-                        log::warn!("recovery: skipping root: {e}");
-                        continue;
-                    }
-                    for action in vault_buddy_capture::recovery::recover_root(
-                        &root,
-                        &vault.name,
-                        stale,
-                        v.create_note,
-                    ) {
-                        use vault_buddy_capture::recovery::RecoveryAction;
-                        match action {
-                            RecoveryAction::Recovered { mp3 } => {
-                                let name = mp3
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                toast(&app, "Recording recovered", &name);
+                    for folder in roots {
+                        let Ok(root) =
+                            capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
+                        else {
+                            log::warn!("recovery: skipping unsafe configured folder {folder:?}");
+                            continue;
+                        };
+                        if !root.is_dir() {
+                            continue;
+                        }
+                        if let Err(e) =
+                            capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root)
+                        {
+                            log::warn!("recovery: skipping root: {e}");
+                            continue;
+                        }
+                        for action in vault_buddy_capture::recovery::recover_root(
+                            &root,
+                            &vault.name,
+                            stale,
+                            v.create_note,
+                        ) {
+                            use vault_buddy_capture::recovery::RecoveryAction;
+                            match action {
+                                RecoveryAction::Recovered { mp3 } => {
+                                    let name = mp3
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    toast(&app, "Recording recovered", &name);
+                                }
+                                RecoveryAction::Fresh(_) => fresh_found = true,
+                                RecoveryAction::DeletedEmpty(_) => {}
                             }
-                            RecoveryAction::Fresh(_) => fresh_found = true,
-                            RecoveryAction::DeletedEmpty(_) => {}
                         }
                     }
                 }
+                fresh_found
+            };
+            // Retry while work is pending (fresh orphans aging, or passes
+            // postponed by an active recording). Bounded so a pathological
+            // state cannot spin forever: 960 × 90s ≈ 24h of retries, far
+            // beyond any realistic recording session; recovery also reruns
+            // on every app launch.
+            let mut retries = 0u32;
+            while pass(Duration::from_secs(60)) {
+                retries += 1;
+                if retries >= 960 {
+                    log::warn!("recovery: giving up rescans after {retries} attempts");
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(90));
             }
-            fresh_found
-        };
-        // Retry while work is pending (fresh orphans aging, or passes
-        // postponed by an active recording). Bounded so a pathological
-        // state cannot spin forever: 960 × 90s ≈ 24h of retries, far
-        // beyond any realistic recording session; recovery also reruns
-        // on every app launch.
-        let mut retries = 0u32;
-        while pass(Duration::from_secs(60)) {
-            retries += 1;
-            if retries >= 960 {
-                log::warn!("recovery: giving up rescans after {retries} attempts");
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(90));
-        }
-    });
+        })
+        .expect("failed to spawn capture-recovery thread");
 }
