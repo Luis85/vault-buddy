@@ -33,6 +33,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # our `tauri` npm script is an alias for `tauri dev`; the action's
+          # default `npm run tauri build` would expand to `tauri dev build`,
+          # which dev-builds and then LAUNCHES the app on the runner forever
+          tauriScript: npx tauri
           tagName: ${{ github.ref_name }}
           releaseName: "Vault Buddy ${{ github.ref_name }}"
           releaseDraft: false
