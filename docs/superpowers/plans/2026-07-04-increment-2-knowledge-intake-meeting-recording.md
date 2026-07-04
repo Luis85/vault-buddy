@@ -1077,6 +1077,7 @@ git commit -m "feat(capture): streaming LAME MP3 encoder wrapper"
 - Produces:
   - `fn has_mp3_frame(bytes: &[u8]) -> bool` — true if an MP3 sync word (`0xFF` followed by a byte whose top 3 bits are set) appears.
   - `enum RecoveryAction { Recovered { mp3: PathBuf }, DeletedEmpty(PathBuf), Fresh(PathBuf) }`
+  - `fn rename_into_reserved(from: &Path, dir: &Path, base: &str) -> Result<(PathBuf, PathBuf), String>` — shared finalize primitive: loops `reserve_final` + non-replacing rename, retrying with an advanced suffix when the destination appears in the check→rename window. Task 8's session finalize uses this too.
   - `fn recover_root(root: &Path, vault_name: &str, stale_after: Duration, write_note: bool) -> Vec<RecoveryAction>` — recursively walks `root` for `.…mp3.part` files and stale `.….md.tmp` note temps; fresh `.part`s are reported as `Fresh` (caller schedules a rescan), zero-frame `.part`s are deleted, others are renamed to `<base> (recovered).mp3` via `reserve_final` + rename-retry, with an optional note (`event: recovered after crash`). Stale `.md.tmp` files are deleted.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1277,11 +1278,13 @@ pub fn recover_root(
             return;
         }
         let dir = path.parent().unwrap_or(root);
-        let (mp3, note) = reserve_final(dir, &recovered_base(&base));
-        if std::fs::rename(path, &mp3).is_err() {
-            log::warn!("recovery: rename failed for {}", path.display());
-            return;
-        }
+        let (mp3, note) = match rename_into_reserved(path, dir, &recovered_base(&base)) {
+            Ok(paths) => paths,
+            Err(e) => {
+                log::warn!("recovery: rename failed for {}: {e}", path.display());
+                return;
+            }
+        };
         log::info!("recovery: finalized {}", mp3.display());
         if write_note {
             let meta = NoteMeta {
@@ -1298,6 +1301,29 @@ pub fn recover_root(
         actions.push(RecoveryAction::Recovered { mp3 });
     });
     actions
+}
+
+/// Finalize `from` under the first free suffixed name for `base` in `dir`.
+/// The rename is the arbiter: a destination created between the reserve
+/// check and the rename advances the suffix and retries (Windows renames
+/// are non-replacing; on Unix the exists() pre-check plus the tight retry
+/// loop is the accepted dev-platform approximation).
+pub fn rename_into_reserved(
+    from: &Path,
+    dir: &Path,
+    base: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    loop {
+        let (mp3, note) = reserve_final(dir, base);
+        match std::fs::rename(from, &mp3) {
+            Ok(()) => return Ok((mp3, note)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // Windows reports rename-onto-existing as PermissionDenied or
+            // AlreadyExists depending on the API path.
+            Err(_) if mp3.exists() => continue,
+            Err(e) => return Err(format!("finalize rename failed: {e}")),
+        }
+    }
 }
 
 fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
@@ -1339,14 +1365,14 @@ git commit -m "feat(capture): crash recovery scan with staleness and zero-frame 
 - Modify: `src-tauri/capture/src/lib.rs` (add `pub mod session;`)
 
 **Interfaces:**
-- Consumes: `mixer::*`, `encoder::Mp3Encoder`, `vault_buddy_core::capture_paths::reserve_final`, `vault_buddy_core::capture_note::{render_note, write_note_atomic, NoteMeta}`.
+- Consumes: `mixer::*`, `encoder::Mp3Encoder`, `recovery::rename_into_reserved` (Task 7), `vault_buddy_core::capture_note::{render_note, write_note_atomic, NoteMeta}`.
 - Produces:
   - `enum SourceMsg { Samples(Vec<f32>) /* raw interleaved at source rate */, Lost }`
-  - `struct SourceInput { pub name: String, pub rate: u32, pub channels: u16, pub required: bool, pub rx: std::sync::mpsc::Receiver<SourceMsg> }`
+  - `struct SourceInput { pub name: String, pub rate: u32, pub channels: u16, pub rx: std::sync::mpsc::Receiver<SourceMsg> }` — every opened source is one the mode requires, so loss detection is simply "no source left alive": a meeting continues while either mic or loopback survives; a mic-only voice note finalizes when the mic dies.
   - `struct SessionParams { pub dir: PathBuf, pub base: String, pub part: PathBuf, pub bitrate_kbps: u32, pub vault_name: String, pub recording_type: String, pub create_note: bool, pub recorded_at: String, pub flush_every: Duration, pub fsync_every: Duration }`
   - `struct Outcome { pub mp3: PathBuf, pub note: Option<PathBuf>, pub duration_secs: u64, pub warning: Option<String>, pub ended_early: bool }`
   - `struct CaptureSession` with `fn start(params: SessionParams, sources: Vec<SourceInput>) -> std::io::Result<CaptureSession>` (creates the `.part` with `create_new`), `fn stop(self) -> Result<Outcome, String>`, and `fn is_running(&self) -> bool`.
-  - The worker finalizes **on its own** (returning through `stop()`'s join) when all required sources are lost.
+  - The worker finalizes **on its own** (returning through `stop()`'s join) when no source is left alive.
 
 - [ ] **Step 1: Write the failing integration tests**
 
@@ -1393,8 +1419,8 @@ mod tests {
         let session = CaptureSession::start(
             params(dir.path()),
             vec![
-                SourceInput { name: "mic".into(), rate: 44_100, channels: 1, required: true, rx: rx_a },
-                SourceInput { name: "loopback".into(), rate: 44_100, channels: 1, required: false, rx: rx_b },
+                SourceInput { name: "mic".into(), rate: 44_100, channels: 1, rx: rx_a },
+                SourceInput { name: "loopback".into(), rate: 44_100, channels: 1, rx: rx_b },
             ],
         )
         .unwrap();
@@ -1422,7 +1448,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let session = CaptureSession::start(
             params(dir.path()),
-            vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, required: true, rx }],
+            vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, rx }],
         )
         .unwrap();
         tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
@@ -1440,7 +1466,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let session = CaptureSession::start(
             params(dir.path()),
-            vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, required: true, rx }],
+            vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, rx }],
         )
         .unwrap();
         tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
@@ -1465,7 +1491,7 @@ mod tests {
         p.base = "b".into();
         let result = CaptureSession::start(
             p,
-            vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, required: true, rx }],
+            vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, rx }],
         );
         assert!(result.is_err(), "must not truncate the orphan");
         assert_eq!(
@@ -1498,7 +1524,6 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use vault_buddy_core::capture_note::{render_note, write_note_atomic, NoteMeta};
-use vault_buddy_core::capture_paths::reserve_final;
 
 pub enum SourceMsg {
     Samples(Vec<f32>),
@@ -1509,7 +1534,6 @@ pub struct SourceInput {
     pub name: String,
     pub rate: u32,
     pub channels: u16,
-    pub required: bool,
     pub rx: Receiver<SourceMsg>,
 }
 
@@ -1634,12 +1658,12 @@ fn run_worker(
             }
         }
 
-        let no_required_source_left = states
-            .iter()
-            .filter(|s| s.input.required)
-            .all(|s| !s.alive);
-        let finish = stopped || no_required_source_left;
-        if no_required_source_left && !stopped {
+        // Every opened source is one the mode requires (spec: source loss
+        // is judged against the mode's sources) — a meeting survives on
+        // either stream; a mic-only voice note ends when the mic dies.
+        let no_source_left = states.iter().all(|s| !s.alive);
+        let finish = stopped || no_source_left;
+        if no_source_left && !stopped {
             ended_early = true;
         }
 
@@ -1691,18 +1715,8 @@ fn run_worker(
 
     let duration_secs = frames_written / TARGET_RATE as u64;
     let _elapsed = started.elapsed();
-    let (mp3, note_path) = loop {
-        let (mp3, note_path) = reserve_final(&params.dir, &params.base);
-        match std::fs::rename(&params.part, &mp3) {
-            Ok(()) => break (mp3, note_path),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            // Windows reports rename-onto-existing as PermissionDenied or
-            // AlreadyExists depending on the API path; retry either only
-            // if the destination actually exists now.
-            Err(_) if mp3.exists() => continue,
-            Err(e) => return Err(format!("finalize rename failed: {e}")),
-        }
-    };
+    let (mp3, note_path) =
+        crate::recovery::rename_into_reserved(&params.part, &params.dir, &params.base)?;
     // Make the rename's directory entry durable where the platform
     // supports it (Unix dir fsync; NTFS journaling covers Windows). Worst
     // case the fsynced .part entry survives instead and the next launch's
@@ -1766,7 +1780,7 @@ git commit -m "feat(capture): recording session with crash-safe writer and final
 - Consumes: `session::{SourceMsg, SourceInput}`.
 - Produces:
   - `struct OpenSources { pub inputs: Vec<SourceInput>, pub streams: Vec<cpal::Stream> }` — keep `streams` alive for the whole recording; dropping them stops capture.
-  - `fn open_sources(meeting_mode: bool) -> Result<OpenSources, String>` — always opens the default mic (required). When `meeting_mode` **and** on Windows, also opens WASAPI loopback on the default output device (not required — its loss must not kill the meeting). On non-Windows, `meeting_mode` opens mic only (documented dev limitation).
+  - `fn open_sources(meeting_mode: bool) -> Result<OpenSources, String>` — always opens the default mic. When `meeting_mode` **and** on Windows, also opens WASAPI loopback on the default output device. Loss handling lives in the session's all-sources-dead predicate: a meeting continues while either stream survives. On non-Windows, `meeting_mode` opens mic only (documented dev limitation).
   - Errors are human-readable: `"No microphone found — check Windows sound settings."`, `"Desktop audio (loopback) unavailable: <cause>"`.
 
 - [ ] **Step 1: Write the (compile-focused) test**
@@ -1786,7 +1800,7 @@ mod tests {
         match open_sources(true) {
             Ok(open) => {
                 assert!(!open.inputs.is_empty());
-                assert!(open.inputs[0].required, "mic is the required source");
+                assert!(!open.inputs[0].name.is_empty(), "mic source is named");
             }
             Err(message) => {
                 assert!(!message.is_empty());
@@ -1884,7 +1898,6 @@ pub fn open_sources(meeting_mode: bool) -> Result<OpenSources, String> {
         name: mic_name,
         rate: mic_config.sample_rate().0,
         channels: mic_config.channels(),
-        required: true,
         rx: mic_rx,
     });
 
@@ -1908,7 +1921,6 @@ pub fn open_sources(meeting_mode: bool) -> Result<OpenSources, String> {
             name,
             rate: config.sample_rate().0,
             channels: config.channels(),
-            required: false,
             rx,
         });
     }
@@ -1948,7 +1960,7 @@ git commit -m "feat(capture): cpal device layer with Windows loopback"
 **Interfaces:**
 - Consumes: `vault_buddy_capture::{devices, session, recovery}`, `vault_buddy_core::{capture_config, capture_paths, discovery}`, Task 11's `tray::set_recording(app, bool)` (call sites written here, implemented next task — stub it now as a no-op in tray.rs to keep the build green: `pub fn set_recording(_app: &AppHandle, _recording: bool) {}`).
 - Produces:
-  - `pub struct CaptureState(pub Mutex<Option<ActiveCapture>>)` with `pub struct ActiveCapture { pub session: vault_buddy_capture::session::CaptureSession, pub streams: Vec<cpal::Stream>, pub vault_id: String, pub started_at_ms: u64 }` — note `cpal::Stream` is `!Send`; wrap streams in the struct only if the compiler allows the state to be managed; otherwise leak the streams into a dedicated thread (see implementation note below).
+  - `pub struct CaptureState(pub Mutex<Option<ActiveCapture>>)` with `pub struct ActiveCapture { pub stop_tx: Sender<StopReason>, pub vault_id: String, pub started_at_ms: u64 }` — `cpal::Stream` is `!Send`, so the streams live on a dedicated device thread, and the session outcome is consumed by a dedicated monitor thread (see implementation note below).
   - Commands: `start_capture(app, state, id: String) -> Result<StatusPayload, String>`, `stop_capture(app, state) -> Result<(), String>`, `capture_status(state) -> StatusPayload`.
   - `#[derive(Clone, serde::Serialize)] pub struct StatusPayload { pub recording: bool, pub vault_id: Option<String>, pub started_at_ms: Option<u64> }`
   - Events emitted on the app: `capture:started` (StatusPayload), `capture:saved` (`{ mp3: String, note: Option<String>, ended_early: bool }`), `capture:failed` (`{ message: String }`), `capture:warning` (`{ message: String }`).
@@ -1970,21 +1982,22 @@ log = "0.4"
 ```rust
 pub struct ActiveCapture {
     pub stop_tx: std::sync::mpsc::Sender<StopReason>,
-    pub done_rx: std::sync::mpsc::Receiver<Result<vault_buddy_capture::session::Outcome, String>>,
     pub vault_id: String,
     pub started_at_ms: u64,
 }
 pub enum StopReason { User }
 ```
 
-The spawned thread: open sources → build `SessionParams` → `CaptureSession::start` → hold `streams` → block on `stop_rx.recv()` → `session.stop()` → drop streams → send outcome through `done_tx`. If any required source dies, `session.stop()` returns early anyway when called; to surface self-finalization promptly, the thread can poll `session.is_running()` every 500 ms alongside the stop channel (use `recv_timeout(500ms)`).
+The spawned device thread: open sources → build `SessionParams` → `CaptureSession::start` → hold `streams` → wait on `stop_rx.recv_timeout(500ms)` while also polling `session.is_running()` (so self-finalization after source loss is noticed promptly) → `session.stop()` → drop streams → send the outcome through `done_tx`.
+
+**The sole consumer of `done_rx` is a dedicated monitor thread** spawned by `start_capture`. It blocks on `done_rx.recv()`, clears `CaptureState`, emits `capture:saved`/`capture:failed`, shows the toast, and resets the tray — regardless of *why* the session ended (user Stop, menu Stop, shutdown finalize, or self-finalization when every source died). Stop paths therefore only *send* `StopReason::User` and wait for the state to clear; they never consume the outcome themselves. This is what guarantees a voice-note whose mic was unplugged surfaces its saved file immediately instead of leaving the UI stuck on "recording".
 
 - [ ] **Step 1: Implement the module**
 
 `src-tauri/src/capture_commands.rs` (full file):
 
 ```rust
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -1998,7 +2011,6 @@ pub enum StopReason {
 
 pub struct ActiveCapture {
     pub stop_tx: Sender<StopReason>,
-    pub done_rx: Receiver<Result<Outcome, String>>,
     pub vault_id: String,
     pub started_at_ms: u64,
 }
@@ -2170,11 +2182,30 @@ pub fn start_capture(
     };
     *guard = Some(ActiveCapture {
         stop_tx,
-        done_rx,
         vault_id: id,
         started_at_ms: payload.started_at_ms.unwrap(),
     });
     drop(guard);
+
+    // Monitor thread: the ONLY consumer of the session outcome. Covers
+    // user/menu/shutdown stops AND self-finalization (all sources lost) —
+    // the state clears and the outcome surfaces no matter who ended it.
+    let app3 = app.clone();
+    std::thread::spawn(move || {
+        let result = done_rx
+            .recv()
+            .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
+        *app3.state::<CaptureState>().0.lock().unwrap() = None;
+        match result {
+            Ok(outcome) => emit_saved(&app3, &outcome),
+            Err(e) => {
+                log::error!("capture: finalize failed: {e}");
+                let _ = app3.emit("capture:failed", serde_json::json!({ "message": e.clone() }));
+                toast(&app3, "Recording failed", &e);
+            }
+        }
+        crate::tray::set_recording(&app3, false);
+    });
 
     // Indicator hardening: recording buddy must be visible.
     if let Some(window) = app.get_webview_window("main") {
@@ -2185,33 +2216,32 @@ pub fn start_capture(
     Ok(payload)
 }
 
-fn stop_active(app: &AppHandle, active: ActiveCapture) {
-    let _ = active.stop_tx.send(StopReason::User);
-    match active.done_rx.recv_timeout(Duration::from_secs(15)) {
-        Ok(Ok(outcome)) => emit_saved(app, &outcome),
-        Ok(Err(e)) => {
-            log::error!("capture: finalize failed: {e}");
-            let _ = app.emit("capture:failed", serde_json::json!({ "message": e.clone() }));
-            toast(app, "Recording failed", &e);
+/// Ask the device thread to stop and wait until the monitor thread has
+/// cleared the state (i.e. the outcome landed and events were emitted).
+/// Shutdown paths rely on this wait so the app exits only after the save.
+fn request_stop_and_wait(app: &AppHandle, wait: Duration) {
+    let stop_tx = {
+        let guard = app.state::<CaptureState>().0.lock().unwrap();
+        guard.as_ref().map(|active| active.stop_tx.clone())
+    };
+    let Some(stop_tx) = stop_tx else { return };
+    let _ = stop_tx.send(StopReason::User);
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if app.state::<CaptureState>().0.lock().unwrap().is_none() {
+            return;
         }
-        Err(_) => {
-            let msg = "Recording did not finalize in time.".to_string();
-            let _ = app.emit("capture:failed", serde_json::json!({ "message": msg.clone() }));
-            toast(app, "Recording failed", &msg);
-        }
+        std::thread::sleep(Duration::from_millis(100));
     }
-    crate::tray::set_recording(app, false);
+    log::warn!("capture: stop wait timed out");
 }
 
 #[tauri::command]
 pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result<(), String> {
-    let active = state
-        .0
-        .lock()
-        .unwrap()
-        .take()
-        .ok_or("No recording is running.")?;
-    stop_active(&app, active);
+    if state.0.lock().unwrap().is_none() {
+        return Err("No recording is running.".to_string());
+    }
+    request_stop_and_wait(&app, Duration::from_secs(15));
     Ok(())
 }
 
@@ -2222,10 +2252,9 @@ pub fn is_recording(app: &AppHandle) -> bool {
 /// Every shutdown path funnels through here so quitting mid-meeting saves
 /// the capture through the normal stop flow instead of stranding a .part.
 pub fn finalize_if_recording(app: &AppHandle) {
-    let taken = app.state::<CaptureState>().0.lock().unwrap().take();
-    if let Some(active) = taken {
+    if is_recording(app) {
         log::info!("capture: finalizing active recording before shutdown");
-        stop_active(app, active);
+        request_stop_and_wait(app, Duration::from_secs(15));
     }
 }
 
@@ -2328,7 +2357,7 @@ git commit -m "feat(app): capture commands, events, notifications, startup recov
 - Modify: `src-tauri/src/lib.rs` (CloseRequested finalize, buddy-hide guard, recovery kickoff, `tray-stop-recording` / `buddy-stop-recording` menu events)
 
 **Interfaces:**
-- Consumes: `capture_commands::{finalize_if_recording, is_recording, run_recovery}` and Task 10's `stop_capture` internals via a new helper `capture_commands::stop_from_menu(app: &AppHandle)` (add it: takes state from app, calls the same `stop_active`; body below).
+- Consumes: `capture_commands::{finalize_if_recording, is_recording, run_recovery}` and Task 10's `stop_capture` internals via a new helper `capture_commands::stop_from_menu(app: &AppHandle)` (add it: delegates to `request_stop_and_wait`; body below).
 - Produces: `tray::set_recording(app, recording: bool)` — swaps tray icon (programmatic red-dot variant), tooltip (`"Vault Buddy — recording"`), and menu (adds `Stop recording` item with id `"tray-stop-recording"` while recording).
 
 - [ ] **Step 1: Add `stop_from_menu` to capture_commands.rs**
@@ -2336,10 +2365,7 @@ git commit -m "feat(app): capture commands, events, notifications, startup recov
 ```rust
 /// Stop triggered from a native menu (tray or buddy) rather than the panel.
 pub fn stop_from_menu(app: &AppHandle) {
-    let taken = app.state::<CaptureState>().0.lock().unwrap().take();
-    if let Some(active) = taken {
-        stop_active(app, active);
-    }
+    request_stop_and_wait(app, Duration::from_secs(15));
 }
 ```
 
@@ -3090,7 +3116,7 @@ git commit -m "docs: capture config schema and Windows verification checklist"
 
 ## Self-Review Notes (already applied)
 
-- Spec coverage walked section-by-section: capture action (T10/13), recording UX + indicator hardening (T11/13), pipeline (T5/6/8/9), storage layout + reservation (T3/8), note + atomic write + toggle (T4/8/10), config (T2, docs T14), notifications (T10), recovery incl. staleness/zero-frame/rescan/dated-walk/collision-safe names (T7/T10), quit/close finalize (T11), single instance (T10), mode-aware source loss (T8/T9 required flags), stop-time recheck + rename retry (T3 `reserve_final` + T8 loop), CI (T1), Windows checklist (T14).
+- Spec coverage walked section-by-section: capture action (T10/13), recording UX + indicator hardening (T11/13), pipeline (T5/6/8/9), storage layout + reservation (T3/8), note + atomic write + toggle (T4/8/10), config (T2, docs T14), notifications (T10), recovery incl. staleness/zero-frame/rescan/dated-walk/collision-safe names (T7/T10), quit/close finalize (T11), single instance (T10), mode-aware source loss (T8 all-sources-dead predicate), stop-time recheck + rename retry (T3 `reserve_final` + T7 `rename_into_reserved`, shared by session and recovery), self-finalization surfacing (T10 monitor thread), CI (T1), Windows checklist (T14).
 - Type consistency: `SourceMsg`/`SourceInput` defined in T8, consumed by T9; `reserve_final` defined T3, consumed T7/T8; `set_recording` stubbed in T10 exactly as T11 replaces it; `captureDisabled` prop name identical in T13 component and tests.
 - Known judgment calls an implementer may hit: exact `mp3lame-encoder` / cpal API names (adjust internals, keep interfaces), Windows rename error kinds (both retried), Vitest mock ordering in T12 (noted inline).
 ```
