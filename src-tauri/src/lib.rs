@@ -1,3 +1,4 @@
+mod capture_commands;
 mod commands;
 mod tray;
 
@@ -5,6 +6,15 @@ use tauri::{Emitter, Manager};
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Second launch: focus the running buddy instead of starting a
+            // new process (spec: recovery must never race a live recording).
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_log::Builder::new().build())
         // Remember where the user parked the buddy across restarts. Only the
         // position: the window size is managed dynamically by the panel
@@ -15,12 +25,16 @@ pub fn run() {
                 .build(),
         )
         .manage(commands::PanelOffset::default())
+        .manage(capture_commands::CaptureState::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction — restore the unshifted home position first so a
         // panel-open-at-the-edge close can't persist the shifted point.
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                // Alt+F4 / session shutdown bypass tray::quit — finalize any
+                // active recording here too so it never gets stranded.
+                capture_commands::finalize_if_recording(window.app_handle());
                 tray::restore_home_position(window.app_handle());
             }
         })
@@ -30,10 +44,14 @@ pub fn run() {
             commands::open_daily_note,
             commands::set_panel_offset,
             commands::set_window_geometry,
-            commands::show_buddy_menu
+            commands::show_buddy_menu,
+            capture_commands::start_capture,
+            capture_commands::stop_capture,
+            capture_commands::capture_status
         ])
         .setup(|app| {
             tray::create_tray(app.handle())?;
+            capture_commands::run_recovery(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {

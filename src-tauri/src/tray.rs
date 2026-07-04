@@ -31,6 +31,9 @@ pub fn restore_home_position(app: &AppHandle) {
 /// Persist the buddy's home position and exit. Shared by the tray menu and
 /// the buddy's right-click menu.
 pub fn quit(app: &AppHandle) {
+    // Mid-meeting quits must save through the normal stop flow, not strand
+    // a .part — block here until any active recording has finalized.
+    crate::capture_commands::finalize_if_recording(app);
     restore_home_position(app);
     // app.exit bypasses window destruction, which is what the window-state
     // plugin normally saves on — save explicitly.
@@ -43,6 +46,11 @@ pub fn quit(app: &AppHandle) {
     }
     app.exit(0);
 }
+
+/// Placeholder tray indicator toggle — Task 11 replaces this with the real
+/// recording-state icon swap. Kept here now so `capture_commands` can call
+/// it without a forward-reference to code that doesn't exist yet.
+pub fn set_recording(_app: &AppHandle, _recording: bool) {}
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
