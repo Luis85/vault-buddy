@@ -2,6 +2,7 @@
 import { CHARACTERS } from "../characters";
 import { useSettingsStore } from "../stores/settings";
 import BuddyAvatar from "./BuddyAvatar.vue";
+import UpdateSettings from "./UpdateSettings.vue";
 
 const settings = useSettingsStore();
 </script>
@@ -91,5 +92,6 @@ const settings = useSettingsStore();
         @change="settings.toggleDragging()"
       />
     </section>
+    <UpdateSettings />
   </div>
 </template>

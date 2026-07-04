@@ -87,6 +87,26 @@ Release for end users.
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
+### In-app updates (updater signing)
+
+Installed apps self-update from Settings → Updates. Updates are verified
+against a dedicated updater keypair (independent of Windows code signing):
+
+- the **public key** lives in `src-tauri/tauri.conf.json` under
+  `plugins.updater.pubkey`
+- the **private key** must exist as the repository secrets
+  `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` —
+  both CI and the release workflow need them to build
+  (`bundle.createUpdaterArtifacts` signs at build time)
+
+Generate a keypair once with `npx tauri signer generate -w <path>` and keep
+the private key safe: whoever holds it can ship updates to every user. The
+release workflow attaches a `latest.json` manifest to each GitHub release;
+installed apps poll
+`releases/latest/download/latest.json` and offer the update in the settings
+panel (download, signature check, install, relaunch — always user-initiated,
+per the PRD's Human in Control principle).
+
 ## Development with Superpowers
 
 This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)

@@ -32,11 +32,19 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # signs the updater artifacts and generates latest.json so
+          # installed apps can self-update from the settings panel
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # our `tauri` npm script is an alias for `tauri dev`; the action's
           # default `npm run tauri build` would expand to `tauri dev build`,
           # which dev-builds and then LAUNCHES the app on the runner forever
           tauriScript: npx tauri
+          # we ship both MSI and NSIS but the release notes tell users to
+          # install the NSIS setup.exe; without this latest.json points
+          # self-updates at the MSI and updaters silently switch installer
+          updaterJsonPreferNsis: true
           tagName: ${{ github.ref_name }}
           releaseName: "Vault Buddy ${{ github.ref_name }}"
           releaseDraft: false

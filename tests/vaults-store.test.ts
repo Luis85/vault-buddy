@@ -38,6 +38,18 @@ describe("vaults store", () => {
     expect(store.vaults).toEqual(sampleVaults);
   });
 
+  it("reopening the panel lands on the vault list, not settings", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults") return sampleVaults;
+    });
+    const store = useVaultsStore();
+    await store.togglePanel();
+    store.showSettings = true;
+    await store.togglePanel(); // close while on settings
+    await store.togglePanel(); // reopen
+    expect(store.showSettings).toBe(false);
+  });
+
   it("runAction passes the vault id and tracks busy state", async () => {
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockIPC((cmd, args) => {
