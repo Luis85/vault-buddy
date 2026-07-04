@@ -1,5 +1,14 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import {
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { config, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { nextTick } from "vue";
@@ -14,6 +23,7 @@ const state = vi.hoisted(() => ({
     | ((event: { payload: boolean }) => void)
     | null,
   eventHandlers: {} as Record<string, () => void>,
+  geometryWidths: [] as number[],
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -59,19 +69,37 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import App from "../src/App.vue";
 import { useVaultsStore } from "../src/stores/vaults";
-import { COLLAPSED } from "../src/composables/useCompanionWindow";
+import { COLLAPSED, BUBBLE } from "../src/composables/useCompanionWindow";
 
 const flush = () => new Promise((r) => setTimeout(r));
 
 describe("App layout geometry", () => {
+  const originalStubs = config.global.stubs;
+
+  beforeAll(() => {
+    // The bubble is wrapped in a real <Transition> in App.vue (fade in/out).
+    // Stubbing it makes v-if add/remove synchronous so the "hides"/"stays
+    // dismissed" absence assertions below don't have to wait out a real
+    // ~150ms leave animation under fake/real timers.
+    config.global.stubs = { ...originalStubs, transition: true };
+  });
+
+  afterAll(() => {
+    config.global.stubs = originalStubs;
+  });
+
   beforeEach(() => {
     localStorage.clear(); // settings persistence must not leak across tests
     setActivePinia(createPinia());
-    mockIPC((cmd) => {
+    mockIPC((cmd, args) => {
       if (cmd === "list_vaults") return [];
+      if (cmd === "set_window_geometry") {
+        state.geometryWidths.push((args as { width: number }).width);
+      }
     });
     state.pos = { x: 100, y: 100 };
     state.eventHandlers = {};
+    state.geometryWidths = [];
   });
 
   afterEach(() => {
@@ -237,5 +265,59 @@ describe("App layout geometry", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows a greeting bubble on launch", async () => {
+    const wrapper = mount(App);
+    await flush();
+    await nextTick();
+    const bubble = wrapper.find('[data-testid="speech-bubble"]');
+    expect(bubble.exists()).toBe(true);
+    expect(bubble.text().length).toBeGreaterThan(0);
+  });
+
+  it("hides the greeting bubble once the panel opens", async () => {
+    const wrapper = mount(App);
+    await flush();
+    await nextTick();
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(true);
+
+    const store = useVaultsStore();
+    await store.togglePanel();
+    await flush();
+    await nextTick();
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(false);
+  });
+
+  it("feeds the greeting into the window geometry (grows to bubble size on launch)", async () => {
+    const wrapper = mount(App);
+    await flush();
+    await nextTick();
+    await flush();
+    // Without bubbleVisible wired into useCompanionWindow the window would
+    // stay collapsed (88) on launch; a BUBBLE-width geometry call is proof
+    // the greeting reached the geometry composable. 260 comes only from the
+    // bubble state (panel is 440, collapsed 88).
+    expect(state.geometryWidths).toContain(BUBBLE.width);
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(true);
+  });
+
+  it("stays dismissed after the panel opens and closes within the greeting window", async () => {
+    const wrapper = mount(App);
+    await flush();
+    await nextTick();
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(true);
+
+    const store = useVaultsStore();
+    await store.togglePanel(); // opening must cancel the greeting timer
+    await flush();
+    await nextTick();
+    await store.togglePanel(); // close again, still within the 5s greeting window
+    await flush();
+    await nextTick();
+    // The bubble must NOT reappear. It is gone here only because dismiss()
+    // set bubbleVisible=false; without that watch the bubble would render
+    // again now that panelOpen is false.
+    expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(false);
   });
 });
