@@ -84,7 +84,7 @@ Everything should be modular.
 
 Every capability should be replaceable.
 
-Every integration should become a plugin or skill.
+Every integration should become a plugin.
 
 ### Delightful
 
@@ -269,8 +269,6 @@ Monitoring execution.
 
 ### Platform Layer
 
-Skills.
-
 Plugins.
 
 Extensions.
@@ -353,27 +351,27 @@ Community ecosystem.
 
 ---
 
-## 12. Skills Architecture
+## 12. Plugin Architecture
 
-Vault Buddy capabilities are organized as Skills.
+Vault Buddy capabilities are organized as Plugins.
 
 Examples:
 
-- Obsidian Skill
-- Git Skill
-- GitHub Skill
-- Jira Skill
-- Terminal Skill
-- Browser Skill
-- Filesystem Skill
-- Calendar Skill
-- Email Skill
-- Cursor Skill
-- Claude Skill
-- MCP Skill
-- Voice Skill
+- Obsidian Plugin
+- Git Plugin
+- GitHub Plugin
+- Jira Plugin
+- Terminal Plugin
+- Browser Plugin
+- Filesystem Plugin
+- Calendar Plugin
+- Email Plugin
+- Cursor Plugin
+- Claude Plugin
+- MCP Plugin
+- Voice Plugin
 
-Each skill provides:
+Each plugin provides:
 
 - Actions
 - Commands
@@ -573,7 +571,7 @@ See the [Task Management capability PRD](prds/task-management.md) for the detail
                   │
       ┌───────────┼────────────┐
       │           │            │
-   Skills      AI Agents    Automations
+   Plugins     AI Agents    Automations
       │           │            │
       └───────────┼────────────┘
                   │
@@ -624,7 +622,7 @@ Obsidian      Local Tools      MCP Servers
 ### Phase 4 — Platform
 
 - Plugin SDK
-- Skills Marketplace
+- Plugin Marketplace
 - Agent SDK
 - Workflow Marketplace
 - Community Extensions
