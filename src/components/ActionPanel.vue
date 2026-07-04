@@ -57,7 +57,7 @@ function onFilterEscape(event: KeyboardEvent) {
     >
       {{ store.error }}
     </p>
-    <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
         v-if="filtered.length > 0"
         :vaults="filtered"

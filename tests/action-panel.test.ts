@@ -35,6 +35,8 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll("button");
     expect(buttons).toHaveLength(4); // 2 vaults × (row + daily note)
+    // the list scrolls inside the fixed-height panel with the themed scrollbar
+    expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
   });
 
   it("dispatches open_daily_note with the vault id", async () => {
