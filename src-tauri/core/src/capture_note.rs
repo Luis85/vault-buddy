@@ -24,21 +24,33 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
+/// Double-quote a YAML scalar, escaping `\` and `"` and flattening
+/// newlines to spaces. Vault and device names are user/system input;
+/// unquoted they could break the frontmatter or inject fields — and an
+/// unquoted `1:02:03` duration even parses as YAML sexagesimal.
+fn yaml_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\n', '\r'], " ");
+    format!("\"{escaped}\"")
+}
+
 pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     let mut out = String::from("---\n");
-    out.push_str(&format!("recorded: {}\n", meta.recorded_at));
+    out.push_str(&format!("recorded: {}\n", yaml_quote(&meta.recorded_at)));
     out.push_str(&format!(
         "duration: {}\n",
-        format_duration(meta.duration_secs)
+        yaml_quote(&format_duration(meta.duration_secs))
     ));
-    out.push_str(&format!("vault: {}\n", meta.vault_name));
-    out.push_str(&format!("type: {}\n", meta.recording_type));
+    out.push_str(&format!("vault: {}\n", yaml_quote(&meta.vault_name)));
+    out.push_str(&format!("type: {}\n", yaml_quote(&meta.recording_type)));
     out.push_str("inputs:\n");
     for device in &meta.input_devices {
-        out.push_str(&format!("  - {device}\n"));
+        out.push_str(&format!("  - {}\n", yaml_quote(device)));
     }
     if let Some(event) = &meta.event {
-        out.push_str(&format!("event: {event}\n"));
+        out.push_str(&format!("event: {}\n", yaml_quote(event)));
     }
     out.push_str("created-by: Vault Buddy\n---\n\n");
     out.push_str(&format!("![[{mp3_file_name}]]\n"));
@@ -128,11 +140,11 @@ mod tests {
     fn note_contains_frontmatter_and_embed() {
         let note = render_note(&meta(), "2026-07-04 1405 Meeting.mp3");
         assert!(note.starts_with("---\n"), "frontmatter first: {note}");
-        assert!(note.contains("recorded: 2026-07-04T14:05:00+02:00"));
-        assert!(note.contains("duration: 1:02:03"));
-        assert!(note.contains("vault: Work"));
-        assert!(note.contains("type: Meeting"));
-        assert!(note.contains("- Headset Mic"));
+        assert!(note.contains(r#"recorded: "2026-07-04T14:05:00+02:00""#));
+        assert!(note.contains(r#"duration: "1:02:03""#));
+        assert!(note.contains(r#"vault: "Work""#));
+        assert!(note.contains(r#"type: "Meeting""#));
+        assert!(note.contains(r#"- "Headset Mic""#));
         assert!(note.contains("![[2026-07-04 1405 Meeting.mp3]]"));
         assert!(!note.contains("event:"), "no event line when None");
     }
@@ -141,7 +153,22 @@ mod tests {
     fn note_includes_event_when_present() {
         let mut m = meta();
         m.event = Some("recovered after crash".into());
-        assert!(render_note(&m, "x.mp3").contains("event: recovered after crash"));
+        assert!(render_note(&m, "x.mp3").contains(r#"event: "recovered after crash""#));
+    }
+
+    #[test]
+    fn yaml_special_characters_are_escaped() {
+        // Vault and device names are user/system input: colons, quotes and
+        // newlines must not break the frontmatter or inject fields.
+        let mut m = meta();
+        m.vault_name = "Work: \"Client\" Vault".into();
+        m.input_devices = vec!["Mic\nInjected: true".into()];
+        let note = render_note(&m, "x.mp3");
+        assert!(note.contains(r#"vault: "Work: \"Client\" Vault""#));
+        assert!(
+            !note.contains("\nInjected:"),
+            "newline must not inject a field"
+        );
     }
 
     #[test]
