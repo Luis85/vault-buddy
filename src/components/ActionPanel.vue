@@ -131,6 +131,12 @@ onUnmounted(() => capture.dismissRename());
     >
       {{ capture.error }}
     </p>
+    <p
+      v-if="view === 'list' && capture.status === 'idle' && capture.warning"
+      class="mb-2 rounded-lg bg-amber-500/15 px-2 py-1 text-xs text-amber-200"
+    >
+      {{ capture.warning }}
+    </p>
     <RenamePrompt
       v-if="view === 'list' && capture.lastSaved"
       class="mb-2"

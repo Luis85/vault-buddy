@@ -59,6 +59,9 @@ export const useCaptureStore = defineStore("capture", {
       await listen<{ atMs: number }>("capture:paused", (event) => {
         this.paused = true;
         this.pausedSinceMs = event.payload.atMs ?? Date.now();
+        // No capture:level events arrive while paused — without this the
+        // meter would freeze showing the last live peak under "Paused".
+        this.level = 0;
       });
       await listen<{ pausedTotalMs: number }>("capture:resumed", (event) => {
         this.paused = false;

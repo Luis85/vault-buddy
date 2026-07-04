@@ -193,6 +193,51 @@ describe("ActionPanel", () => {
     expect(store.captureSettingsVaultId).toBe("d4e5f6");
   });
 
+  it("shows the rename warning banner while idle in the list view", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.status = "idle";
+    capture.warning = "Recording renamed, but its note needs attention";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain(
+      "Recording renamed, but its note needs attention"
+    );
+    // RecordingBar is unmounted while idle, so this must be the only copy
+    expect(wrapper.findAll("[data-testid='level-meter']")).toHaveLength(0);
+  });
+
+  it("hides the idle rename warning banner outside the list view", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.view = "settings";
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.status = "idle";
+    capture.warning = "Recording renamed, but its note needs attention";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).not.toContain(
+      "Recording renamed, but its note needs attention"
+    );
+  });
+
+  it("does not duplicate the warning banner while RecordingBar is showing it", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.status = "recording";
+    capture.startedAtMs = Date.now();
+    capture.warning = "Recording renamed, but its note needs attention";
+    await wrapper.vm.$nextTick();
+    const matches = wrapper.text().match(/note needs attention/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+
   it("shows the rename prompt after a save and hides it on dismiss", async () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();

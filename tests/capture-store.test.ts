@@ -167,9 +167,13 @@ describe("capture store", () => {
     expect(calls).toContain("pause_capture");
     // Rust confirms via event — the store mirrors it, not the invoke
     expect(store.paused).toBe(false);
+    state.eventHandlers["capture:level"]!({ payload: { peak: 0.8 } });
+    expect(store.level).toBeCloseTo(0.8);
     state.eventHandlers["capture:paused"]!({ payload: { atMs: 5_000 } });
     expect(store.paused).toBe(true);
     expect(store.pausedSinceMs).toBe(5_000);
+    // the meter must not freeze at the pre-pause peak while paused
+    expect(store.level).toBe(0);
     await store.pause(); // already paused: no second IPC call
     expect(calls.filter((c) => c === "pause_capture")).toHaveLength(1);
     await store.resume();
