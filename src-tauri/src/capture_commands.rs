@@ -4,17 +4,19 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
-use vault_buddy_capture::session::{CaptureSession, Outcome, SessionParams};
+use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 
-pub enum StopReason {
-    User,
-}
-
 pub struct ActiveCapture {
-    pub stop_tx: Sender<StopReason>,
+    pub control_tx: Sender<Control>,
     pub vault_id: String,
     pub started_at_ms: u64,
+    /// Pause bookkeeping mirrors the session (which owns the truth for the
+    /// encoded timeline) so capture_status can resync a reloaded webview's
+    /// frozen-elapsed display exactly.
+    pub paused: bool,
+    pub paused_total_ms: u64,
+    pub paused_since_ms: Option<u64>,
     /// The .part file the live session owns, once the worker has reserved
     /// it — None while devices are still being set up (and for a timed-out
     /// start whose worker never reported back).
@@ -33,6 +35,9 @@ pub struct StatusPayload {
     pub recording: bool,
     pub vault_id: Option<String>,
     pub started_at_ms: Option<u64>,
+    pub paused: bool,
+    pub paused_total_ms: u64,
+    pub paused_since_ms: Option<u64>,
 }
 
 fn now_ms() -> u64 {
@@ -95,11 +100,17 @@ pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
             recording: true,
             vault_id: Some(active.vault_id.clone()),
             started_at_ms: Some(active.started_at_ms),
+            paused: active.paused,
+            paused_total_ms: active.paused_total_ms,
+            paused_since_ms: active.paused_since_ms,
         },
         None => StatusPayload {
             recording: false,
             vault_id: None,
             started_at_ms: None,
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
         },
     }
 }
@@ -236,7 +247,7 @@ pub fn start_capture(
 
     // Device validation happens on the worker thread BEFORE any file is
     // created (spec: start failures stay file-free).
-    let (stop_tx, stop_rx) = mpsc::channel::<StopReason>();
+    let (control_tx, control_rx) = mpsc::channel::<Control>();
     let (done_tx, done_rx) = mpsc::channel::<Result<Outcome, String>>();
     // Ok carries the reserved .part path so the reservation below learns
     // which file the live session owns.
@@ -251,9 +262,12 @@ pub fn start_capture(
             return Err("A recording is already running.".to_string());
         }
         *guard = Some(ActiveCapture {
-            stop_tx: stop_tx.clone(),
+            control_tx: control_tx.clone(),
             vault_id: id.clone(),
             started_at_ms: now_ms(),
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
             part: None,
         });
     }
@@ -267,6 +281,15 @@ pub fn start_capture(
     std::thread::spawn(move || {
         while let Ok(message) = warn_rx.recv() {
             let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
+        }
+    });
+
+    // Advisory level meter: forward the worker's ~5 Hz peaks to the panel.
+    let (level_tx, level_rx) = mpsc::channel::<f32>();
+    let app_level = app.clone();
+    std::thread::spawn(move || {
+        while let Ok(peak) = level_rx.recv() {
+            let _ = app_level.emit("capture:level", serde_json::json!({ "peak": peak }));
         }
     });
 
@@ -316,7 +339,7 @@ pub fn start_capture(
             flush_every: Duration::from_secs(1),
             fsync_every: Duration::from_secs(30),
             warn_tx: Some(warn_tx),
-            level_tx: None,
+            level_tx: Some(level_tx),
             start_warning,
         };
         let session = match CaptureSession::start(params, open.inputs) {
@@ -332,11 +355,13 @@ pub fn start_capture(
         );
         let _ = ready_tx.send(Ok(names.part.clone()));
 
-        // Own the streams here; poll for user stop or self-finalization.
+        // Own the streams here; poll for control or self-finalization.
         let streams = open.streams;
         loop {
-            match stop_rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(StopReason::User) | Err(RecvTimeoutError::Disconnected) => break,
+            match control_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => break,
+                Ok(Control::Pause) => session.pause(),
+                Ok(Control::Resume) => session.resume(),
                 Err(RecvTimeoutError::Timeout) => {
                     if !session.is_running() {
                         break; // sources died; worker self-finalized
@@ -388,7 +413,7 @@ pub fn start_capture(
             // worker is truly wedged, the state stays reserved until its
             // recv() finally returns or the app restarts.
             let msg = "Recording did not start in time.".to_string();
-            let _ = stop_tx.send(StopReason::User);
+            let _ = control_tx.send(Control::Stop);
             let app4 = app.clone();
             std::thread::spawn(move || {
                 if let Ok(Ok(part)) = ready_rx.recv() {
@@ -414,7 +439,7 @@ pub fn start_capture(
                 // but the reservation installed above still needs clearing
                 // either way, or a real recording could never start again.
                 clear_active(&app4);
-                crate::tray::set_recording(&app4, false);
+                crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
             });
             emit_failed(&app, &msg);
             return Err(msg);
@@ -425,6 +450,9 @@ pub fn start_capture(
         recording: true,
         vault_id: Some(id),
         started_at_ms: Some(started_at_ms),
+        paused: false,
+        paused_total_ms: 0,
+        paused_since_ms: None,
     };
 
     // Monitor thread: the ONLY consumer of the session outcome. Covers
@@ -443,14 +471,14 @@ pub fn start_capture(
                 emit_failed(&app3, &e);
             }
         }
-        crate::tray::set_recording(&app3, false);
+        crate::tray::set_capture_state(&app3, crate::tray::TrayCaptureState::Idle);
     });
 
     // Indicator hardening: recording buddy must be visible.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
     }
-    crate::tray::set_recording(&app, true);
+    crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
     let _ = app.emit("capture:started", payload.clone());
     Ok(payload)
 }
@@ -468,7 +496,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
     let capture_state = app.state::<CaptureState>();
     let mut guard = capture_state.0.lock().unwrap();
     let Some(active) = guard.as_ref() else { return };
-    let _ = active.stop_tx.send(StopReason::User);
+    let _ = active.control_tx.send(Control::Stop);
     let deadline = wait.map(|limit| std::time::Instant::now() + limit);
     while guard.is_some() {
         match deadline {
@@ -516,6 +544,74 @@ pub fn stop_from_menu(app: &AppHandle) {
 
 pub fn is_recording(app: &AppHandle) -> bool {
     app.state::<CaptureState>().0.lock().unwrap().is_some()
+}
+
+/// Shared by the IPC commands and the tray menu items. Errors are typed
+/// for the UI (which disables the buttons in starting/saving states) —
+/// but the tray can always race, so every precondition re-checks here.
+fn set_paused(app: &AppHandle, pause: bool) -> Result<(), String> {
+    let state = app.state::<CaptureState>();
+    let mut guard = state.0.lock().unwrap();
+    let Some(active) = guard.as_mut() else {
+        return Err("No recording is running.".to_string());
+    };
+    if active.part.is_none() {
+        return Err("Recording is still starting.".to_string());
+    }
+    if pause == active.paused {
+        return Err(if pause {
+            "Recording is already paused."
+        } else {
+            "Recording is not paused."
+        }
+        .to_string());
+    }
+    let now = now_ms();
+    if pause {
+        active.paused = true;
+        active.paused_since_ms = Some(now);
+        let _ = active.control_tx.send(Control::Pause);
+    } else {
+        active.paused = false;
+        active.paused_total_ms += now.saturating_sub(active.paused_since_ms.take().unwrap_or(now));
+        let _ = active.control_tx.send(Control::Resume);
+    }
+    let paused_total_ms = active.paused_total_ms;
+    drop(guard);
+    if pause {
+        let _ = app.emit("capture:paused", serde_json::json!({ "atMs": now }));
+        crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Paused);
+    } else {
+        let _ = app.emit(
+            "capture:resumed",
+            serde_json::json!({ "pausedTotalMs": paused_total_ms }),
+        );
+        crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Recording);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn pause_capture(app: AppHandle) -> Result<(), String> {
+    set_paused(&app, true)
+}
+
+#[tauri::command]
+pub fn resume_capture(app: AppHandle) -> Result<(), String> {
+    set_paused(&app, false)
+}
+
+/// Tray menu variants: failures only log — there is no panel to show them.
+pub fn pause_from_menu(app: &AppHandle) {
+    if let Err(e) = set_paused(app, true) {
+        log::warn!("pause from tray: {e}");
+    }
+}
+
+pub fn resume_from_menu(app: &AppHandle) {
+    if let Err(e) = set_paused(app, false) {
+        log::warn!("resume from tray: {e}");
+    }
 }
 
 /// Every shutdown path funnels through here so quitting mid-meeting saves
