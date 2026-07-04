@@ -64,6 +64,10 @@ naming, crash recovery, and full audit logging.
    the running buddy instead of starting a new process), and as a second
    guard the scan only recovers `.part` files whose modification time is
    stale (no writes for ≥60 s; an active session flushes every ~1 s).
+   Recovered files go through the **same pairwise mp3+md collision
+   suffixing and exclusive-create logic** as normal saves
+   (`… (recovered).mp3`, `… (recovered) (2).mp3`, …) so a rename never
+   fails against — or replaces — an earlier recovered capture.
 
 ### Out of scope (deferred)
 
@@ -128,11 +132,15 @@ the existing `discovery`/`daily_notes`/`uri` style.
 ## Data flow (happy path)
 
 1. `start_capture(vault_id)` → load config (defaults if absent) → verify
-   the vault path is writable → create `Meetings/YYYY/MM/` → open
+   the vault path is writable → **open the loopback and mic streams first**
+   (device validation happens before any file exists, keeping start
+   failures file-free) → create `Meetings/YYYY/MM/` → create
    `.YYYY-MM-DD HHmm Meeting.mp3.part` (dot-prefixed → hidden in Obsidian)
-   in the target folder.
-2. Open the loopback stream, then the mic stream → worker thread pulls both
-   ring buffers → mixer → encoder → file, flushed every second.
+   in the target folder. If anything fails after the `.part` exists but
+   before recording begins, the empty `.part` is deleted as part of the
+   failure path.
+2. Worker thread pulls both ring buffers → mixer → encoder → file, flushed
+   every second.
 3. `stop_capture()` → flush encoder → fsync → rename to the final name →
    write the `.md` note → emit `capture:saved` + toast. Streaming encode
    makes stop near-instant regardless of meeting length.
