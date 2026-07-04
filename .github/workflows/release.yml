@@ -32,6 +32,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # signs the updater artifacts and generates latest.json so
+          # installed apps can self-update from the settings panel
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # our `tauri` npm script is an alias for `tauri dev`; the action's
           # default `npm run tauri build` would expand to `tauri dev build`,

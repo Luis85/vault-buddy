@@ -65,6 +65,10 @@ jobs:
       - run: npm ci
       - name: Build Tauri app and installers
         run: npx tauri build
+        env:
+          # createUpdaterArtifacts requires the signing key at build time
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
