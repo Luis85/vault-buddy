@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import CompanionCharacter from "./components/CompanionCharacter.vue";
 import ActionPanel from "./components/ActionPanel.vue";
+import SpeechBubble from "./components/SpeechBubble.vue";
 import { useCompanionWindow } from "./composables/useCompanionWindow";
 import { useVaultsStore } from "./stores/vaults";
 import { useSettingsStore } from "./stores/settings";
 import { useCaptureStore } from "./stores/capture";
 import { logBreadcrumb } from "./logging";
+import { useGreeting } from "./composables/useGreeting";
 
 const store = useVaultsStore();
 const settings = useSettingsStore();
@@ -17,7 +19,15 @@ const capture = useCaptureStore();
 const { panelOpen, busyVaultId } = storeToRefs(store);
 const working = computed(() => busyVaultId.value !== null);
 
-const { side, valign } = useCompanionWindow(panelOpen);
+const { bubbleVisible, bubbleText, dismiss } = useGreeting();
+const { side, valign } = useCompanionWindow(panelOpen, bubbleVisible);
+
+// Opening the panel supersedes the greeting: cancel its timer and hide it
+// so it can't reappear when the panel closes again within the greeting
+// window. (The bubble is also hidden by v-if while the panel is open.)
+watch(panelOpen, (open) => {
+  if (open) dismiss();
+});
 
 // Dragging the buddy enters the OS window-move loop, which steals focus
 // from the webview. Closing the panel on that focus loss would resize the
@@ -147,6 +157,14 @@ onUnmounted(() => {
         @drag-start="onDragStart"
       />
     </div>
+    <Transition name="bubble-fade">
+      <div
+        v-if="bubbleVisible && !panelOpen"
+        class="flex min-w-0 flex-1 items-center self-stretch p-2"
+      >
+        <SpeechBubble :text="bubbleText" :side="side" :valign="valign" />
+      </div>
+    </Transition>
     <div
       v-if="panelOpen"
       class="min-w-0 flex-1 self-stretch p-2"
@@ -156,3 +174,16 @@ onUnmounted(() => {
     </div>
   </main>
 </template>
+
+<style scoped>
+/* The greeting fades in on launch and out on dismiss (design spec). Short
+   enough that the buddy still feels responsive. */
+.bubble-fade-enter-active,
+.bubble-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+.bubble-fade-enter-from,
+.bubble-fade-leave-to {
+  opacity: 0;
+}
+</style>
