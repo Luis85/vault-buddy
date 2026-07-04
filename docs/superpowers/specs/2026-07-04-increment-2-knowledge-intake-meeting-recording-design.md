@@ -41,8 +41,12 @@ naming, crash recovery, and full audit logging.
    resample/mix to 44.1 kHz stereo with soft-clip limiting → stream-encode
    128 kbps MP3 (LAME) into a hidden `.part` file inside the target folder,
    flushed ~every second, atomically renamed on stop.
-4. **Storage layout** — `Meetings/YYYY/MM/YYYY-MM-DD HHmm Meeting.mp3`;
-   name collisions get a ` (2)`, ` (3)`, … suffix. The collision check
+4. **Storage layout** — folder and label follow the recording mode:
+   `meeting` → `Meetings/YYYY/MM/YYYY-MM-DD HHmm Meeting.mp3`;
+   `voice-note` → `Voice Notes/YYYY/MM/YYYY-MM-DD HHmm Voice Note.mp3`
+   (matching the PRD's distinct Voice Notes folder). A configured
+   recording folder overrides the mode default. Name collisions get a
+   ` (2)`, ` (3)`, … suffix. The collision check
    treats the recording and its markdown note as a **pair**: a base name
    is only used if the `.mp3`, the `.md`, **and the corresponding
    `.mp3.part`** paths are all free, so a pre-existing user note — or a
@@ -67,15 +71,18 @@ naming, crash recovery, and full audit logging.
    written into user vaults (a vault synced to another machine must not
    carry this machine's device assumptions). Establishes the settings
    schema for later increments: recording mode (`meeting` default;
-   `voice-note` = mic-only), recording folder, bitrate, note on/off.
-   Hand-editable and documented; a settings UI comes in a later increment.
+   `voice-note` = mic-only), recording folder (optional — when absent the
+   mode default applies: `Meetings` / `Voice Notes`), bitrate, note
+   on/off. Hand-editable and documented; a settings UI comes in a later
+   increment.
 7. **Notifications** — buddy/panel states cover started/stopped; an OS
    toast (Tauri notification plugin) reports **saved** (with filename) and
    **failed**.
 8. **Crash recovery** — on startup, orphaned `.part` files are finalized
    as `… (recovered).mp3` (plus note and toast). The scan covers the
-   **effective recording root** of every discovered vault — each vault's
-   configured recording folder, or the `Meetings/` default when that
+   **effective recording roots** of every discovered vault — the
+   configured recording folder, or **both** mode defaults (`Meetings/`
+   and `Voice Notes/`) when that
    vault has no persisted config entry — and walks **all dated
    subfolders** beneath it (`YYYY/MM/`), not just the current month's, so
    both a first-ever capture that crashed before any config existed and a
@@ -162,7 +169,8 @@ the existing `discovery`/`daily_notes`/`uri` style.
    mode requires, before any file exists** (`meeting`: loopback + mic;
    `voice-note`: mic only — loopback is neither opened nor required, and
    the mixer and metadata reflect the single source), keeping start
-   failures file-free → create `Meetings/YYYY/MM/` → reserve a base name
+   failures file-free → create the mode's dated folder
+   (`Meetings/YYYY/MM/` or `Voice Notes/YYYY/MM/`) → reserve a base name
    where `.mp3`, `.md`, and `.mp3.part` are all free, then exclusive-create
    `.YYYY-MM-DD HHmm Meeting.mp3.part` (dot-prefixed → hidden in Obsidian)
    in the target folder — an unrecovered orphan `.part` from a same-minute
@@ -188,11 +196,18 @@ the existing `discovery`/`daily_notes`/`uri` style.
    non-replacing operation and is the true arbiter: if it reports the
    destination exists (created in the window after the check), the stop
    path advances the suffix and retries the rename rather than failing
-   or stranding the `.part` → rename to the final name →
+   or stranding the `.part` → rename to the final name, then sync the
+   parent directory where the platform supports it (Unix directory
+   fsync; on Windows, NTFS journaling covers directory metadata) →
    write the `.md` note **if
    enabled in the vault's config** (the same toggle governs recovery's
    note) → emit `capture:saved` + toast. Streaming encode makes stop
-   near-instant regardless of meeting length.
+   near-instant regardless of meeting length. Durability framing for the
+   create/rename directory entries: even if a power cut at the worst
+   moment drops a freshly created or renamed entry, the fsynced audio
+   bytes survive under whichever entry the journal kept, and the next
+   launch's recovery finalizes them — the no-loss guarantee is held
+   end-to-end through recovery, not by any single rename.
 
 ## Performance targets
 
