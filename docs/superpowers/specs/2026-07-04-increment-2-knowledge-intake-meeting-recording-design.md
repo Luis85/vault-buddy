@@ -57,7 +57,11 @@ naming, crash recovery, and full audit logging.
    and makes captures instantly visible in Obsidian. The note is written
    with exclusive-create (never overwrite); if the path is somehow taken
    despite the pairwise collision check, the note gets its own suffix
-   rather than replacing existing content.
+   rather than replacing existing content. Note contents are written
+   atomically with the same pattern as the audio: write to a dot-prefixed
+   temp file, flush + fsync, then rename onto the reserved name — a crash
+   mid-write leaves a hidden temp file (cleaned up on the next launch),
+   never a truncated note in the vault.
 6. **Per-vault config file** — app-side at
    `%APPDATA%\vault-buddy\config.json`, keyed by vault ID. No config is
    written into user vaults (a vault synced to another machine must not

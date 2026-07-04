@@ -298,6 +298,12 @@ The document contains:
 - Action Items
 - Open Questions
 
+Metadata and the embedded recording are always present. The remaining
+sections (transcript, summary, decisions, action items, open questions)
+appear only once the optional AI pipeline (Version 2 of the roadmap) has
+produced them — a note created without AI processing contains just
+metadata and the embed, not empty placeholder sections.
+
 This transforms an audio file into immediately usable knowledge.
 
 ---
