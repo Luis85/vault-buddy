@@ -173,11 +173,15 @@ the existing `discovery`/`daily_notes`/`uri` style.
    to the OS every second and `fsync`ed to disk roughly every 30 seconds
    (per-second flush protects against app crashes; the periodic fsync
    bounds power-loss data loss to ~30 s without hammering the disk).
-3. `stop_capture()` → flush encoder → fsync → **re-run the pairwise name
-   reservation immediately before the rename** (during a long recording a
-   user or sync client may have created the preselected final name; the
-   suffix simply advances rather than failing the stop or stranding the
-   `.part`) → rename to the final name → write the `.md` note **if
+3. `stop_capture()` → flush encoder → fsync → **re-check the final
+   `.mp3` and `.md` destinations immediately before the rename** (during
+   a long recording a user or sync client may have created the
+   preselected final name; the suffix simply advances rather than failing
+   the stop or stranding the `.part`). This stop-time check covers only
+   the final destinations — the session's own `.mp3.part` is exempt, so
+   an ordinary no-collision save keeps its original base name instead of
+   suffixing against its own temp file → rename to the final name →
+   write the `.md` note **if
    enabled in the vault's config** (the same toggle governs recovery's
    note) → emit `capture:saved` + toast. Streaming encode makes stop
    near-instant regardless of meeting length.
@@ -197,21 +201,28 @@ Guiding rule: **never lose captured audio.**
   missing/unwritable, no default microphone, loopback unavailable →
   `capture:failed` with a human-readable message in the panel; buddy stays
   idle. (In `voice-note` mode, absent loopback is fine by definition.)
-- **One source dies mid-recording** (headset unplugged, device switch) —
-  recording continues with the surviving stream; the mixer already
-  silence-fills a starved side. A `capture:warning` shows in the panel and
-  the event is recorded in the note metadata.
-- **Both sources die** — finalize immediately (flush, rename, write note)
-  and report "recording ended early" with the saved file.
+- **Source loss mid-recording** is judged against the sources the mode
+  requires. While at least one required source still delivers audio
+  (e.g. the headset mic dies during a `meeting` recording), the
+  recording continues on the surviving stream — the mixer already
+  silence-fills a starved side — with a `capture:warning` in the panel
+  and the event recorded in the note metadata. When **no** required
+  source remains (both die in `meeting` mode, or the mic dies in
+  mic-only `voice-note` mode), finalize immediately (flush, rename,
+  write note) and report "recording ended early" with the saved file —
+  never silently continue recording nothing.
 - **Disk full / write error mid-recording** — stop streams, attempt to
   finalize what is flushed, surface the error.
 - **App crash / power loss** — the `.part` file contains valid MP3 frames
   up to the last per-second flush after an app crash, and up to the last
   ~30 s `fsync` after power loss. The startup recovery scan finalizes orphans as
-  `… (recovered).mp3` (+ note + toast). Recovery only ever renames — it
-  never deletes — and only acts on `.part` files with a stale mtime
-  (≥60 s), backed by single-instance enforcement, so it can never grab a
-  recording that another live session is still writing.
+  `… (recovered).mp3` (+ note + toast). Recovery never deletes captured
+  audio — the sole deletion it performs is the zero-frame case above
+  (a `.part` containing no complete MP3 frame, which holds no audio),
+  removed with a log entry so it is not retried forever. It only acts on
+  `.part` files with a stale mtime (≥60 s), backed by single-instance
+  enforcement, so it can never grab a recording that another live
+  session is still writing.
 - **Concurrency** — `start_capture` during an active session returns a
   typed error; the UI prevents it by disabling other Capture buttons.
 - **Auditability** — every start/stop/save/recovery is app-logged with
