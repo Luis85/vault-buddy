@@ -4,8 +4,8 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
-  { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal" },
-  { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work" },
+  { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
+  { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work", open: false },
 ];
 
 describe("vaults store", () => {

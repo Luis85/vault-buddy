@@ -5,6 +5,9 @@ pub struct Vault {
     pub id: String,
     pub name: String,
     pub path: String,
+    /// Currently open in Obsidian, per the `open` flag Obsidian maintains
+    /// in its own registry. As fresh as the last read of obsidian.json.
+    pub open: bool,
 }
 
 /// Parses the content of Obsidian's own `obsidian.json` vault registry.
@@ -21,10 +24,15 @@ pub fn parse_obsidian_config(json: &str) -> Vec<Vault> {
         .filter_map(|(id, entry)| {
             let path = entry.get("path")?.as_str()?;
             let name = vault_name_from_path(path)?;
+            let open = entry
+                .get("open")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             Some(Vault {
                 id: id.clone(),
                 name,
                 path: path.to_string(),
+                open,
             })
         })
         .collect();
@@ -79,15 +87,25 @@ mod tests {
                 Vault {
                     id: "d4e5f6".into(),
                     name: "Personal".into(),
-                    path: "C:\\Users\\luis\\vaults\\Personal".into()
+                    path: "C:\\Users\\luis\\vaults\\Personal".into(),
+                    open: false
                 },
                 Vault {
                     id: "a1b2c3".into(),
                     name: "Work".into(),
-                    path: "C:\\Users\\luis\\vaults\\Work".into()
+                    path: "C:\\Users\\luis\\vaults\\Work".into(),
+                    open: true
                 },
             ]
         );
+    }
+
+    #[test]
+    fn open_flag_defaults_to_false_when_absent_or_not_a_bool() {
+        let vaults = parse_obsidian_config(
+            r#"{ "vaults": { "x": { "path": "/v/A", "open": "yes" }, "y": { "path": "/v/B" } } }"#,
+        );
+        assert!(vaults.iter().all(|v| !v.open));
     }
 
     #[test]

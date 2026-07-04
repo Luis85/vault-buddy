@@ -36,11 +36,37 @@ const isBusy = (vault: Vault, command: "open_vault" | "open_daily_note") =>
 // controls that target different vaults.
 const accessibleName = (vault: Vault) =>
   isAmbiguous(vault) ? `${vault.name} (${vault.path})` : vault.name;
+
+// Vaults currently open in Obsidian surface first, under their own header.
+// With nothing open the list stays flat (no headers). Alphabetical order
+// (from discovery) is preserved within each group.
+const groups = computed(() => {
+  const open = props.vaults.filter((v) => v.open);
+  const rest = props.vaults.filter((v) => !v.open);
+  if (open.length === 0) {
+    return [{ key: "all", label: null as string | null, vaults: rest }];
+  }
+  return [
+    { key: "open", label: "Open now" as string | null, vaults: open },
+    { key: "rest", label: "Other vaults" as string | null, vaults: rest },
+  ].filter((group) => group.vaults.length > 0);
+});
 </script>
 
 <template>
-  <ul class="space-y-1">
-    <li v-for="vault in vaults" :key="vault.id" :title="vault.path">
+  <div
+    v-for="group in groups"
+    :key="group.key"
+    class="mt-2 first:mt-0"
+  >
+    <h2
+      v-if="group.label"
+      class="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500"
+    >
+      {{ group.label }}
+    </h2>
+    <ul class="space-y-1">
+      <li v-for="vault in group.vaults" :key="vault.id" :title="vault.path">
       <div
         class="flex items-center gap-1 rounded-lg transition-colors hover:bg-white/10"
       >
@@ -58,8 +84,16 @@ const accessibleName = (vault: Vault) =>
             {{ vault.name.charAt(0).toUpperCase() }}
           </span>
           <span class="min-w-0 flex-1">
-            <span class="block truncate text-sm font-medium text-slate-100">
-              {{ vault.name }}
+            <span class="flex items-center gap-1.5">
+              <span class="truncate text-sm font-medium text-slate-100">
+                {{ vault.name }}
+              </span>
+              <span
+                v-if="vault.open"
+                class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400"
+                title="Open in Obsidian"
+                aria-hidden="true"
+              ></span>
             </span>
             <span
               v-if="isAmbiguous(vault)"
@@ -105,6 +139,7 @@ const accessibleName = (vault: Vault) =>
           </svg>
         </button>
       </div>
-    </li>
-  </ul>
+      </li>
+    </ul>
+  </div>
 </template>

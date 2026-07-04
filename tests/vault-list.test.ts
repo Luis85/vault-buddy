@@ -5,14 +5,14 @@ import VaultList from "../src/components/VaultList.vue";
 type Busy = "open_vault" | "open_daily_note" | null;
 
 const mountList = (
-  vaults: Array<{ id: string; name: string; path: string }>,
+  vaults: Array<{ id: string; name: string; path: string; open: boolean }>,
   busyVaultId: string | null = null,
   busyCommand: Busy = null,
 ) => mount(VaultList, { props: { vaults, busyVaultId, busyCommand } });
 
 const sample = [
-  { id: "aaa111", name: "Personal", path: "C:\\vaults\\Personal" },
-  { id: "bbb222", name: "Work", path: "C:\\vaults\\Work" },
+  { id: "aaa111", name: "Personal", path: "C:\\vaults\\Personal", open: false },
+  { id: "bbb222", name: "Work", path: "C:\\vaults\\Work", open: false },
 ];
 
 describe("VaultList", () => {
@@ -36,6 +36,35 @@ describe("VaultList", () => {
     expect(wrapper.text()).toContain("W");
   });
 
+  it("lists open vaults first under an 'Open now' header", () => {
+    const wrapper = mountList([
+      { id: "a", name: "Alpha", path: "C:\\v\\Alpha", open: false },
+      { id: "z", name: "Zulu", path: "C:\\v\\Zulu", open: true },
+    ]);
+    expect(wrapper.text()).toContain("Open now");
+    expect(wrapper.text()).toContain("Other vaults");
+    // Zulu is alphabetically last but open — it must render first
+    const names = wrapper
+      .findAll("li .text-sm")
+      .map((node) => node.text().trim());
+    expect(names[0]).toBe("Zulu");
+    expect(names[1]).toBe("Alpha");
+  });
+
+  it("marks open vaults with an indicator dot", () => {
+    const wrapper = mountList([
+      { id: "z", name: "Zulu", path: "C:\\v\\Zulu", open: true },
+      { id: "a", name: "Alpha", path: "C:\\v\\Alpha", open: false },
+    ]);
+    expect(wrapper.findAll('[title="Open in Obsidian"]')).toHaveLength(1);
+  });
+
+  it("shows a flat list without headers when nothing is open", () => {
+    const wrapper = mountList(sample);
+    expect(wrapper.text()).not.toContain("Open now");
+    expect(wrapper.text()).not.toContain("Other vaults");
+  });
+
   it("shows a spinner on the busy action and disables all buttons", () => {
     const wrapper = mountList(sample, "aaa111", "open_vault");
     expect(wrapper.find('[role="status"]').exists()).toBe(true);
@@ -48,8 +77,8 @@ describe("VaultList", () => {
 
   it("shows the path for vaults with duplicate names so they can be told apart", () => {
     const wrapper = mountList([
-      { id: "aaa111", name: "Notes", path: "C:\\personal\\Notes" },
-      { id: "bbb222", name: "Notes", path: "D:\\work\\Notes" },
+      { id: "aaa111", name: "Notes", path: "C:\\personal\\Notes", open: false },
+      { id: "bbb222", name: "Notes", path: "D:\\work\\Notes", open: false },
     ]);
     expect(wrapper.text()).toContain("C:\\personal\\Notes");
     expect(wrapper.text()).toContain("D:\\work\\Notes");
@@ -57,8 +86,8 @@ describe("VaultList", () => {
 
   it("disambiguates duplicate names in the accessible action labels too", () => {
     const wrapper = mountList([
-      { id: "aaa111", name: "Notes", path: "C:\\personal\\Notes" },
-      { id: "bbb222", name: "Notes", path: "D:\\work\\Notes" },
+      { id: "aaa111", name: "Notes", path: "C:\\personal\\Notes", open: false },
+      { id: "bbb222", name: "Notes", path: "D:\\work\\Notes", open: false },
     ]);
     // screen-reader users must not hear two identical controls that target
     // different vaults

@@ -6,14 +6,15 @@ import ActionPanel from "../src/components/ActionPanel.vue";
 import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
-  { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal" },
-  { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work" },
+  { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
+  { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work", open: false },
 ];
 
 const manyVaults = Array.from({ length: 8 }, (_, i) => ({
   id: `id${i}`,
   name: `Vault ${i}`,
   path: `C:\\vaults\\Vault ${i}`,
+  open: false,
 }));
 
 describe("ActionPanel", () => {

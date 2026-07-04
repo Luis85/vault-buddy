@@ -34,6 +34,9 @@ Setup: `npm install`, then `npm run tauri dev`.
 - [ ] Clicking the character grows the window and shows the dark panel listing
       your real vaults (names match Obsidian's vault switcher) with a count
       badge and an avatar initial per row.
+- [ ] With a vault open in Obsidian, it appears first under an "Open now"
+      header with a green dot; the rest sit under "Other vaults". Close it in
+      Obsidian, reopen the panel: it moves back into the flat list.
 - [ ] Clicking a vault row brings that vault up in Obsidian; a spinner shows
       on the row while it launches, then the panel closes by itself.
 - [ ] The calendar button with an existing daily note opens it in the right
