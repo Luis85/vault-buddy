@@ -1,47 +1,54 @@
 # Vault Buddy
 
-An AI-native desktop companion for knowledge work — starting as the best desktop
-companion for Obsidian and evolving into an extensible, local-first desktop
-operating layer.
+An AI-native desktop companion for knowledge work — starting as the best
+desktop companion for Obsidian and evolving into an extensible, local-first
+desktop operating layer.
+
+A small animated character lives on your desktop, always within reach. Click
+it and your Obsidian vaults are one action away — no window hunting, no
+context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Stack:** Tauri 2 · Vue 3 · TypeScript · Rust
-- **Status:** Product Discovery
+- **Status:** Increment 1 — desktop companion with Obsidian vault access
 
-See the full [Product Requirements Document](docs/PRD.md) for vision, principles,
-capabilities, architecture, and roadmap.
+See the [Product Requirements Document](docs/PRD.md) for the full vision,
+principles, capabilities, and roadmap.
 
-## Development with Superpowers
+## Install
 
-This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)
-agentic skills framework directly into [`.claude/skills/`](.claude/skills), rather
-than depending on the plugin marketplace. The skills are checked into version
-control, so every collaborator gets them automatically — no marketplace, install,
-or trust step required.
+Grab the latest installer from the
+[**Releases**](https://github.com/Luis85/vault-buddy/releases) page:
+download `Vault Buddy_*_x64-setup.exe`, run it, done. The installer fetches
+the WebView2 runtime automatically if needed (Windows 11 already has it).
 
-Included skills:
+> The installers aren't code-signed yet, so SmartScreen may warn — click
+> **More info → Run anyway**.
 
-- `brainstorming` — turn ideas into designs before implementation
-- `writing-plans` / `executing-plans` — plan authoring and execution
-- `test-driven-development` — red/green/refactor discipline
-- `systematic-debugging` — root-cause tracing and defense-in-depth
-- `requesting-code-review` / `receiving-code-review` — review workflows
-- `subagent-driven-development` / `dispatching-parallel-agents` — subagent orchestration
-- `using-git-worktrees` / `finishing-a-development-branch` — branch workflows
-- `verification-before-completion` — pre-completion checks
-- `writing-skills` — authoring new skills
-- `using-superpowers` — meta-skill that coordinates the rest
+## Usage
 
-Claude Code discovers these on the next session (or after `/reload-plugins`).
-Model-invoked skills trigger automatically from their descriptions; you can also
-invoke one explicitly, e.g. `/brainstorming`.
+The buddy appears as a small, always-on-top character on your desktop.
 
-A `SessionStart` hook ([`.claude/hooks/session-start`](.claude/hooks), wired in
-[`.claude/settings.json`](.claude/settings.json)) injects the `using-superpowers`
-meta-skill at the start of every session — so Claude consults the skills library
-proactively rather than only when a description happens to match. The hook is a
-cross-platform polyglot wrapper (`run-hook.cmd`) that runs under both Windows
-(Git Bash) and Unix shells.
+- **Click** the buddy to open the vault panel. It lists every vault Obsidian
+  knows about; vaults currently open in Obsidian appear first under
+  "Open now" with a green dot.
+- **Click a vault row** to bring that vault up in Obsidian, or hit the
+  **calendar button** to jump straight into today's daily note (created via
+  Obsidian if it doesn't exist yet).
+- **Filter** kicks in automatically above 5 vaults — type to narrow by name
+  or path. Escape clears the filter, then closes the panel.
+- **Drag** the buddy anywhere; its position is remembered across restarts.
+  The panel opens toward free screen space, so edges and corners are fine.
+- **Right-click** the buddy for the menu: toggle the idle **animation**,
+  **hide to tray**, or **quit**.
+- **Tray icon**: Show/Hide the buddy, quit the app.
+- The panel gets out of your way on its own: Escape, clicking the desktop,
+  or launching a vault all close it.
 
-To update the vendored copies, re-pull the `skills/` directory from the upstream
-[obra/superpowers](https://github.com/obra/superpowers) repository.
+Vault Buddy never writes into your vaults — opening notes and creating
+daily notes is delegated to Obsidian itself via `obsidian://` URIs, and
+every launched URI is logged.
+
+## Contributing
+
+Building from source, tests, CI, and the release flow are documented in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

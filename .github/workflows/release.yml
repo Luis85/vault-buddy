@@ -1,0 +1,52 @@
+name: Release
+
+# Pushing a version tag (v0.1.0, v1.2.3, ...) builds the Windows installers
+# and publishes them as a GitHub Release — users download and double-click,
+# no toolchain required.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Build and publish Windows installers
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Build app and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Vault Buddy ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          releaseBody: |
+            ## Install
+
+            Download **`Vault Buddy_*_x64-setup.exe`** below and run it — that's all.
+            The installer fetches the WebView2 runtime automatically if your
+            Windows doesn't have it yet (Windows 11 ships with it). Prefer MSI?
+            Use the `.msi` instead; both install the same app.
+
+            > **SmartScreen note:** the installers are not code-signed yet, so
+            > Windows may show "Windows protected your PC". Click
+            > **More info → Run anyway**.
+
+            After installing, the buddy appears on your desktop:
+            - **Click** it to open your Obsidian vaults
+            - **Drag** it anywhere; the position is remembered
+            - **Right-click** for animation toggle, hide to tray, and quit

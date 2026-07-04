@@ -1,0 +1,140 @@
+import { beforeEach, afterEach, describe, expect, it } from "vitest";
+import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import ActionPanel from "../src/components/ActionPanel.vue";
+import { useVaultsStore } from "../src/stores/vaults";
+
+const sampleVaults = [
+  { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
+  { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work", open: false },
+];
+
+const manyVaults = Array.from({ length: 8 }, (_, i) => ({
+  id: `id${i}`,
+  name: `Vault ${i}`,
+  path: `C:\\vaults\\Vault ${i}`,
+  open: false,
+}));
+
+describe("ActionPanel", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  afterEach(() => {
+    clearMocks();
+  });
+
+  it("lists each vault with both actions and a count badge", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.text()).toContain("Personal");
+    expect(wrapper.text()).toContain("Work");
+    expect(wrapper.text()).toContain("2"); // count badge
+    const buttons = wrapper.findAll("button");
+    expect(buttons).toHaveLength(4); // 2 vaults × (row + daily note)
+    // the list scrolls inside the fixed-height panel with the themed scrollbar
+    expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
+  });
+
+  it("dispatches open_daily_note with the vault id", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .find('[aria-label="Open today\'s daily note in Personal"]')
+      .trigger("click");
+    expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "d4e5f6" } }]);
+  });
+
+  it("hides the filter for short lists", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('input[type="search"]').exists()).toBe(false);
+  });
+
+  it("filters long lists by name and path", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const input = wrapper.find('input[type="search"]');
+    expect(input.exists()).toBe(true);
+    await input.setValue("Vault 3");
+    expect(wrapper.text()).toContain("Vault 3");
+    expect(wrapper.text()).not.toContain("Vault 5");
+  });
+
+  it("shows a friendly message when nothing matches the filter", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper.find('input[type="search"]').setValue("zzz");
+    expect(wrapper.text()).toContain('No vaults match "zzz"');
+  });
+
+  it("clears the filter on Escape instead of closing", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const input = wrapper.find('input[type="search"]');
+    await input.setValue("Vault 3");
+    await input.trigger("keydown", { key: "Escape" });
+    expect((input.element as HTMLInputElement).value).toBe("");
+    expect(wrapper.text()).toContain("Vault 5"); // list unfiltered again
+  });
+
+  it("shows the friendly empty state when no vaults were found", () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const text = wrapper.text().replace(/\s+/g, " ");
+    expect(text).toContain(
+      "Obsidian not found — no vaults discovered. Is Obsidian installed and has it been opened at least once?"
+    );
+  });
+
+  it("shows the error banner when an action failed", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.error = "failed to launch obsidian://open";
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.text()).toContain("failed to launch");
+  });
+
+  it("disables all buttons while busy", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.busyVaultId = "a1b2c3";
+    store.busyCommand = "open_vault";
+    const wrapper = mount(ActionPanel);
+    const buttons = wrapper.findAll("button");
+    expect(buttons).toHaveLength(4);
+    expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
+      true
+    );
+  });
+
+  it("renders error banner and empty state together", () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    store.error = "failed to launch obsidian://open";
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.text()).toContain("failed to launch");
+    expect(wrapper.text()).toContain("Obsidian not found");
+  });
+});

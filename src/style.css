@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Slim translucent scrollbar matching the dark glass panel. The standard
+   properties take precedence over ::-webkit-scrollbar in modern Chromium
+   (WebView2), so they are all that is needed. */
+.panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.25) transparent;
+}
+
+/* PRD accessibility requirement: respect the OS reduced-motion setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
