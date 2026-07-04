@@ -415,18 +415,22 @@ pub fn finalize_if_recording(app: &AppHandle) {
 }
 
 /// Startup recovery over every discovered vault's effective recording
-/// root; fresh orphans trigger one rescan after the staleness window.
+/// root; pending work (fresh orphans, or a pass postponed by an active
+/// recording) retries every 90s, bounded at ~24h of attempts.
 pub fn run_recovery(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let pass = |stale: Duration| -> bool {
-            // A live recording's .part must never be visible to a recovery
-            // pass: a clock jump could give the live .part a future mtime
-            // that makes it look stale, and it would be "recovered" out
-            // from under the encoder. recover_root has no notion of the
-            // active session, so postpone the whole pass while a recording
-            // is active — returning true schedules the 90s rescan, which
-            // retries after the recording ends. Coarse, but strictly safe.
+            // A live recording's .part should never be caught by a recovery
+            // pass in practice: a clock jump could give the live .part a
+            // future mtime that makes it look stale, and it would be
+            // "recovered" out from under the encoder. recover_root has no
+            // notion of the active session, so postpone the whole pass
+            // while a recording is active — returning true keeps the pass
+            // retrying every 90s while work is pending, rather than only
+            // running again at next launch. Coarse, but safe in practice
+            // (this is-recording check runs once per pass, not once per
+            // file recover_root scans).
             {
                 let state = app.state::<CaptureState>();
                 let guard = state.0.lock().unwrap();
@@ -491,9 +495,19 @@ pub fn run_recovery(app: &AppHandle) {
             }
             fresh_found
         };
-        if pass(Duration::from_secs(60)) {
+        // Retry while work is pending (fresh orphans aging, or passes
+        // postponed by an active recording). Bounded so a pathological
+        // state cannot spin forever: 960 × 90s ≈ 24h of retries, far
+        // beyond any realistic recording session; recovery also reruns
+        // on every app launch.
+        let mut retries = 0u32;
+        while pass(Duration::from_secs(60)) {
+            retries += 1;
+            if retries >= 960 {
+                log::warn!("recovery: giving up rescans after {retries} attempts");
+                break;
+            }
             std::thread::sleep(Duration::from_secs(90));
-            pass(Duration::from_secs(60));
         }
     });
 }
