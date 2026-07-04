@@ -25,7 +25,7 @@ cd vault-buddy
 #   git checkout <branch-name>
 
 npm install
-npm run tauri   # alias for `tauri dev`
+npm run test-build   # `tauri dev` — compile the shell and run the app
 ```
 
 The first `tauri dev` compiles the Rust shell and takes a few minutes; after
@@ -107,7 +107,15 @@ installed apps poll
 panel (download, signature check, install, relaunch — always user-initiated,
 per the PRD's Human in Control principle).
 
-## Development with Superpowers
+## Development with coding agents
+
+Agent-facing guidance — commands, architecture invariants, conventions, and
+the release flow in one place — lives in [`AGENTS.md`](../AGENTS.md) at the
+repo root, where coding agents (Claude Code, Codex, Cursor, ...) pick it up
+automatically. [`CLAUDE.md`](../CLAUDE.md) points Claude Code at it. Keep
+`AGENTS.md` current when the repo changes.
+
+### Superpowers skills
 
 This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)
 agentic skills framework directly into [`.claude/skills/`](../.claude/skills),
