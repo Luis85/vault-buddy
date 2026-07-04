@@ -50,7 +50,17 @@ pub fn transcribe_recording(
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);
-    transcript::replace_if_ours(&path, &content).map_err(|e| format!("write transcript: {e}"))?;
+    match transcript::replace_if_ours(&path, &content)
+        .map_err(|e| format!("write transcript: {e}"))?
+    {
+        transcript::ReplaceOutcome::Written => {}
+        transcript::ReplaceOutcome::SkippedForeign => {
+            log::warn!(
+                "transcribe: left an existing non-regenerable sidecar untouched (not overwritten): {}",
+                path.display()
+            );
+        }
+    }
     Ok(path)
 }
 
@@ -136,5 +146,17 @@ mod tests {
         let err = transcribe_recording(&mp3, &FakeErr, &opts(), "t").unwrap_err();
         assert!(err.contains("engine exploded"));
         assert!(!transcript_path(&mp3).exists());
+    }
+
+    #[test]
+    fn decode_error_leaves_no_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&mp3, b"this is not a valid mp3 stream at all").unwrap();
+        assert!(transcribe_recording(&mp3, &FakeOk, &opts(), "t").is_err());
+        assert!(
+            !transcript_path(&mp3).exists(),
+            "no sidecar when decode fails"
+        );
     }
 }
