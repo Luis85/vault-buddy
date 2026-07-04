@@ -59,14 +59,18 @@ function onContextMenu(event: MouseEvent) {
 
 let unlistenFocus: (() => void) | undefined;
 let unlistenAnimation: (() => void) | undefined;
+let unlistenDragging: (() => void) | undefined;
 
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("contextmenu", onContextMenu);
   try {
-    // The buddy's native right-click menu toggles this from the Rust side.
+    // The buddy's native right-click menu toggles these from the Rust side.
     unlistenAnimation = await listen("buddy-toggle-animation", () => {
       settings.toggleAnimations();
+    });
+    unlistenDragging = await listen("buddy-toggle-dragging", () => {
+      settings.toggleDragging();
     });
   } catch {
     // not running under Tauri (unit tests)
@@ -98,6 +102,7 @@ onUnmounted(() => {
   window.removeEventListener("contextmenu", onContextMenu);
   unlistenFocus?.();
   unlistenAnimation?.();
+  unlistenDragging?.();
 });
 </script>
 
@@ -129,6 +134,9 @@ onUnmounted(() => {
       <CompanionCharacter
         :working="working"
         :animated="settings.animationsEnabled"
+        :character="settings.character"
+        :draggable="settings.draggingEnabled"
+        :facing="settings.facing"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
       />

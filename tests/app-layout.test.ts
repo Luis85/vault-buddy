@@ -134,6 +134,20 @@ describe("App layout geometry", () => {
     expect(wrapper.find("button.buddy").classes()).not.toContain("still");
   });
 
+  it("toggles buddy dragging from the native menu event", async () => {
+    const wrapper = mount(App);
+    await flush(); // let onMounted register the event listener
+    expect(wrapper.find("button.buddy").classes()).toContain("cursor-grab");
+
+    state.eventHandlers["buddy-toggle-dragging"]?.();
+    await nextTick();
+    expect(wrapper.find("button.buddy").classes()).toContain("cursor-pointer");
+
+    state.eventHandlers["buddy-toggle-dragging"]?.();
+    await nextTick();
+    expect(wrapper.find("button.buddy").classes()).toContain("cursor-grab");
+  });
+
   it("closes the panel when the transparent gutter is clicked", async () => {
     const wrapper = mount(App);
     const store = useVaultsStore();

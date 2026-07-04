@@ -34,7 +34,7 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Personal");
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
-    const buttons = wrapper.findAll("button");
+    const buttons = wrapper.findAll(".panel-scroll button");
     expect(buttons).toHaveLength(4); // 2 vaults × (row + daily note)
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
@@ -122,11 +122,41 @@ describe("ActionPanel", () => {
     store.busyVaultId = "a1b2c3";
     store.busyCommand = "open_vault";
     const wrapper = mount(ActionPanel);
-    const buttons = wrapper.findAll("button");
+    // vault action buttons only — the header's settings gear stays usable
+    const buttons = wrapper.findAll(".panel-scroll button");
     expect(buttons).toHaveLength(4);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );
+  });
+
+  it("switches between the vault list and the buddy settings via the gear", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const gear = wrapper.find('[data-testid="settings-toggle"]');
+    expect(gear.exists()).toBe(true);
+
+    await gear.trigger("click");
+    expect(wrapper.text()).toContain("Buddy settings");
+    expect(wrapper.text()).toContain("Classic");
+    expect(wrapper.text()).not.toContain("Personal");
+
+    await gear.trigger("click");
+    expect(wrapper.text()).toContain("Vaults");
+    expect(wrapper.text()).toContain("Personal");
+  });
+
+  it("hides the filter and count badge while settings are open", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('input[type="search"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="settings-toggle"]').trigger("click");
+    expect(wrapper.find('input[type="search"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("8"); // count badge hidden
   });
 
   it("renders error banner and empty state together", () => {

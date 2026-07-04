@@ -39,12 +39,14 @@ pub fn set_window_geometry(
 /// Native context menu for the buddy. The collapsed window is far too small
 /// to host an HTML menu; the OS popup renders outside the window bounds and
 /// matches the tray menu. Item events are handled in `lib.rs`. `animated`
-/// reflects the frontend's current setting and drives the checkmark.
+/// and `dragging` reflect the frontend's current settings and drive the
+/// checkmarks.
 #[tauri::command]
 pub fn show_buddy_menu(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     animated: bool,
+    dragging: bool,
 ) -> Result<(), String> {
     use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
@@ -57,12 +59,21 @@ pub fn show_buddy_menu(
         None::<&str>,
     )
     .map_err(|e| e.to_string())?;
+    let dragging = CheckMenuItem::with_id(
+        &app,
+        "buddy-dragging",
+        "Dragging",
+        true,
+        dragging,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
     let separator = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
     let hide = MenuItem::with_id(&app, "buddy-hide", "Hide to tray", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let quit = MenuItem::with_id(&app, "buddy-quit", "Quit Vault Buddy", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let menu = Menu::with_items(&app, &[&animation, &separator, &hide, &quit])
+    let menu = Menu::with_items(&app, &[&animation, &dragging, &separator, &hide, &quit])
         .map_err(|e| e.to_string())?;
     // Win32 popup menus require the owning window to be foreground —
     // without this the menu is delayed or silently ignored until the user

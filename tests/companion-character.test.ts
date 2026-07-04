@@ -109,11 +109,11 @@ describe("CompanionCharacter", () => {
     expect(el.releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
-  it("opens the native context menu on right-click with the animation state", async () => {
+  it("opens the native context menu on right-click with the current settings", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     await wrapper.find("button.buddy").trigger("contextmenu");
     expect(ipcCalls).toEqual([
-      { cmd: "show_buddy_menu", args: { animated: true } },
+      { cmd: "show_buddy_menu", args: { animated: true, dragging: true } },
     ]);
     // the browser context menu must not appear alongside the native one —
     // the handler prevents the default
@@ -126,6 +126,33 @@ describe("CompanionCharacter", () => {
     });
     // .still overrides idle, hover and working animations via CSS
     expect(wrapper.find("button.buddy").classes()).toContain("still");
+  });
+
+  it("never starts a window drag when dragging is disabled", async () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, draggable: false },
+    });
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { screenX: 120, screenY: 120 });
+    expect(startDragging).not.toHaveBeenCalled();
+    expect(wrapper.emitted("drag-start")).toBeUndefined();
+    // the press stays a plain click and still opens the panel
+    await buddy.trigger("pointerup");
+    await buddy.trigger("click", { detail: 1 });
+    expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  it("drops the grab cursor and drag hint when dragging is disabled", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, draggable: false },
+    });
+    const buddy = wrapper.find("button.buddy");
+    expect(buddy.classes()).toContain("cursor-pointer");
+    expect(buddy.classes()).not.toContain("cursor-grab");
+    expect(buddy.attributes("aria-label")).toBe(
+      "Vault Buddy — click to open the panel",
+    );
   });
 
   it("toggles again on the click after a completed drag", async () => {

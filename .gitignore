@@ -4,3 +4,5 @@ src-tauri/target/
 src-tauri/core/target/
 src-tauri/gen/
 app-icon.png
+
+.vite
