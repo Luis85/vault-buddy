@@ -1,10 +1,15 @@
 mod capture_commands;
 mod commands;
+mod diagnostics;
 mod tray;
 
 use tauri::{Emitter, Manager};
 
 pub fn run() {
+    // Before anything else: a panic during builder construction or in any
+    // thread should still be captured on disk.
+    diagnostics::install_panic_hook();
+
     tauri::Builder::default()
         // Registered first (per the plugin's docs) so a second launch bails
         // before any other plugin runs. Two instances would mean two buddies,
@@ -20,7 +25,29 @@ pub fn run() {
         }))
         // Recording saved/failed toasts.
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        // Persist to a rotating file in the app log dir — the bare `.build()`
+        // logged only to stdout, which is invisible in a release GUI build,
+        // so crashes left no trail. `targets` REPLACES the plugin defaults
+        // (which are Stdout + an unnamed LogDir): set them explicitly to
+        // Stdout (kept for `tauri dev`) + a single `vault-buddy.log`, so we
+        // don't also spawn a second, default-named log file. 5 MB + KeepOne
+        // bounds disk while keeping the one rotated-out file that usually
+        // holds the crash preceding a restart. Local timestamps so lines
+        // match the user's clock.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("vault-buddy".into()),
+                    }),
+                ])
+                .level(log::LevelFilter::Info)
+                .max_file_size(5 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
         // Remember where the user parked the buddy across restarts. Only the
         // position: the window size is managed dynamically by the panel
         // open/close logic and must never be restored from disk.
@@ -75,11 +102,17 @@ pub fn run() {
             commands::set_panel_offset,
             commands::set_window_geometry,
             commands::show_buddy_menu,
+            commands::open_logs_folder,
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status
         ])
         .setup(|app| {
+            // Give the panic hook the real log dir; until now it falls back to
+            // the temp dir.
+            if let Ok(dir) = app.path().app_log_dir() {
+                diagnostics::set_log_dir(dir);
+            }
             tray::create_tray(app.handle())?;
             capture_commands::run_recovery(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
@@ -104,56 +137,90 @@ pub fn run() {
             // z-order-only SetWindowPos that never moves, resizes, or
             // steals focus.
             let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                // Checkpoint of the buddy's parked position. Exit paths that
-                // save state can silently fail or be bypassed (the updater
-                // kills the process via std::process::exit) — persisting
-                // within a second of any move means the state file always
-                // holds a recent correct position, whatever the exit path.
-                let mut last_pos: Option<(i32, i32)> = None;
-                let mut ticks: u32 = 0;
-                let mut saved_once = false;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    ticks = ticks.saturating_add(1);
-                    let Some(window) = handle.get_webview_window("main") else {
-                        continue;
-                    };
-                    if !window.is_visible().unwrap_or(false) {
-                        continue;
-                    }
-                    let _ = window.set_always_on_top(true);
-                    // Never persist while the panel has the window shifted —
-                    // only the unshifted home position may reach disk.
-                    let offset = *handle.state::<commands::PanelOffset>().0.lock().unwrap();
-                    if offset != (0, 0) {
-                        continue;
-                    }
-                    if let Ok(pos) = window.outer_position() {
-                        let pos = (pos.x, pos.y);
-                        let moved = last_pos.is_some() && last_pos != Some(pos);
-                        // The early ticks must not write: a save that lands
-                        // before the window-state plugin's restore would
-                        // poison its cache with the pre-restore default
-                        // position. But a drag within that window would be
-                        // absorbed into the baseline and lost until the next
-                        // move — so once restore has certainly landed, one
-                        // unconditional save persists whatever the baseline
-                        // is. Any successful save (moved or initial) counts.
-                        let initial = !saved_once && ticks >= 3;
-                        if moved || initial {
-                            match handle.save_window_state(StateFlags::POSITION) {
-                                Ok(()) => saved_once = true,
-                                Err(e) => log::warn!("position checkpoint failed: {e}"),
-                            }
-                        }
-                        last_pos = Some(pos);
-                    }
+            // Checkpoint of the buddy's parked position. Exit paths that save
+            // state can silently fail or be bypassed (the updater kills the
+            // process via std::process::exit) — persisting within a second of
+            // any move means the state file always holds a recent correct
+            // position, whatever the exit path. These counters live across
+            // ticks, so they are owned by the loop closure below.
+            let mut last_pos: Option<(i32, i32)> = None;
+            let mut ticks: u32 = 0;
+            let mut saved_once = false;
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                // One bad tick must never permanently kill always-on-top
+                // re-assertion + position checkpointing. Isolate each tick: a
+                // panic here is captured by the crash hook and this line, and
+                // the loop keeps running.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
+                }));
+                if outcome.is_err() {
+                    log::error!("background checkpoint tick panicked; continuing");
                 }
             });
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running Vault Buddy");
+        .unwrap_or_else(|e| {
+            // The run loop failing to start is fatal, but `.expect` would
+            // panic with no persisted reason — log it first so the cause
+            // survives in the app log.
+            log::error!("fatal: Tauri run loop exited: {e}");
+            std::process::exit(1);
+        });
+}
+
+/// One iteration of the always-on-top / position-checkpoint loop. Split out of
+/// the loop so it can run inside `catch_unwind` (a `continue` can't cross a
+/// closure boundary — skips become early `return`s here). `Manager` is in
+/// scope via the module-level `use`, so `get_webview_window`/`state` resolve.
+fn checkpoint_tick(
+    handle: &tauri::AppHandle,
+    last_pos: &mut Option<(i32, i32)>,
+    ticks: &mut u32,
+    saved_once: &mut bool,
+) {
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+    *ticks = ticks.saturating_add(1);
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    // Windows re-shuffles the topmost band when other topmost windows appear
+    // (taskbar previews, flyouts), which can drop the buddy behind the
+    // taskbar. No event reaches us, so re-assert always-on-top every tick — a
+    // cheap z-order-only SetWindowPos that never moves, resizes, or steals
+    // focus. Log a failure instead of swallowing it: a persistent failure is
+    // how the buddy silently sinks behind the taskbar.
+    if let Err(e) = window.set_always_on_top(true) {
+        log::warn!("always-on-top re-assert failed: {e}");
+    }
+    // Never persist while the panel has the window shifted — only the
+    // unshifted home position may reach disk.
+    if handle.state::<commands::PanelOffset>().get() != (0, 0) {
+        return;
+    }
+    if let Ok(pos) = window.outer_position() {
+        let pos = (pos.x, pos.y);
+        let moved = last_pos.is_some() && *last_pos != Some(pos);
+        // The early ticks must not write: a save that lands before the
+        // window-state plugin's restore would poison its cache with the
+        // pre-restore default position. But a drag within that window would be
+        // absorbed into the baseline and lost until the next move — so once
+        // restore has certainly landed, one unconditional save persists
+        // whatever the baseline is. Any successful save (moved or initial)
+        // counts.
+        let initial = !*saved_once && *ticks >= 3;
+        if moved || initial {
+            match handle.save_window_state(StateFlags::POSITION) {
+                Ok(()) => *saved_once = true,
+                Err(e) => log::warn!("position checkpoint failed: {e}"),
+            }
+        }
+        *last_pos = Some(pos);
+    }
 }

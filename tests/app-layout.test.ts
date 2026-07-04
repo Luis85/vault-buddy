@@ -13,6 +13,14 @@ import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { nextTick } from "vue";
 
+// App.vue now imports the logging bridge; under mockIPC (which sets
+// __TAURI_INTERNALS__) that would otherwise fire real plugin-log IPC.
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
 const state = vi.hoisted(() => ({
   pos: { x: 100, y: 100 },
   monitor: {

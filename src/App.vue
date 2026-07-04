@@ -10,6 +10,7 @@ import { useCompanionWindow } from "./composables/useCompanionWindow";
 import { useVaultsStore } from "./stores/vaults";
 import { useSettingsStore } from "./stores/settings";
 import { useCaptureStore } from "./stores/capture";
+import { logBreadcrumb } from "./logging";
 import { useGreeting } from "./composables/useGreeting";
 
 const store = useVaultsStore();
@@ -43,6 +44,7 @@ let dragBlurPending = false;
 function onDragStart() {
   dragStartedAt = Date.now();
   dragBlurPending = true;
+  logBreadcrumb("buddy drag start");
 }
 
 function dragJustStarted() {
