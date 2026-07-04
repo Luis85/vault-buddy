@@ -388,6 +388,7 @@ git commit -m "feat(core): per-vault capture config with defensive defaults"
   - `fn part_file_name(base: &str) -> String` — `".{base}.mp3.part"`.
   - `fn base_from_part(part_file_name: &str) -> Option<String>` — inverse; `None` if the name doesn't match the pattern.
   - `fn recovered_base(base: &str) -> String` — `"{base} (recovered)"`.
+  - `fn safe_recording_root(vault_path: &Path, folder: &str) -> Result<PathBuf, String>` — joins a configured folder onto the vault, rejecting absolute paths and any `..`/root components so a hand-edited config can never write outside the vault (PRD: recordings are stored inside the vault).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -467,6 +468,28 @@ mod tests {
     fn recovered_base_appends_marker() {
         assert_eq!(recovered_base("b"), "b (recovered)");
     }
+
+    #[test]
+    fn safe_root_accepts_plain_and_nested_folders() {
+        let vault = Path::new("/v");
+        assert_eq!(
+            safe_recording_root(vault, "Meetings").unwrap(),
+            Path::new("/v/Meetings")
+        );
+        assert_eq!(
+            safe_recording_root(vault, "Capture/Meetings").unwrap(),
+            Path::new("/v/Capture/Meetings")
+        );
+    }
+
+    #[test]
+    fn safe_root_rejects_escaping_folders() {
+        let vault = Path::new("/v");
+        assert!(safe_recording_root(vault, "../outside").is_err());
+        assert!(safe_recording_root(vault, "a/../../outside").is_err());
+        assert!(safe_recording_root(vault, "/etc").is_err());
+        assert!(safe_recording_root(vault, "C:\\other").is_err());
+    }
 }
 ```
 
@@ -543,6 +566,23 @@ pub fn reserve_names(dir: &Path, base: &str) -> CaptureNames {
     unreachable!("suffix search always terminates")
 }
 
+/// Join a configured recording folder onto the vault, refusing anything
+/// that could land outside it: the config file is hand-editable, and the
+/// PRD guarantees recordings are stored inside the vault.
+pub fn safe_recording_root(vault_path: &Path, folder: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let rel = Path::new(folder);
+    let escapes = rel.components().any(|c| {
+        !matches!(c, Component::Normal(_) | Component::CurDir)
+    }) || folder.contains('\\') && folder.contains(':');
+    if folder.is_empty() || escapes {
+        return Err(format!(
+            "Configured recording folder must stay inside the vault: {folder:?}"
+        ));
+    }
+    Ok(vault_path.join(rel))
+}
+
 /// Stop-time recheck: only the final destinations matter — the session's
 /// own .part must not push an ordinary save onto a suffixed name.
 pub fn reserve_final(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
@@ -563,7 +603,9 @@ Add `pub mod capture_paths;` to `src-tauri/core/src/lib.rs` beside the other mod
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_core capture_paths`
-Expected: 8 passed.
+Expected: 10 passed. (The `C:\other` rejection relies on the backslash+colon
+check when the test runs on Linux — on Windows it is a Prefix component and
+rejected structurally.)
 
 - [ ] **Step 5: fmt + clippy + commit**
 
@@ -1369,7 +1411,7 @@ git commit -m "feat(capture): crash recovery scan with staleness and zero-frame 
 - Produces:
   - `enum SourceMsg { Samples(Vec<f32>) /* raw interleaved at source rate */, Lost }`
   - `struct SourceInput { pub name: String, pub rate: u32, pub channels: u16, pub rx: std::sync::mpsc::Receiver<SourceMsg> }` — every opened source is one the mode requires, so loss detection is simply "no source left alive": a meeting continues while either mic or loopback survives; a mic-only voice note finalizes when the mic dies.
-  - `struct SessionParams { pub dir: PathBuf, pub base: String, pub part: PathBuf, pub bitrate_kbps: u32, pub vault_name: String, pub recording_type: String, pub create_note: bool, pub recorded_at: String, pub flush_every: Duration, pub fsync_every: Duration }`
+  - `struct SessionParams { pub dir: PathBuf, pub base: String, pub part: PathBuf, pub bitrate_kbps: u32, pub vault_name: String, pub recording_type: String, pub create_note: bool, pub recorded_at: String, pub flush_every: Duration, pub fsync_every: Duration, pub warn_tx: Option<std::sync::mpsc::Sender<String>> }` — `warn_tx` delivers source-loss warnings **live, while recording continues** (the panel must show "source lost" during the meeting, not after stop).
   - `struct Outcome { pub mp3: PathBuf, pub note: Option<PathBuf>, pub duration_secs: u64, pub warning: Option<String>, pub ended_early: bool }`
   - `struct CaptureSession` with `fn start(params: SessionParams, sources: Vec<SourceInput>) -> std::io::Result<CaptureSession>` (creates the `.part` with `create_new`), `fn stop(self) -> Result<Outcome, String>`, and `fn is_running(&self) -> bool`.
   - The worker finalizes **on its own** (returning through `stop()`'s join) when no source is left alive.
@@ -1408,6 +1450,7 @@ mod tests {
             recorded_at: "2026-07-04T14:05:00+02:00".into(),
             flush_every: Duration::from_millis(100),
             fsync_every: Duration::from_secs(30),
+            warn_tx: None,
         }
     }
 
@@ -1446,13 +1489,19 @@ mod tests {
     fn losing_the_only_required_source_finalizes_early() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel();
+        let (warn_tx, warn_rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.warn_tx = Some(warn_tx);
         let session = CaptureSession::start(
-            params(dir.path()),
+            p,
             vec![SourceInput { name: "mic".into(), rate: 44_100, channels: 1, rx }],
         )
         .unwrap();
         tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
         tx.send(SourceMsg::Lost).unwrap();
+        // the warning must arrive live, not only inside the final Outcome
+        let live = warn_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(live.contains("mic"), "live warning names the source: {live}");
         // worker should self-finalize; stop() then just collects the outcome
         std::thread::sleep(Duration::from_millis(500));
         let outcome = session.stop().unwrap();
@@ -1548,6 +1597,8 @@ pub struct SessionParams {
     pub recorded_at: String,
     pub flush_every: Duration,
     pub fsync_every: Duration,
+    /// Live source-loss warnings, delivered while the recording continues.
+    pub warn_tx: Option<Sender<String>>,
 }
 
 pub struct Outcome {
@@ -1644,14 +1695,22 @@ fn run_worker(
                     }
                     Ok(SourceMsg::Lost) => {
                         s.alive = false;
-                        warning = Some(format!("source lost: {}", s.input.name));
-                        log::warn!("capture: source lost: {}", s.input.name);
+                        let msg = format!("source lost: {}", s.input.name);
+                        log::warn!("capture: {msg}");
+                        if let Some(tx) = &params.warn_tx {
+                            let _ = tx.send(msg.clone());
+                        }
+                        warning = Some(msg);
                         break;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
                         s.alive = false;
-                        warning = Some(format!("source lost: {}", s.input.name));
+                        let msg = format!("source lost: {}", s.input.name);
+                        if let Some(tx) = &params.warn_tx {
+                            let _ = tx.send(msg.clone());
+                        }
+                        warning = Some(msg);
                         break;
                     }
                 }
@@ -2051,9 +2110,8 @@ fn emit_saved(app: &AppHandle, outcome: &Outcome) {
             "endedEarly": outcome.ended_early,
         }),
     );
-    if let Some(w) = &outcome.warning {
-        let _ = app.emit("capture:warning", serde_json::json!({ "message": w }));
-    }
+    // Source-loss warnings were already emitted live via warn_tx; here the
+    // outcome only feeds the note metadata and the ended-early toast copy.
     let body = if outcome.ended_early {
         format!("Recording ended early — saved {file_name}")
     } else {
@@ -2106,7 +2164,17 @@ pub fn start_capture(
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     let app2 = app.clone();
     let vault_name = vault.name.clone();
-    let root = vault_path.join(cfg.effective_recording_folder());
+    // Hand-editable config must never escape the vault (PRD guarantee).
+    let root = capture_paths::safe_recording_root(&vault_path, cfg.effective_recording_folder())?;
+
+    // Live source-loss warnings: forwarded to the panel while recording.
+    let (warn_tx, warn_rx) = mpsc::channel::<String>();
+    let app_warn = app.clone();
+    std::thread::spawn(move || {
+        while let Ok(message) = warn_rx.recv() {
+            let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
+        }
+    });
 
     std::thread::spawn(move || {
         let open = match vault_buddy_capture::devices::open_sources(meeting) {
@@ -2137,6 +2205,7 @@ pub fn start_capture(
             recorded_at: now.to_rfc3339(),
             flush_every: Duration::from_secs(1),
             fsync_every: Duration::from_secs(30),
+            warn_tx: Some(warn_tx),
         };
         let session = match CaptureSession::start(params, open.inputs) {
             Ok(s) => s,
@@ -2164,14 +2233,34 @@ pub fn start_capture(
         let _ = done_tx.send(session.stop());
     });
 
-    match ready_rx
-        .recv_timeout(Duration::from_secs(10))
-        .map_err(|_| "Recording did not start in time.".to_string())?
-    {
-        Ok(()) => {}
-        Err(e) => {
-            let _ = app2.emit("capture:failed", serde_json::json!({ "message": e }));
+    match ready_rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            let _ = app2.emit("capture:failed", serde_json::json!({ "message": e.clone() }));
             return Err(e);
+        }
+        Err(_) => {
+            // Startup hung (e.g. a wedged audio driver). The worker may
+            // still create the .part and start the session AFTER this
+            // return — never leave that recording detached: a janitor
+            // thread waits for the worker's one ready signal and, if a
+            // session did start, stops it and surfaces the outcome so no
+            // audio is silently stranded.
+            let msg = "Recording did not start in time.".to_string();
+            let app4 = app2.clone();
+            std::thread::spawn(move || {
+                if let Ok(Ok(())) = ready_rx.recv() {
+                    log::warn!("capture: late start after timeout — stopping and draining");
+                    let _ = stop_tx.send(StopReason::User);
+                    match done_rx.recv() {
+                        Ok(Ok(outcome)) => emit_saved(&app4, &outcome),
+                        other => log::warn!("capture: late-start cleanup: {other:?}"),
+                    }
+                }
+                // worker replied Err (or vanished): nothing was created.
+            });
+            let _ = app2.emit("capture:failed", serde_json::json!({ "message": msg.clone() }));
+            return Err(msg);
         }
     }
 
@@ -2275,7 +2364,12 @@ pub fn run_recovery(app: &AppHandle) {
                     None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
                 };
                 for folder in roots {
-                let root = std::path::Path::new(&vault.path).join(&folder);
+                let Ok(root) =
+                    capture_paths::safe_recording_root(std::path::Path::new(&vault.path), &folder)
+                else {
+                    log::warn!("recovery: skipping unsafe configured folder {folder:?}");
+                    continue;
+                };
                 if !root.is_dir() {
                     continue;
                 }
