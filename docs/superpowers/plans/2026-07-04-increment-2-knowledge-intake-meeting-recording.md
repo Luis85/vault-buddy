@@ -427,6 +427,7 @@ git commit -m "feat(core): per-vault capture config with defensive defaults"
   - `fn base_from_part(part_file_name: &str) -> Option<String>` — inverse; `None` if the name doesn't match the pattern.
   - `fn recovered_base(base: &str) -> String` — `"{base} (recovered)"`.
   - `fn safe_recording_root(vault_path: &Path, folder: &str) -> Result<PathBuf, String>` — joins a configured folder onto the vault, rejecting absolute paths and any `..`/root components so a hand-edited config can never write outside the vault (PRD: recordings are stored inside the vault).
+  - `fn assert_root_inside_vault(vault_path: &Path, root: &Path) -> Result<(), String>` — runtime companion to the lexical check: canonicalizes both paths (the root must already exist) and requires the root to resolve under the vault, so a pre-existing symlink or Windows junction at the recording folder cannot carry writes outside the vault. Called by the start path after `create_dir_all` and by the recovery pass per root.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1241,6 +1242,7 @@ git commit -m "feat(capture): streaming LAME MP3 encoder wrapper"
   - `fn rename_into_reserved(from: &Path, dir: &Path, base: &str) -> Result<(PathBuf, PathBuf), String>` — shared finalize primitive: loops `reserve_final` + non-replacing rename, retrying with an advanced suffix when the destination appears in the check→rename window. Task 8's session finalize uses this too.
   - `fn recover_root(root: &Path, vault_name: &str, stale_after: Duration, write_note: bool) -> Vec<RecoveryAction>` — recursively walks `root` for `.…mp3.part` files and stale note temps; fresh `.part`s are reported as `Fresh` (caller schedules a rescan), zero-frame `.part`s are deleted, others are renamed to `<base> (recovered).mp3` via `rename_into_reserved`, with an optional note (`event: recovered after crash`).
   - **Ownership filters — recovery may only ever touch Vault Buddy's own files:** a `.mp3.part` is processed only when its base matches the capture timestamp pattern `YYYY-MM-DD HHmm …` (private `is_capture_base` check) — another tool's `.download.mp3.part` is never deleted or renamed; note temps are cleaned only when they end with `capture_note::NOTE_TMP_SUFFIX` (the `.vault-buddy.tmp` marker).
+  - **Layout filter — recovery traverses only the dated capture layout:** from the root it descends only into 4-digit year directories and, within them, 2-digit month directories, and visits files only inside those month folders — Vault Buddy writes nowhere else, so a stale capture-named `.part` a user moved into `Meetings/Project/` (or left at the root) is never touched. Symlinks are still skipped at every level.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1556,23 +1558,43 @@ pub fn rename_into_reserved(
     }
 }
 
-fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // entry.file_type() reads the dirent and does NOT follow symlinks:
-        // a symlinked directory (or Windows junction) inside a recording
-        // root must never let the scan escape the vault or enter a cycle,
-        // and symlinked files are skipped for the same reason.
-        let Ok(file_type) = entry.file_type() else {
+fn is_digit_dir(name: &str, len: usize) -> bool {
+    name.len() == len && name.chars().all(|c| c.is_ascii_digit())
+}
+
+fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            // entry.file_type() reads the dirent and does NOT follow
+            // symlinks: a symlinked directory (or Windows junction) must
+            // never let the scan escape the vault or enter a cycle.
+            if let Ok(ft) = entry.file_type() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                out.push((entry.path(), ft, name));
+            }
+        }
+    }
+    out
+}
+
+/// Vault Buddy writes only under `<root>/YYYY/MM` — recovery looks
+/// nowhere else, so a capture-named file a user moved into an arbitrary
+/// subfolder (or the root itself) is never touched.
+fn walk(root: &Path, visit: &mut dyn FnMut(&Path)) {
+    for (year_path, year_ft, year_name) in dir_entries(root) {
+        if !year_ft.is_dir() || !is_digit_dir(&year_name, 4) {
             continue;
-        };
-        if file_type.is_dir() {
-            walk(&path, visit);
-        } else if file_type.is_file() {
-            visit(&path);
+        }
+        for (month_path, month_ft, month_name) in dir_entries(&year_path) {
+            if !month_ft.is_dir() || !is_digit_dir(&month_name, 2) {
+                continue;
+            }
+            for (file_path, file_ft, _) in dir_entries(&month_path) {
+                if file_ft.is_file() {
+                    visit(&file_path);
+                }
+            }
         }
     }
 }
@@ -1584,6 +1606,13 @@ Add `pub mod recovery;` to `src-tauri/capture/src/lib.rs`.
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_capture recovery`
 Expected: 9 passed (the symlink test is `#[cfg(unix)]`; on Windows 8).
+
+**Dated-layout amendment (applied in a follow-up fix):** with the
+`YYYY/MM`-only walk, all tests place `.part`/temp files under a
+`month_dir(root)` helper (`root/2026/07/`, created via `create_dir_all`);
+the symlink test symlinks `root/2026` → outside (with the payload in
+`outside/07/`); and two extra tests assert that a capture-named `.part`
+at the root or under a non-dated subfolder (`Project/`) is ignored.
 
 - [ ] **Step 5: fmt + clippy + commit**
 
@@ -2374,6 +2403,8 @@ pub fn start_capture(
     // Hand-editable config must never escape the vault (PRD guarantee).
     let root = capture_paths::safe_recording_root(&vault_path, cfg.effective_recording_folder())?;
 
+    let vault_path2 = vault_path.clone();
+
     // Live source-loss warnings: forwarded to the panel while recording.
     let (warn_tx, warn_rx) = mpsc::channel::<String>();
     let app_warn = app.clone();
@@ -2397,6 +2428,12 @@ pub fn start_capture(
         let dir = capture_paths::dated_folder(&root, date);
         if let Err(e) = std::fs::create_dir_all(&dir) {
             let _ = ready_tx.send(Err(format!("Cannot create recording folder: {e}")));
+            return;
+        }
+        // A pre-existing symlink/junction at the recording folder must
+        // not carry writes outside the vault (lexical check can't see it).
+        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path2, &dir) {
+            let _ = ready_tx.send(Err(e));
             return;
         }
         let base = capture_paths::base_name(date, now.hour(), now.minute(), label);
@@ -2597,6 +2634,13 @@ pub fn run_recovery(app: &AppHandle) {
                     continue;
                 };
                 if !root.is_dir() {
+                    continue;
+                }
+                if let Err(e) = capture_paths::assert_root_inside_vault(
+                    std::path::Path::new(&vault.path),
+                    &root,
+                ) {
+                    log::warn!("recovery: skipping root: {e}");
                     continue;
                 }
                 for action in vault_buddy_capture::recovery::recover_root(
