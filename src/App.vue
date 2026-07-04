@@ -41,10 +41,19 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") closePanel();
 }
 
+// The stock WebView context menu (Refresh, etc.) breaks the desktop-widget
+// illusion. Suppress it everywhere except text fields, where the native
+// copy/paste menu stays useful. The buddy shows its own native menu.
+function onContextMenu(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (!target?.closest("input, textarea")) event.preventDefault();
+}
+
 let unlistenFocus: (() => void) | undefined;
 
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
+  window.addEventListener("contextmenu", onContextMenu);
   try {
     // Clicking the desktop takes focus off the companion — close the panel
     // so the transparent window shrinks out of the way.
@@ -60,6 +69,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("contextmenu", onContextMenu);
   unlistenFocus?.();
 });
 </script>

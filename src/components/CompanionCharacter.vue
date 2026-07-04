@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 defineProps<{ working: boolean }>();
@@ -55,6 +56,14 @@ function onClick() {
   }
   emit("toggle");
 }
+
+function onContextMenu() {
+  // Native OS popup — the collapsed window is far too small to host an
+  // HTML menu, and the OS menu matches the tray menu's look.
+  void invoke("show_buddy_menu").catch(() => {
+    // not running under Tauri (unit tests)
+  });
+}
 </script>
 
 <template>
@@ -70,6 +79,7 @@ function onClick() {
       @pointerup="onPointerEnd"
       @pointercancel="onPointerEnd"
       @click="onClick"
+      @contextmenu.prevent="onContextMenu"
     >
       <svg width="64" height="64" viewBox="0 0 96 96" aria-hidden="true">
         <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />

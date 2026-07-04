@@ -54,6 +54,11 @@ Setup: `npm install`, then `npm run tauri dev`.
 - [ ] While Vault Buddy is running, remove a vault from Obsidian (so it leaves
       `obsidian.json`), then trigger one of its actions from the still-open
       panel: an inline "vault not found" error banner appears; no crash.
+- [ ] Right-clicking the buddy shows a native menu with "Hide to tray" and
+      "Quit Vault Buddy"; Hide makes the companion disappear and tray
+      "Show / Hide" brings it back; Quit exits (and still saves position).
+- [ ] Right-clicking the panel or empty areas shows no browser context menu;
+      right-clicking inside the filter box still shows the native text menu.
 - [ ] Tray "Show / Hide" toggles the companion; "Quit Vault Buddy" exits the
       app.
 - [ ] `tauri dev` console shows a `launching URI: obsidian://...` log line for

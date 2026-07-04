@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import CompanionCharacter from "../src/components/CompanionCharacter.vue";
 
 const startDragging = vi.hoisted(() => vi.fn());
@@ -7,9 +8,19 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging }),
 }));
 
+const ipcCalls: string[] = [];
+
 describe("CompanionCharacter", () => {
   beforeEach(() => {
     startDragging.mockClear();
+    ipcCalls.length = 0;
+    mockIPC((cmd) => {
+      ipcCalls.push(cmd);
+    });
+  });
+
+  afterEach(() => {
+    clearMocks();
   });
 
   it("emits toggle when the character is clicked", async () => {
@@ -67,6 +78,15 @@ describe("CompanionCharacter", () => {
 
     await buddy.trigger("pointerup", { pointerId: 7 });
     expect(el.releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("opens the native context menu on right-click", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    await wrapper.find("button.buddy").trigger("contextmenu");
+    expect(ipcCalls).toContain("show_buddy_menu");
+    // the browser context menu must not appear alongside the native one —
+    // the handler prevents the default
+    expect(wrapper.emitted("toggle")).toBeUndefined();
   });
 
   it("toggles again on the click after a completed drag", async () => {

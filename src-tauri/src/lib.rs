@@ -17,10 +17,18 @@ pub fn run() {
             commands::list_vaults,
             commands::open_vault,
             commands::open_daily_note,
-            commands::set_panel_offset
+            commands::set_panel_offset,
+            commands::show_buddy_menu
         ])
         .setup(|app| {
             tray::create_tray(app.handle())?;
+            // Items of the buddy's right-click popup menu (the tray handles
+            // its own menu; ids are distinct so neither handles the other's).
+            app.on_menu_event(|app, event| match event.id().as_ref() {
+                "buddy-hide" => tray::hide_to_tray(app),
+                "buddy-quit" => tray::quit(app),
+                _ => {}
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

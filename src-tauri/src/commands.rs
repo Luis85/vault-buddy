@@ -16,6 +16,22 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
     *state.0.lock().unwrap() = (x, y);
 }
 
+/// Native context menu for the buddy. The collapsed window is far too small
+/// to host an HTML menu; the OS popup renders outside the window bounds and
+/// matches the tray menu. Item events are handled in `lib.rs`.
+#[tauri::command]
+pub fn show_buddy_menu(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+
+    let hide = MenuItem::with_id(&app, "buddy-hide", "Hide to tray", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let separator = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(&app, "buddy-quit", "Quit Vault Buddy", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(&app, &[&hide, &separator, &quit]).map_err(|e| e.to_string())?;
+    window.popup_menu(&menu).map_err(|e| e.to_string())
+}
+
 fn find_vault(id: &str) -> Result<discovery::Vault, String> {
     discovery::discover_vaults()
         .into_iter()
