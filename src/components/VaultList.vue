@@ -7,11 +7,13 @@ const props = defineProps<{
   busyVaultId: string | null;
   busyCommand: "open_vault" | "open_daily_note" | null;
   captureDisabled: boolean;
+  recordingVaultId: string | null;
 }>();
 defineEmits<{
   (e: "open-vault", id: string): void;
   (e: "open-daily-note", id: string): void;
   (e: "capture", id: string): void;
+  (e: "capture-settings", id: string): void;
 }>();
 
 // Obsidian allows two registered vaults whose folders share a name; without a
@@ -96,6 +98,12 @@ const groups = computed(() => {
                 title="Open in Obsidian"
                 aria-hidden="true"
               ></span>
+              <span
+                v-if="vault.id === recordingVaultId"
+                class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-red-500"
+                title="Recording…"
+                aria-hidden="true"
+              ></span>
             </span>
             <span
               v-if="isAmbiguous(vault)"
@@ -160,6 +168,31 @@ const groups = computed(() => {
           >
             <rect x="9" y="2" width="6" height="12" rx="3" />
             <path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+          :disabled="busyVaultId !== null"
+          :aria-label="`Capture settings for ${accessibleName(vault)}`"
+          title="Capture settings"
+          @click="$emit('capture-settings', vault.id)"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+            />
           </svg>
         </button>
       </div>

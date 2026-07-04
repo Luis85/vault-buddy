@@ -143,9 +143,11 @@ function onFilterEscape(event: KeyboardEvent) {
         :busy-vault-id="store.busyVaultId"
         :busy-command="store.busyCommand"
         :capture-disabled="capture.status !== 'idle'"
+        :recording-vault-id="capture.vaultId"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
         @capture="capture.start($event)"
+        @capture-settings="store.openCaptureSettings($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
         No vaults match "{{ filter }}".

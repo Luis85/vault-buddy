@@ -35,7 +35,7 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(6); // 2 vaults × (row + daily note + capture)
+    expect(buttons).toHaveLength(8); // 2 vaults × (row + daily note + capture + gear)
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
   });
@@ -124,7 +124,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     // vault action buttons only — the header's settings gear stays usable
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(6);
+    expect(buttons).toHaveLength(8);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );
@@ -178,5 +178,17 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     expect(wrapper.text()).toContain("failed to launch");
     expect(wrapper.text()).toContain("Obsidian not found");
+  });
+
+  it("opens capture settings when a vault gear is clicked", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .find('[aria-label="Capture settings for Personal"]')
+      .trigger("click");
+    expect(store.view).toBe("captureSettings");
+    expect(store.captureSettingsVaultId).toBe("d4e5f6");
   });
 });
