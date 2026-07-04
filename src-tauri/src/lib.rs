@@ -33,6 +33,7 @@ pub fn run() {
             commands::list_vaults,
             commands::open_vault,
             commands::open_daily_note,
+            commands::prepare_update_install,
             commands::set_panel_offset,
             commands::set_window_geometry,
             commands::show_buddy_menu

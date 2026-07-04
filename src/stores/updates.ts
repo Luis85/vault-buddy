@@ -1,7 +1,9 @@
 import { defineStore } from "pinia";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { useVaultsStore } from "./vaults";
 
 export type UpdatePhase =
   | "idle"
@@ -48,6 +50,15 @@ export const useUpdatesStore = defineStore("updates", {
       this.phase = "installing";
       this.error = null;
       try {
+        // The install path exits the process without the normal close/quit
+        // hooks, and the window-state plugin persists the position on exit.
+        // Close the panel (its transition restores the window's unshifted
+        // home position) and run the Rust-side restore as a deterministic
+        // backstop, so installing with the panel open at a screen edge
+        // can't persist the shifted point.
+        useVaultsStore().panelOpen = false;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        await invoke("prepare_update_install").catch(() => {});
         await this.available.downloadAndInstall();
         // Tauri's signature check has already verified the payload; hand
         // over to the new version.

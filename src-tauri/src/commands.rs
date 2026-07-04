@@ -16,6 +16,15 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
     *state.0.lock().unwrap() = (x, y);
 }
 
+/// Called right before the updater installs and restarts: that path exits
+/// the process without the normal close/quit hooks, so restore the
+/// unshifted home position first — otherwise installing with the panel
+/// open at a screen edge would persist the shifted point for next launch.
+#[tauri::command]
+pub fn prepare_update_install(app: tauri::AppHandle) {
+    crate::tray::restore_home_position(&app);
+}
+
 /// Applies position and size in one native call. The frontend used to issue
 /// setPosition and setSize as two IPC round-trips, and the intermediate
 /// geometry got painted — the buddy visibly flashed to a corner whenever the
