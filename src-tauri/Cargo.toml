@@ -28,4 +28,5 @@ vault_buddy_core = { path = "core" }
 vault_buddy_capture = { path = "capture" }
 
 [workspace]
-members = ["core", "capture"]
+resolver = "2"
+members = ["core", "capture", "transcribe"]

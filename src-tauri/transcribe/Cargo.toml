@@ -1,0 +1,23 @@
+[package]
+name = "vault_buddy_transcribe"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+# whisper.cpp is compiled and static-linked only with this feature on, so
+# Linux CI can build/test the crate without a C++ toolchain. The shell
+# enables it; the windows-app CI job is the compile gate.
+whisper = ["dep:whisper-rs"]
+
+[dependencies]
+vault_buddy_core = { path = "../core" }
+log = "0.4"
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+ureq = "2"
+dirs = "6"
+whisper-rs = { version = "0.16", optional = true }
+
+[dev-dependencies]
+mp3lame-encoder = "0.2"
+tempfile = "3"
