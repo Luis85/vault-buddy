@@ -165,20 +165,29 @@ folder, or Settings).
 - `vault-buddy.log` — the rotating app log (5 MB, one rotated file kept).
   Frontend diagnostics funnel into it too (`src/logging.ts`).
 - `crash.log` — Rust panic records (thread, location, backtrace) written
-  synchronously by the panic hook. A panic in the first instants of startup
+  synchronously by the panic hook. Every record also carries the app
+  version and OS/architecture. A panic in the first instants of startup
   lands in `%TEMP%\vault-buddy-crash.log` and is folded into `crash.log` on
   the next launch.
+- Native faults (a SEH exception on Windows — WebView2, GPU, or
+  audio-driver crashes — or a fatal signal on Unix) are now caught by an
+  OS-level crash handler (the `crash-handler` crate) and also land in
+  `crash.log`, as a `native crash: …` record with the exception code
+  (Windows) or signal number (Unix), version, and OS — but no stack: the
+  handler runs in an already-crashed process and stays deliberately
+  minimal (preformat + append + flush, no allocator-heavy work, no
+  logging framework calls).
 - `.vault-buddy.run` — the run marker. If a session ends without passing
   through a graceful exit path, the next launch logs a warning and shows a
   notification that the previous session ended uncleanly.
 - `Vault Buddy.log` (if you still have one) — the pre-v0.2.2 default-named
   log; the app no longer writes it, safe to delete manually.
 
-Honest limitation: a native fault (WebView2 renderer, GPU driver, audio
-driver inside the capture stack) terminates the process without a Rust
-panic, so it never produces a `crash.log` entry — the unclean-shutdown
-warning is the signal for those. For a native crash dump, enable Windows
-Error Reporting LocalDumps for `vault-buddy.exe` (see
+Honest limitation: a kill or power loss allows no in-process write at
+all, native crash handler included — the run marker is the only signal,
+detected at the next launch. For a full native crash dump (not just the
+one-line record above), enable Windows Error Reporting LocalDumps for
+`vault-buddy.exe` (see
 [Collecting user-mode dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps)).
 
 ## Capture configuration

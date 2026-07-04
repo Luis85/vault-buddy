@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
+import { logWarning } from "../logging";
 import type { Vault } from "../types";
 
 export const useVaultsStore = defineStore("vaults", {
@@ -26,6 +27,7 @@ export const useVaultsStore = defineStore("vaults", {
         // Keep whatever list we had; a transient failure shouldn't blank
         // a panel that was working a moment ago.
         this.error = String(e);
+        logWarning(`vault discovery failed: ${String(e)}`);
       } finally {
         this.loaded = true;
       }
@@ -53,6 +55,7 @@ export const useVaultsStore = defineStore("vaults", {
         this.panelOpen = false;
       } catch (e) {
         this.error = String(e);
+        logWarning(`${command} failed for vault ${vaultId}: ${String(e)}`);
       } finally {
         this.busyVaultId = null;
         this.busyCommand = null;

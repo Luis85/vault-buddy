@@ -34,6 +34,11 @@ export function logWarning(message: string): void {
   emit(pluginWarn, message);
 }
 
+/** Error-level marker for faults the app caught but could not handle. */
+export function logError(message: string): void {
+  emit(pluginError, message);
+}
+
 /**
  * Route uncaught frontend errors into the persistent log so a webview fault
  * during a drag leaves a trail alongside the Rust crash record. Idempotent

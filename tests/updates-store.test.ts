@@ -13,7 +13,9 @@ vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
+vi.mock("../src/logging", () => ({ logWarning: vi.fn() }));
 
+import { logWarning } from "../src/logging";
 import { useUpdatesStore } from "../src/stores/updates";
 import { useVaultsStore } from "../src/stores/vaults";
 
@@ -160,6 +162,20 @@ describe("updates store", () => {
     expect(vaults.panelOpen).toBe(true);
     expect(vaults.view).toBe("settings");
     expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("a failing install logs a warning through the log bridge", async () => {
+    const vaults = useVaultsStore();
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockRejectedValue("install broke");
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    vaults.panelOpen = true;
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("install failed"),
+    );
   });
 
   it("ignores install requests when no update is available", async () => {

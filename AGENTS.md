@@ -190,6 +190,21 @@ found the failure it prevents:
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
 
+### Diagnostics invariants
+
+- Every spawned thread is named (`std::thread::Builder`) — crash records
+  must identify the dying thread.
+- No swallowed error: anything caught-and-hidden goes through
+  `log::warn!`/`log::error!` (Rust) or `src/logging.ts` (frontend);
+  user-facing failures funnel through their domain chokepoint (e.g.
+  `emit_failed`).
+- Exit paths: the run loop stamps the clean-shutdown marker
+  automatically; any code that terminates via `std::process::exit` must
+  call `diagnostics::mark_clean_shutdown()` first or the next launch
+  reports a crash.
+- The panic hook + native crash handler are installed before the
+  builder — nothing may be moved ahead of them.
+
 ### Frontend state
 
 Pinia stores: `vaults` (list, panel open/closed, panel view state

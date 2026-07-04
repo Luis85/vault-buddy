@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { panelTransitionsSettled } from "../composables/useCompanionWindow";
+import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 
 export type UpdatePhase =
@@ -47,6 +48,7 @@ export const useUpdatesStore = defineStore("updates", {
       } catch (e) {
         this.error = String(e);
         this.phase = "error";
+        logWarning(`update check failed: ${String(e)}`);
       }
     },
     async installUpdate() {
@@ -62,6 +64,7 @@ export const useUpdatesStore = defineStore("updates", {
         // keep `available` so the user can retry the install
         this.error = String(e);
         this.phase = "error";
+        logWarning(`update download failed: ${String(e)}`);
         return;
       }
       const vaults = useVaultsStore();
@@ -94,6 +97,7 @@ export const useUpdatesStore = defineStore("updates", {
         vaults.panelOpen = true;
         this.error = String(e);
         this.phase = "error";
+        logWarning(`update install failed: ${String(e)}`);
       }
     },
   },
