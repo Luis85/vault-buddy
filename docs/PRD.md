@@ -353,7 +353,7 @@ Community ecosystem.
 
 ## 12. Plugin Architecture
 
-Vault Buddy capabilities are organized as Plugins.
+Vault Buddy's external integrations are organized as Plugins, each registering new Capabilities with the runtime. Built-in domains such as Task Management, Vault Management and the Workflow Engine are runtime engines, not Plugins.
 
 Examples:
 
