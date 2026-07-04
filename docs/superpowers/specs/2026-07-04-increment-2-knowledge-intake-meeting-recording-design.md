@@ -40,8 +40,12 @@ naming, crash recovery, and full audit logging.
 4. **Storage layout** — `Meetings/YYYY/MM/YYYY-MM-DD HHmm Meeting.mp3`;
    name collisions get a ` (2)`, ` (3)`, … suffix. The collision check
    treats the recording and its markdown note as a **pair**: a base name
-   is only used if both the `.mp3` and the `.md` paths are free, so a
-   pre-existing user note is never overwritten. Folders are auto-created.
+   is only used if the `.mp3`, the `.md`, **and the corresponding
+   `.mp3.part`** paths are all free, so a pre-existing user note — or a
+   not-yet-recovered orphan from a crash in the same minute — is never
+   overwritten. The `.part` itself is opened with exclusive-create; if
+   that fails despite the check, the suffixing simply advances. Folders
+   are auto-created.
 5. **Companion markdown note** (no AI) — a same-named `.md` beside the MP3
    containing frontmatter metadata (date, duration, vault, recording type,
    devices, created timestamp) and an `![[…]]` embed of the recording.
@@ -142,11 +146,13 @@ the existing `discovery`/`daily_notes`/`uri` style.
 1. `start_capture(vault_id)` → load config (defaults if absent) → verify
    the vault path is writable → **open the loopback and mic streams first**
    (device validation happens before any file exists, keeping start
-   failures file-free) → create `Meetings/YYYY/MM/` → create
+   failures file-free) → create `Meetings/YYYY/MM/` → reserve a base name
+   where `.mp3`, `.md`, and `.mp3.part` are all free, then exclusive-create
    `.YYYY-MM-DD HHmm Meeting.mp3.part` (dot-prefixed → hidden in Obsidian)
-   in the target folder. If anything fails after the `.part` exists but
-   before recording begins, the empty `.part` is deleted as part of the
-   failure path.
+   in the target folder — an unrecovered orphan `.part` from a same-minute
+   crash just advances the suffix. If anything fails after the `.part`
+   exists but before recording begins, the empty `.part` is deleted as
+   part of the failure path.
 2. Worker thread pulls both ring buffers → mixer → encoder → file, flushed
    to the OS every second and `fsync`ed to disk roughly every 30 seconds
    (per-second flush protects against app crashes; the periodic fsync
