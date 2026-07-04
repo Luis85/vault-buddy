@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, ref } from "vue";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
+// useCompanionWindow now imports the logging bridge, which under mockIPC
+// (which sets __TAURI_INTERNALS__) would otherwise fire real plugin-log IPC.
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
 interface Point {
   x: number;
   y: number;

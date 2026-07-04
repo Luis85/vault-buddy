@@ -6,6 +6,7 @@ import {
   LogicalSize,
 } from "@tauri-apps/api/window";
 import { planPanelPlacement, type Rect } from "./companionPlacement";
+import { logBreadcrumb, logWarning } from "../logging";
 
 export const COLLAPSED = { width: 88, height: 88 };
 export const EXPANDED = { width: 440, height: 340 };
@@ -85,6 +86,9 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
     pos: { x: number; y: number },
     size: { width: number; height: number },
   ): Promise<void> {
+    logBreadcrumb(
+      `geometry → ${pos.x},${pos.y} ${size.width}×${size.height}`,
+    );
     return invoke("set_window_geometry", {
       x: pos.x,
       y: pos.y,
@@ -128,10 +132,11 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         },
         EXPANDED,
       );
-    } catch {
+    } catch (e) {
       // No window/monitor info — grow right/down in place. Leave any
       // recorded offset untouched so a pending shift is still undone on
       // close.
+      logWarning(`applyOpen fell back: ${String(e)}`);
       side.value = "right";
       valign.value = "down";
       await win
@@ -148,8 +153,9 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         { x: pos.x + offset.x, y: pos.y + offset.y },
         COLLAPSED,
       );
-    } catch {
+    } catch (e) {
       // window may be gone during shutdown — best-effort collapse
+      logWarning(`applyClose fell back: ${String(e)}`);
       await win
         .setSize(new LogicalSize(COLLAPSED.width, COLLAPSED.height))
         .catch(() => {});
@@ -174,8 +180,9 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         if (stale(open)) return; // a newer toggle already won
         return open ? applyOpen() : applyClose();
       })
-      .catch(() => {
+      .catch((e) => {
         // a failed transition must not wedge the queue
+        logWarning(`panel transition failed: ${String(e)}`);
       });
     transitionsTail = queue;
   });
