@@ -10,9 +10,26 @@ use vault_buddy_core::crash::{format_crash_record, CrashRecord};
 // — a panic in that tiny pre-setup window is still captured.
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// Handle to `crash.log`, opened once the real log dir is known so the
+/// native crash handler never has to open a file at crash time (see
+/// `install_native_crash_handler`). `Write` is implemented for `&File`, so
+/// the handler writes through this shared reference without any I/O setup.
+static PREOPENED_CRASH_FILE: OnceLock<std::fs::File> = OnceLock::new();
+
 /// Record the app log dir for the panic hook. Called once from `setup`.
 pub fn set_log_dir(dir: PathBuf) {
+    let crash_path = dir.join("crash.log");
     let _ = LOG_DIR.set(dir);
+    match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&crash_path)
+    {
+        Ok(file) => {
+            let _ = PREOPENED_CRASH_FILE.set(file);
+        }
+        Err(e) => log::warn!("could not pre-open crash.log for the native crash handler: {e}"),
+    }
 }
 
 /// Pre-setup fallback location for crash records — app-specific name so
@@ -51,14 +68,33 @@ pub fn mark_clean_shutdown() {
     }
 }
 
-/// Re-stamp the marker as running while the app lives. A premature
-/// "clean" (an update install that failed after its pre-exit stamp)
-/// self-heals on the next heartbeat.
+/// Re-stamp the marker as running while the app lives — but only once the
+/// gate is clear. This was once described as "self-healing" a premature
+/// "clean" stamp from a failed update install, but the gate it checks
+/// latches forever once tripped, so a heartbeat alone could never repair
+/// that case: it would keep early-returning below forever. The actual
+/// repair is explicit — `rearm_running_marker`, called by the frontend when
+/// an update install fails. This function is the backstop once re-armed: it
+/// keeps the marker fresh so the *next* real crash still reports correctly.
 pub fn heartbeat_running_marker() {
     let shutting_down = vault_buddy_core::sync_util::lock_ignoring_poison(&MARKER_GATE);
     if *shutting_down {
         return;
     }
+    if let Some(dir) = LOG_DIR.get() {
+        let _ =
+            vault_buddy_core::app_diagnostics::write_running_marker(dir, env!("CARGO_PKG_VERSION"));
+    }
+}
+
+/// Re-arm crash detection after an aborted shutdown: a failed update
+/// install keeps the app running after prepare_update_install already
+/// stamped "clean" and latched the gate. Clearing the latch and
+/// re-stamping under the same lock restores the exact state a normal
+/// running session has.
+pub fn rearm_running_marker() {
+    let mut shutting_down = vault_buddy_core::sync_util::lock_ignoring_poison(&MARKER_GATE);
+    *shutting_down = false;
     if let Some(dir) = LOG_DIR.get() {
         let _ =
             vault_buddy_core::app_diagnostics::write_running_marker(dir, env!("CARGO_PKG_VERSION"));
@@ -123,44 +159,100 @@ pub fn install_panic_hook() {
 // dropping it would silently unregister the hooks.
 static NATIVE_CRASH_HANDLER: OnceLock<crash_handler::CrashHandler> = OnceLock::new();
 
+/// `install_native_crash_handler` runs before the Tauri builder — and so
+/// before the log plugin exists — so a `log::warn!` on install failure goes
+/// nowhere. Stash the message here instead; `report_startup_diagnostics`
+/// replays it once real logging is up.
+static NATIVE_HANDLER_ERROR: OnceLock<String> = OnceLock::new();
+
+/// Log a native-crash-handler install failure, if one happened. Call once
+/// from `setup`, right after the startup banner (the first point logging
+/// actually reaches a file).
+pub fn report_startup_diagnostics() {
+    if let Some(err) = NATIVE_HANDLER_ERROR.get() {
+        log::warn!("{err}");
+    }
+}
+
 /// Catch what the panic hook cannot: native faults (SEH exceptions on
 /// Windows — WebView2, GPU or audio-driver crashes — and fatal signals on
-/// Unix). The handler runs in a crashed process, so it does the minimum:
-/// preformat one record and append it to crash.log. Returning
-/// Handled(false) lets the previous/default handling (WER dumps on Windows,
-/// default signal disposition on Unix) still run afterward.
+/// Unix). The handler runs in a crashed process, possibly with the heap
+/// lock still held by whatever corrupted it — a single allocation there
+/// (format!, String, Vec growth) can deadlock a process that's also holding
+/// the single-instance lock. So every byte written at crash time is either
+/// preformatted here at install time or a fixed-size stack buffer; the
+/// crash-time closure below does no formatting and no heap allocation on
+/// the path that matters. Returning Handled(false) lets the
+/// previous/default handling (WER dumps on Windows, default signal
+/// disposition on Unix) still run afterward.
 pub fn install_native_crash_handler() {
+    // Preformatted once, now — never at crash time. The fault time can't be
+    // known in advance, so the record says so explicitly and points at the
+    // log tail instead.
+    let install_ts = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S%.3f %z")
+        .to_string();
+    let timestamp = format!(
+        "(session start {install_ts}; fault time unrecorded — see the tail of vault-buddy.log)"
+    );
+    let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let record: Vec<u8> = format_crash_record(&CrashRecord {
+        timestamp: &timestamp,
+        thread: "<native fault>",
+        message: "native crash (exception/signal code on the next line)",
+        location: None,
+        backtrace: "<unavailable for native faults — enable WER LocalDumps for a dump>",
+        app_version: env!("CARGO_PKG_VERSION"),
+        os: &os,
+    })
+    .into_bytes();
+
     let result = crash_handler::CrashHandler::attach(unsafe {
         crash_handler::make_crash_event(move |context: &crash_handler::CrashContext| {
-            let timestamp = chrono::Local::now()
-                .format("%Y-%m-%d %H:%M:%S%.3f %z")
-                .to_string();
-            let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
             #[cfg(windows)]
-            let message = format!(
-                "native crash: exception code {:#010x}",
-                context.exception_code
-            );
+            let code = context.exception_code as u32;
+            // `ssi_signo` is already `u32` on this target, but the field's
+            // width isn't a cross-platform guarantee — keep the cast so
+            // this still type-checks if that ever changes.
             #[cfg(target_os = "linux")]
-            let message = format!("native crash: signal {}", context.siginfo.ssi_signo);
-            #[cfg(target_os = "macos")]
-            let message = "native crash (mach exception)".to_string();
-            let record = format_crash_record(&CrashRecord {
-                timestamp: &timestamp,
-                thread: "<native fault>",
-                message: &message,
-                location: None,
-                backtrace: "<unavailable for native faults — enable WER LocalDumps for a dump>",
-                app_version: env!("CARGO_PKG_VERSION"),
-                os: &os,
-            });
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(crash_file())
-            {
-                let _ = file.write_all(record.as_bytes());
+            #[allow(clippy::unnecessary_cast)]
+            let code = context.siginfo.ssi_signo as u32;
+            // Fixed-size stack buffer — `hex_u32` writes into it with no
+            // allocation, unlike `format!("{:#010x}", ...)`.
+            #[cfg(any(windows, target_os = "linux"))]
+            let mut hex_buf = [0u8; 10];
+            #[cfg(any(windows, target_os = "linux"))]
+            let code_hex = vault_buddy_core::crash::hex_u32(code, &mut hex_buf);
+
+            let write_record = |mut file: &std::fs::File| {
+                let _ = file.write_all(&record);
+                let _ = file.write_all(b"code: ");
+                #[cfg(any(windows, target_os = "linux"))]
+                let _ = file.write_all(code_hex);
+                #[cfg(target_os = "macos")]
+                let _ = file.write_all(b"(mach exception)");
+                let _ = file.write_all(b"\n\n");
                 let _ = file.flush();
+            };
+
+            match PREOPENED_CRASH_FILE.get() {
+                Some(file) => write_record(file),
+                None => {
+                    // Pre-setup window: the handler was installed (this
+                    // closure exists) but `set_log_dir` hasn't opened the
+                    // handle yet — a fault in the first instants of startup.
+                    // Best-effort fall back to the stray temp file; unlike
+                    // the pre-opened-handle path above, this may still
+                    // allocate (OpenOptions, path join), but the window it
+                    // covers is a few milliseconds wide.
+                    if let Ok(f) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(stray_crash_file())
+                    {
+                        write_record(&f);
+                    }
+                }
             }
             crash_handler::CrashEventResult::Handled(false)
         })
@@ -169,7 +261,11 @@ pub fn install_native_crash_handler() {
         Ok(handler) => {
             let _ = NATIVE_CRASH_HANDLER.set(handler);
         }
-        Err(e) => log::warn!("native crash handler unavailable: {e}"),
+        Err(e) => {
+            let msg = format!("native crash handler unavailable: {e}");
+            log::warn!("{msg}");
+            let _ = NATIVE_HANDLER_ERROR.set(msg);
+        }
     }
 }
 

@@ -28,9 +28,13 @@ pub fn check_previous_run(dir: &Path) -> PreviousRun {
     }
 }
 
-/// Stamp the marker as running. Called at startup and re-stamped by the
-/// checkpoint heartbeat so a premature "clean" (e.g. an update install
-/// that failed after its pre-exit stamp) self-heals while the app lives.
+/// Stamp the marker as running. Called at startup, and again explicitly by
+/// the shell crate's `rearm_running_marker` when an update install fails
+/// after already stamping "clean" — the gate that stamp latches would
+/// otherwise keep the heartbeat from ever writing "running" again, so the
+/// frontend calls back in on that specific failure. Once re-armed, the
+/// checkpoint heartbeat re-stamps this periodically as a backstop while the
+/// app keeps running.
 pub fn write_running_marker(dir: &Path, version: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(

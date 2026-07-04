@@ -116,6 +116,7 @@ pub fn run() {
             commands::set_window_geometry,
             commands::show_buddy_menu,
             commands::open_logs_folder,
+            commands::rearm_crash_detection,
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status,
@@ -137,6 +138,9 @@ pub fn run() {
                 env!("CARGO_PKG_VERSION"),
                 std::process::id()
             );
+            // install_native_crash_handler ran before this logger existed —
+            // replay any install failure it stashed, now that logging works.
+            diagnostics::report_startup_diagnostics();
             if let Ok(dir) = app.path().app_log_dir() {
                 // A panic before setup wrote its record to the temp dir —
                 // fold it in where "Open logs folder" points.
@@ -224,10 +228,11 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            // The run loop failing to start is fatal, but `.expect` would
-            // panic with no persisted reason — log it first so the cause
-            // survives in the app log.
-            log::error!("fatal: Tauri run loop exited: {e}");
+            // Building the app is fatal, but `.expect` would panic with no
+            // persisted reason — log it first so the cause survives in the
+            // app log. This fires before any run loop exists (that's
+            // `.run()` below) — building the app itself failed.
+            log::error!("fatal: Tauri app failed to build: {e}");
             std::process::exit(1);
         })
         .run(|_app, event| {
@@ -254,6 +259,15 @@ fn checkpoint_tick(
     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
     *ticks = ticks.saturating_add(1);
+    // Re-stamp the run marker every ~15s, regardless of window state: a
+    // hidden buddy (tray-hidden, or mid-recording with no visible window)
+    // is still a running session and must keep heartbeating, so this runs
+    // ABOVE the window-visibility early-returns below. This is a backstop
+    // once re-armed — see `heartbeat_running_marker`'s doc for why a
+    // premature "clean" stamp needs an explicit re-arm, not just this.
+    if (*ticks).is_multiple_of(15) {
+        crate::diagnostics::heartbeat_running_marker();
+    }
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };
@@ -268,11 +282,6 @@ fn checkpoint_tick(
     // how the buddy silently sinks behind the taskbar.
     if let Err(e) = window.set_always_on_top(true) {
         log::warn!("always-on-top re-assert failed: {e}");
-    }
-    // Re-stamp the run marker every ~15s: cheap, and it un-does a
-    // premature "clean" stamp if an update install failed after writing it.
-    if (*ticks).is_multiple_of(15) {
-        crate::diagnostics::heartbeat_running_marker();
     }
     // Never persist while the panel has the window shifted — only the
     // unshifted home position may reach disk.

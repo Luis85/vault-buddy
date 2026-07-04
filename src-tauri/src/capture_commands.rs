@@ -740,13 +740,17 @@ pub fn run_recovery(app: &AppHandle) {
                     let state = app.state::<CaptureState>();
                     let guard = lock_ignoring_poison(&state.0);
                     if let Some(active) = guard.as_ref() {
+                        // Build the message while still holding the guard,
+                        // then drop it before the synchronous file-log write
+                        // — the state mutex must never be held across I/O.
+                        let live_part = active
+                            .part
+                            .as_deref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "not yet reserved".to_string());
+                        drop(guard);
                         log::info!(
-                            "recovery: postponed while a recording is active (live part: {})",
-                            active
-                                .part
-                                .as_deref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_else(|| "not yet reserved".to_string())
+                            "recovery: postponed while a recording is active (live part: {live_part})"
                         );
                         return true;
                     }
