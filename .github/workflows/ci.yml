@@ -37,12 +37,14 @@ jobs:
       - name: rustfmt (whole workspace)
         run: cargo fmt --check
         working-directory: src-tauri
-      - name: clippy (core crate)
-        run: cargo clippy --all-targets -- -D warnings
-        working-directory: src-tauri/core
-      - name: tests (core crate)
-        run: cargo test
-        working-directory: src-tauri/core
+      - name: Install ALSA headers (cpal build dependency on Linux)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: clippy (core + capture crates)
+        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: tests (core + capture crates)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture
+        working-directory: src-tauri
 
   windows-app:
     name: Windows app (build + installer)

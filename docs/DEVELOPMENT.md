@@ -25,7 +25,7 @@ cd vault-buddy
 #   git checkout <branch-name>
 
 npm install
-npm run tauri   # alias for `tauri dev`
+npm run test-build   # `tauri dev` — compile the shell and run the app
 ```
 
 The first `tauri dev` compiles the Rust shell and takes a few minutes; after
@@ -47,18 +47,25 @@ Alternatively, every push through CI builds Windows installers — download the
 ```bash
 npm run test                       # Vitest component/store tests
 npm run build                      # vue-tsc typecheck + production build
-cd src-tauri && cargo fmt --check  # Rust formatting (whole workspace)
-cd core && cargo clippy --all-targets -- -D warnings
-cargo test                         # pure Rust core tests (run anywhere)
+
+# from src-tauri/ — mirrors the CI "Rust core" job (Linux needs ALSA's
+# headers first: sudo apt-get install -y libasound2-dev)
+cargo fmt --check
+cargo clippy -p vault_buddy_core -p vault_buddy_capture --all-targets -- -D warnings
+cargo test -p vault_buddy_core -p vault_buddy_capture
 ```
 
-The Rust code is split in two: `src-tauri/core/` is a pure crate with all
-Obsidian logic (config parsing, daily-note resolution, URI building) and no
-GUI dependencies — it tests on any machine, including CI containers.
-`src-tauri/` is the thin Tauri shell (window, tray, command wrappers) and
-needs platform WebView libraries to compile — on Windows that works out of
-the box; Linux containers can't compile it (no webkit2gtk), which is why CI
-builds the app on a Windows runner.
+The Rust code is split into three crates: `src-tauri/core/` (`vault_buddy_core`)
+is a pure crate with all Obsidian logic (config parsing, daily-note
+resolution, URI building) and no GUI or audio dependencies — it tests on any
+machine, including CI containers. `src-tauri/capture/` (`vault_buddy_capture`)
+is the audio engine — device capture via `cpal`, MP3 encoding via LAME
+(`mp3lame-encoder`) — and also tests anywhere, though on Linux it needs
+ALSA's development headers to build: `sudo apt-get install -y
+libasound2-dev`. `src-tauri/` itself is the thin Tauri shell (window, tray,
+command wrappers) and needs platform WebView libraries to compile — on
+Windows that works out of the box; Linux containers can't compile it (no
+webkit2gtk), which is why CI builds the app on a Windows runner.
 
 ## Quality pipeline
 
@@ -107,7 +114,15 @@ installed apps poll
 panel (download, signature check, install, relaunch — always user-initiated,
 per the PRD's Human in Control principle).
 
-## Development with Superpowers
+## Development with coding agents
+
+Agent-facing guidance — commands, architecture invariants, conventions, and
+the release flow in one place — lives in [`AGENTS.md`](../AGENTS.md) at the
+repo root, where coding agents (Claude Code, Codex, Cursor, ...) pick it up
+automatically. [`CLAUDE.md`](../CLAUDE.md) points Claude Code at it. Keep
+`AGENTS.md` current when the repo changes.
+
+### Superpowers skills
 
 This repository vendors the [obra/superpowers](https://github.com/obra/superpowers)
 agentic skills framework directly into [`.claude/skills/`](../.claude/skills),
@@ -141,3 +156,23 @@ happens to match. The hook is a cross-platform polyglot wrapper
 
 To update the vendored copies, re-pull the `skills/` directory from the
 upstream [obra/superpowers](https://github.com/obra/superpowers) repository.
+
+## Capture configuration
+
+Per-vault capture settings live app-side in `%APPDATA%\vault-buddy\config.json`
+(keyed by Obsidian vault ID — the key from `obsidian.json`). The file is
+optional; missing files, entries, or fields fall back to defaults. Nothing is
+ever written into your vaults except recordings and their notes.
+
+```json
+{
+  "vaults": {
+    "<vault-id>": {
+      "mode": "meeting",          // "meeting" (mic + desktop audio) | "voice-note" (mic only)
+      "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
+      "bitrateKbps": 128,          // 128 | 160 | 192
+      "createNote": true           // companion .md with metadata + embed
+    }
+  }
+}
+```

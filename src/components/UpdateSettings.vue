@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
 import { useUpdatesStore } from "../stores/updates";
 
 const updates = useUpdatesStore();
+
+// a failed download/install keeps `available` for retry — the install
+// button must stay visible alongside the error, not vanish behind it
+const showInstall = computed(
+  () =>
+    updates.phase === "available" ||
+    updates.phase === "installing" ||
+    (updates.phase === "error" && updates.available !== null),
+);
 
 onMounted(() => {
   void updates.loadVersion();
@@ -38,7 +47,7 @@ onMounted(() => {
         You're up to date.
       </p>
       <div
-        v-else-if="updates.phase === 'available' || updates.phase === 'installing'"
+        v-else-if="showInstall"
         class="mt-1.5 flex items-center justify-between gap-2"
       >
         <span class="text-xs text-slate-300">

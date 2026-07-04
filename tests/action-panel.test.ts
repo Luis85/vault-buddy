@@ -35,7 +35,7 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(4); // 2 vaults × (row + daily note)
+    expect(buttons).toHaveLength(6); // 2 vaults × (row + daily note + capture)
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
   });
@@ -124,7 +124,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     // vault action buttons only — the header's settings gear stays usable
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(6);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );
@@ -146,6 +146,18 @@ describe("ActionPanel", () => {
     await gear.trigger("click");
     expect(wrapper.text()).toContain("Vaults");
     expect(wrapper.text()).toContain("Personal");
+  });
+
+  it("mounts on the settings view when the store says so", () => {
+    // an install failure reopens the destroyed panel directly on settings,
+    // where the update error and retry button live
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.showSettings = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.text()).toContain("Buddy settings");
+    expect(wrapper.text()).not.toContain("Personal");
   });
 
   it("hides the filter and count badge while settings are open", async () => {

@@ -1,8 +1,10 @@
+import { markRaw } from "vue";
 import { defineStore } from "pinia";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { panelTransitionsSettled } from "../composables/useCompanionWindow";
 import { useVaultsStore } from "./vaults";
 
 export type UpdatePhase =
@@ -34,7 +36,9 @@ export const useUpdatesStore = defineStore("updates", {
       try {
         const update = await check();
         if (update) {
-          this.available = update;
+          // Update extends Resource, whose rid lives in a JS private field;
+          // a reactive proxy around it would make downloadAndInstall() throw
+          this.available = markRaw(update);
           this.phase = "available";
         } else {
           this.available = null;
@@ -50,21 +54,44 @@ export const useUpdatesStore = defineStore("updates", {
       this.phase = "installing";
       this.error = null;
       try {
+        // Download with the panel still open: the spinner and any
+        // download/signature error render inside it, so it must not vanish
+        // while the slow part runs.
+        await this.available.download();
+      } catch (e) {
+        // keep `available` so the user can retry the install
+        this.error = String(e);
+        this.phase = "error";
+        return;
+      }
+      const vaults = useVaultsStore();
+      try {
         // The install path exits the process without the normal close/quit
         // hooks, and the window-state plugin persists the position on exit.
         // Close the panel (its transition restores the window's unshifted
         // home position) and run the Rust-side restore as a deterministic
         // backstop, so installing with the panel open at a screen edge
         // can't persist the shifted point.
-        useVaultsStore().panelOpen = false;
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        vaults.panelOpen = false;
+        // Wait until the close transition has actually landed — geometry
+        // moved home AND the offset reset reported to Rust — so the
+        // prepare_update_install backstop can't race it and double-shift
+        // the position. The timeout keeps a wedged transition from
+        // blocking the install forever.
+        await Promise.race([
+          panelTransitionsSettled(),
+          new Promise((resolve) => setTimeout(resolve, 1000)),
+        ]);
         await invoke("prepare_update_install").catch(() => {});
-        await this.available.downloadAndInstall();
+        await this.available.install();
         // Tauri's signature check has already verified the payload; hand
         // over to the new version.
         await relaunch();
       } catch (e) {
+        // reopen the panel on the settings view so the error is visible;
         // keep `available` so the user can retry the install
+        vaults.showSettings = true;
+        vaults.panelOpen = true;
         this.error = String(e);
         this.phase = "error";
       }
