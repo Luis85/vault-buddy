@@ -22,7 +22,11 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
 /// open at a screen edge would persist the shifted point for next launch.
 #[tauri::command]
 pub fn prepare_update_install(app: tauri::AppHandle) {
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
     crate::tray::restore_home_position(&app);
+    // the installer exits without window destruction, which is what the
+    // window-state plugin saves on — persist explicitly, like the quit path
+    let _ = app.save_window_state(StateFlags::POSITION);
 }
 
 /// Applies position and size in one native call. The frontend used to issue
