@@ -2,7 +2,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-defineProps<{ working: boolean }>();
+const props = withDefaults(
+  defineProps<{ working: boolean; animated?: boolean }>(),
+  { animated: true },
+);
 const emit = defineEmits<{
   (e: "toggle"): void;
   (e: "drag-start"): void;
@@ -70,8 +73,9 @@ function onClick(e: MouseEvent) {
 
 function onContextMenu() {
   // Native OS popup — the collapsed window is far too small to host an
-  // HTML menu, and the OS menu matches the tray menu's look.
-  void invoke("show_buddy_menu").catch(() => {
+  // HTML menu, and the OS menu matches the tray menu's look. The current
+  // animation state drives the menu's checkmark.
+  void invoke("show_buddy_menu", { animated: props.animated }).catch(() => {
     // not running under Tauri (unit tests)
   });
 }
@@ -82,7 +86,7 @@ function onContextMenu() {
     <button
       type="button"
       class="buddy block cursor-grab focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-      :class="{ working }"
+      :class="{ working, still: !animated }"
       aria-label="Vault Buddy — click to open the panel, drag to move"
       title="Click to open · drag to move"
       @pointerdown="onPointerDown"
@@ -125,6 +129,12 @@ function onContextMenu() {
   animation: blink 4s infinite;
   transform-origin: center;
   transform-box: fill-box;
+}
+/* user turned the animation off (right-click menu) — overrides idle,
+   hover and working states alike */
+.buddy.still,
+.buddy.still .eye {
+  animation: none !important;
 }
 @keyframes bob {
   0%,

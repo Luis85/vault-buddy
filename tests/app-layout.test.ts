@@ -13,6 +13,16 @@ const state = vi.hoisted(() => ({
   focusHandler: null as
     | ((event: { payload: boolean }) => void)
     | null,
+  eventHandlers: {} as Record<string, () => void>,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, handler: () => void) => {
+    state.eventHandlers[name] = handler;
+    return Promise.resolve(() => {
+      delete state.eventHandlers[name];
+    });
+  },
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -55,11 +65,13 @@ const flush = () => new Promise((r) => setTimeout(r));
 
 describe("App layout geometry", () => {
   beforeEach(() => {
+    localStorage.clear(); // settings persistence must not leak across tests
     setActivePinia(createPinia());
     mockIPC((cmd) => {
       if (cmd === "list_vaults") return [];
     });
     state.pos = { x: 100, y: 100 };
+    state.eventHandlers = {};
   });
 
   afterEach(() => {
@@ -106,6 +118,20 @@ describe("App layout geometry", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await flush();
     expect(store.panelOpen).toBe(false);
+  });
+
+  it("toggles the buddy animation from the native menu event", async () => {
+    const wrapper = mount(App);
+    await flush(); // let onMounted register the event listener
+    expect(wrapper.find("button.buddy").classes()).not.toContain("still");
+
+    state.eventHandlers["buddy-toggle-animation"]?.();
+    await nextTick();
+    expect(wrapper.find("button.buddy").classes()).toContain("still");
+
+    state.eventHandlers["buddy-toggle-animation"]?.();
+    await nextTick();
+    expect(wrapper.find("button.buddy").classes()).not.toContain("still");
   });
 
   it("closes the panel when the transparent gutter is clicked", async () => {

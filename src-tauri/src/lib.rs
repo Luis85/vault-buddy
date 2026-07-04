@@ -1,7 +1,7 @@
 mod commands;
 mod tray;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub fn run() {
     tauri::Builder::default()
@@ -30,6 +30,11 @@ pub fn run() {
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "buddy-hide" => tray::hide_to_tray(app),
                 "buddy-quit" => tray::quit(app),
+                // the animation setting lives in the frontend (localStorage);
+                // hand the toggle back to it
+                "buddy-animation" => {
+                    let _ = app.emit("buddy-toggle-animation", ());
+                }
                 _ => {}
             });
             // Windows re-shuffles the topmost band when other topmost

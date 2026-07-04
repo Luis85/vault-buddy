@@ -2,12 +2,15 @@
 import { computed, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import CompanionCharacter from "./components/CompanionCharacter.vue";
 import ActionPanel from "./components/ActionPanel.vue";
 import { useCompanionWindow } from "./composables/useCompanionWindow";
 import { useVaultsStore } from "./stores/vaults";
+import { useSettingsStore } from "./stores/settings";
 
 const store = useVaultsStore();
+const settings = useSettingsStore();
 const { panelOpen, busyVaultId } = storeToRefs(store);
 const working = computed(() => busyVaultId.value !== null);
 
@@ -50,10 +53,19 @@ function onContextMenu(event: MouseEvent) {
 }
 
 let unlistenFocus: (() => void) | undefined;
+let unlistenAnimation: (() => void) | undefined;
 
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("contextmenu", onContextMenu);
+  try {
+    // The buddy's native right-click menu toggles this from the Rust side.
+    unlistenAnimation = await listen("buddy-toggle-animation", () => {
+      settings.toggleAnimations();
+    });
+  } catch {
+    // not running under Tauri (unit tests)
+  }
   try {
     // Clicking the desktop takes focus off the companion — close the panel
     // so the transparent window shrinks out of the way.
@@ -71,6 +83,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("contextmenu", onContextMenu);
   unlistenFocus?.();
+  unlistenAnimation?.();
 });
 </script>
 
@@ -101,6 +114,7 @@ onUnmounted(() => {
     >
       <CompanionCharacter
         :working="working"
+        :animated="settings.animationsEnabled"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
       />

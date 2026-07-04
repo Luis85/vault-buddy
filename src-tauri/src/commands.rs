@@ -38,17 +38,32 @@ pub fn set_window_geometry(
 
 /// Native context menu for the buddy. The collapsed window is far too small
 /// to host an HTML menu; the OS popup renders outside the window bounds and
-/// matches the tray menu. Item events are handled in `lib.rs`.
+/// matches the tray menu. Item events are handled in `lib.rs`. `animated`
+/// reflects the frontend's current setting and drives the checkmark.
 #[tauri::command]
-pub fn show_buddy_menu(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+pub fn show_buddy_menu(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    animated: bool,
+) -> Result<(), String> {
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
+    let animation = CheckMenuItem::with_id(
+        &app,
+        "buddy-animation",
+        "Animation",
+        true,
+        animated,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let separator = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
     let hide = MenuItem::with_id(&app, "buddy-hide", "Hide to tray", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let separator = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
     let quit = MenuItem::with_id(&app, "buddy-quit", "Quit Vault Buddy", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let menu = Menu::with_items(&app, &[&hide, &separator, &quit]).map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(&app, &[&animation, &separator, &hide, &quit])
+        .map_err(|e| e.to_string())?;
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 

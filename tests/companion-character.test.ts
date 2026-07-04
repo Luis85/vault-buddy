@@ -8,14 +8,14 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging }),
 }));
 
-const ipcCalls: string[] = [];
+const ipcCalls: Array<{ cmd: string; args: unknown }> = [];
 
 describe("CompanionCharacter", () => {
   beforeEach(() => {
     startDragging.mockClear();
     ipcCalls.length = 0;
-    mockIPC((cmd) => {
-      ipcCalls.push(cmd);
+    mockIPC((cmd, args) => {
+      ipcCalls.push({ cmd, args });
     });
   });
 
@@ -109,13 +109,23 @@ describe("CompanionCharacter", () => {
     expect(el.releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
-  it("opens the native context menu on right-click", async () => {
+  it("opens the native context menu on right-click with the animation state", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     await wrapper.find("button.buddy").trigger("contextmenu");
-    expect(ipcCalls).toContain("show_buddy_menu");
+    expect(ipcCalls).toEqual([
+      { cmd: "show_buddy_menu", args: { animated: true } },
+    ]);
     // the browser context menu must not appear alongside the native one —
     // the handler prevents the default
     expect(wrapper.emitted("toggle")).toBeUndefined();
+  });
+
+  it("stops all animation when animated is off", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: true, animated: false },
+    });
+    // .still overrides idle, hover and working animations via CSS
+    expect(wrapper.find("button.buddy").classes()).toContain("still");
   });
 
   it("toggles again on the click after a completed drag", async () => {
