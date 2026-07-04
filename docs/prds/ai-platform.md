@@ -377,13 +377,14 @@ Every workflow is equally executable by:
 - Service layer
 - Knowledge services
 - Task services
+- Baseline permissions and audit log
 - Embedded MCP server
 
 ### Phase 2
 
 - Workflow engine
 - Internal event bus
-- Permissions
+- Fine-grained permission scopes
 - Plugin API
 
 ### Phase 3
