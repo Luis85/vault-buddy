@@ -85,6 +85,11 @@ undone before any position is persisted. Invariants:
   checkpoints the parked position to the window-state file whenever it
   changed — but only while the offset is zero. Exit-time saves alone proved
   lossy (the updater kills the process via `std::process::exit`).
+- The same loop heartbeat-refreshes a run marker (`app_diagnostics` in the
+  core crate) that detects unclean shutdowns the panic hook structurally
+  cannot see (native faults, kills, power loss) — every graceful exit path
+  (tray/buddy quit, Alt+F4 close, update install) must stamp
+  `diagnostics::mark_clean_shutdown()`.
 
 ### Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
 

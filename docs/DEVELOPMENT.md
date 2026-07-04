@@ -157,6 +157,30 @@ happens to match. The hook is a cross-platform polyglot wrapper
 To update the vendored copies, re-pull the `skills/` directory from the
 upstream [obra/superpowers](https://github.com/obra/superpowers) repository.
 
+## Logs & crash reporting
+
+Log folder: `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` (tray → Open logs
+folder, or Settings).
+
+- `vault-buddy.log` — the rotating app log (5 MB, one rotated file kept).
+  Frontend diagnostics funnel into it too (`src/logging.ts`).
+- `crash.log` — Rust panic records (thread, location, backtrace) written
+  synchronously by the panic hook. A panic in the first instants of startup
+  lands in `%TEMP%\vault-buddy-crash.log` and is folded into `crash.log` on
+  the next launch.
+- `.vault-buddy.run` — the run marker. If a session ends without passing
+  through a graceful exit path, the next launch logs a warning and shows a
+  notification that the previous session ended uncleanly.
+- `Vault Buddy.log` (if you still have one) — the pre-v0.2.2 default-named
+  log; the app no longer writes it, safe to delete manually.
+
+Honest limitation: a native fault (WebView2 renderer, GPU driver, audio
+driver inside the capture stack) terminates the process without a Rust
+panic, so it never produces a `crash.log` entry — the unclean-shutdown
+warning is the signal for those. For a native crash dump, enable Windows
+Error Reporting LocalDumps for `vault-buddy.exe` (see
+[Collecting user-mode dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps)).
+
 ## Capture configuration
 
 Per-vault capture settings live app-side in `%APPDATA%\vault-buddy\config.json`
