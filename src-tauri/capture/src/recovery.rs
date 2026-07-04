@@ -146,23 +146,43 @@ pub fn rename_into_reserved(
     }
 }
 
-fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // entry.file_type() reads the dirent and does NOT follow symlinks:
-        // a symlinked directory (or Windows junction) inside a recording
-        // root must never let the scan escape the vault or enter a cycle,
-        // and symlinked files are skipped for the same reason.
-        let Ok(file_type) = entry.file_type() else {
+fn is_digit_dir(name: &str, len: usize) -> bool {
+    name.len() == len && name.chars().all(|c| c.is_ascii_digit())
+}
+
+fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            // entry.file_type() reads the dirent and does NOT follow
+            // symlinks: a symlinked directory (or Windows junction) must
+            // never let the scan escape the vault or enter a cycle.
+            if let Ok(ft) = entry.file_type() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                out.push((entry.path(), ft, name));
+            }
+        }
+    }
+    out
+}
+
+/// Vault Buddy writes only under `<root>/YYYY/MM` — recovery looks
+/// nowhere else, so a capture-named file a user moved into an arbitrary
+/// subfolder (or the root itself) is never touched.
+fn walk(root: &Path, visit: &mut dyn FnMut(&Path)) {
+    for (year_path, year_ft, year_name) in dir_entries(root) {
+        if !year_ft.is_dir() || !is_digit_dir(&year_name, 4) {
             continue;
-        };
-        if file_type.is_dir() {
-            walk(&path, visit);
-        } else if file_type.is_file() {
-            visit(&path);
+        }
+        for (month_path, month_ft, month_name) in dir_entries(&year_path) {
+            if !month_ft.is_dir() || !is_digit_dir(&month_name, 2) {
+                continue;
+            }
+            for (file_path, file_ft, _) in dir_entries(&month_path) {
+                if file_ft.is_file() {
+                    visit(&file_path);
+                }
+            }
         }
     }
 }
@@ -186,6 +206,14 @@ mod tests {
         let _ = path;
     }
 
+    /// Vault Buddy only ever writes under `<root>/YYYY/MM` — recovery
+    /// walks nowhere else, so tests must place capture-named files there.
+    fn month_dir(root: &std::path::Path) -> std::path::PathBuf {
+        let d = root.join("2026").join("07");
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     #[test]
     fn sync_word_detection() {
         assert!(has_mp3_frame(&mp3_bytes()));
@@ -196,7 +224,8 @@ mod tests {
     #[test]
     fn recovers_stale_part_with_audio() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(".2026-07-04 1405 Meeting.mp3.part");
+        let month = month_dir(dir.path());
+        let part = month.join(".2026-07-04 1405 Meeting.mp3.part");
         std::fs::write(&part, mp3_bytes()).unwrap();
         make_stale(&part);
         let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
@@ -209,7 +238,7 @@ mod tests {
                 );
                 assert!(mp3.exists());
                 assert!(!part.exists());
-                let note = dir.path().join("2026-07-04 1405 Meeting (recovered).md");
+                let note = month.join("2026-07-04 1405 Meeting (recovered).md");
                 assert!(note.exists(), "recovery note written");
                 let text = std::fs::read_to_string(note).unwrap();
                 assert!(text.contains(r#"event: "recovered after crash""#));
@@ -225,28 +254,31 @@ mod tests {
     #[test]
     fn respects_note_toggle() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(format!(".{BASE}.mp3.part"));
+        let month = month_dir(dir.path());
+        let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
         recover_root(dir.path(), "Work", Duration::ZERO, false);
-        assert!(!dir.path().join(format!("{BASE} (recovered).md")).exists());
-        assert!(dir.path().join(format!("{BASE} (recovered).mp3")).exists());
+        assert!(!month.join(format!("{BASE} (recovered).md")).exists());
+        assert!(month.join(format!("{BASE} (recovered).mp3")).exists());
     }
 
     #[test]
     fn deletes_zero_frame_part() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(format!(".{BASE}.mp3.part"));
+        let month = month_dir(dir.path());
+        let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, [0u8; 64]).unwrap();
         let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
         assert!(matches!(actions[0], RecoveryAction::DeletedEmpty(_)));
         assert!(!part.exists());
-        assert!(!dir.path().join(format!("{BASE} (recovered).mp3")).exists());
+        assert!(!month.join(format!("{BASE} (recovered).mp3")).exists());
     }
 
     #[test]
     fn reports_fresh_part_without_touching_it() {
         let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(format!(".{BASE}.mp3.part"));
+        let month = month_dir(dir.path());
+        let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
         let actions = recover_root(dir.path(), "Work", Duration::from_secs(3600), true);
         assert!(matches!(actions[0], RecoveryAction::Fresh(_)));
@@ -283,7 +315,8 @@ mod tests {
         // Another tool's hidden partial download must survive recovery
         // untouched — even a zero-frame one must NOT be deleted.
         let dir = tempfile::tempdir().unwrap();
-        let foreign = dir.path().join(".download.mp3.part");
+        let month = month_dir(dir.path());
+        let foreign = month.join(".download.mp3.part");
         std::fs::write(&foreign, [0u8; 64]).unwrap();
         let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
         assert!(
@@ -296,13 +329,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_directories_are_not_followed() {
-        // A symlink inside a recording root must not let recovery walk
-        // outside the vault and rename/delete files there.
+        // A symlink standing in for a dated year folder must not let
+        // recovery walk outside the vault and rename/delete files there.
         let outside = tempfile::tempdir().unwrap();
-        let part = outside.path().join(format!(".{BASE}.mp3.part"));
+        let outside_month = outside.path().join("07");
+        std::fs::create_dir_all(&outside_month).unwrap();
+        let part = outside_month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
         let root = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("2026")).unwrap();
         let actions = recover_root(root.path(), "Work", Duration::ZERO, true);
         assert!(actions.is_empty(), "walked through symlink: {actions:?}");
         assert!(part.exists(), "outside file untouched");
@@ -311,12 +346,46 @@ mod tests {
     #[test]
     fn deletes_only_vault_buddy_note_temps() {
         let dir = tempfile::tempdir().unwrap();
-        let ours = dir.path().join(".b.md.vault-buddy.tmp");
-        let foreign = dir.path().join(".draft.md.tmp");
+        let month = month_dir(dir.path());
+        let ours = month.join(".b.md.vault-buddy.tmp");
+        let foreign = month.join(".draft.md.tmp");
         std::fs::write(&ours, "half a note").unwrap();
         std::fs::write(&foreign, "another tool's temp").unwrap();
         recover_root(dir.path(), "Work", Duration::ZERO, true);
         assert!(!ours.exists(), "our stale temp is cleaned");
         assert!(foreign.exists(), "foreign temp files are never touched");
+    }
+
+    #[test]
+    fn root_level_parts_are_ignored() {
+        // A capture-named .part left directly at the vault root (not under
+        // <root>/YYYY/MM) is outside the layout recovery is allowed to
+        // touch.
+        let dir = tempfile::tempdir().unwrap();
+        let part = dir.path().join(format!(".{BASE}.mp3.part"));
+        std::fs::write(&part, mp3_bytes()).unwrap();
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        assert!(
+            actions.is_empty(),
+            "root-level part produced actions: {actions:?}"
+        );
+        assert!(part.exists());
+    }
+
+    #[test]
+    fn non_dated_subfolders_are_ignored() {
+        // A capture-named .part a user moved into an arbitrary subfolder
+        // must survive — recovery only looks under <root>/YYYY/MM.
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("Project");
+        std::fs::create_dir_all(&sub).unwrap();
+        let part = sub.join(format!(".{BASE}.mp3.part"));
+        std::fs::write(&part, mp3_bytes()).unwrap();
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        assert!(
+            actions.is_empty(),
+            "non-dated subfolder produced actions: {actions:?}"
+        );
+        assert!(part.exists());
     }
 }

@@ -84,6 +84,23 @@ pub fn safe_recording_root(vault_path: &Path, folder: &str) -> Result<PathBuf, S
     Ok(vault_path.join(rel))
 }
 
+/// Runtime companion to `safe_recording_root`: canonicalize both paths
+/// (the root must already exist) and require the root to resolve under
+/// the vault — a pre-existing symlink or Windows junction at the
+/// recording folder would otherwise carry writes outside the vault
+/// despite the lexical check.
+pub fn assert_root_inside_vault(vault_path: &Path, root: &Path) -> Result<(), String> {
+    let vault =
+        std::fs::canonicalize(vault_path).map_err(|e| format!("Cannot resolve vault path: {e}"))?;
+    let resolved =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve recording folder: {e}"))?;
+    if resolved.starts_with(&vault) {
+        Ok(())
+    } else {
+        Err("Configured recording folder resolves outside the vault".to_string())
+    }
+}
+
 /// Stop-time recheck: only the final destinations matter — the session's
 /// own .part must not push an ordinary save onto a suffixed name.
 pub fn reserve_final(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
@@ -195,5 +212,23 @@ mod tests {
         assert!(safe_recording_root(vault, "a/../../outside").is_err());
         assert!(safe_recording_root(vault, "/etc").is_err());
         assert!(safe_recording_root(vault, "C:\\other").is_err());
+    }
+
+    #[test]
+    fn root_inside_vault_passes_canonical_check() {
+        let vault = tempfile::tempdir().unwrap();
+        let root = vault.path().join("Meetings");
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(assert_root_inside_vault(vault.path(), &root).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_root_outside_vault_is_rejected() {
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = vault.path().join("Meetings");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        assert!(assert_root_inside_vault(vault.path(), &link).is_err());
     }
 }
