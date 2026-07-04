@@ -109,11 +109,11 @@ describe("CompanionCharacter", () => {
     expect(el.releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
-  it("opens the native context menu on right-click with the animation state", async () => {
+  it("opens the native context menu on right-click with the current settings", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     await wrapper.find("button.buddy").trigger("contextmenu");
     expect(ipcCalls).toEqual([
-      { cmd: "show_buddy_menu", args: { animated: true } },
+      { cmd: "show_buddy_menu", args: { animated: true, dragging: true } },
     ]);
     // the browser context menu must not appear alongside the native one —
     // the handler prevents the default

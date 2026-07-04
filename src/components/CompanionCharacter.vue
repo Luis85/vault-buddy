@@ -83,8 +83,11 @@ function onClick(e: MouseEvent) {
 function onContextMenu() {
   // Native OS popup — the collapsed window is far too small to host an
   // HTML menu, and the OS menu matches the tray menu's look. The current
-  // animation state drives the menu's checkmark.
-  void invoke("show_buddy_menu", { animated: props.animated }).catch(() => {
+  // animation/dragging states drive the menu's checkmarks.
+  void invoke("show_buddy_menu", {
+    animated: props.animated,
+    dragging: props.draggable,
+  }).catch(() => {
     // not running under Tauri (unit tests)
   });
 }
