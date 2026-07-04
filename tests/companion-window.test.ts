@@ -56,6 +56,7 @@ import {
   useCompanionWindow,
   COLLAPSED,
   EXPANDED,
+  BUBBLE,
 } from "../src/composables/useCompanionWindow";
 
 const flush = () => new Promise((r) => setTimeout(r));
@@ -178,5 +179,35 @@ describe("useCompanionWindow", () => {
     expect(state.pos).toEqual({ x: 1780, y: 100 });
     expect(lastResize()).toBe(String(COLLAPSED.width));
     expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
+  });
+
+  it("grows to the bubble size when the greeting bubble opens", async () => {
+    const panel = ref(false);
+    const bubble = ref(false);
+    useCompanionWindow(panel, bubble);
+
+    bubble.value = true;
+    await nextTick();
+    await flush();
+    expect(lastResize()).toBe(String(BUBBLE.width));
+
+    bubble.value = false;
+    await nextTick();
+    await flush();
+    expect(lastResize()).toBe(String(COLLAPSED.width));
+  });
+
+  it("lets the panel win when both the panel and the bubble are open", async () => {
+    const panel = ref(false);
+    const bubble = ref(false);
+    useCompanionWindow(panel, bubble);
+
+    bubble.value = true;
+    panel.value = true;
+    await nextTick();
+    await flush();
+    await flush();
+    // panel precedence: the window opens to the full panel size, not BUBBLE
+    expect(lastResize()).toBe(String(EXPANDED.width));
   });
 });
