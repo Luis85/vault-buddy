@@ -1,5 +1,14 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import {
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { config, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { nextTick } from "vue";
@@ -65,6 +74,20 @@ import { COLLAPSED, BUBBLE } from "../src/composables/useCompanionWindow";
 const flush = () => new Promise((r) => setTimeout(r));
 
 describe("App layout geometry", () => {
+  const originalStubs = config.global.stubs;
+
+  beforeAll(() => {
+    // The bubble is wrapped in a real <Transition> in App.vue (fade in/out).
+    // Stubbing it makes v-if add/remove synchronous so the "hides"/"stays
+    // dismissed" absence assertions below don't have to wait out a real
+    // ~150ms leave animation under fake/real timers.
+    config.global.stubs = { ...originalStubs, transition: true };
+  });
+
+  afterAll(() => {
+    config.global.stubs = originalStubs;
+  });
+
   beforeEach(() => {
     localStorage.clear(); // settings persistence must not leak across tests
     setActivePinia(createPinia());

@@ -151,12 +151,14 @@ onUnmounted(() => {
         @drag-start="onDragStart"
       />
     </div>
-    <div
-      v-if="bubbleVisible && !panelOpen"
-      class="flex min-w-0 flex-1 items-center self-stretch p-2"
-    >
-      <SpeechBubble :text="bubbleText" :side="side" :valign="valign" />
-    </div>
+    <Transition name="bubble-fade">
+      <div
+        v-if="bubbleVisible && !panelOpen"
+        class="flex min-w-0 flex-1 items-center self-stretch p-2"
+      >
+        <SpeechBubble :text="bubbleText" :side="side" :valign="valign" />
+      </div>
+    </Transition>
     <div
       v-if="panelOpen"
       class="min-w-0 flex-1 self-stretch p-2"
@@ -166,3 +168,16 @@ onUnmounted(() => {
     </div>
   </main>
 </template>
+
+<style scoped>
+/* The greeting fades in on launch and out on dismiss (design spec). Short
+   enough that the buddy still feels responsive. */
+.bubble-fade-enter-active,
+.bubble-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+.bubble-fade-enter-from,
+.bubble-fade-leave-to {
+  opacity: 0;
+}
+</style>

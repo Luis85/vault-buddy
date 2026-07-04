@@ -181,6 +181,34 @@ describe("useCompanionWindow", () => {
     expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
   });
 
+  it("restores the original position after a bubble open→close at a screen edge", async () => {
+    // buddy hugging the right edge of a 1920x1080 monitor: opening the
+    // bubble shifts the window left so it unfolds on-screen; closing must
+    // put it back and report a zero offset
+    state.monitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+    };
+    state.pos = { x: 1780, y: 100 };
+
+    const panel = ref(false);
+    const bubble = ref(false);
+    useCompanionWindow(panel, bubble);
+
+    bubble.value = true;
+    await nextTick();
+    await flush();
+    const shift = BUBBLE.width - COLLAPSED.width;
+    expect(state.pos).toEqual({ x: 1780 - shift, y: 100 });
+    expect(state.calls).toContain(`reportOffset:${shift},0`);
+
+    bubble.value = false;
+    await nextTick();
+    await flush();
+    expect(state.pos).toEqual({ x: 1780, y: 100 });
+    expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
+  });
+
   it("grows to the bubble size when the greeting bubble opens", async () => {
     const panel = ref(false);
     const bubble = ref(false);
