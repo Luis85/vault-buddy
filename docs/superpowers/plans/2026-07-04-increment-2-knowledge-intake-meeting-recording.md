@@ -2089,6 +2089,22 @@ fn run_worker(
 
 Add `pub mod session;` to `src-tauri/capture/src/lib.rs`.
 
+**Write-error amendment (review finding):** the spec requires "disk full /
+write error mid-recording → stop streams, attempt to finalize what is
+flushed, surface the error." A bare `?` on the encode/write/flush calls
+inside the loop would instead exit the worker and strand the playable
+`.part` until a future restart's recovery. Amend the worker: capture loop
+I/O errors into `let mut write_error: Option<String>`, `break` out of the
+loop instead of returning, and run the normal finalize path best-effort
+(skip the encoder tail if `finish()` also fails; still fsync + rename what
+is on disk). On successful finalize return `Ok(Outcome)` with
+`ended_early: true` and `warning: Some(format!("recording ended early: {e}"))`;
+return `Err` only if the finalize rename itself fails. Add a test:
+sabotage writes by opening the part read-only? — not portable; instead
+test via a session whose `dir` is deleted mid-recording on Unix
+(`#[cfg(unix)]`), asserting stop() still returns Ok with `ended_early`
+or a clean Err — best-effort coverage, the code path is the contract.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run from `src-tauri/`: `cargo test -p vault_buddy_capture session`
@@ -2552,6 +2568,17 @@ pub fn start_capture(
             return Err(msg);
         }
     }
+
+    // Timeout-reservation amendment (review finding): the janitor branch
+    // above must RESERVE CaptureState before returning — otherwise a
+    // second start_capture can pass the is-recording guard while the late
+    // first worker still creates its .part and records, overlapping two
+    // captures. In the timeout branch: install ActiveCapture (with a
+    // cloned stop_tx) before returning, send StopReason::User immediately
+    // so a late worker stops as soon as it reaches its loop, and have the
+    // janitor clear the state (and reset the tray) after draining ready/
+    // done. If the worker is truly hung, the state stays reserved —
+    // conservative: no new capture can start until the app restarts.
 
     let payload = StatusPayload {
         recording: true,
