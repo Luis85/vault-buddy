@@ -51,6 +51,10 @@ pub struct SessionParams {
     /// other tick (~5 Hz). Lossy by design — a gone receiver must never
     /// slow or fail the encode path.
     pub level_tx: Option<Sender<f32>>,
+    /// Warning that predates the session (e.g. a configured device missing
+    /// at start): seeds the worker's warning so it reaches the note's
+    /// event metadata and the final Outcome exactly like a live warning.
+    pub start_warning: Option<String>,
 }
 
 pub struct Outcome {
@@ -144,7 +148,7 @@ fn run_worker(
     let mut last_flush = Instant::now();
     let mut last_fsync = Instant::now();
     let mut frames_written: u64 = 0;
-    let mut warning: Option<String> = None;
+    let mut warning: Option<String> = params.start_warning.clone();
     let mut ended_early = false;
     // Set when an encode/write/flush call fails mid-recording. Rather than
     // returning immediately (which would abandon the .part file), we break
@@ -448,6 +452,7 @@ mod tests {
             fsync_every: Duration::from_secs(30),
             warn_tx: None,
             level_tx: None,
+            start_warning: None,
         }
     }
 
@@ -710,5 +715,38 @@ mod tests {
             std::fs::read_to_string(dir.path().join(".b.mp3.part")).unwrap(),
             "orphan"
         );
+    }
+
+    #[test]
+    fn start_warning_reaches_outcome_and_note_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.start_warning = Some("Configured microphone \"X\" not found".into());
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        assert!(
+            outcome
+                .warning
+                .as_deref()
+                .unwrap_or("")
+                .contains("not found"),
+            "warning surfaced: {:?}",
+            outcome.warning
+        );
+        assert!(!outcome.ended_early, "a fallback is not an early end");
+        let note = std::fs::read_to_string(outcome.note.expect("note")).unwrap();
+        assert!(note.contains("event:"), "note metadata event: {note}");
     }
 }

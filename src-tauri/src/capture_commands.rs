@@ -165,13 +165,23 @@ pub fn start_capture(
     });
 
     std::thread::spawn(move || {
-        let open = match vault_buddy_capture::devices::open_sources(uses_loopback) {
+        let open = match vault_buddy_capture::devices::open_sources(
+            uses_loopback,
+            cfg.input_device.as_deref(),
+            cfg.output_device.as_deref(),
+        ) {
             Ok(o) => o,
             Err(e) => {
                 let _ = ready_tx.send(Err(e));
                 return;
             }
         };
+        // Stale-device fallbacks: surface live (capture:warning via the
+        // forwarder) AND seed the session so the note metadata records it.
+        for w in &open.warnings {
+            let _ = warn_tx.send(w.clone());
+        }
+        let start_warning = (!open.warnings.is_empty()).then(|| open.warnings.join("; "));
         let now = chrono::Local::now();
         use chrono::Timelike;
         let date = now.date_naive();
@@ -201,6 +211,7 @@ pub fn start_capture(
             fsync_every: Duration::from_secs(30),
             warn_tx: Some(warn_tx),
             level_tx: None,
+            start_warning,
         };
         let session = match CaptureSession::start(params, open.inputs) {
             Ok(s) => s,
