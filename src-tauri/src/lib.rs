@@ -20,7 +20,26 @@ pub fn run() {
         }))
         // Recording saved/failed toasts.
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        // Persist to a rotating file in the app log dir — the bare `.build()`
+        // logged only to stdout, which is invisible in a release GUI build,
+        // so crashes left no trail. `LogDir` writes `vault-buddy.log`; the
+        // default stdout target is kept for `tauri dev`. 5 MB + KeepOne bounds
+        // disk while keeping the one rotated-out file that usually holds the
+        // crash preceding a restart. Local timestamps so lines match the
+        // user's clock.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("vault-buddy".into()),
+                    },
+                ))
+                .level(log::LevelFilter::Info)
+                .max_file_size(5 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
         // Remember where the user parked the buddy across restarts. Only the
         // position: the window size is managed dynamically by the panel
         // open/close logic and must never be restored from disk.
