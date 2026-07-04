@@ -5,6 +5,7 @@
 //! regenerable sidecars from a finished transcript or a user's edits.
 
 use crate::capture_note::{format_duration, write_note_atomic, yaml_quote, NOTE_TMP_SUFFIX};
+use crate::capture_paths::is_capture_base;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -192,6 +193,57 @@ pub fn replace_if_ours(transcript_path: &Path, content: &str) -> std::io::Result
     result.map(|()| ReplaceOutcome::Written)
 }
 
+/// Capture MP3s under `<root>/YYYY/MM` that still need a transcript (missing
+/// or one of our regenerable sidecars). Same layout discipline as recovery:
+/// only `YYYY/MM`, only capture-named files, never follows symlinks.
+pub fn pending_transcriptions(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for (year, yft, yname) in dir_entries(root) {
+        if !yft.is_dir() || !is_digit_dir(&yname, 4) {
+            continue;
+        }
+        for (month, mft, mname) in dir_entries(&year) {
+            if !mft.is_dir() || !is_digit_dir(&mname, 2) {
+                continue;
+            }
+            for (path, fft, name) in dir_entries(&month) {
+                if !fft.is_file() {
+                    continue;
+                }
+                let Some(base) = name.strip_suffix(".mp3") else {
+                    continue;
+                };
+                if !is_capture_base(base) {
+                    continue;
+                }
+                if needs_transcription(&path) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn is_digit_dir(name: &str, len: usize) -> bool {
+    name.len() == len && name.chars().all(|c| c.is_ascii_digit())
+}
+
+fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            // file_type() reads the dirent WITHOUT following symlinks — a
+            // symlinked dir/junction must never let the scan escape the vault.
+            if let Ok(ft) = entry.file_type() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                out.push((entry.path(), ft, name));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +424,51 @@ mod tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(temps.is_empty(), "temp not cleaned: {temps:?}");
+    }
+
+    fn month_dir(root: &Path) -> std::path::PathBuf {
+        let d = root.join("2026").join("07");
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn scan_finds_capture_mp3_without_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        let mp3 = month.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&mp3, b"audio").unwrap();
+        let pending = pending_transcriptions(dir.path());
+        assert_eq!(pending, vec![mp3]);
+    }
+
+    #[test]
+    fn scan_skips_completed_and_ignores_foreign_and_placeholders_are_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        // completed → skipped
+        let done = month.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&done, b"audio").unwrap();
+        std::fs::write(transcript_path(&done), render_transcript(&meta(), &[])).unwrap();
+        // placeholder → still pending
+        let pend = month.join("2026-07-04 1406 Meeting.mp3");
+        std::fs::write(&pend, b"audio").unwrap();
+        write_placeholder(&pend).unwrap();
+        // foreign (not a capture base) → ignored
+        std::fs::write(month.join("random.mp3"), b"audio").unwrap();
+
+        let pending = pending_transcriptions(dir.path());
+        assert_eq!(pending, vec![pend]);
+    }
+
+    #[test]
+    fn scan_ignores_non_dated_and_root_level_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // capture-named mp3 directly at the root (not under YYYY/MM)
+        std::fs::write(dir.path().join("2026-07-04 1405 Meeting.mp3"), b"a").unwrap();
+        let sub = dir.path().join("Project");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("2026-07-04 1405 Meeting.mp3"), b"a").unwrap();
+        assert!(pending_transcriptions(dir.path()).is_empty());
     }
 }
