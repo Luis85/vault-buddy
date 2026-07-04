@@ -99,6 +99,7 @@ pub fn run() {
             commands::set_panel_offset,
             commands::set_window_geometry,
             commands::show_buddy_menu,
+            commands::open_logs_folder,
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status

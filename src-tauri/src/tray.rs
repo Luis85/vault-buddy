@@ -108,6 +108,7 @@ fn buddy_icon(recording: bool) -> tauri::image::Image<'static> {
 
 fn tray_menu(app: &AppHandle, recording: bool) -> tauri::Result<Menu<tauri::Wry>> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / Hide", !recording, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "open-logs", "Open logs folder", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Vault Buddy", true, None::<&str>)?;
     if recording {
         let stop = MenuItem::with_id(
@@ -117,9 +118,9 @@ fn tray_menu(app: &AppHandle, recording: bool) -> tauri::Result<Menu<tauri::Wry>
             true,
             None::<&str>,
         )?;
-        Menu::with_items(app, &[&stop, &toggle, &quit_item])
+        Menu::with_items(app, &[&stop, &toggle, &logs, &quit_item])
     } else {
-        Menu::with_items(app, &[&toggle, &quit_item])
+        Menu::with_items(app, &[&toggle, &logs, &quit_item])
     }
 }
 
@@ -167,6 +168,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     crate::capture_commands::stop_from_menu(&app);
                 });
             }
+            "open-logs" => crate::diagnostics::open_log_dir(app),
             "quit" => quit(app),
             _ => {}
         })

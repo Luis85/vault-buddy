@@ -168,3 +168,10 @@ pub fn open_daily_note(id: String) -> Result<(), String> {
     let target = daily_note_uri(&vault.id, Path::new(&vault.path), today);
     uri::launch(&target)
 }
+
+/// Reveal the app log folder (holding `vault-buddy.log` and `crash.log`) in
+/// the OS file manager, so a user can attach logs after a crash.
+#[tauri::command]
+pub fn open_logs_folder(app: tauri::AppHandle) {
+    crate::diagnostics::open_log_dir(&app);
+}
