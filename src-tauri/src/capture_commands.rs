@@ -207,23 +207,44 @@ pub fn start_capture(
         Err(_) => {
             // Startup hung (e.g. a wedged audio driver). The worker may
             // still create the .part and start the session AFTER this
-            // return — never leave that recording detached: a janitor
-            // thread waits for the worker's one ready signal and, if a
-            // session did start, stops it and surfaces the outcome so no
-            // audio is silently stranded.
+            // return — never leave that recording detached, and never let
+            // a second start_capture race it. So, before returning:
+            //   1. Reserve CaptureState now, under the guard already held
+            //      from the top of this call. capture_status will
+            //      conservatively report "recording" and a concurrent
+            //      start_capture is rejected by the is-recording guard —
+            //      exactly as if the late worker had already succeeded.
+            //   2. Send an immediate stop so a late worker halts as soon
+            //      as it reaches its poll loop instead of recording on
+            //      indefinitely.
+            //   3. Release the guard before spawning the janitor thread
+            //      below, which drains the worker's real outcome and only
+            //      then clears the reservation (and resets the tray) — so
+            //      if the worker is truly wedged, the state stays reserved
+            //      until its recv() finally returns or the app restarts.
             let msg = "Recording did not start in time.".to_string();
+            *guard = Some(ActiveCapture {
+                stop_tx: stop_tx.clone(),
+                vault_id: id.clone(),
+                started_at_ms: now_ms(),
+            });
+            drop(guard);
+            let _ = stop_tx.send(StopReason::User);
             let app4 = app2.clone();
             std::thread::spawn(move || {
                 if let Ok(Ok(())) = ready_rx.recv() {
                     log::warn!("capture: late start after timeout — stopping and draining");
-                    let _ = stop_tx.send(StopReason::User);
                     match done_rx.recv() {
                         Ok(Ok(outcome)) => emit_saved(&app4, &outcome),
                         Ok(Err(e)) => log::warn!("capture: late-start cleanup failed: {e}"),
                         Err(_) => log::warn!("capture: late-start cleanup: worker vanished"),
                     }
                 }
-                // worker replied Err (or vanished): nothing was created.
+                // worker replied Err (or vanished): nothing was created,
+                // but the reservation installed above still needs clearing
+                // either way, or a real recording could never start again.
+                *app4.state::<CaptureState>().0.lock().unwrap() = None;
+                crate::tray::set_recording(&app4, false);
             });
             let _ = app2.emit(
                 "capture:failed",

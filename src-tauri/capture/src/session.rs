@@ -124,6 +124,12 @@ fn run_worker(
     let mut frames_written: u64 = 0;
     let mut warning: Option<String> = None;
     let mut ended_early = false;
+    // Set when an encode/write/flush call fails mid-recording. Rather than
+    // returning immediately (which would abandon the .part file), we break
+    // out of the loop and fall through to the normal finalize path so
+    // whatever audio already made it into the encoder is saved best-effort
+    // and surfaced to the caller instead of stranded as a hidden .part.
+    let mut write_error: Option<String> = None;
 
     loop {
         let stopped = matches!(
@@ -203,12 +209,27 @@ fn run_worker(
             let b = mono_slices.get(1).map(|v| v.as_slice()).unwrap_or(&silent);
             let stereo = mixer::mix_to_stereo_i16(a, b);
             frames_written += (stereo.len() / 2) as u64;
-            let bytes = encoder.encode(&stereo)?;
-            file.write_all(&bytes).map_err(|e| e.to_string())?;
+            let bytes = match encoder.encode(&stereo) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::error!("capture: encode failed mid-recording: {e}");
+                    write_error = Some(e);
+                    break;
+                }
+            };
+            if let Err(e) = file.write_all(&bytes) {
+                log::error!("capture: write failed mid-recording: {e}");
+                write_error = Some(e.to_string());
+                break;
+            }
         }
 
         if last_flush.elapsed() >= params.flush_every {
-            file.flush().map_err(|e| e.to_string())?;
+            if let Err(e) = file.flush() {
+                log::error!("capture: flush failed mid-recording: {e}");
+                write_error = Some(e.to_string());
+                break;
+            }
             last_flush = Instant::now();
         }
         if last_fsync.elapsed() >= params.fsync_every {
@@ -222,9 +243,30 @@ fn run_worker(
     }
 
     // Finalize: flush encoder, fsync, stop-time reservation + rename retry.
-    let tail = encoder.finish()?;
-    file.write_all(&tail).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
+    // On a prior write_error every step here is best-effort (attempt, log
+    // on failure, keep going) — the goal is to save whatever audio already
+    // reached the encoder rather than guarantee a perfect tail frame. Only
+    // the rename below is still allowed to fail the whole call: if the
+    // reserved name can't be claimed there is nothing left to surface.
+    if let Some(err) = &write_error {
+        match encoder.finish() {
+            Ok(tail) => {
+                if let Err(e) = file.write_all(&tail) {
+                    log::error!("capture: best-effort tail write failed after {err}: {e}");
+                }
+            }
+            Err(e) => {
+                log::error!("capture: best-effort encoder finish failed after {err}: {e}");
+            }
+        }
+        if let Err(e) = file.sync_all() {
+            log::error!("capture: best-effort fsync failed after {err}: {e}");
+        }
+    } else {
+        let tail = encoder.finish()?;
+        file.write_all(&tail).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
     drop(file);
 
     let duration_secs = frames_written / TARGET_RATE as u64;
@@ -240,6 +282,14 @@ fn run_worker(
         let _ = dir_handle.sync_all();
     }
     log::info!("capture: saved {}", mp3.display());
+
+    if let Some(err) = write_error {
+        ended_early = true;
+        warning = Some(match warning {
+            Some(prior) => format!("{prior}; recording ended early: {err}"),
+            None => format!("recording ended early: {err}"),
+        });
+    }
 
     let note = if params.create_note {
         let meta = NoteMeta {
