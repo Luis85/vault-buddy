@@ -34,12 +34,18 @@ naming, crash recovery, and full audit logging.
    128 kbps MP3 (LAME) into a hidden `.part` file inside the target folder,
    flushed ~every second, atomically renamed on stop.
 4. **Storage layout** — `Meetings/YYYY/MM/YYYY-MM-DD HHmm Meeting.mp3`;
-   name collisions get a ` (2)`, ` (3)`, … suffix. Folders are auto-created.
+   name collisions get a ` (2)`, ` (3)`, … suffix. The collision check
+   treats the recording and its markdown note as a **pair**: a base name
+   is only used if both the `.mp3` and the `.md` paths are free, so a
+   pre-existing user note is never overwritten. Folders are auto-created.
 5. **Companion markdown note** (no AI) — a same-named `.md` beside the MP3
    containing frontmatter metadata (date, duration, vault, recording type,
    devices, created timestamp) and an `![[…]]` embed of the recording.
    Config-toggleable, default on. Delivers the PRD's Metadata requirement
-   and makes captures instantly visible in Obsidian.
+   and makes captures instantly visible in Obsidian. The note is written
+   with exclusive-create (never overwrite); if the path is somehow taken
+   despite the pairwise collision check, the note gets its own suffix
+   rather than replacing existing content.
 6. **Per-vault config file** — app-side at
    `%APPDATA%\vault-buddy\config.json`, keyed by vault ID. No config is
    written into user vaults (a vault synced to another machine must not
@@ -53,6 +59,11 @@ naming, crash recovery, and full audit logging.
 8. **Crash recovery** — on startup, orphaned `.part` files in configured
    recording folders are finalized as `… (recovered).mp3` (plus note and
    toast). Streaming MP3 encoding means partial files are playable.
+   Recovery must never touch a live recording: the app enforces **single
+   instance** (`tauri-plugin-single-instance` — a second launch focuses
+   the running buddy instead of starting a new process), and as a second
+   guard the scan only recovers `.part` files whose modification time is
+   stale (no writes for ≥60 s; an active session flushes every ~1 s).
 
 ### Out of scope (deferred)
 
@@ -152,7 +163,9 @@ Guiding rule: **never lose captured audio.**
 - **App crash / power loss** — the `.part` file contains valid MP3 frames
   up to the last flush. The startup recovery scan finalizes orphans as
   `… (recovered).mp3` (+ note + toast). Recovery only ever renames — it
-  never deletes.
+  never deletes — and only acts on `.part` files with a stale mtime
+  (≥60 s), backed by single-instance enforcement, so it can never grab a
+  recording that another live session is still writing.
 - **Concurrency** — `start_capture` during an active session returns a
   typed error; the UI prevents it by disabling other Capture buttons.
 - **Auditability** — every start/stop/save/recovery is app-logged with
@@ -166,8 +179,10 @@ Windows (development environment is Linux).
 
 - **Rust unit tests (CI, no devices):** mixer math — mixing, soft-clip,
   underrun silence-fill, overflow drop; resampler correctness on synthetic
-  sines; filename/collision/path generation; config parsing with
-  missing/partial/garbage input; frontmatter and note rendering.
+  sines; filename/path generation including pairwise mp3+md collision
+  suffixing; recovery staleness decision (fresh vs. stale mtime); config
+  parsing with missing/partial/garbage input; frontmatter and note
+  rendering.
 - **Rust integration test (CI):** synthesized PCM through
   mixer → encoder → file; assert a decodable MP3 with expected duration
   (± tolerance); simulate mid-stream truncation and assert recovery
