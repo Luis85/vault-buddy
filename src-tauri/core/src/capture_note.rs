@@ -28,7 +28,7 @@ pub fn format_duration(secs: u64) -> String {
 /// newlines to spaces. Vault and device names are user/system input;
 /// unquoted they could break the frontmatter or inject fields — and an
 /// unquoted `1:02:03` duration even parses as YAML sexagesimal.
-fn yaml_quote(value: &str) -> String {
+pub(crate) fn yaml_quote(value: &str) -> String {
     let escaped = value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")

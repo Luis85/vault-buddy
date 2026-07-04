@@ -4,6 +4,7 @@ pub mod capture_paths;
 pub mod daily_notes;
 pub mod discovery;
 pub mod process;
+pub mod transcript;
 pub mod uri;
 
 use chrono::NaiveDate;
