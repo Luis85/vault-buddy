@@ -52,6 +52,44 @@ describe("BuddyAvatar", () => {
     expect(wrapper.find("svg.classic").exists()).toBe(true);
   });
 
+  describe("greeting hover", () => {
+    it("wiggles while the pointer is over the buddy", async () => {
+      const wrapper = mount(BuddyAvatar, { props: { characterId: "knight" } });
+      const avatar = wrapper.find(".avatar");
+      expect(avatar.classes()).not.toContain("hovering");
+
+      await avatar.trigger("pointerenter");
+      expect(avatar.classes()).toContain("hovering");
+
+      await avatar.trigger("pointerleave");
+      expect(avatar.classes()).not.toContain("hovering");
+    });
+
+    it("clears a stuck hover when the page is hidden (hide to tray)", async () => {
+      // hiding the window never delivers pointerleave — without the
+      // visibilitychange reset the buddy comes back wiggling
+      const wrapper = mount(BuddyAvatar, { props: { characterId: "knight" } });
+      const avatar = wrapper.find(".avatar");
+      await avatar.trigger("pointerenter");
+      expect(avatar.classes()).toContain("hovering");
+
+      document.dispatchEvent(new Event("visibilitychange"));
+      await nextTick();
+      expect(avatar.classes()).not.toContain("hovering");
+    });
+
+    it("clears a stuck hover when the window blurs", async () => {
+      const wrapper = mount(BuddyAvatar); // classic avatar wiggles too
+      const avatar = wrapper.find(".avatar");
+      await avatar.trigger("pointerenter");
+      expect(avatar.classes()).toContain("hovering");
+
+      window.dispatchEvent(new Event("blur"));
+      await nextTick();
+      expect(avatar.classes()).not.toContain("hovering");
+    });
+  });
+
   describe("random idle bursts", () => {
     beforeEach(() => {
       vi.useFakeTimers();

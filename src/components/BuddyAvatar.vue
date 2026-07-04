@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { getCharacter } from "../characters";
 
 const props = withDefaults(
@@ -90,7 +90,26 @@ watch(
   { immediate: true },
 );
 
-onUnmounted(() => clearTimeout(idleTimer));
+// The greeting wiggle can't use CSS :hover: hiding the window (tray) never
+// delivers a pointerleave, so the webview's :hover state sticks and the
+// buddy comes back wiggling until the next real hover. Track hover in JS
+// instead and clear it whenever the page goes away.
+const hovered = ref(false);
+
+function clearHover() {
+  hovered.value = false;
+}
+
+onMounted(() => {
+  document.addEventListener("visibilitychange", clearHover);
+  window.addEventListener("blur", clearHover);
+});
+
+onUnmounted(() => {
+  clearTimeout(idleTimer);
+  document.removeEventListener("visibilitychange", clearHover);
+  window.removeEventListener("blur", clearHover);
+});
 </script>
 
 <template>
@@ -98,11 +117,13 @@ onUnmounted(() => clearTimeout(idleTimer));
   <svg
     v-if="!sheet"
     class="avatar classic"
-    :class="{ working, still: !animated }"
+    :class="{ working, still: !animated, hovering: hovered }"
     width="64"
     height="64"
     viewBox="0 0 96 96"
     aria-hidden="true"
+    @pointerenter="hovered = true"
+    @pointerleave="clearHover"
   >
     <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />
     <circle class="eye" cx="38" cy="46" r="5" fill="#fff" />
@@ -123,8 +144,10 @@ onUnmounted(() => clearTimeout(idleTimer));
   <div
     v-else
     class="avatar sprite"
-    :class="{ working, still: !animated }"
+    :class="{ working, still: !animated, hovering: hovered }"
     aria-hidden="true"
+    @pointerenter="hovered = true"
+    @pointerleave="clearHover"
   >
     <div
       class="sheet"
@@ -141,8 +164,8 @@ onUnmounted(() => clearTimeout(idleTimer));
 .classic {
   animation: bob 3s ease-in-out infinite;
 }
-/* greeting */
-.classic:hover:not(.working) {
+/* greeting — JS-tracked hover, see clearHover() for why not :hover */
+.classic.hovering:not(.working) {
   animation: wiggle 0.6s ease-in-out infinite;
 }
 /* working */
@@ -164,7 +187,7 @@ onUnmounted(() => clearTimeout(idleTimer));
   justify-content: center;
 }
 /* greeting — the strip keeps playing while the whole character sways */
-.sprite:hover:not(.working) {
+.sprite.hovering:not(.working) {
   animation: wiggle 0.6s ease-in-out infinite;
 }
 .sheet {
