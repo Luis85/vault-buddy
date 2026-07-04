@@ -46,7 +46,7 @@ const accessibleName = (vault: Vault) =>
       >
         <button
           type="button"
-          class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50"
+          class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
           :disabled="busyVaultId !== null"
           :aria-label="`Open vault ${accessibleName(vault)}`"
           @click="$emit('open-vault', vault.id)"
@@ -77,7 +77,7 @@ const accessibleName = (vault: Vault) =>
         </button>
         <button
           type="button"
-          class="mr-1 shrink-0 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:opacity-50"
+          class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
           :disabled="busyVaultId !== null"
           :aria-label="`Open today's daily note in ${accessibleName(vault)}`"
           title="Open today's daily note"
