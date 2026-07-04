@@ -101,6 +101,7 @@ function onFilterEscape(event: KeyboardEvent) {
       class="mb-2"
       :started-at-ms="capture.startedAtMs"
       :saving="capture.status === 'saving'"
+      :starting="capture.status === 'starting'"
       :warning="capture.warning"
       @stop="capture.stop()"
     />

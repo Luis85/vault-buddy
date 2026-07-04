@@ -1,15 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invoke(...args),
+const state = vi.hoisted(() => ({
+  eventHandlers: {} as Record<string, (event: { payload: unknown }) => void>,
 }));
-const listeners = new Map<string, (event: { payload: unknown }) => void>();
+
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: (name: string, cb: (event: { payload: unknown }) => void) => {
-    listeners.set(name, cb);
-    return Promise.resolve(() => listeners.delete(name));
+  listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+    state.eventHandlers[name] = handler;
+    return Promise.resolve(() => {
+      delete state.eventHandlers[name];
+    });
   },
 }));
 
@@ -18,46 +20,56 @@ import { useCaptureStore } from "../src/stores/capture";
 describe("capture store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    invoke.mockReset();
-    listeners.clear();
+    state.eventHandlers = {};
   });
 
-  it("starts recording and tracks the vault", async () => {
-    invoke.mockResolvedValueOnce({
-      recording: true,
-      vaultId: "v1",
-      startedAtMs: 123,
+  afterEach(() => {
+    clearMocks();
+  });
+
+  it("starts recording after a successful start_capture call", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "start_capture") {
+        return { recording: true, vaultId: "v1", startedAtMs: 123 };
+      }
     });
     const store = useCaptureStore();
     await store.start("v1");
-    expect(invoke).toHaveBeenCalledWith("start_capture", { id: "v1" });
+    expect(calls).toEqual([{ cmd: "start_capture", args: { id: "v1" } }]);
     expect(store.status).toBe("recording");
-    expect(store.vaultId).toBe("v1");
     expect(store.startedAtMs).toBe(123);
   });
 
   it("ignores a second start while one is pending or active", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
     let resolveFirst!: (v: unknown) => void;
-    invoke.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveFirst = resolve;
-      }),
-    );
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "start_capture") {
+        return new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+    });
     const store = useCaptureStore();
     const first = store.start("v1");
     expect(store.status).toBe("starting");
     await store.start("v2"); // pending: must be ignored
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
     resolveFirst({ recording: true, vaultId: "v1", startedAtMs: 123 });
     await first;
     expect(store.status).toBe("recording");
     await store.start("v2"); // active: must be ignored
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(store.vaultId).toBe("v1");
+    expect(calls).toHaveLength(1);
+    expect(store.startedAtMs).toBe(123);
   });
 
   it("start failure surfaces the error and stays idle", async () => {
-    invoke.mockRejectedValueOnce("No microphone found");
+    mockIPC(() => {
+      throw "No microphone found";
+    });
     const store = useCaptureStore();
     await store.start("v1");
     expect(store.status).toBe("idle");
@@ -65,47 +77,78 @@ describe("capture store", () => {
   });
 
   it("stop passes through saving and returns to idle on saved event", async () => {
-    invoke.mockResolvedValueOnce({ recording: false, vaultId: null, startedAtMs: null }); // capture_status resync
-    invoke.mockResolvedValueOnce({ recording: true, vaultId: "v1", startedAtMs: 1 });
-    invoke.mockResolvedValueOnce(undefined); // stop_capture
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") {
+        return { recording: false, vaultId: null, startedAtMs: null }; // resync
+      }
+      if (cmd === "start_capture") {
+        return { recording: true, vaultId: "v1", startedAtMs: 1 };
+      }
+      if (cmd === "stop_capture") return undefined;
+    });
     const store = useCaptureStore();
     await store.init();
     await store.start("v1");
     const stopping = store.stop();
     expect(store.status).toBe("saving");
     await stopping;
-    listeners.get("capture:saved")!({
+    // Simulate a prior failed stop attempt that left stale banners up —
+    // a fresh save must clear them, not just the status.
+    store.error = "boom";
+    store.warning = "stale warning";
+    state.eventHandlers["capture:saved"]!({
       payload: { mp3: "/v/m.mp3", note: null, endedEarly: false },
     });
     expect(store.status).toBe("idle");
     expect(store.lastSavedFile).toBe("/v/m.mp3");
+    expect(store.error).toBeNull();
+    expect(store.warning).toBeNull();
   });
 
   it("failed event resets to idle with error", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") {
+        return { recording: false, vaultId: null, startedAtMs: null };
+      }
+    });
     const store = useCaptureStore();
     await store.init();
-    listeners.get("capture:failed")!({ payload: { message: "boom" } });
+    state.eventHandlers["capture:failed"]!({ payload: { message: "boom" } });
     expect(store.status).toBe("idle");
     expect(store.error).toBe("boom");
   });
 
   it("warning event is stored without changing status", async () => {
-    invoke.mockResolvedValueOnce({ recording: false, vaultId: null, startedAtMs: null }); // capture_status resync
-    invoke.mockResolvedValueOnce({ recording: true, vaultId: "v1", startedAtMs: 1 });
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") {
+        return { recording: false, vaultId: null, startedAtMs: null }; // resync
+      }
+      if (cmd === "start_capture") {
+        return { recording: true, vaultId: "v1", startedAtMs: 1 };
+      }
+    });
     const store = useCaptureStore();
     await store.init();
     await store.start("v1");
-    listeners.get("capture:warning")!({ payload: { message: "source lost: mic" } });
+    state.eventHandlers["capture:warning"]!({
+      payload: { message: "source lost: mic" },
+    });
     expect(store.status).toBe("recording");
     expect(store.warning).toContain("source lost");
   });
 
   it("init resyncs from capture_status (app restarted mid-recording UI)", async () => {
-    invoke.mockResolvedValueOnce({ recording: true, vaultId: "v9", startedAtMs: 7 });
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "capture_status") {
+        return { recording: true, vaultId: "v9", startedAtMs: 7 };
+      }
+    });
     const store = useCaptureStore();
     await store.init();
-    expect(invoke).toHaveBeenCalledWith("capture_status");
+    expect(calls.map((c) => c.cmd)).toContain("capture_status");
     expect(store.status).toBe("recording");
-    expect(store.vaultId).toBe("v9");
+    expect(store.startedAtMs).toBe(7);
   });
 });

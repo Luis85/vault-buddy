@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 const props = defineProps<{
   startedAtMs: number | null;
   saving: boolean;
+  starting: boolean;
   warning: string | null;
 }>();
 defineEmits<{ (e: "stop"): void }>();
@@ -37,13 +38,13 @@ const elapsed = computed(() => {
         aria-hidden="true"
       ></span>
       <span class="flex-1 text-sm font-medium text-red-100" role="status">
-        {{ saving ? "Saving…" : `Recording ${elapsed}` }}
+        {{ starting ? "Starting…" : saving ? "Saving…" : `Recording ${elapsed}` }}
       </span>
       <button
         type="button"
         class="cursor-pointer rounded-lg bg-red-500/80 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-default disabled:opacity-50"
         aria-label="Stop recording"
-        :disabled="saving"
+        :disabled="saving || starting"
         @click="$emit('stop')"
       >
         ⏹ Stop

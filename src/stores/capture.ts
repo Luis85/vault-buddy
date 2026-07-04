@@ -6,7 +6,6 @@ import type { CaptureSaved, CaptureStatus } from "../types";
 export const useCaptureStore = defineStore("capture", {
   state: () => ({
     status: "idle" as "idle" | "starting" | "recording" | "saving",
-    vaultId: null as string | null,
     startedAtMs: null as number | null,
     error: null as string | null,
     warning: null as string | null,
@@ -16,13 +15,15 @@ export const useCaptureStore = defineStore("capture", {
     async init() {
       await listen<CaptureSaved>("capture:saved", (event) => {
         this.status = "idle";
-        this.vaultId = null;
         this.startedAtMs = null;
         this.lastSavedFile = event.payload.mp3;
+        // A previous stop/failure may have left a stale banner up —
+        // a fresh successful save means neither is still relevant.
+        this.error = null;
+        this.warning = null;
       });
       await listen<{ message: string }>("capture:failed", (event) => {
         this.status = "idle";
-        this.vaultId = null;
         this.startedAtMs = null;
         this.error = event.payload.message;
       });
@@ -34,7 +35,6 @@ export const useCaptureStore = defineStore("capture", {
         const s = await invoke<CaptureStatus>("capture_status");
         if (s.recording) {
           this.status = "recording";
-          this.vaultId = s.vaultId;
           this.startedAtMs = s.startedAtMs;
         }
       } catch {
@@ -53,7 +53,6 @@ export const useCaptureStore = defineStore("capture", {
       try {
         const s = await invoke<CaptureStatus>("start_capture", { id: vaultId });
         this.status = "recording";
-        this.vaultId = s.vaultId;
         this.startedAtMs = s.startedAtMs;
       } catch (e) {
         // Only downgrade if this attempt still owns the state — an event
