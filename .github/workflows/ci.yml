@@ -58,6 +58,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # shared with the release workflow: a tag build restores the warm
+          # cache produced by pushes to main instead of compiling ~450
+          # release-profile crates from scratch
+          shared-key: windows-app
       - run: npm ci
       - name: Build Tauri app and installers
         run: npx tauri build
