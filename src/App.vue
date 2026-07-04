@@ -129,6 +129,7 @@ onUnmounted(() => {
       <CompanionCharacter
         :working="working"
         :animated="settings.animationsEnabled"
+        :character="settings.character"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
       />

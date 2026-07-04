@@ -26,4 +26,26 @@ describe("settings store", () => {
     setActivePinia(createPinia());
     expect(useSettingsStore().animationsEnabled).toBe(true);
   });
+
+  it("uses the classic buddy by default", () => {
+    expect(useSettingsStore().character).toBe("classic");
+  });
+
+  it("persists the chosen character across store instances", () => {
+    useSettingsStore().setCharacter("knight");
+    setActivePinia(createPinia());
+    expect(useSettingsStore().character).toBe("knight");
+  });
+
+  it("falls back to classic for an unknown stored character", () => {
+    localStorage.setItem("vault-buddy.character", "retired-hero");
+    expect(useSettingsStore().character).toBe("classic");
+  });
+
+  it("normalizes unknown ids passed to setCharacter", () => {
+    const store = useSettingsStore();
+    store.setCharacter("nope");
+    expect(store.character).toBe("classic");
+    expect(localStorage.getItem("vault-buddy.character")).toBe("classic");
+  });
 });

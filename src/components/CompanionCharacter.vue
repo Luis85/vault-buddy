@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import BuddyAvatar from "./BuddyAvatar.vue";
 
 const props = withDefaults(
-  defineProps<{ working: boolean; animated?: boolean }>(),
-  { animated: true },
+  defineProps<{ working: boolean; animated?: boolean; character?: string }>(),
+  { animated: true, character: "classic" },
 );
 const emit = defineEmits<{
   (e: "toggle"): void;
@@ -96,81 +97,11 @@ function onContextMenu() {
       @click="onClick"
       @contextmenu.prevent="onContextMenu"
     >
-      <svg width="64" height="64" viewBox="0 0 96 96" aria-hidden="true">
-        <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />
-        <circle class="eye" cx="38" cy="46" r="5" fill="#fff" />
-        <circle class="eye" cx="58" cy="46" r="5" fill="#fff" />
-        <path
-          d="M40 62 Q48 70 56 62"
-          stroke="#fff"
-          stroke-width="3"
-          fill="none"
-          stroke-linecap="round"
-        />
-      </svg>
+      <BuddyAvatar
+        :character-id="character"
+        :working="working"
+        :animated="animated"
+      />
     </button>
   </div>
 </template>
-
-<style scoped>
-/* idle */
-.buddy {
-  animation: bob 3s ease-in-out infinite;
-}
-/* greeting */
-.buddy:hover:not(.working) {
-  animation: wiggle 0.6s ease-in-out infinite;
-}
-/* working */
-.buddy.working {
-  animation: pulse 0.9s ease-in-out infinite;
-}
-.buddy .eye {
-  animation: blink 4s infinite;
-  transform-origin: center;
-  transform-box: fill-box;
-}
-/* user turned the animation off (right-click menu) — overrides idle,
-   hover and working states alike */
-.buddy.still,
-.buddy.still .eye {
-  animation: none !important;
-}
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
-}
-@keyframes wiggle {
-  0%,
-  100% {
-    transform: rotate(-4deg);
-  }
-  50% {
-    transform: rotate(4deg);
-  }
-}
-@keyframes pulse {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(0.94);
-  }
-}
-@keyframes blink {
-  0%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  96% {
-    transform: scaleY(0.1);
-  }
-}
-</style>
