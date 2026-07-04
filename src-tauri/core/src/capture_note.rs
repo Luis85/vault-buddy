@@ -98,12 +98,34 @@ pub fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"));
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(content.as_bytes())?;
-        f.sync_all()?;
-    }
+    // Exclusive-create the temp too: File::create on the predictable temp
+    // name would truncate an existing file or follow a planted symlink out
+    // of the vault. On AlreadyExists, take a numbered temp name instead
+    // (still carrying the ownership marker so recovery can clean it).
+    let (tmp, mut f) = {
+        let mut attempt = 0u32;
+        loop {
+            let candidate = if attempt == 0 {
+                dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"))
+            } else {
+                dir.join(format!(".{file_name}.{attempt}{NOTE_TMP_SUFFIX}"))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => break (candidate, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    };
+    f.write_all(content.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
     // Non-replacing on Windows (rename fails if dest exists). On Unix,
     // rename would replace — the exists() guard above plus the pairwise
     // reservation makes that window acceptable for a dev-only platform.
@@ -204,6 +226,22 @@ mod tests {
         // is not needed — just verify the constant shape is used.
         write_note_atomic(&note, "x").unwrap();
         assert!(NOTE_TMP_SUFFIX.contains("vault-buddy"));
+    }
+
+    #[test]
+    fn occupied_temp_name_is_never_truncated() {
+        // A pre-existing file (or planted symlink) at the predictable
+        // temp name must survive; the write takes a numbered temp instead.
+        let dir = tempfile::tempdir().unwrap();
+        let squatter = dir.path().join(format!(".n.md{NOTE_TMP_SUFFIX}"));
+        std::fs::write(&squatter, "someone else's bytes").unwrap();
+        let note = dir.path().join("n.md");
+        write_note_atomic(&note, "content").unwrap();
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "content");
+        assert_eq!(
+            std::fs::read_to_string(&squatter).unwrap(),
+            "someone else's bytes"
+        );
     }
 
     #[test]
