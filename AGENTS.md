@@ -84,14 +84,50 @@ the install button stays visible for retry. The `Update` object is stored
 with `markRaw()` — a Vue reactive proxy breaks its private-field `rid` and
 every real install would throw.
 
-### Vault discovery (`src-tauri/core/src/discovery.rs`, `process.rs`)
+### The vault domain (core crate + `vaults` store)
 
-Vaults come from Obsidian's own registry
-(`%APPDATA%\obsidian\obsidian.json`), re-read on every panel open. The
-`open` flag in that file survives a full Obsidian quit (it's how Obsidian
-restores vaults on relaunch), so `list_vaults` clears all open flags when no
-Obsidian process is running — otherwise the "Open now" group shows stale
-entries. Malformed config always degrades to an empty list, never an error.
+Hard rule from the PRD: **Vault Buddy never writes into a vault.** Opening
+notes and creating daily notes is delegated to Obsidian via `obsidian://`
+URIs, and every launched URI is logged (`uri::launch`) as the audit trail.
+Anything that would touch vault contents directly is a design change, not a
+patch.
+
+Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
+`list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
+`open_vault` / `open_daily_note` → `uri.rs` → OS URI handler → Obsidian.
+
+- **`discovery.rs`** parses Obsidian's own registry into
+  `Vault { id, name, path, open }`. The `id` is the registry's hex key; the
+  display name is the last path component (split on `/` **and** `\` —
+  obsidian.json stores backslash paths on Windows but tests run on Unix).
+  Lists sort case-insensitively by name. Malformed or missing config always
+  degrades to an empty list, never an error.
+- **`process.rs`** exists because the registry's `open` flag survives a full
+  Obsidian quit (that's how Obsidian restores vaults on relaunch).
+  `list_vaults` clears all open flags when no Obsidian process is running;
+  the name match requires the exact executable or a real delimiter
+  (`obsidian`, `Obsidian.exe`, `Obsidian Helper …`) so tools like
+  `obsidian-sync` don't count.
+- **`daily_notes.rs`** reads each vault's `.obsidian/daily-notes.json`
+  (folder + moment-style format). Only the `YYYY`/`MM`/`DD` tokens are
+  supported, matched as whole letter runs — `MMMM` or `YYYYMMDD` fall back
+  to the default format entirely rather than half-substituting, because a
+  wrong literal path would make Obsidian silently create a misnamed note.
+  The rendered path is vault-relative **without** `.md` (the URI `file`
+  parameter's expected form).
+- **`uri.rs`** addresses vaults by **ID, never name** (folder names can
+  collide across vaults) and percent-encodes every parameter.
+  `daily_note_uri` (in `core/src/lib.rs`) picks `obsidian://open` when the
+  note file exists and `obsidian://new` otherwise — creation happens inside
+  Obsidian.
+- **`vaults` store** re-runs discovery on every panel open (one JSON read;
+  a user who just launched Obsidian must not stay stuck on a cached empty
+  list) but keeps the previous list when a refresh fails transiently, so a
+  working panel never blanks. Launching a vault closes the panel; a failed
+  launch keeps it open with the error banner.
+- **`VaultList.vue`** surfaces `open: true` vaults first under an "Open
+  now" header (flat list when nothing is open); the name/path filter only
+  appears above 5 vaults.
 
 ### Frontend state
 
