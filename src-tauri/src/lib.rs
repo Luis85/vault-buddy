@@ -12,10 +12,12 @@ pub fn run() {
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
                 .build(),
         )
+        .manage(commands::PanelOffset::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_vaults,
             commands::open_vault,
-            commands::open_daily_note
+            commands::open_daily_note,
+            commands::set_panel_offset
         ])
         .setup(|app| {
             tray::create_tray(app.handle())?;

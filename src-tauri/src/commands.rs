@@ -1,6 +1,20 @@
 use chrono::Local;
 use std::path::Path;
+use std::sync::Mutex;
 use vault_buddy_core::{daily_note_uri, discovery, uri};
+
+/// Physical pixels the frontend subtracted from the window position while
+/// the panel is open (so it can unfold toward free screen space). The quit
+/// path adds it back before persisting the position — otherwise a quit with
+/// the panel open would save the shifted point and the buddy would respawn
+/// away from where the user parked it.
+#[derive(Default)]
+pub struct PanelOffset(pub Mutex<(i32, i32)>);
+
+#[tauri::command]
+pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
+    *state.0.lock().unwrap() = (x, y);
+}
 
 fn find_vault(id: &str) -> Result<discovery::Vault, String> {
     discovery::discover_vaults()

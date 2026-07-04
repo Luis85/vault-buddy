@@ -1,4 +1,5 @@
 import { ref, watch, type Ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getCurrentWindow,
   currentMonitor,
@@ -60,6 +61,17 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
   // buddy stays put even if the window was dragged while open.
   let offset = { x: 0, y: 0 };
 
+  // Mirror the offset to the Rust side: quitting from the tray saves the
+  // window position, and it must save the unshifted home position even if
+  // the panel is open at that moment.
+  function reportOffset() {
+    void invoke("set_panel_offset", { x: offset.x, y: offset.y }).catch(
+      () => {
+        // not running under Tauri (unit tests) — nothing to report to
+      },
+    );
+  }
+
   // A transition was superseded when the panel state changed while its
   // window calls were still in flight (e.g. a quick double-click).
   const stale = (expected: boolean) => panelOpen.value !== expected;
@@ -90,6 +102,7 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
       // Record before moving: if we're superseded right after the move,
       // the close transition still knows what to undo.
       offset = placement.offset;
+      reportOffset();
       const target = {
         x: home.x - placement.offset.x,
         y: home.y - placement.offset.y,
@@ -121,6 +134,7 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         // window may be gone during shutdown; nothing to restore
       }
       offset = { x: 0, y: 0 };
+      reportOffset();
     }
     side.value = "right";
     valign.value = "down";

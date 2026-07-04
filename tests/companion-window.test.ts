@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, ref } from "vue";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 interface Point {
   x: number;
@@ -71,6 +72,16 @@ describe("useCompanionWindow", () => {
     state.monitor = null;
     state.deferOuter = false;
     state.pendingOuter.length = 0;
+    mockIPC((cmd, args) => {
+      if (cmd === "set_panel_offset") {
+        const { x, y } = args as { x: number; y: number };
+        state.calls.push(`reportOffset:${x},${y}`);
+      }
+    });
+  });
+
+  afterEach(() => {
+    clearMocks();
   });
 
   it("expands on open and collapses on close", async () => {
@@ -138,6 +149,10 @@ describe("useCompanionWindow", () => {
     const shift = EXPANDED.width - COLLAPSED.width;
     expect(state.pos).toEqual({ x: 1780 - shift, y: 100 });
 
+    // the Rust side must know about the shift so a tray quit saves the
+    // unshifted home position
+    expect(state.calls).toContain(`reportOffset:${shift},0`);
+
     open.value = false;
     await nextTick();
     await flush();
@@ -145,5 +160,6 @@ describe("useCompanionWindow", () => {
     // closing puts the buddy back exactly where the user left it
     expect(state.pos).toEqual({ x: 1780, y: 100 });
     expect(lastResize()).toBe(`setSize:${COLLAPSED.width}`);
+    expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
   });
 });
