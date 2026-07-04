@@ -1,0 +1,65 @@
+//! whisper.cpp binding (whisper-rs), compiled only with the `whisper`
+//! feature. Static-linked — no runtime DLL. Not Linux-tested; the
+//! windows-app CI job is the compile gate.
+
+use crate::Transcriber;
+use std::path::Path;
+use vault_buddy_core::transcript::Segment;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+pub struct WhisperTranscriber {
+    ctx: WhisperContext,
+}
+
+impl WhisperTranscriber {
+    pub fn load(model_path: &Path) -> Result<Self, String> {
+        // Pass the `&Path` straight through rather than round-tripping via
+        // `to_string_lossy()`: `WhisperContext::new_with_params` takes it by
+        // `AsRef<Path>` and converts with its own `path_to_bytes` internally,
+        // so this avoids a lossy UTF-8 conversion for no benefit.
+        let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+            .map_err(|e| format!("load model {}: {e}", model_path.display()))?;
+        Ok(Self { ctx })
+    }
+}
+
+impl Transcriber for WhisperTranscriber {
+    fn transcribe(&self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>, String> {
+        let mut state = self
+            .ctx
+            .create_state()
+            .map_err(|e| format!("whisper state: {e}"))?;
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        if let Some(lang) = language {
+            params.set_language(Some(lang));
+        }
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_special(false);
+        state
+            .full(params, samples)
+            .map_err(|e| format!("whisper inference: {e}"))?;
+
+        // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
+        // timestamps are in centiseconds, converted to ms below (×10).
+        let mut out = Vec::new();
+        for segment in state.as_iter() {
+            let text = segment
+                .to_str_lossy()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                continue;
+            }
+            let t0 = segment.start_timestamp().max(0) as u64;
+            let t1 = segment.end_timestamp().max(0) as u64;
+            out.push(Segment {
+                start_ms: t0 * 10,
+                end_ms: t1 * 10,
+                text,
+            });
+        }
+        Ok(out)
+    }
+}

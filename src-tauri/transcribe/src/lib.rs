@@ -3,6 +3,8 @@
 //! `Transcriber` trait so orchestration is testable without a real model.
 
 pub mod decode;
+#[cfg(feature = "whisper")]
+pub mod engine;
 pub mod model;
 
 use vault_buddy_core::transcript::Segment;
