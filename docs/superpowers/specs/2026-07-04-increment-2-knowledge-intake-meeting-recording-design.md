@@ -185,7 +185,10 @@ Windows (development environment is Linux).
   also cover the new `capture` crate (e.g. run clippy/tests per crate or
   workspace-wide from `src-tauri`, excluding the Tauri shell crate if its
   system dependencies are unavailable on the runner) — otherwise the
-  capture tests above would exist but never execute in CI.
+  capture tests above would exist but never execute in CI. Because cpal's
+  Linux backend links against ALSA, the job must also install
+  `libasound2-dev` (one apt step) before building the capture crate;
+  without it the extended job fails at compile time before any test runs.
 
 ## Known limitations (accepted for this increment)
 
