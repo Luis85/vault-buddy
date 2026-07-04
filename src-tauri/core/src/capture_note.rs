@@ -11,6 +11,9 @@ pub struct NoteMeta {
     pub duration_secs: u64,
     pub vault_name: String,
     pub recording_type: String,
+    /// Total paused time (pre-formatted, e.g. "1:05"); None when the
+    /// recording was never paused — the line is omitted entirely then.
+    pub paused: Option<String>,
     pub input_devices: Vec<String>,
     pub event: Option<String>,
 }
@@ -43,6 +46,9 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         "duration: {}\n",
         yaml_quote(&format_duration(meta.duration_secs))
     ));
+    if let Some(paused) = &meta.paused {
+        out.push_str(&format!("paused: {}\n", yaml_quote(paused)));
+    }
     out.push_str(&format!("vault: {}\n", yaml_quote(&meta.vault_name)));
     out.push_str(&format!("type: {}\n", yaml_quote(&meta.recording_type)));
     out.push_str("inputs:\n");
@@ -168,9 +174,20 @@ mod tests {
             duration_secs: 3723,
             vault_name: "Work".into(),
             recording_type: "Meeting".into(),
+            paused: None,
             input_devices: vec!["Headset Mic".into(), "Speakers (loopback)".into()],
             event: None,
         }
+    }
+
+    #[test]
+    fn note_records_paused_duration_when_present() {
+        let mut m = meta();
+        m.paused = Some(format_duration(65));
+        let note = render_note(&m, "x.mp3");
+        assert!(note.contains(r#"paused: "1:05""#), "{note}");
+        let plain = render_note(&meta(), "x.mp3");
+        assert!(!plain.contains("paused:"), "no paused line when None");
     }
 
     #[test]
