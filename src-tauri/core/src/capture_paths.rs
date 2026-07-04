@@ -22,6 +22,25 @@ pub fn base_name(date: NaiveDate, hour: u32, minute: u32, label: &str) -> String
     format!("{} {hour:02}{minute:02} {label}", date.format("%Y-%m-%d"))
 }
 
+/// Ownership check for .mp3.part files: only bases matching Vault Buddy's
+/// capture pattern `YYYY-MM-DD HHmm <label>` are ours to delete or rename.
+/// Another tool's `.download.mp3.part` in a vault must never be touched.
+pub fn is_capture_base(base: &str) -> bool {
+    let b: Vec<char> = base.chars().collect();
+    if b.len() < 17 {
+        return false;
+    }
+    let digit = |i: usize| b[i].is_ascii_digit();
+    (0..4).all(digit)
+        && b[4] == '-'
+        && (5..7).all(digit)
+        && b[7] == '-'
+        && (8..10).all(digit)
+        && b[10] == ' '
+        && (11..15).all(digit)
+        && b[15] == ' '
+}
+
 pub fn part_file_name(base: &str) -> String {
     format!(".{base}.mp3.part")
 }
@@ -40,7 +59,10 @@ pub fn recovered_base(base: &str) -> String {
     format!("{base} (recovered)")
 }
 
-fn candidate(base: &str, attempt: u32) -> String {
+/// The one collision-suffix scheme: attempt 1 is the plain base, attempt
+/// N is `base (N)`. Reservation, the stop-time recheck, and the note
+/// writer must all mint names from here so they can never diverge.
+pub(crate) fn candidate(base: &str, attempt: u32) -> String {
     if attempt == 1 {
         base.to_string()
     } else {
@@ -253,6 +275,19 @@ mod tests {
     #[test]
     fn recovered_base_appends_marker() {
         assert_eq!(recovered_base("b"), "b (recovered)");
+    }
+
+    // Round-trip: every name this module can mint — plain, suffixed,
+    // recovered — must be recognized as ours, and foreign names must not.
+    #[test]
+    fn is_capture_base_matches_every_generated_name_shape() {
+        let base = base_name(date(), 14, 5, "Meeting");
+        assert!(is_capture_base(&base));
+        assert!(is_capture_base(&format!("{base} (2)")), "suffixed");
+        assert!(is_capture_base(&recovered_base(&base)), "recovered");
+        assert!(!is_capture_base("download"));
+        assert!(!is_capture_base("2026-07-04 Meeting"), "missing HHmm");
+        assert!(!is_capture_base(""));
     }
 
     #[test]

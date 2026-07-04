@@ -3,12 +3,15 @@
 //! first line of defense) and never deletes captured audio — the only
 //! deletion is a .part with no MP3 frame in it, which holds no audio.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use vault_buddy_core::capture_note::{
     render_note, write_note_collision_safe, NoteMeta, NOTE_TMP_SUFFIX,
 };
-use vault_buddy_core::capture_paths::{base_from_part, recovered_base, reserve_final};
+use vault_buddy_core::capture_paths::{
+    base_from_part, is_capture_base, recovered_base, reserve_final,
+};
 
 #[derive(Debug)]
 pub enum RecoveryAction {
@@ -23,23 +26,36 @@ pub fn has_mp3_frame(bytes: &[u8]) -> bool {
         .any(|w| w[0] == 0xFF && (w[1] & 0xE0) == 0xE0)
 }
 
-/// Ownership check for .mp3.part files: only bases matching Vault Buddy's
-/// capture pattern `YYYY-MM-DD HHmm <label>` are ours to delete or rename.
-/// Another tool's `.download.mp3.part` in a vault must never be touched.
-fn is_capture_base(base: &str) -> bool {
-    let b: Vec<char> = base.chars().collect();
-    if b.len() < 17 {
-        return false;
+/// How much of a .part the frame sniff reads. LAME emits the first frame
+/// within the first ~1 s flush, so any real recording has a sync word in
+/// the first few KB — and a frameless part has none anywhere, so a
+/// bounded prefix decides either way without pulling a multi-hour
+/// recording into memory. Deliberate behavior change vs. reading the
+/// whole file: a .part whose ONLY sync word sits beyond this prefix
+/// would now be deleted as frameless — that shape cannot come from our
+/// encoder, so no test pins it.
+const FRAME_SNIFF_LEN: u64 = 64 * 1024;
+
+fn read_prefix(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(limit)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Pure staleness decision (split from `is_stale` so clock cases are
+/// testable without touching real file mtimes). A live .part can never be
+/// caught by the skew branch: recovery passes are postponed entirely
+/// while a recording is active (see `run_recovery` in capture_commands).
+fn is_stale_at(modified: SystemTime, now: SystemTime, stale_after: Duration) -> bool {
+    match now.duration_since(modified) {
+        Ok(age) => age >= stale_after,
+        // mtime ahead of the clock: a live recording's mtime tracks "now",
+        // so small skew stays fresh; a gap beyond the window means a clock
+        // jump left an orphan that would otherwise never be recovered.
+        Err(e) => e.duration() >= stale_after,
     }
-    let digit = |i: usize| b[i].is_ascii_digit();
-    (0..4).all(digit)
-        && b[4] == '-'
-        && (5..7).all(digit)
-        && b[7] == '-'
-        && (8..10).all(digit)
-        && b[10] == ' '
-        && (11..15).all(digit)
-        && b[15] == ' '
 }
 
 fn is_stale(path: &Path, stale_after: Duration) -> bool {
@@ -49,10 +65,7 @@ fn is_stale(path: &Path, stale_after: Duration) -> bool {
     let Ok(modified) = meta.modified() else {
         return false;
     };
-    modified
-        .elapsed()
-        .map(|age| age >= stale_after)
-        .unwrap_or(false)
+    is_stale_at(modified, SystemTime::now(), stale_after)
 }
 
 pub fn recover_root(
@@ -87,7 +100,7 @@ pub fn recover_root(
         // A read failure (permissions, AV lock, transient I/O) must NOT
         // look like "no audio" — deletion is only for provably frameless
         // parts. Unreadable files are left for a later pass.
-        let Ok(bytes) = std::fs::read(path) else {
+        let Ok(bytes) = read_prefix(path, FRAME_SNIFF_LEN) else {
             log::warn!("recovery: cannot read {}, skipping", path.display());
             return;
         };
@@ -201,18 +214,28 @@ mod tests {
         v
     }
 
-    fn make_stale(path: &std::path::Path) {
-        // recover_root treats files older than stale_after as orphans; a
-        // zero stale_after makes everything stale without clock games.
-        let _ = path;
-    }
-
     /// Vault Buddy only ever writes under `<root>/YYYY/MM` — recovery
     /// walks nowhere else, so tests must place capture-named files there.
     fn month_dir(root: &std::path::Path) -> std::path::PathBuf {
         let d = root.join("2026").join("07");
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn staleness_decision_handles_clock_skew() {
+        let now = SystemTime::now();
+        let hour = Duration::from_secs(3600);
+        let window = Duration::from_secs(60);
+        // well past the window: an ordinary orphan
+        assert!(is_stale_at(now - hour, now, window));
+        // recent past: possibly still live
+        assert!(!is_stale_at(now - Duration::from_secs(5), now, window));
+        // slightly ahead of the clock (jitter, coarse fs timestamps): fresh
+        assert!(!is_stale_at(now + Duration::from_secs(5), now, window));
+        // far ahead: a clock jump stranded this orphan — it must become
+        // recoverable, not stay "fresh" until the wall clock catches up
+        assert!(is_stale_at(now + hour, now, window));
     }
 
     #[test]
@@ -228,7 +251,7 @@ mod tests {
         let month = month_dir(dir.path());
         let part = month.join(".2026-07-04 1405 Meeting.mp3.part");
         std::fs::write(&part, mp3_bytes()).unwrap();
-        make_stale(&part);
+        // a zero stale_after makes everything stale without clock games
         let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -273,6 +296,26 @@ mod tests {
         assert!(matches!(actions[0], RecoveryAction::DeletedEmpty(_)));
         assert!(!part.exists());
         assert!(!month.join(format!("{BASE} (recovered).mp3")).exists());
+    }
+
+    #[test]
+    fn large_part_with_early_sync_word_is_recovered() {
+        // 128 KiB with the only sync word ~512 bytes in: well inside the
+        // bounded prefix the sniff reads (see FRAME_SNIFF_LEN — the >64 KiB
+        // negative is deliberately unpinned).
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        let mut bytes = vec![0u8; 128 * 1024];
+        bytes[512] = 0xFF;
+        bytes[513] = 0xFB;
+        let part = month.join(format!(".{BASE}.mp3.part"));
+        std::fs::write(&part, &bytes).unwrap();
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, false);
+        assert!(
+            matches!(&actions[0], RecoveryAction::Recovered { .. }),
+            "expected Recovered, got {actions:?}"
+        );
+        assert!(!part.exists());
     }
 
     #[test]

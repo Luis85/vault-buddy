@@ -72,11 +72,11 @@ pub fn write_note_collision_safe(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     for attempt in 1u32.. {
-        let candidate = if attempt == 1 {
-            note_path.to_path_buf()
-        } else {
-            dir.join(format!("{stem} ({attempt}).md"))
-        };
+        // Names come from the shared suffix scheme — same as the .mp3 side.
+        let candidate = dir.join(format!(
+            "{}.md",
+            crate::capture_paths::candidate(&stem, attempt)
+        ));
         match write_note_atomic(&candidate, content) {
             Ok(()) => return Ok(candidate),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

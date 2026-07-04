@@ -69,6 +69,11 @@ impl CaptureSession {
         params: SessionParams,
         sources: Vec<SourceInput>,
     ) -> std::io::Result<CaptureSession> {
+        // Encoder init comes FIRST: a LAME setup failure must fail the
+        // start before any file exists and before ready is signaled —
+        // never a brief "recording" state that immediately dies.
+        let encoder =
+            Mp3Encoder::new(TARGET_RATE, params.bitrate_kbps).map_err(std::io::Error::other)?;
         // Exclusive create: an existing file here means an unrecovered
         // orphan won the name despite the reservation — never truncate it.
         let file = std::fs::OpenOptions::new()
@@ -76,7 +81,8 @@ impl CaptureSession {
             .create_new(true)
             .open(&params.part)?;
         let (stop_tx, stop_rx) = mpsc::channel();
-        let handle = std::thread::spawn(move || run_worker(file, params, sources, stop_rx));
+        let handle =
+            std::thread::spawn(move || run_worker(file, encoder, params, sources, stop_rx));
         Ok(CaptureSession { stop_tx, handle })
     }
 
@@ -94,21 +100,11 @@ impl CaptureSession {
 
 fn run_worker(
     mut file: std::fs::File,
+    mut encoder: Mp3Encoder,
     params: SessionParams,
     sources: Vec<SourceInput>,
     stop_rx: Receiver<()>,
 ) -> Result<Outcome, String> {
-    let mut encoder = match Mp3Encoder::new(TARGET_RATE, params.bitrate_kbps) {
-        Ok(enc) => enc,
-        Err(e) => {
-            // Setup failed after the exclusive create — honor the
-            // start-failure rule: no file left behind before the first
-            // MP3 frame exists.
-            drop(file);
-            let _ = std::fs::remove_file(&params.part);
-            return Err(e);
-        }
-    };
     let mut states: Vec<SourceState> = sources
         .into_iter()
         .map(|input| SourceState {
@@ -129,6 +125,11 @@ fn run_worker(
     // whatever audio already made it into the encoder is saved best-effort
     // and surfaced to the caller instead of stranded as a hidden .part.
     let mut write_error: Option<String> = None;
+    // Reusable per-tick buffers: one silence-padded chunk per source plus
+    // a shared all-zeros pad for a missing side, kept across ticks so the
+    // worker doesn't allocate fresh Vecs every 100 ms for hours.
+    let mut chunks: Vec<Vec<f32>> = vec![Vec::new(); states.len()];
+    let mut silence: Vec<f32> = Vec::new();
 
     // Tick on a fixed schedule rather than sleeping a full TICK per cycle:
     // each iteration consumes one TICK of audio, so waiting TICK *plus*
@@ -211,16 +212,23 @@ fn run_worker(
             // Mic + loopback only in this increment: a 3rd+ source would be
             // silently dropped from the mix by design.
             debug_assert!(states.len() <= 2, "mixer folds only two sources");
-            let mut mono_slices: Vec<Vec<f32>> = Vec::with_capacity(states.len());
-            for s in states.iter_mut() {
-                let n = take.min(s.buffer.len());
-                let mut chunk: Vec<f32> = s.buffer.drain(..n).collect();
-                chunk.resize(take, 0.0); // silence-fill underrun
-                mono_slices.push(chunk);
+            if silence.len() < take {
+                silence.resize(take, 0.0);
             }
-            let silent = vec![0.0f32; take];
-            let a = mono_slices.first().map(|v| v.as_slice()).unwrap_or(&silent);
-            let b = mono_slices.get(1).map(|v| v.as_slice()).unwrap_or(&silent);
+            for (s, chunk) in states.iter_mut().zip(chunks.iter_mut()) {
+                let n = take.min(s.buffer.len());
+                chunk.clear();
+                chunk.extend(s.buffer.drain(..n));
+                chunk.resize(take, 0.0); // silence-fill underrun
+            }
+            let a = chunks
+                .first()
+                .map(|v| v.as_slice())
+                .unwrap_or(&silence[..take]);
+            let b = chunks
+                .get(1)
+                .map(|v| v.as_slice())
+                .unwrap_or(&silence[..take]);
             let stereo = mixer::mix_to_stereo_i16(a, b);
             frames_written += (stereo.len() / 2) as u64;
             let bytes = match encoder.encode(&stereo) {
