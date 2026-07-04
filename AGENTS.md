@@ -94,10 +94,14 @@ every real install would throw.
 
 ### The vault domain (core crate + `vaults` store)
 
-Hard rule from the PRD: **Vault Buddy never writes into a vault.** Opening
-notes and creating daily notes is delegated to Obsidian via `obsidian://`
-URIs, and every launched URI is logged (`uri::launch`) as the audit trail.
-Anything that would touch vault contents directly is a design change, not a
+Hard rule, amended by the Knowledge Intake increment: **the vault domain
+never writes into a vault** — opening notes and creating daily notes is
+delegated to Obsidian via `obsidian://` URIs, and every launched URI is
+logged (`uri::launch`) as the audit trail. The **one sanctioned write path**
+is the capture domain (below), which stores recordings and their companion
+notes under strict safety rules; see
+`docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`.
+Any other code touching vault contents directly is a design change, not a
 patch.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
@@ -137,6 +141,33 @@ Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
   now" header (flat list when nothing is open); the name/path filter only
   appears above 5 vaults.
 
+### The capture domain (`src-tauri/capture/` + `capture_commands.rs` + `capture` store)
+
+One-click meeting/voice recording into the vault (Knowledge Intake,
+increment 2). `vault_buddy_capture` owns the audio engine: cpal devices
+(WASAPI loopback on Windows in meeting mode) → mixer → streaming LAME MP3
+into a hidden dot-prefixed `.mp3.part` in the target folder (flush ~1 s,
+fsync ~30 s) → finalize. Invariants — every one exists because a reviewer
+found the failure it prevents:
+
+- **Never lose captured audio; never clobber user files.** Base names are
+  reserved pairwise (`.mp3` + `.md` + `.mp3.part` all free), files are
+  exclusive-created, finalization uses `rename_noreplace` (hard-link based;
+  `std::fs::rename` replaces on every platform) with suffix-retry, and
+  companion notes are written atomically via owned `.vault-buddy.tmp` temps.
+- **Recovery touches only our own files**: dated `YYYY/MM` layout only,
+  capture-pattern basenames only (`is_capture_base` lives beside
+  `base_name` with round-trip tests), marker-suffixed note temps only;
+  staleness-gated, postponed while a recording is active, retried while
+  work is pending.
+- **The buddy is the recording indicator**: all hide paths funnel through
+  `tray::hide_buddy` (the single guarded chokepoint); quit/close finalize
+  on worker threads — never block the event loop — and the app exits only
+  after the save lands.
+- Per-vault settings live app-side in `%APPDATA%\vault-buddy\config.json`
+  (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
+  one malformed value can never flip a vault's mode.
+
 ### Frontend state
 
 Pinia stores: `vaults` (list, panel open/closed, which panel view is showing
@@ -152,9 +183,10 @@ events emitted from menu handlers.
   Tauri IPC is mocked with `mockIPC` from `@tauri-apps/api/mocks`; plugin
   modules are mocked with `vi.mock` + `vi.hoisted`. Tests must never require
   a real Tauri runtime.
-- Rust unit tests sit next to the code in `src-tauri/core/`; keep new logic
-  in the core crate whenever it doesn't need Tauri types, precisely so it's
-  testable everywhere.
+- Rust unit tests sit next to the code in `src-tauri/core/` and
+  `src-tauri/capture/`; keep new logic in the core crate whenever it doesn't
+  need Tauri types, precisely so it's testable everywhere. (`capture` needs
+  `libasound2-dev` on Linux for cpal — CI installs it.)
 - This repo practices TDD via the vendored superpowers skills
   (`.claude/skills/`, injected by a SessionStart hook): failing test first,
   then the fix. Regression tests name the failure mode in a comment.

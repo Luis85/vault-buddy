@@ -8,9 +8,11 @@ import ActionPanel from "./components/ActionPanel.vue";
 import { useCompanionWindow } from "./composables/useCompanionWindow";
 import { useVaultsStore } from "./stores/vaults";
 import { useSettingsStore } from "./stores/settings";
+import { useCaptureStore } from "./stores/capture";
 
 const store = useVaultsStore();
 const settings = useSettingsStore();
+const capture = useCaptureStore();
 const { panelOpen, busyVaultId } = storeToRefs(store);
 const working = computed(() => busyVaultId.value !== null);
 
@@ -64,6 +66,7 @@ let unlistenDragging: (() => void) | undefined;
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("contextmenu", onContextMenu);
+  void capture.init();
   try {
     // The buddy's native right-click menu toggles these from the Rust side.
     unlistenAnimation = await listen("buddy-toggle-animation", () => {
@@ -137,6 +140,7 @@ onUnmounted(() => {
         :character="settings.character"
         :draggable="settings.draggingEnabled"
         :facing="settings.facing"
+        :recording="capture.status === 'recording' || capture.status === 'saving'"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
       />

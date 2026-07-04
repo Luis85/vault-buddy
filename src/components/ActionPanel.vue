@@ -2,10 +2,13 @@
 import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useVaultsStore } from "../stores/vaults";
+import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
+import RecordingBar from "./RecordingBar.vue";
 
 const store = useVaultsStore();
+const capture = useCaptureStore();
 
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
@@ -96,6 +99,21 @@ function onFilterEscape(event: KeyboardEvent) {
     >
       {{ store.error }}
     </p>
+    <RecordingBar
+      v-if="!showSettings && capture.status !== 'idle'"
+      class="mb-2"
+      :started-at-ms="capture.startedAtMs"
+      :saving="capture.status === 'saving'"
+      :starting="capture.status === 'starting'"
+      :warning="capture.warning"
+      @stop="capture.stop()"
+    />
+    <p
+      v-if="!showSettings && capture.error"
+      class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+    >
+      {{ capture.error }}
+    </p>
     <div
       v-if="showSettings"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
@@ -108,8 +126,10 @@ function onFilterEscape(event: KeyboardEvent) {
         :vaults="filtered"
         :busy-vault-id="store.busyVaultId"
         :busy-command="store.busyCommand"
+        :capture-disabled="capture.status !== 'idle'"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
+        @capture="capture.start($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
         No vaults match "{{ filter }}".

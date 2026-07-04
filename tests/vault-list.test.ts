@@ -8,7 +8,11 @@ const mountList = (
   vaults: Array<{ id: string; name: string; path: string; open: boolean }>,
   busyVaultId: string | null = null,
   busyCommand: Busy = null,
-) => mount(VaultList, { props: { vaults, busyVaultId, busyCommand } });
+  captureDisabled = false,
+) =>
+  mount(VaultList, {
+    props: { vaults, busyVaultId, busyCommand, captureDisabled },
+  });
 
 const sample = [
   { id: "aaa111", name: "Personal", path: "C:\\vaults\\Personal", open: false },
@@ -69,10 +73,27 @@ describe("VaultList", () => {
     const wrapper = mountList(sample, "aaa111", "open_vault");
     expect(wrapper.find('[role="status"]').exists()).toBe(true);
     const buttons = wrapper.findAll("button");
-    expect(buttons.length).toBe(4);
+    expect(buttons.length).toBe(6);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true,
     );
+  });
+
+  it("emits capture with the vault id", async () => {
+    const wrapper = mountList(sample);
+    await wrapper
+      .find('[aria-label^="Capture knowledge in"]')
+      .trigger("click");
+    expect(wrapper.emitted("capture")).toEqual([[sample[0].id]]);
+  });
+
+  it("disables capture buttons when captureDisabled", () => {
+    const wrapper = mountList(sample, null, null, true);
+    expect(
+      wrapper
+        .find('[aria-label^="Capture knowledge in"]')
+        .attributes("disabled"),
+    ).toBeDefined();
   });
 
   it("shows the path for vaults with duplicate names so they can be told apart", () => {

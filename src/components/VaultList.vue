@@ -6,10 +6,12 @@ const props = defineProps<{
   vaults: Vault[];
   busyVaultId: string | null;
   busyCommand: "open_vault" | "open_daily_note" | null;
+  captureDisabled: boolean;
 }>();
 defineEmits<{
   (e: "open-vault", id: string): void;
   (e: "open-daily-note", id: string): void;
+  (e: "capture", id: string): void;
 }>();
 
 // Obsidian allows two registered vaults whose folders share a name; without a
@@ -136,6 +138,28 @@ const groups = computed(() => {
           >
             <rect x="3" y="5" width="18" height="16" rx="2" />
             <path d="M8 3v4M16 3v4M3 11h18" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+          :disabled="busyVaultId !== null || captureDisabled"
+          :aria-label="`Capture knowledge in ${accessibleName(vault)}`"
+          title="Capture knowledge (record audio)"
+          @click="$emit('capture', vault.id)"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4" />
           </svg>
         </button>
       </div>
