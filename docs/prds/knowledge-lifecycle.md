@@ -249,7 +249,7 @@ The lifecycle naturally decomposes Vault Buddy into bounded domains.
 - **Knowledge Retrieval** — Responsible for finding and exploring knowledge.
 - **Workflow Engine** — Responsible for orchestrating repeatable processes.
 - **AI Platform** — Responsible for intelligent reasoning and agent orchestration. See the [AI Platform & Agent Runtime PRD](ai-platform.md).
-- **Skills Platform** — Responsible for integrating external tools and services.
+- **Plugin Platform** — Responsible for integrating external tools and services. See the [Plugin Platform section](ai-platform.md#plugin-platform) of the AI Platform & Agent Runtime PRD.
 
 ## Product Roadmap
 
@@ -286,7 +286,7 @@ The lifecycle naturally decomposes Vault Buddy into bounded domains.
 
 ### Knowledge Operating System
 
-- Unified Skills Platform
+- Unified Plugin Platform
 - Plugin Marketplace
 - Agent Marketplace
 - Cross-application Workflows
