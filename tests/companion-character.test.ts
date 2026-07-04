@@ -45,6 +45,28 @@ describe("CompanionCharacter", () => {
     expect(wrapper.emitted("toggle")).toHaveLength(1);
   });
 
+  it("captures the pointer on press so fast flicks can't escape the 64px buddy", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    const el = buddy.element as HTMLElement & {
+      setPointerCapture: (id: number) => void;
+      releasePointerCapture: (id: number) => void;
+    };
+    el.setPointerCapture = vi.fn();
+    el.releasePointerCapture = vi.fn();
+
+    await buddy.trigger("pointerdown", {
+      button: 0,
+      pointerId: 7,
+      screenX: 50,
+      screenY: 50,
+    });
+    expect(el.setPointerCapture).toHaveBeenCalledWith(7);
+
+    await buddy.trigger("pointerup", { pointerId: 7 });
+    expect(el.releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
   it("toggles again on the click after a completed drag", async () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     const buddy = wrapper.find("button.buddy");

@@ -14,6 +14,11 @@ let dragged = false;
 
 function onPointerDown(e: PointerEvent) {
   if (e.button !== 0) return;
+  // Capture the pointer: the buddy is only 64px, so a fast flick can leave
+  // the button before the first pointermove fires. Without capture those
+  // moves go to whatever is under the cursor, the drag never starts, and
+  // the release can even register as a click.
+  (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
   pressedAt = { x: e.screenX, y: e.screenY };
   dragged = false;
 }
@@ -24,10 +29,17 @@ function onPointerMove(e: PointerEvent) {
   if (moved < DRAG_THRESHOLD_PX) return;
   pressedAt = null;
   dragged = true;
+  // The OS move loop takes the mouse from here; let go of the capture.
+  (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(
+    e.pointerId,
+  );
   void getCurrentWindow().startDragging();
 }
 
-function onPointerEnd() {
+function onPointerEnd(e: PointerEvent) {
+  (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(
+    e.pointerId,
+  );
   pressedAt = null;
 }
 
