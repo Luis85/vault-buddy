@@ -103,7 +103,7 @@ async function save() {
       <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
         Default recording mode
       </h2>
-      <div class="flex gap-1" role="radiogroup" aria-label="Recording mode">
+      <div class="flex gap-1" role="radiogroup" aria-label="Default recording mode">
         <button
           v-for="m in [
             { key: 'meeting', label: 'Meeting' },

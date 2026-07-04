@@ -199,7 +199,7 @@ pub fn install_native_crash_handler() {
     let record: Vec<u8> = format_crash_record(&CrashRecord {
         timestamp: &timestamp,
         thread: "<native fault>",
-        message: "native crash (exception/signal code on the next line)",
+        message: "native crash (exception/signal code appended after this record)",
         location: None,
         backtrace: "<unavailable for native faults — enable WER LocalDumps for a dump>",
         app_version: env!("CARGO_PKG_VERSION"),
@@ -224,6 +224,10 @@ pub fn install_native_crash_handler() {
             #[cfg(any(windows, target_os = "linux"))]
             let code_hex = vault_buddy_core::crash::hex_u32(code, &mut hex_buf);
 
+            // Separate write_all calls are deliberate: combining would require
+            // crash-time allocation. The panic hook writes through its own handle,
+            // and the docs already tell readers to treat same-moment records as one
+            // crash, so a torn interleave is an accepted residual risk.
             let write_record = |mut file: &std::fs::File| {
                 let _ = file.write_all(&record);
                 let _ = file.write_all(b"code: ");
