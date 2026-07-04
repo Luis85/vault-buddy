@@ -32,7 +32,7 @@ cd vault-buddy
 #   git checkout <branch-name>
 
 npm install
-npm run tauri dev
+npm run tauri   # alias for `tauri dev`
 ```
 
 The first `tauri dev` compiles the Rust shell and takes a few minutes; after
@@ -43,7 +43,7 @@ tray icon (Show/Hide, Quit) to control it.
 ### Build an installer
 
 ```bash
-npm run tauri build
+npx tauri build
 ```
 
 Installers land in `src-tauri/target/release/bundle/` (`msi/` and `nsis/`).

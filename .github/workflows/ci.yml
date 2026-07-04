@@ -60,7 +60,7 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - name: Build Tauri app and installers
-        run: npm run tauri build
+        run: npx tauri build
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
