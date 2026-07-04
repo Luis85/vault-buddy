@@ -106,4 +106,21 @@ describe("BuddySettings", () => {
     expect(wrapper.text()).toContain("Version 0.2.0 is available");
     expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
   });
+
+  it("keeps the install button visible for retry after a failure", async () => {
+    // the store keeps `available` after a failed download/install exactly
+    // so the user can retry — the button must not vanish behind the error
+    updaterMocks.check.mockResolvedValue({
+      version: "0.2.0",
+      download: vi.fn().mockRejectedValue("download broke"),
+      install: vi.fn(),
+    });
+    const wrapper = mount(BuddySettings);
+    await wrapper.find('[data-testid="check-updates"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="install-update"]').trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("download broke");
+    expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
+  });
 });
