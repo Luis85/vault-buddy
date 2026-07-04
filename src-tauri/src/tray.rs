@@ -68,6 +68,8 @@ pub fn quit(app: &AppHandle) {
 /// proxy) rather than requiring it, and the window-state plugin reads
 /// positions through the same thread-safe dispatchers.
 fn finish_quit(app: &AppHandle) {
+    log::info!("clean shutdown (quit)");
+    crate::diagnostics::mark_clean_shutdown();
     restore_home_position(app);
     // app.exit bypasses window destruction, which is what the window-state
     // plugin normally saves on — save explicitly.

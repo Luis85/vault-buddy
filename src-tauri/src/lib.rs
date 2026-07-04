@@ -4,6 +4,7 @@ mod diagnostics;
 mod tray;
 
 use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 pub fn run() {
     // Before anything else: a panic during builder construction or in any
@@ -95,6 +96,10 @@ pub fn run() {
                         .expect("failed to spawn close-finalize thread");
                 } else {
                     tray::restore_home_position(app);
+                    // Alt+F4 / session end: the window is about to be
+                    // destroyed and the process exits with it.
+                    log::info!("clean shutdown (window close)");
+                    diagnostics::mark_clean_shutdown();
                 }
             }
         })
@@ -122,6 +127,45 @@ pub fn run() {
             // the temp dir.
             if let Ok(dir) = app.path().app_log_dir() {
                 diagnostics::set_log_dir(dir);
+            }
+            log::info!(
+                "Vault Buddy v{} starting (pid {})",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id()
+            );
+            if let Ok(dir) = app.path().app_log_dir() {
+                // A panic before setup wrote its record to the temp dir —
+                // fold it in where "Open logs folder" points.
+                match vault_buddy_core::app_diagnostics::adopt_stray_crash_log(
+                    &diagnostics::stray_crash_file(),
+                    &dir,
+                ) {
+                    Ok(true) => log::info!("adopted a pre-setup crash record into crash.log"),
+                    Ok(false) => {}
+                    Err(e) => log::warn!("could not adopt stray crash log: {e}"),
+                }
+                // The panic hook only sees Rust panics; the marker catches
+                // every other ending too (native fault, kill, power loss).
+                if let vault_buddy_core::app_diagnostics::PreviousRun::Unclean(previous) =
+                    vault_buddy_core::app_diagnostics::check_previous_run(&dir)
+                {
+                    log::warn!(
+                        "previous session did not shut down cleanly ({previous}) — \
+                         see crash.log and the rotated log for its last moments"
+                    );
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("Vault Buddy restarted after an unclean shutdown")
+                        .body("Logs: tray → Open logs folder")
+                        .show();
+                }
+                if let Err(e) = vault_buddy_core::app_diagnostics::write_running_marker(
+                    &dir,
+                    env!("CARGO_PKG_VERSION"),
+                ) {
+                    log::warn!("could not write the run marker: {e}");
+                }
             }
             tray::create_tray(app.handle())?;
             capture_commands::run_recovery(app.handle());
@@ -211,6 +255,11 @@ fn checkpoint_tick(
     // how the buddy silently sinks behind the taskbar.
     if let Err(e) = window.set_always_on_top(true) {
         log::warn!("always-on-top re-assert failed: {e}");
+    }
+    // Re-stamp the run marker every ~15s: cheap, and it un-does a
+    // premature "clean" stamp if an update install failed after writing it.
+    if (*ticks).is_multiple_of(15) {
+        crate::diagnostics::heartbeat_running_marker();
     }
     // Never persist while the panel has the window shifted — only the
     // unshifted home position may reach disk.

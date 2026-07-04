@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use vault_buddy_core::crash::{format_crash_record, CrashRecord};
@@ -15,12 +16,50 @@ pub fn set_log_dir(dir: PathBuf) {
     let _ = LOG_DIR.set(dir);
 }
 
+/// Pre-setup fallback location for crash records — app-specific name so
+/// startup adoption can never grab another program's file.
+pub fn stray_crash_file() -> PathBuf {
+    std::env::temp_dir().join("vault-buddy-crash.log")
+}
+
 fn crash_file() -> PathBuf {
-    LOG_DIR
-        .get()
-        .cloned()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("crash.log")
+    match LOG_DIR.get() {
+        Some(dir) => dir.join("crash.log"),
+        None => stray_crash_file(),
+    }
+}
+
+// Flipped by `mark_clean_shutdown` on every graceful exit path so the
+// heartbeat below can never re-arm the run marker after a graceful exit
+// began — otherwise a heartbeat tick racing the final stamp could leave
+// "running" as the last word and false-positive the next launch as a crash.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Stamp the run marker "clean" and stop the heartbeat from re-arming it.
+/// Called from every graceful exit path (tray/buddy quit, Alt+F4 close,
+/// update install) — a marker still saying "running" at next startup is
+/// therefore a crash/kill by definition. Idempotent and safe to call from a
+/// worker thread (finish_quit runs on `shutdown-finalize`).
+pub fn mark_clean_shutdown() {
+    SHUTTING_DOWN.store(true, Ordering::SeqCst);
+    if let Some(dir) = LOG_DIR.get() {
+        if let Err(e) = vault_buddy_core::app_diagnostics::write_clean_marker(dir) {
+            log::warn!("could not stamp clean shutdown: {e}");
+        }
+    }
+}
+
+/// Re-stamp the marker as running while the app lives. A premature
+/// "clean" (an update install that failed after its pre-exit stamp)
+/// self-heals on the next heartbeat.
+pub fn heartbeat_running_marker() {
+    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Some(dir) = LOG_DIR.get() {
+        let _ =
+            vault_buddy_core::app_diagnostics::write_running_marker(dir, env!("CARGO_PKG_VERSION"));
+    }
 }
 
 /// Install the process-wide panic hook. MUST run before the Tauri builder so a

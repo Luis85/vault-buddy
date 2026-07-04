@@ -61,6 +61,10 @@ pub fn prepare_update_install(app: tauri::AppHandle) {
     if let Err(e) = app.save_window_state(StateFlags::POSITION) {
         log::error!("update install: saving window state failed: {e}");
     }
+    // The updater kills the process via std::process::exit — stamp clean
+    // now or every update would false-positive as a crash next launch.
+    log::info!("clean shutdown (update install)");
+    crate::diagnostics::mark_clean_shutdown();
 }
 
 /// Applies position and size in one native call. The frontend used to issue
