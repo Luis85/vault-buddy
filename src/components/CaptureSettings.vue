@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { logWarning } from "../logging";
 import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
 
 const props = defineProps<{ vaultId: string }>();
@@ -87,6 +88,7 @@ async function save() {
     const message = String(e);
     if (message.toLowerCase().includes("folder")) folderError.value = message;
     else saveError.value = message;
+    logWarning(`capture settings save failed (vault ${props.vaultId}): ${message}`);
   }
 }
 </script>

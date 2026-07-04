@@ -1,7 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import CaptureSettings from "../src/components/CaptureSettings.vue";
+
+vi.mock("../src/logging", () => ({
+  logBreadcrumb: vi.fn(),
+  logWarning: vi.fn(),
+}));
+
+import { logWarning } from "../src/logging";
 
 const config = {
   mode: "meeting",
@@ -125,5 +132,18 @@ describe("CaptureSettings", () => {
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(wrapper.get('[data-testid="save-error"]').text()).toContain("disk full");
+  });
+
+  it("logs a warning through the log bridge when the save fails", async () => {
+    const { wrapper } = await mountLoaded({
+      onSet: () => {
+        throw "Could not save capture settings: disk full";
+      },
+    });
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("settings save failed"),
+    );
   });
 });

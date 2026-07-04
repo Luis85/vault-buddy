@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { logBreadcrumb, logWarning } from "../logging";
 import type { CaptureRenamed, CaptureSaved, CaptureStatus } from "../types";
 
 /** How long the post-save "Name this recording" window stays open. */
@@ -98,6 +99,7 @@ export const useCaptureStore = defineStore("capture", {
       // New recording: the previous save's rename window is over.
       this.dismissRename();
       try {
+        logBreadcrumb(`capture: start requested (vault ${vaultId})`);
         const s = await invoke<CaptureStatus>("start_capture", { id: vaultId });
         this.status = "recording";
         this.startedAtMs = s.startedAtMs;
@@ -111,17 +113,20 @@ export const useCaptureStore = defineStore("capture", {
         // may have moved it on in the meantime.
         if (this.status === "starting") this.status = "idle";
         this.error = String(e);
+        logWarning(`capture start rejected: ${String(e)}`);
       }
     },
     async stop() {
       if (this.status !== "recording") return;
       this.status = "saving";
       try {
+        logBreadcrumb("capture: stop requested");
         await invoke("stop_capture");
         // capture:saved / capture:failed events complete the transition.
       } catch (e) {
         this.status = "idle";
         this.error = String(e);
+        logWarning(`capture stop rejected: ${String(e)}`);
       }
     },
     async pause() {
@@ -131,6 +136,7 @@ export const useCaptureStore = defineStore("capture", {
         // capture:paused flips the state — Rust owns the truth.
       } catch (e) {
         this.error = String(e);
+        logWarning(`capture pause rejected: ${String(e)}`);
       }
     },
     async resume() {
@@ -139,6 +145,7 @@ export const useCaptureStore = defineStore("capture", {
         await invoke("resume_capture");
       } catch (e) {
         this.error = String(e);
+        logWarning(`capture resume rejected: ${String(e)}`);
       }
     },
     armRenameExpiry() {
@@ -167,6 +174,7 @@ export const useCaptureStore = defineStore("capture", {
       } catch (e) {
         // Prompt stays up so the user can fix the title and retry.
         this.renameError = String(e);
+        logWarning(`capture rename rejected: ${String(e)}`);
       }
     },
   },

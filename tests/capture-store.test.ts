@@ -15,6 +15,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
+vi.mock("../src/logging", () => ({
+  logBreadcrumb: vi.fn(),
+  logWarning: vi.fn(),
+}));
+
+import { logWarning } from "../src/logging";
 import { useCaptureStore } from "../src/stores/capture";
 
 describe("capture store", () => {
@@ -266,6 +272,38 @@ describe("capture store", () => {
     await store.rename("x");
     expect(store.lastSaved).not.toBeNull();
     expect(store.renameError).toContain("Title is too long");
+  });
+
+  it("rename failure logs a warning through the log bridge", async () => {
+    mockIPC(() => {
+      throw "Title is too long";
+    });
+    const store = useCaptureStore();
+    store.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await store.rename("x");
+    expect(store.renameError).not.toBeNull();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("rename rejected"),
+    );
+  });
+
+  it("pause failure logs a warning through the log bridge", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "start_capture") {
+        return { recording: true, vaultId: "v1", startedAtMs: 1 };
+      }
+      if (cmd === "pause_capture") {
+        throw "Recording is still starting.";
+      }
+    });
+    const store = useCaptureStore();
+    await store.init();
+    await store.start("v1");
+    await store.pause();
+    expect(store.error).not.toBeNull();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("pause rejected"),
+    );
   });
 
   it("a new recording dismisses the rename window", async () => {
