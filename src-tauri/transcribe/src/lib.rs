@@ -34,6 +34,7 @@ pub fn transcribe_recording(
     transcriber: &dyn Transcriber,
     opts: &TranscribeOptions,
     generated_at: &str,
+    force: bool,
 ) -> Result<PathBuf, String> {
     let started = std::time::Instant::now();
     let samples = decode::decode_to_16k_mono(mp3)?;
@@ -57,15 +58,21 @@ pub fn transcribe_recording(
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);
-    match transcript::replace_if_ours(&path, &content)
-        .map_err(|e| format!("write transcript: {e}"))?
-    {
-        transcript::ReplaceOutcome::Written => {}
-        transcript::ReplaceOutcome::SkippedForeign => {
-            log::warn!(
-                "transcribe: left an existing non-regenerable sidecar untouched (not overwritten): {}",
-                path.display()
-            );
+    if force {
+        // Explicit re-transcribe: overwrite even a finished sidecar.
+        transcript::force_write_sidecar(&path, &content)
+            .map_err(|e| format!("write transcript: {e}"))?;
+    } else {
+        match transcript::replace_if_ours(&path, &content)
+            .map_err(|e| format!("write transcript: {e}"))?
+        {
+            transcript::ReplaceOutcome::Written => {}
+            transcript::ReplaceOutcome::SkippedForeign => {
+                log::warn!(
+                    "transcribe: left an existing non-regenerable sidecar untouched (not overwritten): {}",
+                    path.display()
+                );
+            }
         }
     }
     Ok(path)
@@ -137,8 +144,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
         write_mp3(&mp3);
-        let path =
-            transcribe_recording(&mp3, &FakeOk, &opts(), "2026-07-04T15:00:00+00:00").unwrap();
+        let path = transcribe_recording(&mp3, &FakeOk, &opts(), "2026-07-04T15:00:00+00:00", false)
+            .unwrap();
         assert_eq!(path, transcript_path(&mp3));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("vault-buddy-transcript: complete"));
@@ -152,7 +159,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
         write_mp3(&mp3);
-        let err = transcribe_recording(&mp3, &FakeErr, &opts(), "t").unwrap_err();
+        let err = transcribe_recording(&mp3, &FakeErr, &opts(), "t", false).unwrap_err();
         assert!(err.contains("engine exploded"));
         assert!(!transcript_path(&mp3).exists());
     }
@@ -162,10 +169,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
         std::fs::write(&mp3, b"this is not a valid mp3 stream at all").unwrap();
-        assert!(transcribe_recording(&mp3, &FakeOk, &opts(), "t").is_err());
+        assert!(transcribe_recording(&mp3, &FakeOk, &opts(), "t", false).is_err());
         assert!(
             !transcript_path(&mp3).exists(),
             "no sidecar when decode fails"
         );
+    }
+
+    #[test]
+    fn force_regenerates_a_complete_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        write_mp3(&mp3);
+        let path = transcript_path(&mp3);
+        std::fs::write(&path, "---\nvault-buddy-transcript: complete\n---\nOLD").unwrap();
+        // Without force, a complete transcript is left untouched...
+        transcribe_recording(&mp3, &FakeOk, &opts(), "t", false).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("OLD"));
+        // ...with force, it is regenerated.
+        transcribe_recording(&mp3, &FakeOk, &opts(), "t", true).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("OLD"));
+        assert!(text.contains("hello world"));
     }
 }
