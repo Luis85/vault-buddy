@@ -27,15 +27,25 @@ pub enum Side {
     Right,
 }
 
-/// Vertical tail placement — the SpeechBubble `valign` prop. `Down` means the
-/// bubble is TOP-aligned with the buddy (tail near the bubble's top, level with
-/// the buddy); `Up` means it is BOTTOM-aligned (tail near the bottom, so the
-/// bubble unfolds upward). Named for the `valign` prop values it maps to, not
-/// for the alignment direction.
+/// Where the tail sits on the card so it points at the buddy — the SpeechBubble
+/// `valign` prop (`top`/`middle`/`bottom`). `Middle` is the common case (the
+/// bubble is centered level with the buddy); `Top`/`Bottom` happen only when a
+/// screen edge pushes the card above or below the buddy's center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VAlign {
-    Up,
-    Down,
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// Vertical placement strategy. `Edge` top-aligns with the buddy and flips to
+/// bottom-align near the bottom edge (the panel, which unfolds downward).
+/// `Center` sits the window level with the buddy's center (the bubble, so its
+/// tail points at the character, not the top of the buddy window).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VMode {
+    Edge,
+    Center,
 }
 
 /// The side + vertical alignment the bubble actually landed on, so the tail can
@@ -47,81 +57,78 @@ pub struct Anchor {
     pub valign: VAlign,
 }
 
+/// Tolerance (px) within which the card counts as level with the buddy — a
+/// small clamp near a screen edge then still reads as a `Middle` tail.
+const VALIGN_TOL: i32 = 8;
+
 /// Top-left for the panel window, given the buddy rect, the monitor work area,
-/// and the panel size. The panel always prefers the RIGHT side, so this is a
-/// thin wrapper over `place_beside` that discards the anchor.
+/// and the panel size. The panel prefers the RIGHT side and edge-aligns
+/// vertically, so this is a thin wrapper over `place_beside` that discards the
+/// anchor.
 pub fn panel_position(buddy: Rect, work_area: Option<Rect>, panel_w: i32, panel_h: i32) -> Point {
-    place_beside(buddy, work_area, panel_w, panel_h, Side::Right).0
+    place_beside(buddy, work_area, panel_w, panel_h, Side::Right, VMode::Edge).0
 }
 
 /// Top-left AND resolved anchor for a companion window placed beside the buddy.
 ///
-/// Opens on the `prefer` side and TOP-aligned with the buddy; if that side
-/// overflows its screen edge it flips to the other side, and near the bottom
-/// edge it BOTTOM-aligns so the window unfolds upward. The returned `Anchor`
-/// reports the side/valign actually chosen, so the caller can point the tail
-/// back at the buddy. The position is clamped to the work area. With no work
-/// area (unknown monitor) it honors `prefer`, top-aligned, unclamped.
+/// Opens on the `prefer` side; if that side overflows its screen edge it flips
+/// to the other side. Vertically it follows `vmode`: `Edge` top-aligns (flips
+/// to bottom-align near the bottom edge), `Center` sits level with the buddy's
+/// center. The result is clamped to the work area, and the returned `Anchor`
+/// reports the side plus where the tail must sit (derived from where the card
+/// actually landed relative to the buddy's center) so the tail points back at
+/// the buddy. With no work area (unknown monitor) it honors `prefer`, unclamped.
 pub fn place_beside(
     buddy: Rect,
     work_area: Option<Rect>,
     w: i32,
     h: i32,
     prefer: Side,
+    vmode: VMode,
 ) -> (Point, Anchor) {
     let right_x = buddy.x + buddy.w;
     let left_x = buddy.x - w;
-    let Some(area) = work_area else {
-        let (x, side) = match prefer {
-            Side::Right => (right_x, Side::Right),
-            Side::Left => (left_x, Side::Left),
-        };
-        return (
-            Point { x, y: buddy.y },
-            Anchor {
-                side,
-                valign: VAlign::Down,
-            },
-        );
-    };
     // Horizontal: try the preferred side; flip to the other if it overflows
-    // that screen edge.
-    let (x, side) = match prefer {
-        Side::Right => {
-            if right_x + w <= area.x + area.w {
-                (right_x, Side::Right)
-            } else {
-                (left_x, Side::Left)
-            }
-        }
-        Side::Left => {
-            if left_x >= area.x {
-                (left_x, Side::Left)
-            } else {
-                (right_x, Side::Right)
-            }
-        }
+    // that screen edge (no work area → honor the preference).
+    let (x_pref, side) = match (work_area, prefer) {
+        (Some(area), Side::Right) if right_x + w > area.x + area.w => (left_x, Side::Left),
+        (Some(area), Side::Left) if left_x < area.x => (right_x, Side::Right),
+        (_, Side::Right) => (right_x, Side::Right),
+        (_, Side::Left) => (left_x, Side::Left),
     };
-    // Vertical: top-aligned with the buddy unless that overflows the bottom
-    // edge, in which case bottom-align (window unfolds upward).
-    let (y, valign) = if buddy.y + h <= area.y + area.h {
-        (buddy.y, VAlign::Down)
-    } else {
-        (buddy.y + buddy.h - h, VAlign::Up)
+    let buddy_center_y = buddy.y + buddy.h / 2;
+    // Vertical (pre-clamp) per mode.
+    let y_pref = match vmode {
+        VMode::Edge => match work_area {
+            Some(area) if buddy.y + h > area.y + area.h => buddy.y + buddy.h - h,
+            _ => buddy.y,
+        },
+        VMode::Center => buddy_center_y - h / 2,
     };
     // Clamp fully on-screen. A window larger than the work area (or a buddy in
     // a corner) still lands inside; max is floored to the min so clamp never
-    // sees max < min. The side/valign decision already fit the window, so the
-    // clamp only nudges corner cases and never contradicts the anchor.
-    let max_x = (area.x + area.w - w).max(area.x);
-    let max_y = (area.y + area.h - h).max(area.y);
-    (
-        Point {
-            x: x.clamp(area.x, max_x),
-            y: y.clamp(area.y, max_y),
-        },
-        Anchor { side, valign },
-    )
+    // sees max < min.
+    let (x, y) = match work_area {
+        Some(area) => {
+            let max_x = (area.x + area.w - w).max(area.x);
+            let max_y = (area.y + area.h - h).max(area.y);
+            (x_pref.clamp(area.x, max_x), y_pref.clamp(area.y, max_y))
+        }
+        None => (x_pref, y_pref),
+    };
+    // The tail points at the buddy relative to where the card actually landed:
+    // card above the buddy's center → tail low (Bottom), below → tail high
+    // (Top), level → Middle. This is computed post-clamp, so an edge nudge is
+    // reflected in the tail.
+    let card_center_y = y + h / 2;
+    let valign = if card_center_y + VALIGN_TOL < buddy_center_y {
+        VAlign::Bottom
+    } else if card_center_y > buddy_center_y + VALIGN_TOL {
+        VAlign::Top
+    } else {
+        VAlign::Middle
+    };
+    (Point { x, y }, Anchor { side, valign })
 }
 
 #[cfg(test)]
@@ -207,53 +214,56 @@ mod tests {
     }
 
     #[test]
-    fn place_beside_opens_on_the_preferred_right() {
-        // faces right → bubble to the right of the buddy, tail on its left
+    fn place_beside_centers_on_the_buddy_facing_right() {
+        // faces right → bubble to the right, centered level with the buddy
         let (p, a) = place_beside(
             buddy_at(100, 100),
             Some(AREA),
             BUBBLE_W,
             BUBBLE_H,
             Side::Right,
+            VMode::Center,
         );
+        // centered: y = buddy_center(144) - h/2(75) = 69
         assert_eq!(
             p,
             Point {
                 x: 100 + BUDDY,
-                y: 100
+                y: 69
             }
         );
         assert_eq!(
             a,
             Anchor {
                 side: Side::Right,
-                valign: VAlign::Down,
+                valign: VAlign::Middle,
             }
         );
     }
 
     #[test]
-    fn place_beside_opens_on_the_preferred_left() {
-        // faces left → bubble to the left of the buddy, tail on its right
+    fn place_beside_centers_on_the_buddy_facing_left() {
+        // faces left → bubble to the left, centered level with the buddy
         let (p, a) = place_beside(
             buddy_at(400, 100),
             Some(AREA),
             BUBBLE_W,
             BUBBLE_H,
             Side::Left,
+            VMode::Center,
         );
         assert_eq!(
             p,
             Point {
                 x: 400 - BUBBLE_W,
-                y: 100
+                y: 69
             }
         );
         assert_eq!(
             a,
             Anchor {
                 side: Side::Left,
-                valign: VAlign::Down,
+                valign: VAlign::Middle,
             }
         );
     }
@@ -266,6 +276,7 @@ mod tests {
             BUBBLE_W,
             BUBBLE_H,
             Side::Right,
+            VMode::Center,
         );
         assert_eq!(p.x, 1900 - BUBBLE_W);
         assert_eq!(a.side, Side::Left);
@@ -274,31 +285,64 @@ mod tests {
     #[test]
     fn place_beside_flips_a_left_preference_at_the_left_edge() {
         // buddy hugging the left edge: opening left overflows → flip right
-        let (p, a) = place_beside(buddy_at(0, 100), Some(AREA), BUBBLE_W, BUBBLE_H, Side::Left);
-        assert_eq!(p.x, BUDDY); // buddy at x=0, so right side is at 0 + BUDDY
+        let (p, a) = place_beside(
+            buddy_at(0, 100),
+            Some(AREA),
+            BUBBLE_W,
+            BUBBLE_H,
+            Side::Left,
+            VMode::Center,
+        );
+        assert_eq!(p.x, BUDDY); // buddy at x=0, so the right side is at 0 + BUDDY
         assert_eq!(a.side, Side::Right);
     }
 
     #[test]
-    fn place_beside_bottom_aligns_and_flips_valign_up() {
-        let (_, a) = place_beside(
+    fn place_beside_points_the_tail_up_when_clamped_at_the_top_edge() {
+        // buddy at the very top: the centered bubble can't rise to meet it, so
+        // it clamps down and the tail points UP to the buddy above it.
+        let (p, a) = place_beside(
+            buddy_at(100, 0),
+            Some(AREA),
+            BUBBLE_W,
+            BUBBLE_H,
+            Side::Right,
+            VMode::Center,
+        );
+        assert_eq!(p.y, 0);
+        assert_eq!(a.valign, VAlign::Top);
+    }
+
+    #[test]
+    fn place_beside_points_the_tail_down_when_clamped_at_the_bottom_edge() {
+        let (p, a) = place_beside(
             buddy_at(100, 1000),
             Some(AREA),
             BUBBLE_W,
             BUBBLE_H,
             Side::Right,
+            VMode::Center,
         );
-        assert_eq!(a.valign, VAlign::Up);
+        // clamped up to fit: max_y = 1080 - 150 = 930
+        assert_eq!(p.y, 930);
+        assert_eq!(a.valign, VAlign::Bottom);
     }
 
     #[test]
     fn place_beside_honors_the_preferred_side_with_no_monitor() {
-        let (p, a) = place_beside(buddy_at(400, 100), None, BUBBLE_W, BUBBLE_H, Side::Left);
+        let (p, a) = place_beside(
+            buddy_at(400, 100),
+            None,
+            BUBBLE_W,
+            BUBBLE_H,
+            Side::Left,
+            VMode::Center,
+        );
         assert_eq!(
             p,
             Point {
                 x: 400 - BUBBLE_W,
-                y: 100
+                y: 69
             }
         );
         assert_eq!(a.side, Side::Left);
