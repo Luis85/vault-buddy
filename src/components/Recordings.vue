@@ -212,7 +212,7 @@ async function open(mp3: string) {
           <button
             type="button"
             data-testid="retranscribe"
-            :disabled="transcribingMp3.has(r.mp3) || r.transcriptStatus === 'pending'"
+            :disabled="transcribingMp3.has(r.mp3)"
             :aria-label="`Re-transcribe ${r.title}`"
             title="Re-transcribe"
             class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"

@@ -145,6 +145,27 @@ describe("Recordings", () => {
     expect(calls.some((c) => c.cmd === "retranscribe")).toBe(true);
   });
 
+  it("keeps the re-transcribe button enabled for a stuck pending recording", async () => {
+    // A sidecar stuck at `pending` (a crash left a placeholder, no job
+    // running) must stay re-transcribable: the button is gated only on THIS
+    // session's transient in-flight set, never on the persisted pending
+    // status, or such a recording is stranded with no way to recover it.
+    const { wrapper } = await mountView({
+      list: [
+        {
+          mp3: "C:/v/Meetings/2026/07/p.mp3",
+          title: "Stuck",
+          recordedAt: "2026-07-04 12:00",
+          duration: "0:10",
+          type: "Meeting",
+          transcriptStatus: "pending",
+        },
+      ],
+    });
+    const btn = wrapper.get('[data-testid="retranscribe"]');
+    expect(btn.attributes("disabled")).toBeUndefined();
+  });
+
   it("settles a row's status to complete when capture:transcribed fires", async () => {
     // mockIPC returns the mock's value as-is (no clone — see mocks.js), so
     // recordings.value would alias the shared `sample` array; a fresh copy
