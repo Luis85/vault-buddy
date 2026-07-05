@@ -873,7 +873,7 @@ describe("Recordings", () => {
     await wrapper.findAll('[data-testid="recording-row"]')[0].trigger("click");
     await flushPromises();
     const open = calls.find((c) => c.cmd === "open_recording");
-    expect(open?.args).toEqual({ mp3: sample[0].mp3 }); // first row = Meeting/Standup
+    expect(open?.args).toEqual({ path: sample[0].mp3 }); // first row = Meeting/Standup
     expect(store.panelOpen).toBe(false);
   });
 
@@ -950,7 +950,7 @@ onMounted(async () => {
 
 async function open(mp3: string) {
   try {
-    await invoke("open_recording", { mp3 });
+    await invoke("open_recording", { path: mp3 });
     store.panelOpen = false; // Obsidian takes over — get out of the way
   } catch (e) {
     // A failed open (recording moved, launch error) is non-fatal — surface it
