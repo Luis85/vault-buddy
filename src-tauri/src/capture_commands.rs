@@ -329,13 +329,16 @@ pub fn list_recordings(id: String) -> Vec<RecordingDto> {
         return Vec::new();
     };
     let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
-    let roots: Vec<PathBuf> = cfg
-        .recording_roots()
-        .into_iter()
-        .filter_map(|folder| {
-            capture_paths::safe_recording_root(Path::new(&vault.path), folder).ok()
-        })
-        .collect();
+    // No swallowed error: a rejected (unsafe) folder is skipped WITH a warning,
+    // matching run_recovery/scan_and_enqueue — a silent filter_map would hide it.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for folder in cfg.recording_roots() {
+        let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), folder) else {
+            log::warn!("list_recordings: skipping unsafe recording folder {folder:?}");
+            continue;
+        };
+        roots.push(root);
+    }
     recordings::list_recordings(&roots)
         .into_iter()
         .map(|e| RecordingDto {
