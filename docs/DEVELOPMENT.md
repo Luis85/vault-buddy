@@ -13,6 +13,24 @@ where it's going, see the [PRD](PRD.md).
    prompt you to install the Visual Studio C++ Build Tools if missing
 3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
    [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+4. **LLVM (libclang) and CMake** — the app statically links whisper.cpp for
+   local speech-to-text, so the `whisper` feature is always on for the shell
+   and *every* app build compiles `whisper-rs-sys`, whose build runs `bindgen`
+   (needs `libclang`) and `cmake`. Install both and open a fresh terminal:
+
+   ```powershell
+   winget install LLVM.LLVM Kitware.CMake
+   ```
+
+   If `bindgen` still can't find libclang — the telltale error is
+   `Unable to find libclang: … set the LIBCLANG_PATH environment variable` —
+   point it at the install explicitly and reopen the terminal:
+
+   ```powershell
+   setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
+   ```
+
+   CI's Windows runner ships both tools, so this is a local-only setup step.
 
 ### Check out and run
 
