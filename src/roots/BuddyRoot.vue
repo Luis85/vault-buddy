@@ -68,7 +68,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen w-screen items-start justify-start p-2">
+  <!-- Center the character in the window. Windows clamps this tiny borderless
+       window up to its minimum size (wider/taller than the ~64px character), so
+       top-left anchoring left all the slack on one side — and the placement math
+       (bubble tuck, VMode::Center, the facing midline) assumes the character is
+       centered in the window. Centering makes those assumptions hold. -->
+  <div class="flex h-screen w-screen items-center justify-center">
     <CompanionCharacter
       :working="false"
       :animated="settings.animationsEnabled"

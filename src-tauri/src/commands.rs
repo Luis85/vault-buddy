@@ -199,12 +199,15 @@ pub fn close_bubble(app: tauri::AppHandle) {
 }
 
 /// Pull the greeting bubble toward the buddy by this fraction of the buddy
-/// window's width, overlapping the window's transparent padding (the 88px
-/// window holds a ~64px character centered, so ~0.14 each side is dead space)
-/// so the bubble sits snug against the character instead of floating away. A
-/// fraction rather than a fixed px so it scales with display DPI. Cosmetic —
-/// tuned against a manual Windows check. The panel uses 0.0.
-const BUBBLE_TUCK_FRAC: f64 = 0.30;
+/// window's width so it sits snug against the character instead of floating in
+/// the window's transparent padding. Windows clamps the tiny 88px buddy window
+/// up to its minimum window size (much wider than the ~64px character), so there
+/// is a lot of padding to cross; the character is centered in that window
+/// (`BuddyRoot`), so the padding — and this tuck — are symmetric on both sides.
+/// A fraction rather than a fixed px so it scales with display DPI. Cosmetic,
+/// tuned against a manual Windows check — a single symmetric knob now that the
+/// character is centered. The panel uses 0.0.
+const BUBBLE_TUCK_FRAC: f64 = 0.15;
 
 /// Which side a companion window prefers: a fixed side (the panel always opens
 /// right) or derived from the buddy's position (the bubble opens toward the
@@ -377,34 +380,26 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let _ = bubble.show();
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
-    // Confirm where the buddy is and where the bubble landed (the startup
-    // case): a buddy that isn't at its parked position means the window-state
-    // restore hasn't happened yet.
-    let buddy_pos = app
-        .get_webview_window("main")
-        .and_then(|b| b.outer_position().ok());
-    if let Ok(actual) = bubble.outer_position() {
+    // One-time startup diagnostic. The buddy window is usually larger than the
+    // 88px we asked for — Windows clamps it up to its minimum window size — so
+    // its outer_size confirms how much transparent padding the tuck crosses (why
+    // the character must be centered in it). A buddy not at its parked position
+    // would mean the window-state restore hadn't happened yet.
+    let buddy = app.get_webview_window("main");
+    let buddy_pos = buddy.as_ref().and_then(|b| b.outer_position().ok());
+    let buddy_size = buddy.as_ref().and_then(|b| b.outer_size().ok());
+    if let (Ok(actual), Ok(bsize)) = (bubble.outer_position(), bubble.outer_size()) {
         log::info!(
-            "greeting shown: buddy {:?}, bubble asked ({},{}) actual ({},{})",
+            "greeting shown: buddy pos {:?} size {:?}, bubble asked ({},{}) actual ({},{}) size {}x{}",
             buddy_pos.map(|b| (b.x, b.y)),
+            buddy_size.map(|s| (s.width, s.height)),
             pos.x,
             pos.y,
             actual.x,
-            actual.y
+            actual.y,
+            bsize.width,
+            bsize.height,
         );
-    }
-}
-
-/// Log the buddy's current position — a diagnostic for the "buddy not restored
-/// to where I parked it on restart" report, so the startup restore timing is
-/// visible across the greeting re-pin window.
-pub(crate) fn log_buddy_position(app: &tauri::AppHandle, tag: &str) {
-    use tauri::Manager;
-    if let Some(bp) = app
-        .get_webview_window("main")
-        .and_then(|b| b.outer_position().ok())
-    {
-        log::info!("buddy pos [{tag}]: ({},{})", bp.x, bp.y);
     }
 }
 
@@ -457,6 +452,12 @@ pub fn show_buddy_menu(
 ) -> Result<(), String> {
     use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
+    // Locate the "sometimes a lot of delay before the menu appears" report: time
+    // the menu build and the foreground activation separately. popup_menu itself
+    // is a modal loop (it blocks until dismissed), so it is timed up to its call
+    // only.
+    let started = std::time::Instant::now();
+
     let animation = CheckMenuItem::with_id(
         &app,
         "buddy-animation",
@@ -485,10 +486,16 @@ pub fn show_buddy_menu(
         .map_err(|e| e.to_string())?;
     let menu = Menu::with_items(&app, &[&animation, &dragging, &separator, &hide, &quit])
         .map_err(|e| e.to_string())?;
+    let built = started.elapsed();
     // Win32 popup menus require the owning window to be foreground —
     // without this the menu is delayed or silently ignored until the user
     // left-clicks the (unfocused) buddy first.
     let _ = window.set_focus();
+    log::info!(
+        "buddy menu: build {} ms, set_focus {} ms",
+        built.as_millis(),
+        (started.elapsed() - built).as_millis(),
+    );
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 

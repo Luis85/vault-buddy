@@ -88,19 +88,15 @@ fn schedule_focus_out_check(app: &tauri::AppHandle) {
     }
 }
 
-/// Show the greeting bubble beside the buddy, deferred until the window-state
-/// plugin has restored the buddy's parked position. Shown synchronously in
-/// `setup`, the bubble reads the buddy's pre-restore (default-corner) position
-/// and is left orphaned across the screen once the buddy jumps home.
-///
-/// A single fixed settle is not enough: the restore can land after the show on
-/// a slow disk, and it does not reliably surface as a `Moved` event the
-/// follow-handler (`reposition_bubble_if_visible`) can catch — so the bubble
-/// stays stranded at the default corner (the "bubble too high on startup" bug).
-/// Instead, show after a settle and then re-pin the visible bubble to the buddy
-/// a few times over the next second: each is a cheap `set_position` + anchor
-/// emit, harmless once the buddy has settled, and finished long before the 5s
-/// greeting ends. Best-effort: a spawn failure just skips the greeting.
+/// Show the greeting bubble beside the buddy, a beat after launch so the buddy
+/// is visibly settled before it greets. The buddy's parked position is restored
+/// synchronously in `setup` (before this runs), so — unlike the old design —
+/// there is nothing to wait out and no need to re-pin the bubble repeatedly: a
+/// single settle then show suffices. The frontend pulls both the facing and the
+/// bubble anchor on mount (`get_buddy_facing` / `get_bubble_anchor`), so one
+/// post-show facing emit is enough to cover a buddy webview that happened to
+/// mount before the restore landed. Best-effort: a spawn failure just skips the
+/// greeting.
 fn schedule_show_bubble(app: &tauri::AppHandle) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()
@@ -108,22 +104,13 @@ fn schedule_show_bubble(app: &tauri::AppHandle) {
         .spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(500));
             let a = app.clone();
-            let _ = app.run_on_main_thread(move || commands::show_bubble(&a));
-            for _ in 0..4 {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-                let a = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    // Diagnostic: watch the buddy position settle (or not)
-                    // across the re-pin window on restart.
-                    commands::log_buddy_position(&a, "repin");
-                    // Also emit the facing: the buddy's restored position
-                    // settles in this window, and the restore does not reliably
-                    // surface as a Moved event, so the sprite would otherwise
-                    // keep its default facing until the first drag.
-                    commands::emit_buddy_facing(&a);
-                    commands::reposition_bubble_if_visible(&a);
-                });
-            }
+            let _ = app.run_on_main_thread(move || {
+                commands::show_bubble(&a);
+                // The restored position need not have surfaced as a Moved event,
+                // so emit the facing once here — the sprite then faces correctly
+                // even if the buddy webview mounted before the restore landed.
+                commands::emit_buddy_facing(&a);
+            });
         });
     if let Err(e) = spawned {
         log::warn!("could not spawn show-bubble thread: {e}");
