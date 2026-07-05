@@ -174,8 +174,7 @@ function startWithMode(mode: "meeting" | "voice-note") {
       class="mb-2"
       :saved-mp3="capture.lastSaved.mp3"
       :error="capture.renameError"
-      @rename="capture.rename($event)"
-      @dismiss="capture.dismissRename()"
+      @accept="capture.acceptRename($event)"
     />
     <div
       v-if="view === 'settings'"

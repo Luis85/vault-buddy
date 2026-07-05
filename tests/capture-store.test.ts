@@ -356,4 +356,49 @@ describe("capture store", () => {
     expect(store.pausedTotalMs).toBe(1_500);
     expect(store.pausedSinceMs).toBe(9_000);
   });
+
+  it("acceptRename with unchanged title dismisses without calling rename_capture", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await store.acceptRename("2026-07-04 1405 Meeting");
+    expect(calls).toHaveLength(0);
+    expect(store.lastSaved).toBeNull();
+  });
+
+  it("acceptRename with empty/whitespace title dismisses without calling rename_capture", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await store.acceptRename("   ");
+    expect(calls).toHaveLength(0);
+    expect(store.lastSaved).toBeNull();
+  });
+
+  it("acceptRename with edited title calls rename_capture and updates lastSavedFile", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "rename_capture") {
+        return { mp3: "/v/2026-07-04 1405 Standup.mp3", note: null, warning: null };
+      }
+    });
+    const store = useCaptureStore();
+    store.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await store.acceptRename("Standup");
+    expect(calls).toEqual([
+      {
+        cmd: "rename_capture",
+        args: { mp3: "/v/2026-07-04 1405 Meeting.mp3", title: "Standup" },
+      },
+    ]);
+    expect(store.lastSavedFile).toBe("/v/2026-07-04 1405 Standup.mp3");
+    expect(store.lastSaved).toBeNull();
+  });
 });

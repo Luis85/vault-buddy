@@ -3,8 +3,7 @@ import { computed, ref, watch } from "vue";
 
 const props = defineProps<{ savedMp3: string; error: string | null }>();
 const emit = defineEmits<{
-  (e: "rename", title: string): void;
-  (e: "dismiss"): void;
+  (e: "accept", title: string): void;
 }>();
 
 // Prefill with the saved base (file name without .mp3) so confirming
@@ -22,7 +21,7 @@ watch(baseName, (value) => (title.value = value));
 <template>
   <form
     class="rounded-lg bg-emerald-500/10 px-2 py-1.5"
-    @submit.prevent="emit('rename', title)"
+    @submit.prevent="emit('accept', title)"
   >
     <label class="text-xs font-medium text-emerald-200" for="rename-input">
       Saved ✓ — name this recording?
@@ -39,16 +38,7 @@ watch(baseName, (value) => (title.value = value));
         type="submit"
         class="cursor-pointer rounded-lg bg-emerald-600/80 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
       >
-        Rename
-      </button>
-      <button
-        type="button"
-        class="cursor-pointer rounded-lg p-1 text-slate-400 hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-        aria-label="Keep the timestamp name"
-        title="Keep the timestamp name"
-        @click="emit('dismiss')"
-      >
-        ✕
+        Accept
       </button>
     </div>
     <p v-if="error" class="mt-1 text-xs text-red-300">{{ error }}</p>

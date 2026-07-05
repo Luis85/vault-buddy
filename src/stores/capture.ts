@@ -183,5 +183,24 @@ export const useCaptureStore = defineStore("capture", {
         logWarning(`capture rename rejected: ${String(e)}`);
       }
     },
+    /**
+     * The prompt's single Accept button: an unchanged or emptied title
+     * means "keep the timestamp name" — the pair already exists on disk,
+     * so there is nothing to do but close the prompt. Only a real edit
+     * calls rename_capture.
+     */
+    async acceptRename(title: string) {
+      if (!this.lastSaved) return;
+      const base = (this.lastSaved.mp3.split(/[\\/]/).pop() ?? "").replace(
+        /\.mp3$/i,
+        "",
+      );
+      const trimmed = title.trim();
+      if (!trimmed || trimmed === base) {
+        this.dismissRename();
+        return;
+      }
+      await this.rename(trimmed);
+    },
   },
 });

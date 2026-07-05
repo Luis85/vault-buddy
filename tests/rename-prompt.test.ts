@@ -14,23 +14,22 @@ describe("RenamePrompt", () => {
     expect(input.element.value).toBe("2026-07-04 1405 Meeting");
   });
 
-  it("emits rename with the edited title on submit", async () => {
+  it("emits accept with the edited title on submit", async () => {
     const wrapper = mount(RenamePrompt, {
       props: { savedMp3: "/v/2026-07-04 1405 Meeting.mp3", error: null },
     });
     await wrapper.get("input").setValue("2026-07-04 1405 Standup");
     await wrapper.get("form").trigger("submit");
-    expect(wrapper.emitted("rename")).toEqual([["2026-07-04 1405 Standup"]]);
+    expect(wrapper.emitted("accept")).toEqual([["2026-07-04 1405 Standup"]]);
   });
 
-  it("emits dismiss from the keep-name button", async () => {
+  it("has exactly one button with Accept text", () => {
     const wrapper = mount(RenamePrompt, {
       props: { savedMp3: "/v/2026-07-04 1405 Meeting.mp3", error: null },
     });
-    await wrapper
-      .get("button[aria-label='Keep the timestamp name']")
-      .trigger("click");
-    expect(wrapper.emitted("dismiss")).toHaveLength(1);
+    const buttons = wrapper.findAll("button");
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].text()).toContain("Accept");
   });
 
   it("shows a rename error", () => {
