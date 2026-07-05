@@ -8,9 +8,9 @@ import { useVaultsStore } from "../src/stores/vaults";
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 const sample = [
-  { mp3: "C:/v/Meetings/2026/07/a.mp3", title: "Standup", recordedAt: "2026-07-04 14:05", duration: "1:05", type: "Meeting" },
-  { mp3: "C:/v/Voice Notes/2026/07/b.mp3", title: "Idea", recordedAt: "2026-07-04 09:00", duration: "0:30", type: "Voice Note" },
-  { mp3: "C:/v/Meetings/2026/07/c.mp3", title: "Orphan", recordedAt: "2026-07-03 10:00", duration: null as string | null, type: null as string | null },
+  { mp3: "C:/v/Meetings/2026/07/a.mp3", title: "Standup", recordedAt: "2026-07-04 14:05", duration: "1:05", type: "Meeting", transcriptStatus: "complete" },
+  { mp3: "C:/v/Voice Notes/2026/07/b.mp3", title: "Idea", recordedAt: "2026-07-04 09:00", duration: "0:30", type: "Voice Note", transcriptStatus: "none" },
+  { mp3: "C:/v/Meetings/2026/07/c.mp3", title: "Orphan", recordedAt: "2026-07-03 10:00", duration: null as string | null, type: null as string | null, transcriptStatus: "failed" },
 ];
 
 const mountView = async (
@@ -21,6 +21,7 @@ const mountView = async (
     calls.push({ cmd, args });
     if (cmd === "list_recordings") return opts.list ?? sample;
     if (cmd === "open_recording") return opts.onOpen?.(args);
+    if (cmd === "retranscribe") return null;
   });
   const wrapper = mount(Recordings, { props: { vaultId: "v1" } });
   await flushPromises();
@@ -33,7 +34,12 @@ describe("Recordings", () => {
 
   it("fetches list_recordings for the vault", async () => {
     const { calls } = await mountView();
-    expect(calls[0]).toEqual({ cmd: "list_recordings", args: { id: "v1" } });
+    // onMounted registers the capture event listeners before fetching, so
+    // list_recordings is no longer necessarily calls[0] — find it instead.
+    expect(calls.find((c) => c.cmd === "list_recordings")).toEqual({
+      cmd: "list_recordings",
+      args: { id: "v1" },
+    });
   });
 
   it("groups by type with Ungrouped last", async () => {
@@ -94,5 +100,30 @@ describe("Recordings", () => {
     expect(wrapper.findAll('[data-testid="recording-row"]').length).toBeGreaterThan(0);
     expect(store.panelOpen).toBe(true);
     expect(wrapper.text()).toContain("launch boom");
+  });
+
+  it("re-transcribes immediately for a non-complete transcript", async () => {
+    const { wrapper, calls } = await mountView();
+    // sample[1] "Idea" has transcriptStatus "none" — its row's retranscribe button
+    const rows = wrapper.findAll('[data-testid="recording-row"]');
+    // find the row for sample[1] by its retranscribe button and click it
+    await wrapper.findAll('[data-testid="retranscribe"]')[1].trigger("click");
+    await flushPromises();
+    const rt = calls.find((c) => c.cmd === "retranscribe");
+    expect(rt).toBeTruthy();
+    // no confirm shown for a non-complete transcript
+    expect(wrapper.find('[data-testid="retranscribe-confirm"]').exists()).toBe(false);
+    void rows;
+  });
+
+  it("confirms before re-transcribing a complete transcript", async () => {
+    const { wrapper, calls } = await mountView();
+    // sample[0] "Standup" has transcriptStatus "complete"
+    await wrapper.findAll('[data-testid="retranscribe"]')[0].trigger("click");
+    // no invoke yet — a confirm is shown
+    expect(calls.some((c) => c.cmd === "retranscribe")).toBe(false);
+    await wrapper.get('[data-testid="retranscribe-confirm"]').trigger("click");
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "retranscribe")).toBe(true);
   });
 });

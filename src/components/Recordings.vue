@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useVaultsStore } from "../stores/vaults";
 import { logWarning } from "../logging";
 import type { Recording } from "../types";
@@ -12,6 +13,11 @@ const loading = ref(true);
 const loadError = ref<string | null>(null);
 const openError = ref<string | null>(null);
 const recordings = ref<Recording[]>([]);
+// mp3 currently being (re)transcribed → row shows a spinner. Seeded on click
+// and by capture:transcribing; cleared by transcribed/transcribeFailed.
+const transcribingMp3 = ref<Set<string>>(new Set());
+// mp3 awaiting a "replace the current transcript?" confirm (complete only).
+const confirmMp3 = ref<string | null>(null);
 // Per-view, not persisted: resets to grouped every time the view opens.
 const grouped = ref(true);
 
@@ -34,7 +40,47 @@ const sections = computed<Array<{ type: string | null; items: Recording[] }>>(()
     .map(([type, items]) => ({ type, items }));
 });
 
+function statusLabel(r: Recording): string {
+  if (transcribingMp3.value.has(r.mp3)) return "Transcribing…";
+  return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓" }[r.transcriptStatus];
+}
+
+async function runRetranscribe(mp3: string) {
+  confirmMp3.value = null;
+  transcribingMp3.value = new Set(transcribingMp3.value).add(mp3);
+  try {
+    await invoke("retranscribe", { path: mp3 });
+  } catch (e) {
+    transcribingMp3.value = new Set([...transcribingMp3.value].filter((m) => m !== mp3));
+    openError.value = String(e);
+    logWarning(`retranscribe rejected: ${String(e)}`);
+  }
+}
+
+function onRetranscribeClick(r: Recording) {
+  // A finished (or hand-edited) transcript needs a confirm before we clobber it.
+  if (r.transcriptStatus === "complete") confirmMp3.value = r.mp3;
+  else void runRetranscribe(r.mp3);
+}
+
+function clearTranscribing(mp3: string) {
+  transcribingMp3.value = new Set([...transcribingMp3.value].filter((m) => m !== mp3));
+}
+
 onMounted(async () => {
+  await listen<{ mp3: string }>("capture:transcribing", (e) => {
+    transcribingMp3.value = new Set(transcribingMp3.value).add(e.payload.mp3);
+  });
+  await listen<{ mp3: string }>("capture:transcribed", (e) => {
+    clearTranscribing(e.payload.mp3);
+    const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
+    if (row) row.transcriptStatus = "complete";
+  });
+  await listen<{ mp3: string }>("capture:transcribeFailed", (e) => {
+    clearTranscribing(e.payload.mp3);
+    const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
+    if (row) row.transcriptStatus = "failed";
+  });
   try {
     recordings.value = await invoke<Recording[]>("list_recordings", {
       id: props.vaultId,
@@ -78,6 +124,27 @@ async function open(mp3: string) {
     >
       {{ openError }}
     </p>
+    <div
+      v-if="confirmMp3"
+      data-testid="retranscribe-confirm-row"
+      class="flex items-center justify-between gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-100"
+    >
+      <span>Replace the current transcript?</span>
+      <span class="flex gap-1">
+        <button
+          type="button"
+          data-testid="retranscribe-confirm"
+          class="cursor-pointer rounded bg-amber-500/30 px-2 py-0.5 hover:bg-amber-500/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+          @click="runRetranscribe(confirmMp3)"
+        >Replace</button>
+        <button
+          type="button"
+          data-testid="retranscribe-cancel"
+          class="cursor-pointer rounded bg-white/10 px-2 py-0.5 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          @click="confirmMp3 = null"
+        >Cancel</button>
+      </span>
+    </div>
     <div class="flex items-center justify-between">
       <span class="text-xs text-slate-400">
         {{ recordings.length }} recording{{ recordings.length === 1 ? "" : "s" }}
@@ -104,23 +171,43 @@ async function open(mp3: string) {
         <span class="text-slate-500">· {{ section.items.length }}</span>
       </h2>
       <div class="flex flex-col gap-1">
-        <button
+        <div
           v-for="r in section.items"
           :key="r.mp3"
-          type="button"
-          data-testid="recording-row"
-          class="flex w-full items-baseline justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          @click="open(r.mp3)"
+          class="flex items-center gap-1"
         >
-          <span
-            class="min-w-0 flex-1 truncate text-sm text-slate-100"
-            :title="r.title"
+          <button
+            type="button"
+            data-testid="recording-row"
+            class="flex min-w-0 flex-1 items-baseline justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            @click="open(r.mp3)"
           >
-            {{ r.title }}
-          </span>
-          <span class="shrink-0 text-xs text-slate-400">{{ r.recordedAt }}</span>
-          <span class="shrink-0 text-xs text-slate-500">{{ r.duration ?? "—" }}</span>
-        </button>
+            <span class="min-w-0 flex-1 truncate text-sm text-slate-100" :title="r.title">
+              {{ r.title }}
+            </span>
+            <span class="shrink-0 text-xs text-slate-400">{{ r.recordedAt }}</span>
+            <span class="shrink-0 text-xs text-slate-500">{{ r.duration ?? "—" }}</span>
+          </button>
+          <span
+            v-if="statusLabel(r)"
+            class="shrink-0 text-[10px] text-slate-500"
+            :title="statusLabel(r)"
+          >{{ transcribingMp3.has(r.mp3) || r.transcriptStatus === "pending" ? "…" : r.transcriptStatus === "failed" ? "⚠" : "✓" }}</span>
+          <button
+            type="button"
+            data-testid="retranscribe"
+            :disabled="transcribingMp3.has(r.mp3)"
+            :aria-label="`Re-transcribe ${r.title}`"
+            title="Re-transcribe"
+            class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+            @click="onRetranscribeClick(r)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M23 4v6h-6M1 20v-6h6" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </button>
+        </div>
       </div>
     </section>
   </div>
