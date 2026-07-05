@@ -17,3 +17,19 @@ export interface CaptureSaved {
   note: string | null;
   endedEarly: boolean;
 }
+
+export interface CaptureTranscribed {
+  mp3: string;
+  transcript: string;
+}
+
+export interface CaptureTranscribeFailed {
+  mp3: string;
+  message: string;
+}
+
+export interface ModelDownload {
+  model: string;
+  received: number;
+  total: number | null;
+}

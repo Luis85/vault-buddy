@@ -1,7 +1,13 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CaptureSaved, CaptureStatus } from "../types";
+import type {
+  CaptureSaved,
+  CaptureStatus,
+  CaptureTranscribed,
+  CaptureTranscribeFailed,
+  ModelDownload,
+} from "../types";
 
 export const useCaptureStore = defineStore("capture", {
   state: () => ({
@@ -10,6 +16,10 @@ export const useCaptureStore = defineStore("capture", {
     error: null as string | null,
     warning: null as string | null,
     lastSavedFile: null as string | null,
+    transcribing: false as boolean,
+    transcriptError: null as string | null,
+    transcriptFailedMp3: null as string | null,
+    modelDownload: null as { model: string; received: number; total: number | null } | null,
   }),
   actions: {
     async init() {
@@ -29,6 +39,23 @@ export const useCaptureStore = defineStore("capture", {
       });
       await listen<{ message: string }>("capture:warning", (event) => {
         this.warning = event.payload.message;
+      });
+      await listen<{ mp3: string }>("capture:transcribing", () => {
+        this.transcribing = true;
+        this.transcriptError = null;
+      });
+      await listen<CaptureTranscribed>("capture:transcribed", () => {
+        this.transcribing = false;
+        this.modelDownload = null;
+      });
+      await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
+        this.transcribing = false;
+        this.modelDownload = null;
+        this.transcriptError = event.payload.message;
+        this.transcriptFailedMp3 = event.payload.mp3;
+      });
+      await listen<ModelDownload>("capture:modelDownload", (event) => {
+        this.modelDownload = event.payload;
       });
       // Resync: the webview can reload while Rust keeps recording.
       try {
@@ -70,6 +97,17 @@ export const useCaptureStore = defineStore("capture", {
       } catch (e) {
         this.status = "idle";
         this.error = String(e);
+      }
+    },
+    async retryTranscription() {
+      if (!this.transcriptFailedMp3) return;
+      const path = this.transcriptFailedMp3;
+      this.transcriptError = null;
+      try {
+        await invoke("transcribe_recording_now", { path });
+        this.transcribing = true;
+      } catch (e) {
+        this.transcriptError = String(e);
       }
     },
   },
