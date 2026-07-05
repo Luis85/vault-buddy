@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
+import SelectMenu from "./SelectMenu.vue";
 
 const props = defineProps<{ vaultId: string }>();
 
@@ -66,6 +67,19 @@ const folderPlaceholder = computed(() =>
 function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+// Option lists for the SelectMenu dropdowns ({ value, label }).
+const modelOptions = MODELS.map((m) => ({ value: m, label: capitalize(m) }));
+const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }));
+const bitrateOptions = BITRATES.map((b) => ({ value: b, label: `${b} kbps` }));
+const inputMenuOptions = computed(() => [
+  { value: "", label: "System default" },
+  ...inputOptions.value,
+]);
+const outputMenuOptions = computed(() => [
+  { value: "", label: "System default" },
+  ...outputOptions.value,
+]);
 
 // Any edit invalidates the "Saved ✓" confirmation. During the initial load
 // saveState is already "idle", so the load-time assignments are idle→idle
@@ -229,25 +243,21 @@ async function save() {
     <div v-if="transcribe" class="flex flex-col gap-3 border-l border-white/10 pl-3">
       <section class="flex items-center justify-between gap-2">
         <label for="capture-transcription-model" class="text-sm text-slate-200">Model</label>
-        <select
+        <SelectMenu
           id="capture-transcription-model"
           v-model="transcriptionModel"
+          :options="modelOptions"
           data-testid="transcription-model-select"
-          class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-        >
-          <option v-for="m in MODELS" :key="m" :value="m">{{ capitalize(m) }}</option>
-        </select>
+        />
       </section>
       <section class="flex items-center justify-between gap-2">
         <label for="capture-transcription-language" class="text-sm text-slate-200">Language</label>
-        <select
+        <SelectMenu
           id="capture-transcription-language"
           v-model="transcriptionLanguage"
+          :options="languageOptions"
           data-testid="transcription-language-select"
-          class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-        >
-          <option v-for="l in LANGUAGES" :key="l.code" :value="l.code">{{ l.name }}</option>
-        </select>
+        />
       </section>
       <section class="flex items-center justify-between">
         <label for="capture-transcript-timestamps-toggle" class="text-sm text-slate-200">
@@ -265,47 +275,39 @@ async function save() {
     </div>
     <section class="flex items-center justify-between gap-2">
       <label for="capture-bitrate" class="text-sm text-slate-200">Bitrate</label>
-      <select
+      <SelectMenu
         id="capture-bitrate"
-        v-model.number="bitrateKbps"
+        v-model="bitrateKbps"
+        :options="bitrateOptions"
         data-testid="bitrate-select"
-        class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-        <option v-for="b in BITRATES" :key="b" :value="b">{{ b }} kbps</option>
-      </select>
+      />
     </section>
     <section>
       <label class="mb-1 block text-sm text-slate-200" for="capture-input-device">
         Microphone
       </label>
-      <select
+      <SelectMenu
         id="capture-input-device"
         v-model="inputDevice"
+        :options="inputMenuOptions"
+        aria-label="Microphone"
         data-testid="input-device-select"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-        <option value="">System default</option>
-        <option v-for="o in inputOptions" :key="o.value" :value="o.value">
-          {{ o.label }}
-        </option>
-      </select>
+        wide
+      />
     </section>
     <section v-if="mode === 'meeting'">
       <label class="mb-1 block text-sm text-slate-200" for="capture-output-device">
         Desktop audio from
         <span class="block text-xs text-slate-500">Loopback output device</span>
       </label>
-      <select
+      <SelectMenu
         id="capture-output-device"
         v-model="outputDevice"
+        :options="outputMenuOptions"
+        aria-label="Desktop audio device"
         data-testid="output-device-select"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-        <option value="">System default</option>
-        <option v-for="o in outputOptions" :key="o.value" :value="o.value">
-          {{ o.label }}
-        </option>
-      </select>
+        wide
+      />
     </section>
     <p
       v-if="saveError"

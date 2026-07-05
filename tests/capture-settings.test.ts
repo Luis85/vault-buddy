@@ -31,6 +31,8 @@ const devices = {
   outputs: [{ name: "Speakers", isDefault: true }],
 };
 
+let lastWrapper: ReturnType<typeof mount> | null = null;
+
 const mountLoaded = async (
   overrides: {
     config?: Partial<typeof config>;
@@ -45,14 +47,38 @@ const mountLoaded = async (
     if (cmd === "list_audio_devices") return overrides.devices ?? devices;
     if (cmd === "set_capture_config") return overrides.onSet?.(args);
   });
-  const wrapper = mount(CaptureSettings, { props: { vaultId: "v1" } });
+  // attachTo document.body so the SelectMenu's Teleported popups land in a
+  // queryable place; afterEach unmounts and clears the body.
+  const wrapper = mount(CaptureSettings, {
+    props: { vaultId: "v1" },
+    attachTo: document.body,
+  });
+  lastWrapper = wrapper;
   await flushPromises();
   return { wrapper, calls };
 };
 
+// Open a SelectMenu dropdown and click one of its (Teleported) options.
+const pickOption = async (
+  wrapper: ReturnType<typeof mount>,
+  testid: string,
+  value: string | number,
+) => {
+  await wrapper.get(`[data-testid="${testid}"]`).trigger("click");
+  (
+    document.body.querySelector(`[data-testid="${testid}-option-${value}"]`) as HTMLElement
+  ).click();
+  await flushPromises();
+};
+
 describe("CaptureSettings", () => {
   beforeEach(() => clearMocks());
-  afterEach(() => clearMocks());
+  afterEach(() => {
+    lastWrapper?.unmount();
+    lastWrapper = null;
+    document.body.innerHTML = "";
+    clearMocks();
+  });
 
   it("loads the config into the form", async () => {
     const { wrapper, calls } = await mountLoaded();
@@ -60,18 +86,17 @@ describe("CaptureSettings", () => {
     expect(calls.map((c) => c.cmd)).toContain("list_audio_devices");
     const folder = wrapper.get<HTMLInputElement>('[data-testid="folder-input"]');
     expect(folder.element.value).toBe("Meetings");
-    const bitrate = wrapper.get<HTMLSelectElement>('[data-testid="bitrate-select"]');
-    expect(bitrate.element.value).toBe("160");
-    const input = wrapper.get<HTMLSelectElement>('[data-testid="input-device-select"]');
-    expect(input.element.value).toBe("USB Mic");
+    expect(wrapper.get('[data-testid="bitrate-select"]').text()).toContain("160 kbps");
+    expect(wrapper.get('[data-testid="input-device-select"]').text()).toContain("USB Mic");
   });
 
   it("System default is the first option in both device pickers", async () => {
     const { wrapper } = await mountLoaded();
     for (const testid of ["input-device-select", "output-device-select"]) {
-      const options = wrapper.get(`[data-testid="${testid}"]`).findAll("option");
-      expect(options[0]!.text()).toBe("System default");
-      expect(options[0]!.attributes("value")).toBe("");
+      await wrapper.get(`[data-testid="${testid}"]`).trigger("click");
+      const first = document.body.querySelectorAll('[role="option"]')[0];
+      expect(first?.textContent?.trim()).toBe("System default");
+      await wrapper.get(`[data-testid="${testid}"]`).trigger("click"); // close before the next
     }
   });
 
@@ -79,9 +104,9 @@ describe("CaptureSettings", () => {
     const { wrapper } = await mountLoaded({
       config: { inputDevice: "Unplugged Headset" },
     });
-    const select = wrapper.get<HTMLSelectElement>('[data-testid="input-device-select"]');
-    expect(select.element.value).toBe("Unplugged Headset");
-    expect(select.text()).toContain("Unplugged Headset (not connected)");
+    expect(wrapper.get('[data-testid="input-device-select"]').text()).toContain(
+      "Unplugged Headset (not connected)",
+    );
   });
 
   it("hides the output picker in voice-note mode", async () => {
@@ -92,8 +117,8 @@ describe("CaptureSettings", () => {
   it("saves the edited form through set_capture_config", async () => {
     const { wrapper, calls } = await mountLoaded();
     await wrapper.get('[data-testid="folder-input"]').setValue("Inbox/Audio");
-    await wrapper.get('[data-testid="bitrate-select"]').setValue("192");
-    await wrapper.get('[data-testid="input-device-select"]').setValue("");
+    await pickOption(wrapper, "bitrate-select", 192);
+    await pickOption(wrapper, "input-device-select", "");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     const set = calls.find((c) => c.cmd === "set_capture_config");
@@ -192,12 +217,12 @@ describe("CaptureSettings", () => {
         transcriptTimestamps: false,
       },
     });
-    const model = wrapper.get<HTMLSelectElement>('[data-testid="transcription-model-select"]');
-    expect(model.element.value).toBe("medium");
-    const language = wrapper.get<HTMLSelectElement>(
-      '[data-testid="transcription-language-select"]',
+    expect(wrapper.get('[data-testid="transcription-model-select"]').text()).toContain(
+      "Medium",
     );
-    expect(language.element.value).toBe("es");
+    expect(wrapper.get('[data-testid="transcription-language-select"]').text()).toContain(
+      "Spanish",
+    );
     const timestamps = wrapper.get<HTMLInputElement>(
       '[data-testid="transcript-timestamps-toggle"]',
     );
@@ -207,8 +232,8 @@ describe("CaptureSettings", () => {
   it("saves transcription settings after enabling transcribe and picking a model/language", async () => {
     const { wrapper, calls } = await mountLoaded();
     await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
-    await wrapper.get('[data-testid="transcription-model-select"]').setValue("medium");
-    await wrapper.get('[data-testid="transcription-language-select"]').setValue("es");
+    await pickOption(wrapper, "transcription-model-select", "medium");
+    await pickOption(wrapper, "transcription-language-select", "es");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     const set = calls.find((c) => c.cmd === "set_capture_config");
