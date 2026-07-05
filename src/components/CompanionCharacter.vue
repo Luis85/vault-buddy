@@ -174,15 +174,18 @@ function onContextMenu() {
           :facing="facing"
           :play-nonce="playNonce"
         />
+        <!-- The drawn character sits bottom-center of this 64x64 box, so the
+             status dots hug it — centered horizontally, floating just above
+             the head — rather than pinned to the box's far top-right corner. -->
         <span
           v-if="recording"
-          class="rec-dot absolute -right-1 -top-1 h-3 w-3 rounded-full ring-2 ring-slate-900"
+          class="rec-dot absolute left-1/2 top-1 h-3 w-3 -translate-x-1/2 rounded-full ring-2 ring-slate-900"
           :class="paused ? 'bg-amber-400' : 'bg-red-500'"
           aria-hidden="true"
         ></span>
         <span
           v-if="transcribing && !recording"
-          class="transcribe-dot absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full bg-violet-400 ring-2 ring-slate-900"
+          class="transcribe-dot absolute left-1/2 top-1 h-3 w-3 -translate-x-1/2 animate-pulse rounded-full bg-violet-400 ring-2 ring-slate-900"
           aria-hidden="true"
         ></span>
       </span>

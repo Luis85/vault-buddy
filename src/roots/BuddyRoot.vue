@@ -75,7 +75,7 @@ onUnmounted(() => {
        centered in the window. Centering makes those assumptions hold. -->
   <div class="flex h-screen w-screen items-center justify-center">
     <CompanionCharacter
-      :working="false"
+      :working="capture.transcribing"
       :animated="settings.animationsEnabled"
       :character="settings.character"
       :draggable="settings.draggingEnabled"

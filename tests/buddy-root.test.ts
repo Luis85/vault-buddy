@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import BuddyRoot from "../src/roots/BuddyRoot.vue";
 import { useSettingsStore } from "../src/stores/settings";
+import { useCaptureStore } from "../src/stores/capture";
 
 vi.mock("@tauri-apps/plugin-log", () => ({
   info: vi.fn(),
@@ -50,6 +51,17 @@ describe("BuddyRoot", () => {
     localStorage.setItem("vault-buddy.animations", "off");
     window.dispatchEvent(new Event("storage"));
     expect(useSettingsStore().animationsEnabled).toBe(false);
+  });
+
+  it("puts the buddy in its working animation while transcribing", async () => {
+    const wrapper = mount(BuddyRoot);
+    await flushPromises();
+    const capture = useCaptureStore();
+    // transcription is the buddy's "working" state — it should run/pulse, not
+    // just show the dot. Driven from the capture store, like recording/paused.
+    capture.transcribing = true;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("button.buddy").classes()).toContain("working");
   });
 
   it("reads the position-derived buddy facing from Rust on mount", async () => {
