@@ -5110,6 +5110,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "vault_buddy_capture",
  "vault_buddy_core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

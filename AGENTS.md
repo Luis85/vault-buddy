@@ -52,7 +52,8 @@ launched the app on the CI runner and never exited.
 ### IPC surface (Rust commands, registered in `src-tauri/src/lib.rs`)
 
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
-`set_panel_offset`, `set_window_geometry`, `show_buddy_menu`, plus the
+`set_panel_offset`, `set_window_geometry`, `start_buddy_drag`,
+`show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, plus the
 capture surface: `capture_status`, `start_capture`, `stop_capture`,
 `pause_capture`, `resume_capture`, `get_capture_config`,
 `set_capture_config`, `list_audio_devices`, `rename_capture` — commands
@@ -81,15 +82,43 @@ undone before any position is persisted. Invariants:
 - Panel open/close transitions are serialized in a queue;
   `panelTransitionsSettled()` exposes its tail. The updater awaits it before
   installing — never replace that with a sleep (it races; see git history).
-- The 1s background loop in `lib.rs` (always-on-top re-assert) also
-  checkpoints the parked position to the window-state file whenever it
-  changed — but only while the offset is zero. Exit-time saves alone proved
-  lossy (the updater kills the process via `std::process::exit`).
-- The same loop heartbeat-refreshes a run marker (`app_diagnostics` in the
-  core crate) that detects unclean shutdowns the panic hook structurally
-  cannot see (native faults, kills, power loss) — every graceful exit path
-  (tray/buddy quit, Alt+F4 close, update install) must stamp
-  `diagnostics::mark_clean_shutdown()`.
+- Buddy drags go through the `start_buddy_drag` command, never the raw
+  `startDragging()` JS API. Being synchronous it runs on the main thread,
+  where it re-checks the **logical (swap-aware) primary button** via
+  `GetKeyState(VK_LBUTTON)` right before entering the OS move loop and
+  drops requests that went stale in IPC transit (a stale synthetic
+  WM_NCLBUTTONDOWN starts a buttonless "sticky" move loop on Windows). The
+  re-check is **mouse-only** (a touch/pen contact reports `buttons=1` to the
+  webview but need not surface as `WM_LBUTTONDOWN`), so the frontend passes
+  the pointer type. The command returns whether the drag actually started;
+  the frontend refuses to start one from a pointermove whose button is
+  already up and, on a dropped request, emits `drag-cancelled` so App.vue
+  retracts the blur suppression it armed (`CompanionCharacter.vue`).
+- **Window-state saves and window getters run on the MAIN thread only.**
+  `save_window_state` takes the plugin's cache lock and then reads window
+  geometry; the plugin's Moved listener takes the same lock on the main
+  thread. An off-main save colliding with a drag's Moved flood deadlocked
+  both threads and froze the app with no crash record (the original
+  "drag crash"). The 1s loop in `lib.rs` is therefore a pure metronome: it
+  posts `window_upkeep_tick` (always-on-top re-assert + position
+  checkpoint) to the main thread via `run_on_main_thread` with backpressure
+  (at most one closure outstanding), and it warns when the main thread
+  stops servicing those closures. `finish_quit` marshals its save the same
+  way for the finalize-on-worker quit path; `prepare_update_install` must
+  stay a synchronous command for the same reason.
+- The upkeep tick never touches a window in motion: it is gated by both the
+  time since the last Moved event (2s quiescence) and a direct primary-button
+  check (a drag paused with the button held emits no Moved events), and the
+  position checkpoint (`core::checkpoint::PositionCheckpointer`, unit-tested
+  on Linux) only persists a position after it has settled — never on the
+  tick a change is first seen. First save still waits out the window-state
+  plugin's restore. Exit-time saves alone proved lossy (the updater kills
+  the process via `std::process::exit`).
+- The metronome thread heartbeat-refreshes a run marker (`app_diagnostics`
+  in the core crate) that detects unclean shutdowns the panic hook
+  structurally cannot see (native faults, kills, power loss) — every
+  graceful exit path (tray/buddy quit, Alt+F4 close, update install) must
+  stamp `diagnostics::mark_clean_shutdown()`.
 
 ### Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
 

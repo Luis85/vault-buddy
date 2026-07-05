@@ -28,5 +28,10 @@ vault_buddy_core = { path = "core" }
 vault_buddy_capture = { path = "capture" }
 crash-handler = "0.7.0"
 
+[target."cfg(windows)".dependencies]
+# GetKeyState for the start_buddy_drag stale-request guard; already in the
+# dependency tree via tauri, so this adds no new crate to the build.
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
 [workspace]
 members = ["core", "capture"]

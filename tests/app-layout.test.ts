@@ -52,7 +52,6 @@ vi.mock("@tauri-apps/api/window", () => ({
       return Promise.resolve();
     },
     setSize: () => Promise.resolve(),
-    startDragging: () => Promise.resolve(),
     onFocusChanged: (handler: (event: { payload: boolean }) => void) => {
       state.focusHandler = handler;
       return Promise.resolve(() => {
@@ -101,6 +100,9 @@ describe("App layout geometry", () => {
     setActivePinia(createPinia());
     mockIPC((cmd, args) => {
       if (cmd === "list_vaults") return [];
+      // The drag started — no drop, so App.vue keeps its blur suppression
+      // armed (the drag tests below rely on that).
+      if (cmd === "start_buddy_drag") return true;
       if (cmd === "set_window_geometry") {
         state.geometryWidths.push((args as { width: number }).width);
       }
@@ -227,13 +229,58 @@ describe("App layout geometry", () => {
         screenX: 50,
         screenY: 50,
       });
-      await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+      await buddy.trigger("pointermove", {
+        buttons: 1,
+        screenX: 90,
+        screenY: 90,
+      });
       state.focusHandler?.({ payload: false });
       await flush();
       expect(store.panelOpen).toBe(true); // still open — drag in progress
 
       // a focus loss well after the drag started is a real one
       vi.setSystemTime(100_000 + 5_000);
+      state.focusHandler?.({ payload: false });
+      await flush();
+      expect(store.panelOpen).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes the panel on a blur when the drag was dropped in transit", async () => {
+    // Regression: a fast flick releases the button while start_buddy_drag is
+    // still in flight; the command drops it (no OS move loop). The
+    // drag-start arming must be retracted, or the user's next desktop click
+    // is swallowed as the drag's own blur and the panel is stuck open over
+    // the desktop.
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults") return [];
+      if (cmd === "start_buddy_drag") return false; // dropped in transit
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(100_000);
+      const wrapper = mount(App);
+      await flush();
+      const store = useVaultsStore();
+      await store.togglePanel();
+      expect(store.panelOpen).toBe(true);
+
+      const buddy = wrapper.find("button.buddy");
+      await buddy.trigger("pointerdown", {
+        button: 0,
+        screenX: 50,
+        screenY: 50,
+      });
+      await buddy.trigger("pointermove", {
+        buttons: 1,
+        screenX: 90,
+        screenY: 90,
+      });
+      await flush(); // let start_buddy_drag resolve false → drag-cancelled
+
+      // the very next blur is a real focus loss, not a drag's — must close
       state.focusHandler?.({ payload: false });
       await flush();
       expect(store.panelOpen).toBe(false);
@@ -257,7 +304,11 @@ describe("App layout geometry", () => {
         screenX: 50,
         screenY: 50,
       });
-      await buddy.trigger("pointermove", { screenX: 90, screenY: 90 });
+      await buddy.trigger("pointermove", {
+        buttons: 1,
+        screenX: 90,
+        screenY: 90,
+      });
 
       // blur #1 is the drag entering the OS move loop — suppressed
       state.focusHandler?.({ payload: false });
