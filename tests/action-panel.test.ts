@@ -53,7 +53,10 @@ describe("ActionPanel", () => {
     await wrapper
       .find('[aria-label="Open today\'s daily note in Personal"]')
       .trigger("click");
-    expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "d4e5f6" } }]);
+    expect(calls).toEqual([
+      { cmd: "open_daily_note", args: { id: "d4e5f6" } },
+      { cmd: "close_panel", args: {} },
+    ]);
   });
 
   it("hides the filter for short lists", () => {
@@ -316,6 +319,55 @@ describe("ActionPanel", () => {
       args: { id: "d4e5f6", mode: "meeting" },
     });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+  });
+
+  it("clears a stale record dialog and filter when the panel is shown again", async () => {
+    // The panel window is only hidden/shown, not unmounted, so local dialog
+    // and filter state used to survive a close. Reopening (shownNonce bump)
+    // must reset them, or a reopen shows a stale dialog over the vault list.
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config") {
+        return {
+          mode: "meeting",
+          recordingFolder: null,
+          bitrateKbps: 128,
+          createNote: true,
+          inputDevice: null,
+          outputDevice: null,
+        };
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper.find('input[type="search"]').setValue("Vault"); // keeps all
+    await wrapper
+      .find('[aria-label="Capture knowledge in Vault 0"]')
+      .trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+
+    store.shownNonce++; // the panel was reopened
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(
+      (wrapper.find('input[type="search"]').element as HTMLInputElement).value,
+    ).toBe("");
+  });
+
+  it("dismisses a stale rename prompt when the panel is shown again", async () => {
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
+
+    const store = useVaultsStore();
+    store.shownNonce++; // the panel was reopened
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).not.toContain("name this recording");
   });
 
   it("cancel closes the chooser without starting a recording", async () => {

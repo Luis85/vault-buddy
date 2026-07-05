@@ -16,12 +16,41 @@
         "title": "Vault Buddy",
         "width": 88,
         "height": 88,
+        "visible": false,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
         "resizable": false,
         "skipTaskbar": true,
         "shadow": false
+      },
+      {
+        "label": "panel",
+        "title": "Vault Buddy Panel",
+        "width": 360,
+        "height": 340,
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false
+      },
+      {
+        "label": "bubble",
+        "title": "Vault Buddy Greeting",
+        "width": 260,
+        "height": 150,
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": { "csp": null }

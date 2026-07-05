@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { useVaultsStore } from "../stores/vaults";
@@ -44,17 +44,27 @@ function onFilterEscape(event: KeyboardEvent) {
   }
 }
 
-// The panel component is destroyed on close — that IS the close signal.
-onUnmounted(() => capture.dismissRename());
-
-// One-shot, component-local dialog state: nothing persisted, nothing in
-// Pinia. The panel unmounts on close, which is what dismisses the dialog
-// if it's still open — no explicit teardown needed.
+// One-shot, component-local dialog state: nothing persisted, nothing in Pinia.
 const recordRequest = ref<{
   vaultId: string;
   vaultName: string;
   defaultMode: "meeting" | "voice-note";
 } | null>(null);
+
+// The panel window is only hidden/shown, not unmounted, so onUnmounted no
+// longer fires on close and this local state used to survive a close-and-
+// reopen. `shownNonce` bumps each time Rust re-shows the panel (see
+// PanelRoot / toggle_panel's panel-shown event): treat it as the reopen
+// signal and clear what a close used to reset — a still-open record dialog,
+// the filter text, and a lingering post-save rename prompt.
+watch(
+  () => store.shownNonce,
+  () => {
+    recordRequest.value = null;
+    filter.value = "";
+    capture.dismissRename();
+  },
+);
 
 // The chooser needs the vault's DEFAULT mode; fetch it, then show. A
 // config read failure must not block recording — fall back to meeting.

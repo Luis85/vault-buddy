@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { nextTick } from "vue";
 import BuddyAvatar from "../src/components/BuddyAvatar.vue";
 import { getCharacter } from "../src/characters";
@@ -212,6 +212,29 @@ describe("BuddyAvatar", () => {
       vi.advanceTimersByTime(900);
       await nextTick();
       expect(sheet.classes()).toContain("flipped");
+    });
+
+    it("plays one idle burst on demand when the play nonce changes", async () => {
+      // CompanionCharacter bumps `playNonce` on a click/drop to acknowledge the
+      // interaction with one idle bob (the same burst the scheduler fires).
+      const wrapper = mount(BuddyAvatar, {
+        props: { characterId: "knight", playNonce: 0 },
+      });
+      const sheet = wrapper.find(".sprite .sheet");
+      expect(sheet.classes()).not.toContain("playing");
+
+      await wrapper.setProps({ playNonce: 1 });
+      await flushPromises();
+      expect(sheet.classes()).toContain("playing");
+    });
+
+    it("does not play a demand burst while animations are off", async () => {
+      const wrapper = mount(BuddyAvatar, {
+        props: { characterId: "knight", playNonce: 0, animated: false },
+      });
+      await wrapper.setProps({ playNonce: 1 });
+      await flushPromises();
+      expect(wrapper.find(".sprite .sheet").classes()).not.toContain("playing");
     });
 
     it("faces forward again when animations are turned off mid-glance", async () => {

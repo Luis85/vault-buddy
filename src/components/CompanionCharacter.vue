@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import { logWarning } from "../logging";
@@ -25,7 +26,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "toggle"): void;
   (e: "drag-start"): void;
-  (e: "drag-cancelled"): void;
 }>();
 
 // The buddy is both the click target (toggle panel) and the drag handle
@@ -35,6 +35,14 @@ const emit = defineEmits<{
 const DRAG_THRESHOLD_PX = 5;
 let pressedAt: { x: number; y: number } | null = null;
 let dragged = false;
+
+// A little acknowledgement: play one idle burst whenever the buddy is clicked
+// or dropped in a new spot. Passed to BuddyAvatar, which restarts its idle
+// animation each time this changes (and ignores it while animations are off).
+const playNonce = ref(0);
+function bobOnce() {
+  playNonce.value++;
+}
 
 function onPointerDown(e: PointerEvent) {
   if (e.button !== 0) return;
@@ -57,6 +65,10 @@ function onPointerMove(e: PointerEvent) {
     // consumes the release without a trailing click at all
     // (tauri-apps/tauri#10767) — without this reset the suppression
     // would eat the user's next deliberate click.
+    // If we were mid-drag, the buddy just landed here — bob once. Guarded on
+    // `dragged` so a plain hover (no preceding drag) never bobs, and so a drop
+    // whose trailing click already bobbed (below) isn't double-counted.
+    if (dragged) bobOnce();
     dragged = false;
     return;
   }
@@ -76,32 +88,22 @@ function onPointerMove(e: PointerEvent) {
   (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(
     e.pointerId,
   );
-  // Arm App.vue's blur suppression BEFORE the move loop starts, so the
-  // focus loss it causes is recognised. Emitted synchronously (the OS blur
-  // arrives on a later turn) even though the command may still drop the
-  // request — a drop is retracted below.
+  // Tell the parent (BuddyRoot) the buddy is being dragged so it can close
+  // the panel and get out of the way. A drag that the command later drops
+  // (below) at worst closed the panel a beat early — the user just reopens.
   emit("drag-start");
   // Rust-side chokepoint, not window.startDragging(): the command re-checks
   // the primary button on the main thread right before entering the OS move
-  // loop, dropping requests that went stale in IPC transit. It reports
-  // whether the drag actually started; the pointer type lets it skip the
-  // mouse-only button re-check for touch/pen. `pointerType` can be absent on
-  // synthetic events — default to mouse so the guard still applies.
-  invoke<boolean>("start_buddy_drag", {
+  // loop, dropping requests that went stale in IPC transit. The pointer type
+  // lets it skip the mouse-only button re-check for touch/pen; `pointerType`
+  // can be absent on synthetic events — default to mouse so the guard applies.
+  void invoke("start_buddy_drag", {
     pointerType: e.pointerType || "mouse",
-  })
-    .then((started) => {
-      // Dropped in transit: no move loop began, so no blur will consume the
-      // suppression we just armed — retract it, or a later desktop click is
-      // wrongly swallowed and the panel stays open over the desktop.
-      if (!started) emit("drag-cancelled");
-    })
-    .catch((e) => {
-      // A genuine command failure (not just the no-Tauri unit-test path,
-      // which logWarning no-ops) still means no drag started.
-      logWarning(`start_buddy_drag failed: ${String(e)}`);
-      emit("drag-cancelled");
-    });
+  }).catch((err) => {
+    // A genuine command failure (not the no-Tauri unit-test path, where
+    // logWarning no-ops) just means no drag started.
+    logWarning(`start_buddy_drag failed: ${String(err)}`);
+  });
 }
 
 function onPointerEnd(e: PointerEvent) {
@@ -115,11 +117,15 @@ function onClick(e: MouseEvent) {
   // detail 0 = keyboard activation (Enter/Space) — never a drag's
   // trailing click, so it must not be suppressed.
   if (dragged && e.detail !== 0) {
-    // trailing click of a drag gesture — not an intent to open the panel
+    // trailing click of a drag gesture — the buddy was dropped, not an intent
+    // to open the panel. Acknowledge the drop with one bob.
     dragged = false;
+    bobOnce();
     return;
   }
   dragged = false;
+  // a real click (opens/closes the panel) — bob once
+  bobOnce();
   emit("toggle");
 }
 
@@ -164,6 +170,7 @@ function onContextMenu() {
           :working="working"
           :animated="animated"
           :facing="facing"
+          :play-nonce="playNonce"
         />
         <span
           v-if="recording"

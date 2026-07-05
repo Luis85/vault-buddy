@@ -4,7 +4,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { panelTransitionsSettled } from "../composables/useCompanionWindow";
 import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 
@@ -69,32 +68,27 @@ export const useUpdatesStore = defineStore("updates", {
       }
       const vaults = useVaultsStore();
       try {
-        // The install path exits the process without the normal close/quit
-        // hooks, and the window-state plugin persists the position on exit.
-        // Close the panel (its transition restores the window's unshifted
-        // home position) and run the Rust-side restore as a deterministic
-        // backstop, so installing with the panel open at a screen edge
-        // can't persist the shifted point.
-        vaults.panelOpen = false;
-        // Wait until the close transition has actually landed — geometry
-        // moved home AND the offset reset reported to Rust — so the
-        // prepare_update_install backstop can't race it and double-shift
-        // the position. The timeout keeps a wedged transition from
-        // blocking the install forever.
-        await Promise.race([
-          panelTransitionsSettled(),
-          new Promise((resolve) => setTimeout(resolve, 1000)),
-        ]);
+        // Close the panel window before handing off to the installer, which
+        // exits the process. `prepare_update_install` also closes it; this
+        // gets the UI out of the way first. The buddy window never shifts,
+        // so there is no home position to restore anymore.
+        await invoke("close_panel").catch(() => {});
         await invoke("prepare_update_install").catch(() => {});
         await this.available.install();
         // Tauri's signature check has already verified the payload; hand
         // over to the new version.
         await relaunch();
       } catch (e) {
-        // reopen the panel on the settings view so the error is visible;
-        // keep `available` so the user can retry the install
-        vaults.openSettings();
-        vaults.panelOpen = true;
+        // The install threw, so the process is still alive: reopen the panel
+        // on the settings view so the error and retry button are visible.
+        // `close_panel`/`prepare_update_install` hid the panel window, so
+        // `toggle_panel` reliably re-shows it. Use `requestView` (not
+        // `openSettings`): reopening fires the panel-shown refresh, which
+        // resets to the vault list unless a view was explicitly requested —
+        // `openSettings` would be clobbered back to the list. `available` is
+        // kept for retry.
+        vaults.requestView("settings");
+        await invoke("toggle_panel").catch(() => {});
         this.error = String(e);
         this.phase = "error";
         logWarning(`update install failed: ${String(e)}`);
