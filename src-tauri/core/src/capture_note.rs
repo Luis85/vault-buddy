@@ -426,4 +426,33 @@ mod tests {
             Some(r#"A "quoted" type"#)
         );
     }
+
+    #[test]
+    fn note_field_stops_at_the_closing_frontmatter_delimiter() {
+        // A key that appears only in the BODY (after the closing ---) must not
+        // be read: the scan must stop at the delimiter. Without the break this
+        // would return Some("leaked").
+        let note = format!("{}\nnew-field: leaked\n", render_note(&meta(), "x.mp3"));
+        assert_eq!(note_field(&note, "new-field"), None);
+    }
+
+    #[test]
+    fn note_field_unescapes_backslashes() {
+        // The \\ -> \ arm: a value with a literal backslash (plausible on this
+        // Windows-targeted app — device/vault names, paths) must round-trip.
+        let mut m = meta();
+        m.vault_name = r#"C:\Users\me"#.into();
+        let note = render_note(&m, "x.mp3");
+        assert_eq!(
+            note_field(&note, "vault").as_deref(),
+            Some(r#"C:\Users\me"#)
+        );
+    }
+
+    #[test]
+    fn note_field_returns_an_unquoted_scalar_as_is() {
+        // Hand-edited-note path: an unquoted value is returned trimmed, as-is.
+        let note = "---\ntype: Meeting\n---\n\nbody\n";
+        assert_eq!(note_field(note, "type").as_deref(), Some("Meeting"));
+    }
 }
