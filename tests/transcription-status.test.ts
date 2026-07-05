@@ -44,4 +44,12 @@ describe("TranscriptionStatus", () => {
     const btn = w.get('[data-testid="open-transcript"]');
     expect(btn.text()).toContain("Open in Obsidian");
   });
+
+  it("dismisses the finished row without opening", async () => {
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    const w = mount(TranscriptionStatus);
+    await w.get('[data-testid="dismiss-transcript"]').trigger("click");
+    expect(store.lastTranscribed).toBeNull();
+  });
 });

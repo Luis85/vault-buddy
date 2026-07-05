@@ -45,14 +45,25 @@ const downloadPct = computed(() => {
       role="status"
     >
       <span>✓ Transcribed</span>
-      <button
-        type="button"
-        data-testid="open-transcript"
-        class="cursor-pointer rounded bg-emerald-500/80 px-2 py-0.5 font-semibold text-white hover:bg-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-        @click="capture.openTranscript()"
-      >
-        Open in Obsidian
-      </button>
+      <span class="flex items-center gap-1">
+        <button
+          type="button"
+          data-testid="open-transcript"
+          class="cursor-pointer rounded bg-emerald-500/80 px-2 py-0.5 font-semibold text-white hover:bg-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+          @click="capture.openTranscript()"
+        >
+          Open in Obsidian
+        </button>
+        <button
+          type="button"
+          data-testid="dismiss-transcript"
+          aria-label="Dismiss"
+          class="cursor-pointer rounded px-1 py-0.5 text-emerald-200/80 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+          @click="capture.dismissTranscribed()"
+        >
+          ✕
+        </button>
+      </span>
     </div>
   </div>
 </template>

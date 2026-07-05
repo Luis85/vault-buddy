@@ -269,6 +269,39 @@ describe("capture store", () => {
     expect(calls).toContainEqual({ cmd: "open_transcript", args: { path: "/v/m.mp3" } });
   });
 
+  it("openTranscript clears the row on success", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "open_transcript") return undefined;
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    await store.openTranscript();
+    expect(store.lastTranscribed).toBeNull();
+  });
+
+  it("openTranscript keeps the row and warns on failure", async () => {
+    mockIPC(() => {
+      throw "vault gone";
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    await store.openTranscript();
+    expect(store.lastTranscribed).toEqual({ mp3: "/v/m.mp3" });
+    expect(store.warning).toContain("vault gone");
+  });
+
+  it("dismissTranscribed clears the row without opening", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    store.dismissTranscribed();
+    expect(store.lastTranscribed).toBeNull();
+    expect(calls).not.toContain("open_transcript");
+  });
+
   it("pause and resume flow through IPC and mirror events", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

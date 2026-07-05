@@ -182,11 +182,16 @@ export const useCaptureStore = defineStore("capture", {
       if (!this.lastTranscribed) return;
       try {
         await invoke("open_transcript", { path: this.lastTranscribed.mp3 });
+        this.lastTranscribed = null;
       } catch (e) {
-        // A failed open (recording moved, launch error) is non-fatal — warn.
+        // A failed open (recording moved, launch error) is non-fatal — warn
+        // and keep the row so the user can retry.
         this.warning = String(e);
         logWarning(`open transcript rejected: ${String(e)}`);
       }
+    },
+    dismissTranscribed() {
+      this.lastTranscribed = null;
     },
     async pause() {
       if (this.status !== "recording" || this.paused) return;
