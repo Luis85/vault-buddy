@@ -148,6 +148,44 @@ describe("App layout geometry", () => {
     expect(wrapper.find("main").classes()).toContain("items-end");
   });
 
+  it("hides the buddy while the window shifts open, then reveals it", async () => {
+    // Near the bottom-right corner the window shifts up+left on open, moving
+    // its top-left origin. WebView2 briefly re-shows the stale collapsed
+    // frame there — the buddy must be masked (invisible) at the instant the
+    // window moves, and revealed once the grown layout has painted.
+    vi.stubGlobal("requestAnimationFrame", (cb: (t: number) => void) => {
+      setTimeout(() => cb(0), 0);
+      return 0;
+    });
+    state.pos = { x: 1780, y: 910 };
+    let wrapper: ReturnType<typeof mount> | undefined;
+    let maskedAtGeometry = false;
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults") return [];
+      if (cmd === "start_buddy_drag") return true;
+      if (
+        cmd === "set_window_geometry" &&
+        wrapper
+          ?.find('[data-testid="buddy-cell"]')
+          .classes()
+          .includes("invisible")
+      ) {
+        maskedAtGeometry = true;
+      }
+    });
+    wrapper = mount(App);
+    await flush();
+    const store = useVaultsStore();
+    await store.togglePanel();
+    for (let i = 0; i < 12; i++) await flush();
+
+    expect(maskedAtGeometry).toBe(true);
+    expect(
+      wrapper.find('[data-testid="buddy-cell"]').classes(),
+    ).not.toContain("invisible");
+    vi.unstubAllGlobals();
+  });
+
   it("closes the panel on Escape", async () => {
     mount(App);
     const store = useVaultsStore();

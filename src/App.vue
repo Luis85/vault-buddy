@@ -20,7 +20,7 @@ const { panelOpen, busyVaultId } = storeToRefs(store);
 const working = computed(() => busyVaultId.value !== null);
 
 const { bubbleVisible, bubbleText, dismiss } = useGreeting();
-const { side, valign } = useCompanionWindow(panelOpen, bubbleVisible);
+const { side, valign, maskBuddy } = useCompanionWindow(panelOpen, bubbleVisible);
 
 // Opening the panel supersedes the greeting: cancel its timer and hide it
 // so it can't reappear when the panel closes again within the greeting
@@ -150,9 +150,17 @@ onUnmounted(() => {
     ]"
     @click.self="closePanelUnlessDragging"
   >
+    <!--
+      Masked (kept in layout, just not painted) for the blink of a shifted
+      open: the window's top-left jumps toward free space and WebView2
+      re-shows its stale collapsed frame at that raised origin for a frame,
+      which would otherwise flash the buddy to the corner. useCompanionWindow
+      reveals it again once the grown layout has painted.
+    -->
     <div
       data-testid="buddy-cell"
       class="flex h-[88px] w-[88px] shrink-0 items-start justify-start p-2"
+      :class="{ invisible: maskBuddy }"
     >
       <CompanionCharacter
         :working="working"

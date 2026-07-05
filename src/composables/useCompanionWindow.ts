@@ -51,6 +51,22 @@ export async function panelTransitionsSettled(): Promise<void> {
   await transitionsTail;
 }
 
+// Resolves once the browser has painted at least one frame. A queued rAF
+// callback runs just before a paint, so a second rAF guarantees the frame
+// scheduled by the first was composited. Used to bracket the window resize
+// with real paints so the buddy mask is on-screen before the move and the
+// grown layout is on-screen before the reveal. Degrades to a macrotask
+// where rAF is unavailable (non-browser test runners).
+function afterPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
 /**
  * Grows the transparent window when the panel opens or a greeting bubble
  * shows, and shrinks it back when neither wants space, so the invisible
@@ -66,9 +82,19 @@ export function useCompanionWindow(
 ): {
   side: Ref<"right" | "left">;
   valign: Ref<"down" | "up">;
+  maskBuddy: Ref<boolean>;
 } {
   const side = ref<"right" | "left">("right");
   const valign = ref<"down" | "up">("down");
+  // Hides the buddy for the blink of a *shifted* open. A shifted open moves
+  // the window's top-left corner (up and/or left); WebView2 keeps compositing
+  // its last-painted collapsed frame at that raised origin until the webview
+  // reflows for the larger viewport, flashing the buddy to the corner for a
+  // frame (an upstream wry/WebView2 resize race — the native move is already
+  // one atomic SetWindowPos). Masking the buddy so the stale frame has nothing
+  // to show, then revealing it once the grown layout has painted, is the only
+  // lever available at this layer.
+  const maskBuddy = ref(false);
   // Physical px subtracted from the window position while it is grown. The
   // collapse path adds it back relative to the *current* position, so the
   // buddy stays put even if the window was dragged while open.
@@ -147,6 +173,16 @@ export function useCompanionWindow(
       void reportOffset();
       side.value = placement.side;
       valign.value = placement.valign;
+      // Only a shifted open moves the origin and so exposes the stale-frame
+      // flash; an in-place (down/right) grow keeps the top-left fixed and
+      // needs no mask (masking it would be a gratuitous buddy blink).
+      const shifts = placement.offset.x !== 0 || placement.offset.y !== 0;
+      if (shifts) {
+        maskBuddy.value = true;
+        // Paint the masked frame BEFORE the window moves, or the stale frame
+        // WebView2 re-shows at the raised origin still contains the buddy.
+        await afterPaint();
+      }
       await setGeometry(
         {
           x: home.x - placement.offset.x,
@@ -154,6 +190,9 @@ export function useCompanionWindow(
         },
         size,
       );
+      // Let the grown, bottom-anchored layout paint while still masked, so the
+      // reveal lands on the correct final frame rather than a mid-reflow one.
+      if (shifts) await afterPaint();
     } catch (e) {
       // No window/monitor info — grow right/down in place. Leave any
       // recorded offset untouched so a pending shift is still undone on
@@ -164,6 +203,10 @@ export function useCompanionWindow(
       await win
         .setSize(new LogicalSize(size.width, size.height))
         .catch(() => {});
+    } finally {
+      // Always reveal — a superseded or failed grow must never strand the
+      // buddy invisible.
+      maskBuddy.value = false;
     }
   }
 
@@ -219,5 +262,5 @@ export function useCompanionWindow(
   watch(panelOpen, schedule);
   if (bubbleOpen) watch(bubbleOpen, schedule);
 
-  return { side, valign };
+  return { side, valign, maskBuddy };
 }

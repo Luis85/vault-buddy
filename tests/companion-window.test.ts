@@ -24,6 +24,10 @@ const state = vi.hoisted(() => ({
   },
   deferOuter: false,
   pendingOuter: [] as Array<() => void>,
+  // The composable's buddy mask, wired in per-test so the geometry mock can
+  // record whether the buddy was hidden at the instant the window moved.
+  maskRef: null as null | { value: boolean },
+  maskWhenGeometrySet: [] as boolean[],
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -69,6 +73,11 @@ import {
 } from "../src/composables/useCompanionWindow";
 
 const flush = () => new Promise((r) => setTimeout(r));
+// The mask flow awaits real animation frames; drain enough macrotasks that a
+// full grow transition (mask → paint → resize → paint → reveal) settles.
+const flushAll = async () => {
+  for (let i = 0; i < 12; i++) await flush();
+};
 const resolveOuter = () => {
   for (const resolve of state.pendingOuter.splice(0)) resolve();
 };
@@ -90,6 +99,14 @@ describe("useCompanionWindow", () => {
     state.monitor = null;
     state.deferOuter = false;
     state.pendingOuter.length = 0;
+    state.maskRef = null;
+    state.maskWhenGeometrySet = [];
+    // happy-dom has no compositor; make requestAnimationFrame a plain
+    // macrotask so the mask flow's paint waits resolve under `flush`.
+    vi.stubGlobal("requestAnimationFrame", (cb: (t: number) => void) => {
+      setTimeout(() => cb(0), 0);
+      return 0;
+    });
     mockIPC((cmd, args) => {
       if (cmd === "set_panel_offset") {
         const { x, y } = args as { x: number; y: number };
@@ -103,12 +120,14 @@ describe("useCompanionWindow", () => {
         };
         state.pos = { x, y };
         state.calls.push(`setGeometry:${x},${y},${width}`);
+        state.maskWhenGeometrySet.push(state.maskRef?.value ?? false);
       }
     });
   });
 
   afterEach(() => {
     clearMocks();
+    vi.unstubAllGlobals();
   });
 
   it("expands on open and collapses on close", async () => {
@@ -204,9 +223,7 @@ describe("useCompanionWindow", () => {
 
     state.deferOuter = false;
     resolveOuter();
-    await flush();
-    await flush();
-    await flush();
+    await flushAll();
 
     // the reopen must not re-plan from the shifted position and forget the
     // pending offset — the window stays shifted exactly once
@@ -219,7 +236,7 @@ describe("useCompanionWindow", () => {
 
     open.value = false;
     await nextTick();
-    await flush();
+    await flushAll();
 
     // closing puts the buddy back exactly where the user left it
     expect(state.pos).toEqual({ x: 1780, y: 100 });
@@ -243,14 +260,14 @@ describe("useCompanionWindow", () => {
 
     bubble.value = true;
     await nextTick();
-    await flush();
+    await flushAll();
     const shift = BUBBLE.width - COLLAPSED.width;
     expect(state.pos).toEqual({ x: 1780 - shift, y: 100 });
     expect(state.calls).toContain(`reportOffset:${shift},0`);
 
     bubble.value = false;
     await nextTick();
-    await flush();
+    await flushAll();
     expect(state.pos).toEqual({ x: 1780, y: 100 });
     expect(state.calls[state.calls.length - 1]).toBe("reportOffset:0,0");
   });
@@ -269,6 +286,54 @@ describe("useCompanionWindow", () => {
     await nextTick();
     await flush();
     expect(lastResize()).toBe(String(COLLAPSED.width));
+  });
+
+  it("masks the buddy across a shifted open so the stale frame can't flash it to the corner", async () => {
+    // Buddy hugging the bottom-right of a 1920x1080 monitor: opening shifts
+    // the window's origin up and left. WebView2 briefly composites its stale
+    // collapsed frame at that raised origin, flashing the buddy to the
+    // corner — so the buddy must be masked while the window moves, then
+    // revealed once the grown layout has painted.
+    state.monitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+    };
+    state.pos = { x: 1780, y: 980 };
+
+    const open = ref(false);
+    const { maskBuddy } = useCompanionWindow(open);
+    state.maskRef = maskBuddy;
+
+    open.value = true;
+    await nextTick();
+    await flushAll();
+
+    // the mask was ON at the instant the window geometry changed
+    expect(state.maskWhenGeometrySet).toContain(true);
+    // and is cleared once the transition settles
+    expect(maskBuddy.value).toBe(false);
+  });
+
+  it("does not mask the buddy on an in-place (down/right) open", async () => {
+    // Room to grow down/right: the origin never moves, so there is no stale
+    // frame to hide — masking would be a pointless buddy blink.
+    state.monitor = {
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+    };
+    state.pos = { x: 100, y: 100 };
+
+    const open = ref(false);
+    const { maskBuddy } = useCompanionWindow(open);
+    state.maskRef = maskBuddy;
+
+    open.value = true;
+    await nextTick();
+    await flushAll();
+
+    expect(state.maskWhenGeometrySet).not.toContain(true);
+    expect(maskBuddy.value).toBe(false);
+    expect(lastResize()).toBe(String(EXPANDED.width));
   });
 
   it("lets the panel win when both the panel and the bubble are open", async () => {
