@@ -13,6 +13,7 @@ pub struct NoteMeta {
     pub recording_type: String,
     pub input_devices: Vec<String>,
     pub event: Option<String>,
+    pub transcribe: bool,
 }
 
 pub fn format_duration(secs: u64) -> String {
@@ -54,6 +55,14 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     }
     out.push_str("created-by: Vault Buddy\n---\n\n");
     out.push_str(&format!("![[{mp3_file_name}]]\n"));
+    if meta.transcribe {
+        // The transcript sidecar's name is derived from the mp3 stem and was
+        // reserved pairwise, so this embed resolves once the sidecar lands
+        // (a "transcribing…" placeholder is written immediately so it never
+        // shows "file not found").
+        let stem = mp3_file_name.strip_suffix(".mp3").unwrap_or(mp3_file_name);
+        out.push_str(&format!("\n## Transcript\n\n![[{stem}.transcript]]\n"));
+    }
     out
 }
 
@@ -150,6 +159,7 @@ mod tests {
             recording_type: "Meeting".into(),
             input_devices: vec!["Headset Mic".into(), "Speakers (loopback)".into()],
             event: None,
+            transcribe: false,
         }
     }
 
@@ -255,5 +265,24 @@ mod tests {
         assert_eq!(written, dir.path().join("n (2).md"));
         assert_eq!(std::fs::read_to_string(&written).unwrap(), "content");
         assert_eq!(std::fs::read_to_string(&note).unwrap(), "taken");
+    }
+
+    #[test]
+    fn note_embeds_transcript_when_enabled() {
+        let mut m = meta();
+        m.transcribe = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        assert!(
+            note.contains("![[2026-07-04 1405 Meeting.mp3]]"),
+            "audio embed stays"
+        );
+        assert!(note.contains("## Transcript"));
+        assert!(note.contains("![[2026-07-04 1405 Meeting.transcript]]"));
+    }
+
+    #[test]
+    fn note_has_no_transcript_section_when_disabled() {
+        let note = render_note(&meta(), "b.mp3");
+        assert!(!note.contains("## Transcript"));
     }
 }
