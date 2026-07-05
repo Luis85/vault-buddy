@@ -60,9 +60,12 @@ impl ModelTier {
     }
 }
 
-/// `%APPDATA%\vault-buddy\models` — app-side, never inside a vault.
+/// `%APPDATA%\vault-buddy\models` — nested inside the same app folder as
+/// `config.json` (`vault_buddy_core::capture_config::app_config_dir`), so
+/// transcription reuses the existing app folder and never creates a second
+/// top-level AppData folder. App-side, never inside a vault.
 pub fn model_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("vault-buddy").join("models"))
+    vault_buddy_core::capture_config::app_config_dir().map(|d| d.join("models"))
 }
 
 pub fn model_path(tier: ModelTier) -> Option<PathBuf> {
@@ -139,6 +142,21 @@ mod tests {
     fn model_path_ends_with_the_tier_file() {
         if let Some(p) = model_path(ModelTier::Small) {
             assert_eq!(p.file_name().unwrap().to_string_lossy(), "ggml-small.bin");
+        }
+    }
+
+    #[test]
+    fn model_dir_nests_in_the_shared_app_config_dir() {
+        // Models must live inside the same %APPDATA%\vault-buddy folder as
+        // config.json (core::capture_config::app_config_dir), never a second
+        // top-level app folder. Deriving both from that one helper is what
+        // keeps them from drifting into separate folders.
+        if let (Some(models), Some(app)) = (
+            model_dir(),
+            vault_buddy_core::capture_config::app_config_dir(),
+        ) {
+            assert_eq!(models.parent(), Some(app.as_path()));
+            assert_eq!(models.file_name().unwrap(), "models");
         }
     }
 }

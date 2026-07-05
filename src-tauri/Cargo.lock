@@ -5252,7 +5252,6 @@ dependencies = [
 name = "vault_buddy_transcribe"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "log",
  "mp3lame-encoder",
  "symphonia",

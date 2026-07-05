@@ -172,8 +172,17 @@ pub fn vault_config(cfg: &AppConfig, vault_id: &str) -> VaultCaptureConfig {
     cfg.vaults.get(vault_id).cloned().unwrap_or_default()
 }
 
+/// The app's own data directory: `<config_dir>/vault-buddy`
+/// (`%APPDATA%\vault-buddy` on Windows). Single source of truth for the
+/// app's top-level AppData folder so `config.json` (here) and the
+/// transcription model cache (`transcribe` crate's `model_dir`) always share
+/// ONE folder instead of each hardcoding the name and risking a second one.
+pub fn app_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("vault-buddy"))
+}
+
 pub fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("vault-buddy").join("config.json"))
+    app_config_dir().map(|d| d.join("config.json"))
 }
 
 pub fn load_config() -> AppConfig {
@@ -278,6 +287,19 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_path_nests_in_the_shared_app_config_dir() {
+        // config.json and the transcription model cache (transcribe crate)
+        // both derive from app_config_dir(), so the app keeps ONE top-level
+        // AppData folder — never a second one. Asserting the derivation here
+        // keeps the co-location structural, not coincidental.
+        if let (Some(cfg), Some(app)) = (config_path(), app_config_dir()) {
+            assert_eq!(cfg.parent(), Some(app.as_path()));
+            assert_eq!(cfg.file_name().unwrap(), "config.json");
+            assert_eq!(app.file_name().unwrap(), "vault-buddy");
+        }
+    }
 
     #[test]
     fn defaults_when_json_is_garbage() {
