@@ -226,7 +226,7 @@ async function save() {
         class="h-4 w-4 accent-violet-500"
       />
     </section>
-    <template v-if="transcribe">
+    <div v-if="transcribe" class="flex flex-col gap-3 border-l border-white/10 pl-3">
       <section class="flex items-center justify-between gap-2">
         <label for="capture-transcription-model" class="text-sm text-slate-200">Model</label>
         <select
@@ -262,7 +262,7 @@ async function save() {
           class="h-4 w-4 accent-violet-500"
         />
       </section>
-    </template>
+    </div>
     <section class="flex items-center justify-between gap-2">
       <label for="capture-bitrate" class="text-sm text-slate-200">Bitrate</label>
       <select
