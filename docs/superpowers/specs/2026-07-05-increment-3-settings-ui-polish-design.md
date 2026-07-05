@@ -10,10 +10,10 @@
 
 ## Goal
 
-Six improvements to the capture settings panel, the transcription status row,
-and the vault list. Five are small; the custom dropdown (#5) is the bulk of the
-work and is cleanly separable. None changes the config schema, the IPC command
-surface, or any write-safety rule.
+Seven improvements to the capture settings panel, the transcription status row,
+the vault list, and the buddy. Six are small; the custom dropdown (#5) is the
+bulk of the work and is cleanly separable. None changes the config schema, the
+IPC command surface, or any write-safety rule.
 
 ## 1. `color-scheme: dark` baseline (`src/style.css`)
 
@@ -160,6 +160,30 @@ sets `transcribingVaultId`; `transcribed`/`transcribeFailed` clear it.
 `vault-list.test.ts`: the transcribing dot renders on the matching vault row.
 The backend one-field addition is compiled by CI's Windows job (shell); an
 event field has no unit test.
+
+## 7. Buddy "transcribing" indicator (`components/CompanionCharacter.vue`, `App.vue`)
+
+**Problem.** The buddy pulses a red dot while recording, but shows nothing while
+it transcribes in the background — the character gives no sign it's working.
+
+**Change.** Mirror the recording dot with a transcribing one on the character:
+- **CompanionCharacter:** add a `transcribing?: boolean` prop (default false),
+  add it to the `.buddy` class list, and render a **violet** corner dot
+  (`.transcribe-dot`, placed like the existing `.rec-dot`) with a gentle pulse,
+  shown when `transcribing` and **not** `recording` — recording keeps visual
+  precedence, and the two don't overlap in practice since the worker postpones
+  transcription while a recording is active.
+- **App.vue:** bind `:transcribing="capture.transcribing"` — the existing
+  global flag. The buddy is a single character, so global state is right here;
+  the per-vault dot is #6.
+
+Deliberately a subtle dot, not the active `working` animation (which is the
+transient vault-open busy state): transcription runs for minutes, and an active
+pose that long would be noisy.
+
+**Testing.** `companion-character.test.ts`: the transcribe dot renders when
+`transcribing` is true and is suppressed while `recording`; the App passes
+`capture.transcribing` through.
 
 ## Invariants preserved
 
