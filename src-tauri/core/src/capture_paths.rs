@@ -59,6 +59,75 @@ pub fn recovered_base(base: &str) -> String {
     format!("{base} (recovered)")
 }
 
+/// Longest accepted rename title, in characters.
+pub const MAX_TITLE_CHARS: usize = 120;
+
+/// Chars of the `YYYY-MM-DD HHmm ` prefix every capture base starts with.
+const CAPTURE_PREFIX_CHARS: usize = 16;
+
+/// Strip everything that can never reach a file name: path separators and
+/// the rest of the Windows-reserved set, plus control characters. Then
+/// trim whitespace and the trailing dots/spaces Windows rejects.
+fn sanitize_title(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .filter(|c| {
+            !matches!(c, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*') && !c.is_control()
+        })
+        .collect();
+    cleaned.trim().trim_end_matches(['.', ' ']).to_string()
+}
+
+pub struct RenamePlan {
+    pub dir: PathBuf,
+    pub new_base: String,
+    pub mp3_from: PathBuf,
+    pub note_from: PathBuf,
+}
+
+/// Pure planning for the post-save rename: validates ownership and the
+/// title, derives the new base. Execution (reservation + rename_noreplace +
+/// embed retarget) lives in the capture crate so the safety rails are shared
+/// with the save path.
+pub fn rename_plan(mp3: &Path, new_title: &str) -> Result<RenamePlan, String> {
+    let stem = mp3
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let is_mp3 = mp3
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+    if !is_mp3 || !is_capture_base(&stem) {
+        // Ownership filter: rename only files carrying our capture
+        // pattern — never an arbitrary user mp3 handed in by mistake.
+        return Err("Not a Vault Buddy capture file".to_string());
+    }
+    let mut title = sanitize_title(new_title);
+    // The prompt prefills the full current base; a title that itself
+    // starts with a capture prefix must not end up double-prefixed.
+    if is_capture_base(&title) {
+        title = title.chars().skip(CAPTURE_PREFIX_CHARS).collect();
+    }
+    if title.is_empty() {
+        return Err("Title is empty after removing unusable characters".to_string());
+    }
+    if title.chars().count() > MAX_TITLE_CHARS {
+        return Err(format!(
+            "Title is too long (max {MAX_TITLE_CHARS} characters)"
+        ));
+    }
+    let prefix: String = stem.chars().take(CAPTURE_PREFIX_CHARS).collect();
+    let dir = mp3.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let note_from = dir.join(format!("{stem}.md"));
+    Ok(RenamePlan {
+        dir,
+        new_base: format!("{prefix}{title}"),
+        mp3_from: mp3.to_path_buf(),
+        note_from,
+    })
+}
+
 /// The one collision-suffix scheme: attempt 1 is the plain base, attempt
 /// N is `base (N)`. Reservation, the stop-time recheck, and the note
 /// writer must all mint names from here so they can never diverge.
@@ -389,5 +458,81 @@ mod tests {
         let link = vault.path().join("Meetings");
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
         assert!(assert_root_inside_vault(vault.path(), &link).is_err());
+    }
+
+    #[test]
+    fn rename_plan_keeps_the_capture_prefix_and_sibling_note() {
+        let mp3 = Path::new("/v/Meetings/2026/07/2026-07-04 1405 Meeting.mp3");
+        let plan = rename_plan(mp3, "Standup with Alice").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 Standup with Alice");
+        assert!(
+            is_capture_base(&plan.new_base),
+            "retitled base is still ours"
+        );
+        assert_eq!(plan.dir, Path::new("/v/Meetings/2026/07"));
+        assert_eq!(plan.mp3_from, mp3);
+        assert_eq!(
+            plan.note_from,
+            Path::new("/v/Meetings/2026/07/2026-07-04 1405 Meeting.md")
+        );
+    }
+
+    #[test]
+    fn rename_plan_strips_separators_and_control_characters() {
+        let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting.mp3");
+        let plan = rename_plan(mp3, " a/b\\c:d*e?f\"g<h>i|j\u{7}k ").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 abcdefghijk");
+    }
+
+    #[test]
+    fn rename_plan_keeps_unicode_and_interior_dots() {
+        let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting.mp3");
+        let plan = rename_plan(mp3, "Café v1.2 ☕").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 Café v1.2 ☕");
+    }
+
+    #[test]
+    fn rename_plan_trims_trailing_dots_and_spaces() {
+        // Windows rejects file names ending in dots or spaces.
+        let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting.mp3");
+        let plan = rename_plan(mp3, "Notes.. . ").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 Notes");
+    }
+
+    #[test]
+    fn rename_plan_rejects_empty_after_sanitizing_and_overlong() {
+        let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting.mp3");
+        assert!(rename_plan(mp3, "").is_err());
+        assert!(rename_plan(mp3, "  /\\:  ").is_err());
+        let long = "x".repeat(MAX_TITLE_CHARS + 1);
+        assert!(rename_plan(mp3, &long).is_err());
+        let just_fits = "x".repeat(MAX_TITLE_CHARS);
+        assert!(rename_plan(mp3, &just_fits).is_ok());
+    }
+
+    #[test]
+    fn rename_plan_strips_a_leading_capture_prefix_from_the_title() {
+        // The prompt prefills the FULL current base; confirming unedited
+        // (or editing the tail of it) must not double the prefix.
+        let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting.mp3");
+        let plan = rename_plan(mp3, "2026-07-04 1405 Meeting").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 Meeting");
+        let plan = rename_plan(mp3, "2026-07-04 1405 Meeting with Alice").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 Meeting with Alice");
+    }
+
+    #[test]
+    fn rename_plan_refuses_foreign_files() {
+        // Ownership filter: only our capture pattern may be renamed.
+        assert!(rename_plan(Path::new("/v/2026/07/holiday.mp3"), "t").is_err());
+        assert!(rename_plan(Path::new("/v/2026/07/2026-07-04 1405 Meeting.wav"), "t").is_err());
+        assert!(rename_plan(Path::new("/v/2026/07/2026-07-04 Meeting.mp3"), "t").is_err());
+    }
+
+    #[test]
+    fn rename_plan_on_a_suffixed_base_replaces_label_and_suffix() {
+        let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting (2).mp3");
+        let plan = rename_plan(mp3, "Standup").unwrap();
+        assert_eq!(plan.new_base, "2026-07-04 1405 Standup");
     }
 }

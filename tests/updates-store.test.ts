@@ -13,7 +13,9 @@ vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
+vi.mock("../src/logging", () => ({ logWarning: vi.fn() }));
 
+import { logWarning } from "../src/logging";
 import { useUpdatesStore } from "../src/stores/updates";
 import { useVaultsStore } from "../src/stores/vaults";
 
@@ -77,6 +79,9 @@ describe("updates store", () => {
     expect(download).toHaveBeenCalledTimes(1);
     expect(install).toHaveBeenCalledTimes(1);
     expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+    // the marker is only mis-stamped when install() throws after
+    // prepare_update_install — a successful install must not re-arm
+    expect(mocks.invoke).not.toHaveBeenCalledWith("rearm_crash_detection");
   });
 
   it("keeps the panel open while downloading, closes it before installing", async () => {
@@ -143,12 +148,12 @@ describe("updates store", () => {
     const install = vi.fn().mockImplementation(async () => {
       // whatever the view state was when the process was about to exit,
       // the reopened panel must land on settings
-      vaults.showSettings = false;
+      vaults.view = "list";
       throw "install broke";
     });
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
     vaults.panelOpen = true;
-    vaults.showSettings = true; // installs start from the settings view
+    vaults.view = "settings"; // installs start from the settings view
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
@@ -158,8 +163,38 @@ describe("updates store", () => {
     // the panel remounts on reopen — it must land on settings, where the
     // update error and retry button live, not on the vault list
     expect(vaults.panelOpen).toBe(true);
-    expect(vaults.showSettings).toBe(true);
+    expect(vaults.view).toBe("settings");
     expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("a failing install logs a warning through the log bridge", async () => {
+    const vaults = useVaultsStore();
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockRejectedValue("install broke");
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    vaults.panelOpen = true;
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("install failed"),
+    );
+  });
+
+  it("re-arms crash detection when the install fails", async () => {
+    // prepare_update_install already stamped the run marker "clean" and
+    // latched crash detection off before install() ran — if install()
+    // then throws, the app keeps running with detection permanently
+    // disabled unless the frontend explicitly asks Rust to re-arm it.
+    const vaults = useVaultsStore();
+    const download = vi.fn().mockResolvedValue(undefined);
+    const install = vi.fn().mockRejectedValue("install broke");
+    mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
+    vaults.panelOpen = true;
+    const store = useUpdatesStore();
+    await store.checkForUpdates();
+    await store.installUpdate();
+    expect(mocks.invoke).toHaveBeenCalledWith("rearm_crash_detection");
   });
 
   it("ignores install requests when no update is available", async () => {

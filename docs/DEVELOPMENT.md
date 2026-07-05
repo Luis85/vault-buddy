@@ -157,6 +157,63 @@ happens to match. The hook is a cross-platform polyglot wrapper
 To update the vendored copies, re-pull the `skills/` directory from the
 upstream [obra/superpowers](https://github.com/obra/superpowers) repository.
 
+## Logs & crash reporting
+
+Log folder: `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` (tray → Open logs
+folder, or Settings).
+
+- `vault-buddy.log` — the rotating app log (5 MB, one rotated file kept).
+  Frontend diagnostics funnel into it too (`src/logging.ts`).
+- `crash.log` — Rust panic records (thread, location, backtrace) written
+  synchronously by the panic hook. Every record also carries the app
+  version and OS/architecture. A panic in the first instants of startup
+  lands in `%TEMP%\vault-buddy-crash.log` and is folded into `crash.log` on
+  the next launch.
+- Native faults (a SEH exception on Windows — WebView2, GPU, or
+  audio-driver crashes — or a fatal signal on Unix) are now caught by an
+  OS-level crash handler (the `crash-handler` crate) and also land in
+  `crash.log`, as a `native crash …` record with the exception code
+  (Windows) or signal number (Unix), version, and OS — but no stack, and
+  no fault timestamp (see the record's timestamp field, which instead
+  points at the tail of `vault-buddy.log`). The handler runs in an
+  already-crashed process, possibly with the heap lock still held by
+  whatever corrupted it, so it does zero allocation on the path that
+  matters: the record text is preformatted once at startup, and at fault
+  time the handler only writes those bytes plus the exception/signal code
+  (rendered into a fixed stack buffer, no `format!`) through a `crash.log`
+  handle opened in advance. Only a fault in the first few milliseconds of
+  startup, before that handle is ready, falls back to opening a file at
+  crash time (best-effort, and the one place this path may still
+  allocate). A main-thread Rust panic on Windows can produce **both** a
+  panic record and a native-crash record for the same event (the panic
+  unwinds into an abort, which the native handler also observes) — read
+  two records with matching timestamps as one crash, not two.
+- `.vault-buddy.run` — the run marker. If a session ends without passing
+  through a graceful exit path, the next launch logs a warning and shows a
+  notification that the previous session ended uncleanly. The notification
+  distinguishes two cases by checking whether `crash.log` holds a record at
+  least as new as the stale marker: **a crash record is present** ("Vault
+  Buddy crashed last time" — see crash.log) versus **no record** ("Vault
+  Buddy didn't shut down cleanly" — see vault-buddy.log instead). The
+  second case is not rare: a native WebView2/GPU/audio-driver fault that
+  happens while interacting with another window (e.g. dragging the buddy
+  over another app) commonly kills the process before any handler runs, so
+  no crash.log record ever gets written — the previous notification wording
+  ("see crash.log") was misleading in exactly this case. Crash detection
+  also re-arms itself automatically if an update install fails after the
+  updater's pre-install step already stamped the marker "clean" — the
+  frontend tells Rust to turn detection back on since the process is
+  clearly still running.
+- `Vault Buddy.log` (if you still have one) — the pre-v0.2.2 default-named
+  log; the app no longer writes it, safe to delete manually.
+
+Honest limitation: a kill or power loss allows no in-process write at
+all, native crash handler included — the run marker is the only signal,
+detected at the next launch. For a full native crash dump (not just the
+one-line record above), enable Windows Error Reporting LocalDumps for
+`vault-buddy.exe` (see
+[Collecting user-mode dumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps)).
+
 ## Capture configuration
 
 Per-vault capture settings live app-side in `%APPDATA%\vault-buddy\config.json`
@@ -171,8 +228,12 @@ ever written into your vaults except recordings and their notes.
       "mode": "meeting",          // "meeting" (mic + desktop audio) | "voice-note" (mic only)
       "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
       "bitrateKbps": 128,          // 128 | 160 | 192
-      "createNote": true           // companion .md with metadata + embed
+      "createNote": true,          // companion .md with metadata + embed
+      "inputDevice": "USB Mic",    // optional — cpal device name; omit for system default
+      "outputDevice": "Speakers"   // optional — loopback source (Meeting mode); omit for system default
     }
   }
 }
 ```
+
+The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.

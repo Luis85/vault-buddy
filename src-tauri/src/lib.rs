@@ -4,11 +4,16 @@ mod diagnostics;
 mod tray;
 
 use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 pub fn run() {
     // Before anything else: a panic during builder construction or in any
     // thread should still be captured on disk.
     diagnostics::install_panic_hook();
+    // SEH/signal-level net under the panic hook: catches native faults the
+    // Rust hook can never see. Installed this early so even plugin/builder
+    // construction is covered.
+    diagnostics::install_native_crash_handler();
 
     tauri::Builder::default()
         // Registered first (per the plugin's docs) so a second launch bails
@@ -63,6 +68,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
+        .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction — restore the unshifted home position first so a
@@ -79,18 +85,25 @@ pub fn run() {
                     // re-trigger it via the app handle.
                     api.prevent_close();
                     let app = app.clone();
-                    std::thread::spawn(move || {
-                        capture_commands::finalize_if_recording(&app);
-                        // The recording is finalized, so is_recording is
-                        // now false and the re-triggered CloseRequested
-                        // takes the else branch below (restore + pass
-                        // through to destruction) — no loop.
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.close();
-                        }
-                    });
+                    std::thread::Builder::new()
+                        .name("close-finalize".into())
+                        .spawn(move || {
+                            capture_commands::finalize_if_recording(&app);
+                            // The recording is finalized, so is_recording is
+                            // now false and the re-triggered CloseRequested
+                            // takes the else branch below (restore + pass
+                            // through to destruction) — no loop.
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.close();
+                            }
+                        })
+                        .expect("failed to spawn close-finalize thread");
                 } else {
                     tray::restore_home_position(app);
+                    // Alt+F4 / session end: the window is about to be
+                    // destroyed and the process exits with it.
+                    log::info!("clean shutdown (window close)");
+                    diagnostics::mark_clean_shutdown();
                 }
             }
         })
@@ -103,15 +116,85 @@ pub fn run() {
             commands::set_window_geometry,
             commands::show_buddy_menu,
             commands::open_logs_folder,
+            commands::rearm_crash_detection,
             capture_commands::start_capture,
             capture_commands::stop_capture,
-            capture_commands::capture_status
+            capture_commands::capture_status,
+            capture_commands::get_capture_config,
+            capture_commands::set_capture_config,
+            capture_commands::list_audio_devices,
+            capture_commands::pause_capture,
+            capture_commands::resume_capture,
+            capture_commands::rename_capture
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
             // the temp dir.
             if let Ok(dir) = app.path().app_log_dir() {
                 diagnostics::set_log_dir(dir);
+            }
+            log::info!(
+                "Vault Buddy v{} starting (pid {})",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id()
+            );
+            // install_native_crash_handler ran before this logger existed —
+            // replay any install failure it stashed, now that logging works.
+            diagnostics::report_startup_diagnostics();
+            if let Ok(dir) = app.path().app_log_dir() {
+                // A panic before setup wrote its record to the temp dir —
+                // fold it in where "Open logs folder" points.
+                match vault_buddy_core::app_diagnostics::adopt_stray_crash_log(
+                    &diagnostics::stray_crash_file(),
+                    &dir,
+                ) {
+                    Ok(true) => log::info!("adopted a pre-setup crash record into crash.log"),
+                    Ok(false) => {}
+                    Err(e) => log::warn!("could not adopt stray crash log: {e}"),
+                }
+                // The panic hook only sees Rust panics; the marker catches
+                // every other ending too (native fault, kill, power loss).
+                if let vault_buddy_core::app_diagnostics::PreviousRun::Unclean(previous) =
+                    vault_buddy_core::app_diagnostics::check_previous_run(&dir)
+                {
+                    // Freshness is judged against the stale marker's mtime,
+                    // so this must run before write_running_marker re-stamps.
+                    let (headline, body) =
+                        if vault_buddy_core::app_diagnostics::crash_record_looks_fresh(&dir) {
+                            log::warn!(
+                                "previous session did not shut down cleanly ({previous}); \
+                                 crash.log holds a matching record"
+                            );
+                            (
+                                "Vault Buddy crashed last time",
+                                "Details are in crash.log — tray → Open logs folder",
+                            )
+                        } else {
+                            log::warn!(
+                                "previous session did not shut down cleanly ({previous}) and \
+                                 no crash record was written — a native fault (graphics/\
+                                 WebView2/audio driver) or a kill; the tail of vault-buddy.log \
+                                 shows its last moments. For native dumps enable WER LocalDumps."
+                            );
+                            (
+                                "Vault Buddy didn't shut down cleanly",
+                                "No crash record was written (native fault or kill) — \
+                                 see vault-buddy.log via tray → Open logs folder",
+                            )
+                        };
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title(headline)
+                        .body(body)
+                        .show();
+                }
+                if let Err(e) = vault_buddy_core::app_diagnostics::write_running_marker(
+                    &dir,
+                    env!("CARGO_PKG_VERSION"),
+                ) {
+                    log::warn!("could not write the run marker: {e}");
+                }
             }
             tray::create_tray(app.handle())?;
             capture_commands::run_recovery(app.handle());
@@ -146,28 +229,41 @@ pub fn run() {
             let mut last_pos: Option<(i32, i32)> = None;
             let mut ticks: u32 = 0;
             let mut saved_once = false;
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                // One bad tick must never permanently kill always-on-top
-                // re-assertion + position checkpointing. Isolate each tick: a
-                // panic here is captured by the crash hook and this line, and
-                // the loop keeps running.
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
-                }));
-                if outcome.is_err() {
-                    log::error!("background checkpoint tick panicked; continuing");
-                }
-            });
+            std::thread::Builder::new()
+                .name("topmost-checkpoint".into())
+                .spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    // One bad tick must never permanently kill always-on-top
+                    // re-assertion + position checkpointing. Isolate each tick: a
+                    // panic here is captured by the crash hook and this line, and
+                    // the loop keeps running.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
+                    }));
+                    if outcome.is_err() {
+                        log::error!("background checkpoint tick panicked; continuing");
+                    }
+                })
+                .expect("failed to spawn topmost-checkpoint thread");
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            // The run loop failing to start is fatal, but `.expect` would
-            // panic with no persisted reason — log it first so the cause
-            // survives in the app log.
-            log::error!("fatal: Tauri run loop exited: {e}");
+            // Building the app is fatal, but `.expect` would panic with no
+            // persisted reason — log it first so the cause survives in the
+            // app log. This fires before any run loop exists (that's
+            // `.run()` below) — building the app itself failed.
+            log::error!("fatal: Tauri app failed to build: {e}");
             std::process::exit(1);
+        })
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Every event-loop exit — whatever future path triggered it —
+                // stamps clean. The enumerated stamps on quit/close/update
+                // remain for the std::process::exit path that bypasses this.
+                log::info!("clean shutdown (event loop exit)");
+                diagnostics::mark_clean_shutdown();
+            }
         });
 }
 
@@ -184,6 +280,15 @@ fn checkpoint_tick(
     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
     *ticks = ticks.saturating_add(1);
+    // Re-stamp the run marker every ~15s, regardless of window state: a
+    // hidden buddy (tray-hidden, or mid-recording with no visible window)
+    // is still a running session and must keep heartbeating, so this runs
+    // ABOVE the window-visibility early-returns below. This is a backstop
+    // once re-armed — see `heartbeat_running_marker`'s doc for why a
+    // premature "clean" stamp needs an explicit re-arm, not just this.
+    if (*ticks).is_multiple_of(15) {
+        crate::diagnostics::heartbeat_running_marker();
+    }
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };

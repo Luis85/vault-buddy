@@ -1,25 +1,30 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { storeToRefs } from "pinia";
+import { invoke } from "@tauri-apps/api/core";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
+import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
+import RenamePrompt from "./RenamePrompt.vue";
+import RecordModeDialog from "./RecordModeDialog.vue";
+import type { CaptureConfig } from "../types";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
 
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
-const { showSettings } = storeToRefs(store);
+const { view } = storeToRefs(store);
 
 const filter = ref("");
 // A short list is scannable at a glance; only offer filtering when the
 // list is long enough that scanning stops working.
 const FILTER_THRESHOLD = 5;
 const showFilter = computed(
-  () => !showSettings.value && store.vaults.length > FILTER_THRESHOLD,
+  () => view.value === "list" && store.vaults.length > FILTER_THRESHOLD,
 );
 const filtered = computed(() => {
   const query = filter.value.trim().toLowerCase();
@@ -38,19 +43,57 @@ function onFilterEscape(event: KeyboardEvent) {
     event.stopPropagation();
   }
 }
+
+// The panel component is destroyed on close — that IS the close signal.
+onUnmounted(() => capture.dismissRename());
+
+// One-shot, component-local dialog state: nothing persisted, nothing in
+// Pinia. The panel unmounts on close, which is what dismisses the dialog
+// if it's still open — no explicit teardown needed.
+const recordRequest = ref<{
+  vaultId: string;
+  vaultName: string;
+  defaultMode: "meeting" | "voice-note";
+} | null>(null);
+
+// The chooser needs the vault's DEFAULT mode; fetch it, then show. A
+// config read failure must not block recording — fall back to meeting.
+async function openRecordDialog(vaultId: string) {
+  const vault = store.vaults.find((v) => v.id === vaultId);
+  let defaultMode: "meeting" | "voice-note" = "meeting";
+  try {
+    const cfg = await invoke<CaptureConfig>("get_capture_config", { id: vaultId });
+    defaultMode = cfg.mode;
+  } catch {
+    // stale config never blocks recording — mirror the backend's rule
+  }
+  recordRequest.value = { vaultId, vaultName: vault?.name ?? "", defaultMode };
+}
+
+function startWithMode(mode: "meeting" | "voice-note") {
+  const request = recordRequest.value;
+  recordRequest.value = null;
+  if (request) void capture.start(request.vaultId, mode);
+}
 </script>
 
 <template>
   <div
-    class="flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
+    class="relative flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
   >
     <div class="mb-2 flex items-center justify-between">
       <h1 class="text-sm font-bold text-slate-100">
-        {{ showSettings ? "Buddy settings" : "Vaults" }}
+        {{
+          view === "settings"
+            ? "Buddy settings"
+            : view === "captureSettings"
+              ? "Capture settings"
+              : "Vaults"
+        }}
       </h1>
       <div class="flex items-center gap-2">
         <span
-          v-if="!showSettings && store.vaults.length > 0"
+          v-if="view === 'list' && store.vaults.length > 0"
           class="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
         >
           {{ store.vaults.length }}
@@ -58,12 +101,12 @@ function onFilterEscape(event: KeyboardEvent) {
         <button
           type="button"
           class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="{ 'text-violet-300': showSettings }"
-          :aria-label="showSettings ? 'Back to vaults' : 'Buddy settings'"
-          :aria-pressed="showSettings"
-          :title="showSettings ? 'Back to vaults' : 'Buddy settings'"
+          :class="{ 'text-violet-300': view === 'settings' }"
+          :aria-label="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
+          :aria-pressed="view === 'settings'"
+          :title="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
           data-testid="settings-toggle"
-          @click="showSettings = !showSettings"
+          @click="view === 'list' ? store.openSettings() : store.showList()"
         >
           <svg
             width="16"
@@ -94,31 +137,59 @@ function onFilterEscape(event: KeyboardEvent) {
       @keydown.escape="onFilterEscape"
     />
     <p
-      v-if="!showSettings && store.error"
+      v-if="view === 'list' && store.error"
       class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ store.error }}
     </p>
     <RecordingBar
-      v-if="!showSettings && capture.status !== 'idle'"
+      v-if="view === 'list' && capture.status !== 'idle'"
       class="mb-2"
       :started-at-ms="capture.startedAtMs"
       :saving="capture.status === 'saving'"
       :starting="capture.status === 'starting'"
       :warning="capture.warning"
+      :paused="capture.paused"
+      :paused-total-ms="capture.pausedTotalMs"
+      :paused-since-ms="capture.pausedSinceMs"
+      :level="capture.level"
       @stop="capture.stop()"
+      @pause="capture.pause()"
+      @resume="capture.resume()"
     />
     <p
-      v-if="!showSettings && capture.error"
+      v-if="view === 'list' && capture.error"
       class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ capture.error }}
     </p>
+    <p
+      v-if="view === 'list' && capture.status === 'idle' && capture.warning"
+      class="mb-2 rounded-lg bg-amber-500/15 px-2 py-1 text-xs text-amber-200"
+    >
+      {{ capture.warning }}
+    </p>
+    <RenamePrompt
+      v-if="view === 'list' && capture.lastSaved"
+      class="mb-2"
+      :saved-mp3="capture.lastSaved.mp3"
+      :error="capture.renameError"
+      @accept="capture.acceptRename($event)"
+    />
     <div
-      v-if="showSettings"
+      v-if="view === 'settings'"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <BuddySettings />
+    </div>
+    <div
+      v-else-if="view === 'captureSettings' && store.captureSettingsVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <CaptureSettings
+        :key="store.captureSettingsVaultId"
+        :vault-id="store.captureSettingsVaultId"
+      />
     </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
@@ -127,9 +198,11 @@ function onFilterEscape(event: KeyboardEvent) {
         :busy-vault-id="store.busyVaultId"
         :busy-command="store.busyCommand"
         :capture-disabled="capture.status !== 'idle'"
+        :recording-vault-id="capture.vaultId"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
-        @capture="capture.start($event)"
+        @capture="openRecordDialog($event)"
+        @capture-settings="store.openCaptureSettings($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
         No vaults match "{{ filter }}".
@@ -139,5 +212,12 @@ function onFilterEscape(event: KeyboardEvent) {
         has it been opened at least once?
       </p>
     </div>
+    <RecordModeDialog
+      v-if="recordRequest"
+      :vault-name="recordRequest.vaultName"
+      :default-mode="recordRequest.defaultMode"
+      @start="startWithMode($event)"
+      @cancel="recordRequest = null"
+    />
   </div>
 </template>

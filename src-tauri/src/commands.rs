@@ -61,6 +61,10 @@ pub fn prepare_update_install(app: tauri::AppHandle) {
     if let Err(e) = app.save_window_state(StateFlags::POSITION) {
         log::error!("update install: saving window state failed: {e}");
     }
+    // The updater kills the process via std::process::exit — stamp clean
+    // now or every update would false-positive as a crash next launch.
+    log::info!("clean shutdown (update install)");
+    crate::diagnostics::mark_clean_shutdown();
 }
 
 /// Applies position and size in one native call. The frontend used to issue
@@ -174,4 +178,13 @@ pub fn open_daily_note(id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_logs_folder(app: tauri::AppHandle) {
     crate::diagnostics::open_log_dir(&app);
+}
+
+/// The frontend calls this when an update install fails after
+/// prepare_update_install stamped a clean shutdown — the app keeps
+/// running, so crash detection must come back on.
+#[tauri::command]
+pub fn rearm_crash_detection() {
+    log::warn!("update install failed after shutdown prep — re-arming crash detection");
+    crate::diagnostics::rearm_running_marker();
 }

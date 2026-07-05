@@ -9,9 +9,10 @@ const mountList = (
   busyVaultId: string | null = null,
   busyCommand: Busy = null,
   captureDisabled = false,
+  recordingVaultId: string | null = null,
 ) =>
   mount(VaultList, {
-    props: { vaults, busyVaultId, busyCommand, captureDisabled },
+    props: { vaults, busyVaultId, busyCommand, captureDisabled, recordingVaultId },
   });
 
 const sample = [
@@ -73,7 +74,7 @@ describe("VaultList", () => {
     const wrapper = mountList(sample, "aaa111", "open_vault");
     expect(wrapper.find('[role="status"]').exists()).toBe(true);
     const buttons = wrapper.findAll("button");
-    expect(buttons.length).toBe(6);
+    expect(buttons.length).toBe(8);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true,
     );
@@ -130,5 +131,27 @@ describe("VaultList", () => {
   it("always exposes the full path as a tooltip on the row", () => {
     const wrapper = mountList([sample[0]]);
     expect(wrapper.find("li").attributes("title")).toBe("C:\\vaults\\Personal");
+  });
+
+  it("emits capture-settings with the vault id from the gear", async () => {
+    const wrapper = mountList(sample);
+    await wrapper
+      .find('[aria-label="Capture settings for Work"]')
+      .trigger("click");
+    expect(wrapper.emitted("capture-settings")).toEqual([["bbb222"]]);
+  });
+
+  it("marks the recording vault's row with a red dot", () => {
+    const wrapper = mountList(sample, null, null, true, "bbb222");
+    const dots = wrapper.findAll('[title="Recording…"]');
+    expect(dots).toHaveLength(1);
+    // the dot sits on the Work row
+    const workRow = wrapper.findAll("li").find((li) => li.text().includes("Work"))!;
+    expect(workRow.find('[title="Recording…"]').exists()).toBe(true);
+  });
+
+  it("shows no recording dot when nothing records", () => {
+    const wrapper = mountList(sample);
+    expect(wrapper.find('[title="Recording…"]').exists()).toBe(false);
   });
 });

@@ -125,6 +125,7 @@ pub fn recover_root(
                 duration_secs: 0,
                 vault_name: vault_name.to_string(),
                 recording_type: "Recording".to_string(),
+                paused: None,
                 input_devices: Vec::new(),
                 event: Some("recovered after crash".to_string()),
             };

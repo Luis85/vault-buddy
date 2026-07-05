@@ -11,6 +11,7 @@ const props = withDefaults(
     draggable?: boolean;
     facing?: "right" | "left";
     recording?: boolean;
+    paused?: boolean;
   }>(),
   {
     animated: true,
@@ -18,6 +19,7 @@ const props = withDefaults(
     draggable: true,
     facing: "right",
     recording: false,
+    paused: false,
   },
 );
 const emit = defineEmits<{
@@ -108,7 +110,7 @@ function onContextMenu() {
       class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
       :class="[
         draggable ? 'cursor-grab' : 'cursor-pointer',
-        { working, still: !animated, recording },
+        { working, still: !animated, recording, paused },
       ]"
       :aria-label="
         draggable
@@ -132,7 +134,8 @@ function onContextMenu() {
         />
         <span
           v-if="recording"
-          class="rec-dot absolute -right-1 -top-1 h-3 w-3 rounded-full bg-red-500 ring-2 ring-slate-900"
+          class="rec-dot absolute -right-1 -top-1 h-3 w-3 rounded-full ring-2 ring-slate-900"
+          :class="paused ? 'bg-amber-400' : 'bg-red-500'"
           aria-hidden="true"
         ></span>
       </span>
@@ -144,6 +147,11 @@ function onContextMenu() {
 .buddy.recording:not(.still) .rec-dot {
   animation: rec-blink 1.2s ease-in-out infinite;
 }
+
+.buddy.recording.paused .rec-dot {
+  animation: none;
+}
+
 @keyframes rec-blink {
   0%,
   100% {
