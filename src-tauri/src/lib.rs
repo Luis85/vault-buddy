@@ -183,6 +183,15 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
+                // The panel and bubble are transient — positioned fresh beside
+                // the buddy every time — so persisting their positions is
+                // pointless (it only wrote garbage coords to the state file).
+                .with_denylist(&["panel", "bubble"])
+                // The plugin's implicit restore of the buddy lands a beat AFTER
+                // the visible window is first painted at the OS default — the
+                // startup "buddy jumps from the default corner to home" bug.
+                // Skip it and restore explicitly in `setup`, before showing.
+                .skip_initial_state("main")
                 .build(),
         )
         // In-app updates: the settings panel checks GitHub Releases'
@@ -345,6 +354,21 @@ pub fn run() {
                     env!("CARGO_PKG_VERSION"),
                 ) {
                     log::warn!("could not write the run marker: {e}");
+                }
+            }
+            // Restore the buddy to its parked position and only THEN show it.
+            // The window is created hidden (visible:false) and the plugin's
+            // implicit restore is skipped (skip_initial_state), so it never
+            // paints at the OS default corner first — removing the startup
+            // "buddy jumps from the default to home" flash, and letting the
+            // greeting (scheduled below) land against the real home position.
+            if let Some(main) = app.get_webview_window("main") {
+                use tauri_plugin_window_state::{StateFlags, WindowExt};
+                if let Err(e) = main.restore_state(StateFlags::POSITION) {
+                    log::warn!("could not restore the buddy position: {e}");
+                }
+                if let Err(e) = main.show() {
+                    log::warn!("could not show the buddy window: {e}");
                 }
             }
             tray::create_tray(app.handle())?;

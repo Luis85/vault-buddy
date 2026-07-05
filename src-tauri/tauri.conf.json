@@ -16,6 +16,7 @@
         "title": "Vault Buddy",
         "width": 88,
         "height": 88,
+        "visible": false,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
