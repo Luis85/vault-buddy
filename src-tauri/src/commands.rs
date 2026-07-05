@@ -3,30 +3,78 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use vault_buddy_core::{daily_note_uri, discovery, process, uri};
 
-/// The buddy's current view direction, mirrored from the frontend `settings`
-/// store via `set_buddy_facing`. Read on the main thread when placing the
-/// greeting bubble so it opens on the side the buddy faces. A plain atomic (no
-/// lock): a stale read at worst opens the bubble on the wrong side for one
-/// placement, which the next reposition corrects — so it can never interfere
-/// with the drag-path window work the way a lock could.
-static BUDDY_FACES_RIGHT: AtomicBool = AtomicBool::new(true);
+/// Last facing emitted to the buddy window, so `emit_buddy_facing` fires the
+/// `buddy-facing` event only when the buddy actually crosses the screen midline
+/// — a drag would otherwise flood the webview with one event per Moved. Seeded
+/// by `get_buddy_facing` (the buddy's mount-time read) so the first real flip
+/// still emits. Only touched on the main thread; a relaxed atomic is enough.
+static LAST_FACES_RIGHT: AtomicBool = AtomicBool::new(true);
 
-fn buddy_facing() -> vault_buddy_core::companion_placement::Side {
+/// The buddy's facing, DERIVED from its position: it looks toward the center of
+/// the work area (and the bubble opens the same way), instead of a manual
+/// setting. Best-effort — `Right` when the geometry isn't available yet.
+fn current_facing(app: &tauri::AppHandle) -> vault_buddy_core::companion_placement::Side {
+    use tauri::Manager;
+    use vault_buddy_core::companion_placement::{toward_center_side, Rect, Side};
+    let Some(buddy) = app.get_webview_window("main") else {
+        return Side::Right;
+    };
+    let (Ok(bpos), Ok(bsize)) = (buddy.outer_position(), buddy.outer_size()) else {
+        return Side::Right;
+    };
+    let buddy_rect = Rect {
+        x: bpos.x,
+        y: bpos.y,
+        w: bsize.width as i32,
+        h: bsize.height as i32,
+    };
+    let work = buddy.current_monitor().ok().flatten().map(|m| {
+        let wa = m.work_area();
+        Rect {
+            x: wa.position.x,
+            y: wa.position.y,
+            w: wa.size.width as i32,
+            h: wa.size.height as i32,
+        }
+    });
+    toward_center_side(buddy_rect, work)
+}
+
+fn facing_str(side: vault_buddy_core::companion_placement::Side) -> &'static str {
     use vault_buddy_core::companion_placement::Side;
-    if BUDDY_FACES_RIGHT.load(Ordering::Relaxed) {
-        Side::Right
-    } else {
-        Side::Left
+    match side {
+        Side::Right => "right",
+        Side::Left => "left",
     }
 }
 
-/// Mirror the buddy's view direction from the frontend so the greeting bubble
-/// opens on the side the buddy faces. Called by the buddy window on mount and
-/// whenever the facing setting changes. Anything other than "left" is treated
-/// as right (the sprite's drawn default).
+/// The buddy's current facing, derived from its position. Called by the buddy
+/// window on mount to set the initial sprite direction; later flips arrive via
+/// the `buddy-facing` event. Seeds `LAST_FACES_RIGHT` so the dedup in
+/// `emit_buddy_facing` is aligned with what the sprite already shows.
 #[tauri::command]
-pub fn set_buddy_facing(facing: String) {
-    BUDDY_FACES_RIGHT.store(facing != "left", Ordering::Relaxed);
+pub fn get_buddy_facing(app: tauri::AppHandle) -> String {
+    let side = current_facing(&app);
+    LAST_FACES_RIGHT.store(
+        matches!(side, vault_buddy_core::companion_placement::Side::Right),
+        Ordering::Relaxed,
+    );
+    facing_str(side).to_string()
+}
+
+/// Recompute the buddy's facing from its position and, if it changed, emit
+/// `buddy-facing` so the sprite flips to look toward the screen center. Deduped
+/// via `LAST_FACES_RIGHT`, so a drag emits only when the buddy crosses the
+/// midline, not on every Moved. Runs on the main thread; best-effort.
+pub(crate) fn emit_buddy_facing(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+    let faces_right = matches!(
+        current_facing(app),
+        vault_buddy_core::companion_placement::Side::Right
+    );
+    if LAST_FACES_RIGHT.swap(faces_right, Ordering::Relaxed) != faces_right {
+        let _ = app.emit("buddy-facing", if faces_right { "right" } else { "left" });
+    }
 }
 
 /// Called right before the updater installs and restarts: that path exits
@@ -158,15 +206,23 @@ pub fn close_bubble(app: tauri::AppHandle) {
 /// tuned against a manual Windows check. The panel uses 0.0.
 const BUBBLE_TUCK_FRAC: f64 = 0.30;
 
+/// Which side a companion window prefers: a fixed side (the panel always opens
+/// right) or derived from the buddy's position (the bubble opens toward the
+/// work-area center).
+enum SidePref {
+    Fixed(vault_buddy_core::companion_placement::Side),
+    TowardCenter,
+}
+
 /// Top-left AND the resolved anchor for a companion window (panel or bubble)
-/// placed beside the buddy on the `prefer` side with vertical mode `vmode`.
+/// placed beside the buddy per `side_pref` with vertical mode `vmode`.
 /// `tuck_frac` pulls the window toward the buddy by that fraction of the buddy
 /// width (0.0 = flush beside). `None` when the buddy or target geometry isn't
 /// available yet — callers then leave the window where it was (best-effort).
 fn place_beside_buddy(
     app: &tauri::AppHandle,
     target: &tauri::WebviewWindow,
-    prefer: vault_buddy_core::companion_placement::Side,
+    side_pref: SidePref,
     vmode: vault_buddy_core::companion_placement::VMode,
     tuck_frac: f64,
 ) -> Option<(
@@ -174,7 +230,7 @@ fn place_beside_buddy(
     vault_buddy_core::companion_placement::Anchor,
 )> {
     use tauri::Manager;
-    use vault_buddy_core::companion_placement::{place_beside, Rect, Side};
+    use vault_buddy_core::companion_placement::{place_beside, toward_center_side, Rect, Side};
     let buddy = app.get_webview_window("main")?;
     let bpos = buddy.outer_position().ok()?;
     let bsize = buddy.outer_size().ok()?;
@@ -197,6 +253,10 @@ fn place_beside_buddy(
             h: wa.size.height as i32,
         }
     });
+    let prefer = match side_pref {
+        SidePref::Fixed(s) => s,
+        SidePref::TowardCenter => toward_center_side(buddy_rect, work),
+    };
     let (point, anchor) = place_beside(
         buddy_rect,
         work,
@@ -251,7 +311,9 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
     let Some(panel) = app.get_webview_window("panel") else {
         return;
     };
-    if let Some((pos, _anchor)) = place_beside_buddy(app, &panel, Side::Right, VMode::Edge, 0.0) {
+    if let Some((pos, _anchor)) =
+        place_beside_buddy(app, &panel, SidePref::Fixed(Side::Right), VMode::Edge, 0.0)
+    {
         if let Err(e) = panel.set_position(pos) {
             log::warn!("position_panel: set_position failed: {e}");
         }
@@ -270,7 +332,7 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let Some((pos, anchor)) = place_beside_buddy(
         app,
         &bubble,
-        buddy_facing(),
+        SidePref::TowardCenter,
         vault_buddy_core::companion_placement::VMode::Center,
         BUBBLE_TUCK_FRAC,
     ) else {
@@ -321,7 +383,7 @@ pub(crate) fn reposition_bubble_if_visible(app: &tauri::AppHandle) {
     if let Some((pos, anchor)) = place_beside_buddy(
         app,
         &bubble,
-        buddy_facing(),
+        SidePref::TowardCenter,
         vault_buddy_core::companion_placement::VMode::Center,
         BUBBLE_TUCK_FRAC,
     ) {

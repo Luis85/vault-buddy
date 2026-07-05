@@ -113,6 +113,11 @@ fn schedule_show_bubble(app: &tauri::AppHandle) {
                 std::thread::sleep(std::time::Duration::from_millis(250));
                 let a = app.clone();
                 let _ = app.run_on_main_thread(move || {
+                    // Also emit the facing: the buddy's restored position
+                    // settles in this window, and the restore does not reliably
+                    // surface as a Moved event, so the sprite would otherwise
+                    // keep its default facing until the first drag.
+                    commands::emit_buddy_facing(&a);
                     commands::reposition_bubble_if_visible(&a);
                 });
             }
@@ -192,14 +197,16 @@ pub fn run() {
             // work must never collide with a window in motion.
             tauri::WindowEvent::Moved(_) => {
                 stamp_window_moved();
-                // The greeting bubble tracks the buddy: while it is visible, a
-                // buddy move (i.e. a drag) repositions it so it stays beside
-                // the buddy instead of stranding at the launch spot. Keyed on
-                // the buddy window so the bubble's own resulting Moved can't
-                // recurse; the reposition runs here on the main thread and
-                // touches no shared lock, so it cannot recreate the off-main
-                // save-vs-Moved deadlock (see reposition_bubble_if_visible).
+                // The buddy faces toward the screen center: a move can carry it
+                // across the midline, flipping the sprite (emit is deduped, so
+                // this is cheap on the Moved flood). The greeting bubble tracks
+                // the buddy too — while visible, reposition it so it stays
+                // beside the buddy instead of stranding. Keyed on the buddy
+                // window so the bubble's own resulting Moved can't recurse; both
+                // run here on the main thread and touch no shared lock, so they
+                // cannot recreate the off-main save-vs-Moved deadlock.
                 if window.label() == "main" {
+                    commands::emit_buddy_facing(window.app_handle());
                     commands::reposition_bubble_if_visible(window.app_handle());
                 }
             }
@@ -253,7 +260,7 @@ pub fn run() {
             commands::toggle_panel,
             commands::close_panel,
             commands::close_bubble,
-            commands::set_buddy_facing,
+            commands::get_buddy_facing,
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
