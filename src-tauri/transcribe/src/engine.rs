@@ -38,6 +38,12 @@ impl Transcriber for WhisperTranscriber {
             .map(|n| n.get().saturating_sub(2).max(1))
             .unwrap_or(2) as std::os::raw::c_int;
         params.set_n_threads(n_threads);
+        // Always transcribe in the spoken/selected language — never translate
+        // to English. The multilingual models (small especially) otherwise
+        // drift to English translation on auto-detect; pinning the task off is
+        // the reliable fix, and a pinned language (settings dropdown) removes
+        // the drift entirely.
+        params.set_translate(false);
         if let Some(lang) = language {
             params.set_language(Some(lang));
         }
