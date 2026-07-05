@@ -7,7 +7,6 @@ export const useVaultsStore = defineStore("vaults", {
   state: () => ({
     vaults: [] as Vault[],
     loaded: false,
-    panelOpen: false,
     // Which panel view is showing. Lives here (not in ActionPanel) because
     // the panel is destroyed while closed — a failed update install must be
     // able to reopen it directly on settings, where the error UI lives.
@@ -32,16 +31,6 @@ export const useVaultsStore = defineStore("vaults", {
         this.loaded = true;
       }
     },
-    async togglePanel() {
-      this.panelOpen = !this.panelOpen;
-      // Refresh on every open: discovery is one JSON read, and a user who
-      // saw the empty state, then opened Obsidian, must not stay stuck on
-      // the cached result until the app restarts.
-      if (this.panelOpen) {
-        this.showList();
-        await this.loadVaults();
-      }
-    },
     async refresh() {
       this.showList();
       await this.loadVaults();
@@ -56,8 +45,6 @@ export const useVaultsStore = defineStore("vaults", {
       try {
         await invoke(command, { id: vaultId });
         void invoke("close_panel").catch(() => {});
-        // Obsidian is taking over — get out of the way.
-        this.panelOpen = false;
       } catch (e) {
         this.error = String(e);
         logWarning(`${command} failed for vault ${vaultId}: ${String(e)}`);
