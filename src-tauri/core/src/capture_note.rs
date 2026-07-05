@@ -1,7 +1,8 @@
 //! Companion markdown note: frontmatter metadata + an ![[…]] embed of the
-//! recording — no AI sections in this increment. Written atomically
-//! (temp + fsync + non-replacing rename) so a crash can truncate only a
-//! hidden temp file, never a note in the vault.
+//! recording, plus an optional `## Transcript` embed of the transcript
+//! sidecar when transcription is enabled. Written atomically (temp +
+//! fsync + non-replacing rename) so a crash can truncate only a hidden
+//! temp file, never a note in the vault.
 
 use std::io::Write;
 use std::path::Path;

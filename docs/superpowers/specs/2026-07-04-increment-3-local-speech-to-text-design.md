@@ -330,6 +330,55 @@ Windows.
    from Hugging Face. After that, fully local.
 5. **Loopback captures all desktop audio** (inherited from increment 2), so
    non-meeting audio during a recording is transcribed too.
+6. **Mid-inference CPU sharing.** The worker postpones *starting* a
+   transcription while a recording is active, but cannot yield an
+   in-progress `whisper.full()` (blocking FFI). Mitigated by capping whisper
+   threads to leave ~2 cores free; a recording started during an
+   in-progress transcription still shares CPU.
+7. **In-memory decode.** A recording is decoded fully into memory
+   (source-rate + 16 kHz buffers held transiently); a long meeting can
+   transiently use hundreds of MB. Streaming decode is a follow-up.
+8. **Resident model.** After the first transcription the whisper model
+   stays resident in RAM (~466 MB–1.5 GB) for the process lifetime;
+   dropping it on idle is a follow-up.
+9. **First-enable backfill, panel retry.** Enabling transcription queues
+   all existing recordings; the panel's Retry surfaces only the
+   most-recent failure. Earlier failures persist as `failed` sidecars
+   (re-queued on next launch) and each raises a toast, so nothing is lost
+   — but per-mp3 in-panel retry is a follow-up.
+10. **Toggling `transcribe` off mid-recording** produces a note with a
+    `## Transcript` embed but no sidecar (broken embed). Don't hand-edit
+    config during a recording.
+11. **Skip still reports success.** If a non-regenerable sidecar (a
+    finished transcript or a user file) already exists, the worker leaves
+    it untouched but still emits `capture:transcribed` (and logs the
+    skip).
+12. **Worker supervision.** If the transcription worker thread panics
+    (unlikely — APIs are `Result`-based), transcriptions stop until app
+    restart; the startup scan re-queues pending work on next launch.
+13. **Ownership marker match.** `is_regenerable` matches the
+    `vault-buddy-transcript: pending|failed` marker as a substring
+    anywhere in the file; a finished/user transcript whose body literally
+    contained that text would be misclassified (astronomically unlikely).
+
+### Follow-ups
+
+Small dedup/hardening items noted during review, deferred as non-blocking:
+
+- Shared `create_owned_temp` helper — `transcript.rs` and `capture_note.rs`
+  each hand-roll the same dot-prefixed exclusive-create-with-suffix-retry
+  temp file dance.
+- Shared `core` `YYYY/MM` walker — `transcript.rs`'s startup scan and
+  `recovery.rs`'s crash-recovery scan both re-implement the same dated
+  directory traversal.
+- Shared `mp3_stem()` — the `.mp3` → base-name stripping logic is
+  duplicated across call sites.
+- Shared test MP3 helper — several test modules synthesize their own
+  minimal MP3 fixture instead of a common one.
+- Harden `download_model` (exclusive-create + cleanup of the `.part` file)
+  before any second download call site is added — today it's safe because
+  only one caller downloads models, but the create-then-write isn't
+  exclusive against a second concurrent caller.
 
 ## Success criteria
 

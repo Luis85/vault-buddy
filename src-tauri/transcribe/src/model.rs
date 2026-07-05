@@ -1,6 +1,7 @@
 //! Whisper ggml model registry and on-disk cache. Models are downloaded on
 //! first use (never bundled) from Hugging Face into %APPDATA%\vault-buddy\
-//! models — the only network access in the app.
+//! models — the only network access added for local transcription (the
+//! pre-existing updater also talks to the network, for app updates).
 
 use std::path::PathBuf;
 

@@ -1,7 +1,8 @@
 //! Recording file layout: dated folders, timestamped base names, and the
 //! pairwise reservation rule — a base name is usable only when the .mp3,
-//! the .md AND the hidden .mp3.part are all free, so a capture can never
-//! overwrite a user note or an unrecovered orphan from an earlier crash.
+//! the .md, the hidden .mp3.part, AND the .transcript.md are all free, so
+//! a capture can never overwrite a user note or an unrecovered orphan from
+//! an earlier crash.
 
 use chrono::NaiveDate;
 use std::path::{Path, PathBuf};
