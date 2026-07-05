@@ -260,6 +260,7 @@ pub fn run() {
             commands::toggle_panel,
             commands::close_panel,
             commands::close_bubble,
+            commands::announce,
             commands::get_buddy_facing,
             commands::get_bubble_anchor,
             commands::start_buddy_drag,

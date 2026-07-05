@@ -8,6 +8,11 @@ vi.mock("../src/logging", () => ({
 
 import { logWarning } from "../src/logging";
 import { useVaultsStore } from "../src/stores/vaults";
+import { useSettingsStore } from "../src/stores/settings";
+import {
+  dailyNoteOpenedMessage,
+  vaultOpenedMessage,
+} from "../src/buddyMessages";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
@@ -66,13 +71,53 @@ describe("vaults store", () => {
     });
     const store = useVaultsStore();
     await store.runAction("open_daily_note", "a1b2c3");
+    // the buddy speaks between the launch and the panel close
     expect(calls).toEqual([
       { cmd: "open_daily_note", args: { id: "a1b2c3" } },
+      { cmd: "announce", args: { text: dailyNoteOpenedMessage() } },
       { cmd: "close_panel", args: {} },
     ]);
     expect(store.busyVaultId).toBe(null);
     expect(store.busyCommand).toBe(null);
     expect(store.error).toBe(null);
+  });
+
+  it("the buddy names the vault when an open succeeds", async () => {
+    const spoken: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "announce") spoken.push((args as { text: string }).text);
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    await store.runAction("open_vault", "d4e5f6"); // Personal
+    expect(spoken).toEqual([vaultOpenedMessage("Personal")]);
+  });
+
+  it("the buddy stays silent when Buddy messages is off", async () => {
+    localStorage.setItem("vault-buddy.messages", "off");
+    const spoken: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "announce") spoken.push(args);
+    });
+    useSettingsStore(); // reads the persisted "off"
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    await store.runAction("open_vault", "d4e5f6");
+    expect(spoken).toEqual([]);
+    localStorage.clear();
+  });
+
+  it("the buddy stays silent when an open fails (banner is the feedback)", async () => {
+    const spoken: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "announce") spoken.push(args);
+      if (cmd === "open_vault") throw "vault not found: nope";
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    await store.runAction("open_vault", "d4e5f6");
+    expect(spoken).toEqual([]);
+    expect(store.error).toContain("vault not found");
   });
 
   it("does not close the panel when an action fails", async () => {

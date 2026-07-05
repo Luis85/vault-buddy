@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
+import { announce } from "../announce";
+import { vaultOpenedMessage, dailyNoteOpenedMessage } from "../buddyMessages";
 import type { Vault } from "../types";
 
 export const useVaultsStore = defineStore("vaults", {
@@ -89,6 +91,15 @@ export const useVaultsStore = defineStore("vaults", {
       this.error = null;
       try {
         await invoke(command, { id: vaultId });
+        // the buddy acknowledges the launch (panel window is the single
+        // announcer for opens); a failed open falls through to the catch and
+        // stays silent — the inline error banner is the feedback there.
+        const vault = this.vaults.find((v) => v.id === vaultId);
+        announce(
+          command === "open_daily_note"
+            ? dailyNoteOpenedMessage()
+            : vaultOpenedMessage(vault?.name ?? ""),
+        );
         void invoke("close_panel").catch(() => {});
       } catch (e) {
         this.error = String(e);

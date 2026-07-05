@@ -75,4 +75,28 @@ describe("BubbleRoot", () => {
     expect(bubble.classes()).toContain("side-left");
     expect(bubble.classes()).toContain("valign-bottom");
   });
+
+  it("speaks an acknowledgement pushed via bubble-message", async () => {
+    const wrapper = mount(BubbleRoot);
+    await flushPromises();
+    // Rust's `announce` showed the window and emitted the text here.
+    listeners["bubble-message"]?.({ payload: { text: "Opening Personal ✨" } });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="speech-bubble"]').text()).toContain(
+      "Opening Personal ✨",
+    );
+  });
+
+  it("dismisses the bubble (closing the window) when the panel opens", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+    });
+    mount(BubbleRoot);
+    await flushPromises();
+    // the greeting is up; opening the panel would overlap it beside the buddy
+    listeners["panel-shown"]?.({ payload: undefined });
+    await flushPromises();
+    expect(calls).toContain("close_bubble");
+  });
 });

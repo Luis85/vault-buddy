@@ -71,6 +71,21 @@ const settings = useSettingsStore();
         @change="settings.toggleDragging()"
       />
     </section>
+    <section class="flex items-center justify-between">
+      <label for="messages-toggle" class="text-sm text-slate-200">
+        Buddy messages
+        <span class="block text-xs text-slate-500">
+          The buddy comments on what you do
+        </span>
+      </label>
+      <input
+        id="messages-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+        :checked="settings.buddyMessagesEnabled"
+        @change="settings.toggleBuddyMessages()"
+      />
+    </section>
     <UpdateSettings />
     <DiagnosticsSettings />
   </div>

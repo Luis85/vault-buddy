@@ -66,4 +66,21 @@ describe("settings store", () => {
     store.syncFromStorage();
     expect(store.animationsEnabled).toBe(false);
   });
+
+  it("enables buddy messages by default", () => {
+    expect(useSettingsStore().buddyMessagesEnabled).toBe(true);
+  });
+
+  it("persists the buddy-messages toggle across store instances", () => {
+    useSettingsStore().toggleBuddyMessages();
+    setActivePinia(createPinia());
+    expect(useSettingsStore().buddyMessagesEnabled).toBe(false);
+  });
+
+  it("re-reads buddy messages when another window changes them", () => {
+    const store = useSettingsStore();
+    localStorage.setItem("vault-buddy.messages", "off");
+    store.syncFromStorage();
+    expect(store.buddyMessagesEnabled).toBe(false);
+  });
 });

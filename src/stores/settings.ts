@@ -4,6 +4,7 @@ import { getCharacter } from "../characters";
 const ANIMATIONS_KEY = "vault-buddy.animations";
 const CHARACTER_KEY = "vault-buddy.character";
 const DRAGGING_KEY = "vault-buddy.dragging";
+const MESSAGES_KEY = "vault-buddy.messages";
 
 // The buddy's view direction is no longer a stored setting — it is derived from
 // the buddy's screen position (it looks toward the centre) and pushed from Rust
@@ -17,6 +18,9 @@ export const useSettingsStore = defineStore("settings", {
     draggingEnabled: localStorage.getItem(DRAGGING_KEY) !== "off",
     // getCharacter normalizes stale/unknown stored ids to the classic buddy
     character: getCharacter(localStorage.getItem(CHARACTER_KEY) ?? "").id,
+    // the buddy's spoken acknowledgements (open vault/note, recording +
+    // transcription progress); on by default
+    buddyMessagesEnabled: localStorage.getItem(MESSAGES_KEY) !== "off",
   }),
   actions: {
     toggleAnimations() {
@@ -34,6 +38,13 @@ export const useSettingsStore = defineStore("settings", {
       this.character = getCharacter(id).id;
       localStorage.setItem(CHARACTER_KEY, this.character);
     },
+    toggleBuddyMessages() {
+      this.buddyMessagesEnabled = !this.buddyMessagesEnabled;
+      localStorage.setItem(
+        MESSAGES_KEY,
+        this.buddyMessagesEnabled ? "on" : "off",
+      );
+    },
     // re-reads the same keys the state initializer uses, so the buddy
     // window picks up settings changed in the panel window's settings view
     // (separate webviews sharing localStorage — see the `storage` listener
@@ -44,6 +55,7 @@ export const useSettingsStore = defineStore("settings", {
       this.character = getCharacter(
         localStorage.getItem(CHARACTER_KEY) ?? "",
       ).id;
+      this.buddyMessagesEnabled = localStorage.getItem(MESSAGES_KEY) !== "off";
     },
   },
 });

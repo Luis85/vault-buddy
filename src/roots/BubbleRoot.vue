@@ -3,12 +3,13 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import SpeechBubble from "../components/SpeechBubble.vue";
-import { useGreeting } from "../composables/useGreeting";
+import { useBuddyBubble, ACK_MS } from "../composables/useBuddyBubble";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 
-// The bubble window is shown by Rust on launch; useGreeting drives the text
-// and the auto-dismiss timer. When it dismisses, hide the window.
-const { bubbleVisible, bubbleText } = useGreeting();
+// The bubble window is shown by Rust (startup greeting, or `announce` for an
+// acknowledgement); useBuddyBubble owns the current text + auto-dismiss timer.
+// When it dismisses, hide the window.
+const { visible, text, show, dismiss } = useBuddyBubble();
 useSuppressContextMenu();
 
 // Which side of the buddy the bubble sits on and how its tail aligns — Rust
@@ -21,9 +22,11 @@ const side = ref<"left" | "right">("right");
 const valign = ref<"top" | "middle" | "bottom">("middle");
 
 let unlistenAnchor: (() => void) | undefined;
+let unlistenMessage: (() => void) | undefined;
+let unlistenPanelShown: (() => void) | undefined;
 
-watch(bubbleVisible, (visible) => {
-  if (!visible) void invoke("close_bubble").catch(() => {});
+watch(visible, (isVisible) => {
+  if (!isVisible) void invoke("close_bubble").catch(() => {});
 });
 
 onMounted(async () => {
@@ -49,11 +52,25 @@ onMounted(async () => {
       side.value = event.payload.side;
       valign.value = event.payload.valign;
     });
+    // An acknowledgement the buddy should speak: the announcer (buddy/panel
+    // window) called `announce`, Rust showed + positioned this window and
+    // emitted the text here. Latest-wins replaces any lingering message.
+    unlistenMessage = await listen<{ text: string }>(
+      "bubble-message",
+      (event) => show(event.payload.text, ACK_MS),
+    );
+    // The panel opens beside the buddy, over the bubble's spot — dismiss a
+    // lingering bubble so the two never overlap.
+    unlistenPanelShown = await listen("panel-shown", () => dismiss());
   } catch {
     // not under Tauri (unit tests without the event mock)
   }
 });
-onUnmounted(() => unlistenAnchor?.());
+onUnmounted(() => {
+  unlistenAnchor?.();
+  unlistenMessage?.();
+  unlistenPanelShown?.();
+});
 </script>
 
 <template>
@@ -72,6 +89,6 @@ onUnmounted(() => unlistenAnchor?.());
           : 'items-center',
     ]"
   >
-    <SpeechBubble :text="bubbleText" :side="side" :valign="valign" />
+    <SpeechBubble :text="text" :side="side" :valign="valign" />
   </div>
 </template>

@@ -7,12 +7,17 @@ import { useSettingsStore } from "../stores/settings";
 import { useCaptureStore } from "../stores/capture";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
+import { useBuddyAnnouncements } from "../composables/useBuddyAnnouncements";
 import type { Facing } from "../stores/settings";
 
 const settings = useSettingsStore();
 const capture = useCaptureStore();
 useSuppressContextMenu();
 useSettingsStorageSync();
+// The buddy window is the single announcer for capture-driven progress
+// (recording/transcription); the panel window announces its own vault/note
+// opens. Keeping capture announcements here avoids double bubbles.
+useBuddyAnnouncements();
 
 function invokeQuiet(cmd: string, args?: Record<string, unknown>) {
   void invoke(cmd, args).catch(() => {

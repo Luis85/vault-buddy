@@ -5,6 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import ActionPanel from "../src/components/ActionPanel.vue";
 import { useVaultsStore } from "../src/stores/vaults";
 import { useCaptureStore } from "../src/stores/capture";
+import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
@@ -55,6 +56,7 @@ describe("ActionPanel", () => {
       .trigger("click");
     expect(calls).toEqual([
       { cmd: "open_daily_note", args: { id: "d4e5f6" } },
+      { cmd: "announce", args: { text: dailyNoteOpenedMessage() } },
       { cmd: "close_panel", args: {} },
     ]);
   });
