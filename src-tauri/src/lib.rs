@@ -113,6 +113,9 @@ fn schedule_show_bubble(app: &tauri::AppHandle) {
                 std::thread::sleep(std::time::Duration::from_millis(250));
                 let a = app.clone();
                 let _ = app.run_on_main_thread(move || {
+                    // Diagnostic: watch the buddy position settle (or not)
+                    // across the re-pin window on restart.
+                    commands::log_buddy_position(&a, "repin");
                     // Also emit the facing: the buddy's restored position
                     // settles in this window, and the restore does not reliably
                     // surface as a Moved event, so the sprite would otherwise

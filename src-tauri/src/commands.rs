@@ -348,15 +348,34 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let _ = bubble.show();
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
-    // Confirm where it actually landed vs where we asked (the startup case).
+    // Confirm where the buddy is and where the bubble landed (the startup
+    // case): a buddy that isn't at its parked position means the window-state
+    // restore hasn't happened yet.
+    let buddy_pos = app
+        .get_webview_window("main")
+        .and_then(|b| b.outer_position().ok());
     if let Ok(actual) = bubble.outer_position() {
         log::info!(
-            "greeting shown: asked ({},{}), actual ({},{})",
+            "greeting shown: buddy {:?}, bubble asked ({},{}) actual ({},{})",
+            buddy_pos.map(|b| (b.x, b.y)),
             pos.x,
             pos.y,
             actual.x,
             actual.y
         );
+    }
+}
+
+/// Log the buddy's current position — a diagnostic for the "buddy not restored
+/// to where I parked it on restart" report, so the startup restore timing is
+/// visible across the greeting re-pin window.
+pub(crate) fn log_buddy_position(app: &tauri::AppHandle, tag: &str) {
+    use tauri::Manager;
+    if let Some(bp) = app
+        .get_webview_window("main")
+        .and_then(|b| b.outer_position().ok())
+    {
+        log::info!("buddy pos [{tag}]: ({},{})", bp.x, bp.y);
     }
 }
 
