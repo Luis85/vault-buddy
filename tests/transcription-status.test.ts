@@ -36,4 +36,12 @@ describe("TranscriptionStatus", () => {
     expect(w.text()).toContain("model unavailable");
     expect(w.find("button").exists()).toBe(true);
   });
+
+  it("offers an Open in Obsidian button after a transcription finishes", () => {
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    const w = mount(TranscriptionStatus);
+    const btn = w.get('[data-testid="open-transcript"]');
+    expect(btn.text()).toContain("Open in Obsidian");
+  });
 });

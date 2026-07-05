@@ -236,6 +236,39 @@ describe("capture store", () => {
     expect(store.transcriptError).toBeNull();
   });
 
+  it("transcribed event records the file for the Open action", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribed"]!({
+      payload: { mp3: "/v/m.mp3", transcript: "/v/m.transcript.md" },
+    });
+    expect(store.lastTranscribed).toEqual({ mp3: "/v/m.mp3" });
+  });
+
+  it("a new recording clears the last transcribed marker", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "start_capture") return { recording: true, vaultId: "v2", startedAtMs: 9 };
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/old.mp3" };
+    await store.start("v2");
+    expect(store.lastTranscribed).toBeNull();
+  });
+
+  it("openTranscript invokes open_transcript with the recording path", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    await store.openTranscript();
+    expect(calls).toContainEqual({ cmd: "open_transcript", args: { path: "/v/m.mp3" } });
+  });
+
   it("pause and resume flow through IPC and mirror events", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

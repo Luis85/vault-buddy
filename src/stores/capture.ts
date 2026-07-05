@@ -34,6 +34,8 @@ export const useCaptureStore = defineStore("capture", {
     transcriptError: null as string | null,
     transcriptFailedMp3: null as string | null,
     modelDownload: null as { model: string; received: number; total: number | null } | null,
+    /** Most recent finished transcription; drives the "Open in Obsidian" row. */
+    lastTranscribed: null as { mp3: string } | null,
     /** Post-save rename window; null once renamed/dismissed/expired. */
     lastSaved: null as { mp3: string; note: string | null } | null,
     renameError: null as string | null,
@@ -72,9 +74,10 @@ export const useCaptureStore = defineStore("capture", {
         this.transcribing = true;
         this.transcriptError = null;
       });
-      await listen<CaptureTranscribed>("capture:transcribed", () => {
+      await listen<CaptureTranscribed>("capture:transcribed", (event) => {
         this.transcribing = false;
         this.modelDownload = null;
+        this.lastTranscribed = { mp3: event.payload.mp3 };
       });
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
         this.transcribing = false;
@@ -129,6 +132,7 @@ export const useCaptureStore = defineStore("capture", {
       this.warning = null;
       // New recording: the previous save's rename window is over.
       this.dismissRename();
+      this.lastTranscribed = null;
       try {
         logBreadcrumb(`capture: start requested (vault ${vaultId})`);
         const s = await invoke<CaptureStatus>("start_capture", {
@@ -172,6 +176,16 @@ export const useCaptureStore = defineStore("capture", {
         this.transcribing = true;
       } catch (e) {
         this.transcriptError = String(e);
+      }
+    },
+    async openTranscript() {
+      if (!this.lastTranscribed) return;
+      try {
+        await invoke("open_transcript", { path: this.lastTranscribed.mp3 });
+      } catch (e) {
+        // A failed open (recording moved, launch error) is non-fatal — warn.
+        this.warning = String(e);
+        logWarning(`open transcript rejected: ${String(e)}`);
       }
     },
     async pause() {
