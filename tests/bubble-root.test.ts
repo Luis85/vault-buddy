@@ -36,17 +36,17 @@ describe("BubbleRoot", () => {
     expect(wrapper.find('[data-testid="speech-bubble"]').exists()).toBe(true);
   });
 
-  it("defaults the tail to the buddy's facing side before any anchor event", () => {
-    localStorage.setItem("vault-buddy.facing", "left");
+  it("defaults the tail to the right side before any anchor event", () => {
     const wrapper = mount(BubbleRoot);
-    // facing left → the bubble opens to the left, tail on its right face
+    // Rust derives the side from the buddy's position and pushes it via
+    // bubble-anchor; before that lands the bubble defaults to the right.
     expect(wrapper.get('[data-testid="speech-bubble"]').classes()).toContain(
-      "side-left",
+      "side-right",
     );
   });
 
   it("points the tail per the bubble-anchor event from Rust", async () => {
-    const wrapper = mount(BubbleRoot); // default facing is right
+    const wrapper = mount(BubbleRoot);
     await flushPromises();
     expect(wrapper.get('[data-testid="speech-bubble"]').classes()).toContain(
       "side-right",

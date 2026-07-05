@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import BuddyRoot from "../src/roots/BuddyRoot.vue";
@@ -52,11 +52,13 @@ describe("BuddyRoot", () => {
     expect(useSettingsStore().animationsEnabled).toBe(false);
   });
 
-  it("pushes the buddy facing to Rust so the greeting bubble opens on the right side", async () => {
+  it("reads the position-derived buddy facing from Rust on mount", async () => {
     mount(BuddyRoot);
-    await Promise.resolve();
-    // Rust needs the facing to place the bubble; the buddy window is the
-    // single owner that pushes it.
-    expect(calls).toContain("set_buddy_facing");
+    await flushPromises();
+    // Facing is derived from the buddy's position by Rust; the buddy window
+    // pulls the initial value on mount and then listens for `buddy-facing`
+    // flips (it no longer pushes a stored facing setting to Rust).
+    expect(calls).toContain("get_buddy_facing");
+    expect(calls).not.toContain("set_buddy_facing");
   });
 });

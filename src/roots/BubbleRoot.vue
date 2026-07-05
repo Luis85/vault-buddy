@@ -5,21 +5,17 @@ import { listen } from "@tauri-apps/api/event";
 import SpeechBubble from "../components/SpeechBubble.vue";
 import { useGreeting } from "../composables/useGreeting";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
-import { useSettingsStore } from "../stores/settings";
 
 // The bubble window is shown by Rust on launch; useGreeting drives the text
 // and the auto-dismiss timer. When it dismisses, hide the window.
-const settings = useSettingsStore();
 const { bubbleVisible, bubbleText } = useGreeting();
 useSuppressContextMenu();
 
 // Which side of the buddy the bubble sits on and how its tail aligns — Rust
-// decides this when it places the window (facing preference + screen-edge
-// flip) and pushes it via `bubble-anchor`. Default to the buddy's facing side
-// so the first paint is right before that event lands.
-const side = ref<"left" | "right">(
-  settings.facing === "left" ? "left" : "right",
-);
+// decides this when it places the window (side derived from the buddy's screen
+// position, edge-flip, and vertical clamp) and pushes it via `bubble-anchor`.
+// Default to `right`/`middle`; the anchor event lands before the bubble shows.
+const side = ref<"left" | "right">("right");
 // `middle` is the resting case (bubble centered level with the buddy); the
 // anchor event switches it to `top`/`bottom` only near a screen edge.
 const valign = ref<"top" | "middle" | "bottom">("middle");
