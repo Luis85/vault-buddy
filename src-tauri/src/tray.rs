@@ -71,11 +71,15 @@ fn finish_quit(app: &AppHandle) {
         if let Err(e) = app2.save_window_state(StateFlags::POSITION) {
             log::error!("quit: saving window state failed: {e}");
         }
-        // Destroy the webview before exiting so WebView2 can unregister its
-        // window class in order — otherwise dev consoles log a harmless
-        // "Failed to unregister class Chrome_WidgetWin_0" (ERROR_CLASS_HAS_WINDOWS).
-        if let Some(window) = app2.get_webview_window("main") {
-            let _ = window.destroy();
+        // Destroy EVERY webview before exiting so WebView2 can unregister the
+        // shared `Chrome_WidgetWin_0` window class. All three windows share
+        // that class; leaving even one alive fails the unregister with
+        // ERROR_CLASS_HAS_WINDOWS (1412), logged as
+        // "Failed to unregister class Chrome_WidgetWin_0" on shutdown.
+        for label in ["panel", "bubble", "main"] {
+            if let Some(window) = app2.get_webview_window(label) {
+                let _ = window.destroy();
+            }
         }
         app2.exit(0);
     });
