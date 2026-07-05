@@ -251,6 +251,7 @@ ever written into your vaults except recordings and their notes.
       "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
       "bitrateKbps": 128,          // 128 | 160 | 192
       "createNote": true,          // companion .md with metadata + embed
+      "followUpTemplate": true,    // append a "## Follow-up" scaffold to the companion note (needs createNote)
       "inputDevice": "USB Mic",    // optional — cpal device name; omit for system default
       "outputDevice": "Speakers",  // optional — loopback source (Meeting mode); omit for system default
       "transcribe": false,         // opt in to local speech-to-text
@@ -262,6 +263,9 @@ ever written into your vaults except recordings and their notes.
 }
 ```
 
+- `followUpTemplate` (bool, default `true`) — append a `## Follow-up`
+  scaffold (action items, decisions, notes) to each recording's companion
+  note. Only applies when `createNote` is on.
 - `transcribe` (bool, default `false`) — opt in to local speech-to-text.
   Enabling it downloads a Whisper model on the next recording (or backfills
   existing recordings) and writes a `<name>.transcript.md` sidecar the note

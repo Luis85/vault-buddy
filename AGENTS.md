@@ -9,8 +9,9 @@ live in [docs/superpowers/specs/](docs/superpowers/specs/).
 Vault Buddy is a Windows desktop companion for Obsidian: a Tauri v2 shell
 (Rust) hosting a Vue 3 + Pinia + Tailwind 4 frontend. A tiny always-on-top
 transparent window shows an animated buddy; clicking it expands a panel that
-lists Obsidian vaults and opens them via `obsidian://` URIs. The app never
-writes into vaults.
+lists Obsidian vaults and opens them via `obsidian://` URIs. Browsing never
+writes into a vault; the opt-in capture and transcription paths are the only
+writers (recordings, companion notes, transcript sidecars).
 
 ## What compiles where (read this first)
 
@@ -54,12 +55,14 @@ launched the app on the CI runner and never exited.
 
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
 `toggle_panel`, `close_panel`, `close_bubble`, `get_buddy_facing`,
-`start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`,
-`rearm_crash_detection`, plus the
-capture surface: `capture_status`, `start_capture`, `stop_capture`,
-`pause_capture`, `resume_capture`, `get_capture_config`,
-`set_capture_config`, `list_audio_devices`, `rename_capture` — commands
-live in `src-tauri/src/commands.rs` and `src-tauri/src/capture_commands.rs`.
+`get_bubble_anchor`, `announce`, `start_buddy_drag`, `show_buddy_menu`,
+`open_logs_folder`, `rearm_crash_detection`, plus the capture surface:
+`capture_status`, `start_capture`, `stop_capture`, `pause_capture`,
+`resume_capture`, `get_capture_config`, `set_capture_config`,
+`list_audio_devices`, `rename_capture`, and the recordings/transcription
+surface: `list_recordings`, `open_recording`, `open_transcript`,
+`retranscribe`, `transcribe_recording_now` — commands live in
+`src-tauri/src/commands.rs` and `src-tauri/src/capture_commands.rs`.
 Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
 are handled in `lib.rs`.
 
@@ -294,9 +297,59 @@ found the failure it prevents:
   after a successful audio move degrades to a warning (audio first).
   Config writes stay app-side: owned temp + REPLACING rename is correct
   for `config.json` only, serialized behind `ConfigWriteLock`.
+- **Companion note & follow-up template**: the optional `.md` embeds the audio
+  and carries recording metadata; with the per-vault `follow_up_template` on
+  (default), `render_note` (core) also appends a `## Follow-up` scaffold (action
+  items / decisions / notes). Threaded through the capture crate, same atomic
+  temp write, still never clobbering an existing note.
 - Per-vault settings live app-side in `%APPDATA%\vault-buddy\config.json`
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
+
+### The transcription & recordings domains (`src-tauri/transcribe/` + `core/src/{transcript,recordings}.rs` + `capture_commands.rs`)
+
+Local speech-to-text runs *after* a recording, never live. `vault_buddy_transcribe`
+owns the pipeline: MP3→16 kHz mono PCM (Symphonia) → whisper.cpp via `whisper-rs`
+(behind the `whisper` feature — the real engine is Windows-only, CI-gated) → a
+rendered transcript. The shell (`capture_commands.rs`) drives it through a single
+worker queue — `enqueue_transcription` / `process_transcription`, one
+`TranscriptionJob { mp3, vault_id, force }` at a time — so jobs never run
+concurrently and the model loads once per tier. The model downloads on demand
+(`ensure_model` → `download_model`, progress via `capture:modelDownload`); tier +
+language come from the vault config. State is surfaced as `capture:transcribing` /
+`capture:transcribed` / `capture:transcribeFailed` (each carries the `mp3`).
+
+The transcript is the second sanctioned vault write — a `<base>.transcript.md`
+sidecar the note embeds, under the same never-clobber discipline as the audio
+note (`core::transcript`):
+
+- **Never overwrite a finished or hand-edited transcript.** A
+  `vault-buddy-transcript: pending/failed/complete` frontmatter marker tags our
+  own regenerable output. `write_placeholder` is idempotent (skips an existing
+  sidecar); `replace_if_ours` overwrites **only** a `pending`/`failed` marker (a
+  `complete` transcript or any unmarked/hand-edited file is left untouched,
+  `SkippedForeign`); `transcript_status` classifies Missing/Pending/Failed/
+  Complete for the recordings list. The atomic temp+fsync+rename is shared with
+  the audio note's writer.
+- **`retranscribe` (force) vs `transcribe_recording_now` (retry).** The retry
+  path respects the vault's `transcribe` gate and only regenerates a regenerable
+  sidecar. `retranscribe` is the explicit per-row action: it bypasses the gate
+  and uses `force_write_sidecar` (an unguarded, **sidecar-only** overwrite) for
+  the final write, so it regenerates even a `complete` transcript — but the
+  up-front "transcribing…" placeholder is skipped when the sidecar is already
+  `Complete`, so a forced job that fails mid-flight leaves the original intact
+  (the UI confirms before replacing a finished transcript).
+- **Recovery backfill.** `pending_transcriptions` scans the dated `YYYY/MM`
+  capture layout for capture-named MP3s whose sidecar is missing or regenerable
+  and enqueues them — same layout/basename discipline as the recording recovery.
+
+The **recordings list** (`core::recordings`) is a read-only surface over the same
+folders: `recording_roots` enumerates a vault's capture folders, `list_recordings`
+scans them and reads each companion note's frontmatter (`note_field` for `type` /
+title) plus `transcript_status`, returning `RecordingEntry` rows the panel groups
+by type. Opening a row hands off to Obsidian via `open_recording` /
+`open_transcript` (`obsidian://`, read-only, `uri::launch`-logged) — it never
+writes.
 
 ### Diagnostics invariants
 
@@ -340,14 +393,22 @@ the list. It also bumps `shownNonce`; because the panel window is only
 hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
-state (`view: list | settings | captureSettings` with `captureSettingsVaultId`)
-because that must survive the panel window being hidden.
+state (`view: list | settings | captureSettings | recordings | recordMode`,
+with `captureSettingsVaultId` / `recordingsVaultId` / `recordModeVaultId`)
+because that must survive the panel window being hidden. Views form a fixed
+one-parent-per-view tree (no history stack): the vault-row capture button
+`openRecordMode`s (Meeting / Voice Note / Browse recordings), `openRecordings`
+opens the read-only list, and `back()` returns to the immediate parent
+(`recordings` → record view, everything else → the list) — the header renders
+the cog (buddy settings) on the list and a ← back button on every other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
 character/animation, persisted to localStorage), and `capture` (recording
-state mirrored from Rust: `paused`, `pausedTotalMs`, `level`, `vaultId`,
-`lastSaved`).
+state mirrored from Rust: `paused`, `pausedTotalMs`, `pausedSinceMs`, `level`,
+`vaultId`, `lastSaved`, plus transcription state `transcribing` /
+`transcribingVaultId` driven by
+`capture:transcribing`/`transcribed`/`transcribeFailed`).
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture
