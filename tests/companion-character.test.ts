@@ -9,11 +9,6 @@ const ipcCalls: Array<{ cmd: string; args: unknown }> = [];
 // raw window API.
 const dragCalls = () => ipcCalls.filter((c) => c.cmd === "start_buddy_drag");
 
-// Whether the mocked start_buddy_drag reports the OS drag actually started.
-// The command drops a request whose button went up in IPC transit and
-// answers `false`; tests that exercise that path flip this.
-let dragStarted = true;
-
 // The standard mouse flick: press, then a move past the threshold with the
 // button still physically down. Centralized so the gesture contract lives in
 // one place (adding the `buttons`/`pointerType` fields touched every call
@@ -35,10 +30,9 @@ async function flick(
 describe("CompanionCharacter", () => {
   beforeEach(() => {
     ipcCalls.length = 0;
-    dragStarted = true;
     mockIPC((cmd, args) => {
       ipcCalls.push({ cmd, args });
-      if (cmd === "start_buddy_drag") return dragStarted;
+      if (cmd === "start_buddy_drag") return true;
     });
   });
 
@@ -119,30 +113,6 @@ describe("CompanionCharacter", () => {
     await flick(wrapper.find("button.buddy"), { pointerType: "touch" });
     expect(dragCalls()).toHaveLength(1);
     expect(dragCalls()[0].args).toEqual({ pointerType: "touch" });
-  });
-
-  it("cancels the drag suppression when the command drops a stale request", async () => {
-    // The button can go up in IPC transit: the frontend already emitted
-    // drag-start (arming App.vue's blur suppression), but the OS move loop
-    // never begins, so no drag-induced blur will arrive to consume it. The
-    // component must retract the arm, or a later real desktop-click blur is
-    // wrongly swallowed and the panel stays open over the desktop.
-    dragStarted = false;
-    const wrapper = mount(CompanionCharacter, { props: { working: false } });
-    await flick(wrapper.find("button.buddy"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(wrapper.emitted("drag-start")).toHaveLength(1);
-    expect(wrapper.emitted("drag-cancelled")).toHaveLength(1);
-  });
-
-  it("leaves the suppression armed when the drag actually starts", async () => {
-    const wrapper = mount(CompanionCharacter, { props: { working: false } });
-    await flick(wrapper.find("button.buddy"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(wrapper.emitted("drag-start")).toHaveLength(1);
-    expect(wrapper.emitted("drag-cancelled")).toBeUndefined();
   });
 
   it("never starts an OS drag from a move that arrives after the button is up", async () => {

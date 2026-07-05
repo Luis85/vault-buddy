@@ -25,7 +25,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "toggle"): void;
   (e: "drag-start"): void;
-  (e: "drag-cancelled"): void;
 }>();
 
 // The buddy is both the click target (toggle panel) and the drag handle
@@ -76,32 +75,22 @@ function onPointerMove(e: PointerEvent) {
   (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(
     e.pointerId,
   );
-  // Arm App.vue's blur suppression BEFORE the move loop starts, so the
-  // focus loss it causes is recognised. Emitted synchronously (the OS blur
-  // arrives on a later turn) even though the command may still drop the
-  // request — a drop is retracted below.
+  // Tell the parent (BuddyRoot) the buddy is being dragged so it can close
+  // the panel and get out of the way. A drag that the command later drops
+  // (below) at worst closed the panel a beat early — the user just reopens.
   emit("drag-start");
   // Rust-side chokepoint, not window.startDragging(): the command re-checks
   // the primary button on the main thread right before entering the OS move
-  // loop, dropping requests that went stale in IPC transit. It reports
-  // whether the drag actually started; the pointer type lets it skip the
-  // mouse-only button re-check for touch/pen. `pointerType` can be absent on
-  // synthetic events — default to mouse so the guard still applies.
-  invoke<boolean>("start_buddy_drag", {
+  // loop, dropping requests that went stale in IPC transit. The pointer type
+  // lets it skip the mouse-only button re-check for touch/pen; `pointerType`
+  // can be absent on synthetic events — default to mouse so the guard applies.
+  void invoke("start_buddy_drag", {
     pointerType: e.pointerType || "mouse",
-  })
-    .then((started) => {
-      // Dropped in transit: no move loop began, so no blur will consume the
-      // suppression we just armed — retract it, or a later desktop click is
-      // wrongly swallowed and the panel stays open over the desktop.
-      if (!started) emit("drag-cancelled");
-    })
-    .catch((e) => {
-      // A genuine command failure (not just the no-Tauri unit-test path,
-      // which logWarning no-ops) still means no drag started.
-      logWarning(`start_buddy_drag failed: ${String(e)}`);
-      emit("drag-cancelled");
-    });
+  }).catch((err) => {
+    // A genuine command failure (not the no-Tauri unit-test path, where
+    // logWarning no-ops) just means no drag started.
+    logWarning(`start_buddy_drag failed: ${String(err)}`);
+  });
 }
 
 function onPointerEnd(e: PointerEvent) {

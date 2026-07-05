@@ -1,16 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Companion window: drag the buddy to move, resize toward free screen space when the panel opens",
+  "description": "Buddy, panel, and bubble windows: the frontend drives everything through app commands (toggle_panel, close_panel, start_buddy_drag, …); window geometry and visibility are managed Rust-side, so no core:window IPC grants are needed.",
   "windows": ["main", "panel", "bubble"],
   "permissions": [
     "core:default",
     "log:default",
-    "core:window:allow-set-size",
-    "core:window:allow-set-position",
-    "core:window:allow-outer-position",
-    "core:window:allow-scale-factor",
-    "core:window:allow-current-monitor",
     "updater:default",
     "process:allow-restart"
   ]
