@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from "vue";
 import { storeToRefs } from "pinia";
-import { invoke } from "@tauri-apps/api/core";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
@@ -10,9 +9,8 @@ import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
 import TranscriptionStatus from "./TranscriptionStatus.vue";
 import RenamePrompt from "./RenamePrompt.vue";
-import RecordModeDialog from "./RecordModeDialog.vue";
+import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
-import type { CaptureConfig } from "../types";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -48,41 +46,6 @@ function onFilterEscape(event: KeyboardEvent) {
 
 // The panel component is destroyed on close — that IS the close signal.
 onUnmounted(() => capture.dismissRename());
-
-// One-shot, component-local dialog state: nothing persisted, nothing in
-// Pinia. The panel unmounts on close, which is what dismisses the dialog
-// if it's still open — no explicit teardown needed.
-const recordRequest = ref<{
-  vaultId: string;
-  vaultName: string;
-  defaultMode: "meeting" | "voice-note";
-} | null>(null);
-
-// The chooser needs the vault's DEFAULT mode; fetch it, then show. A
-// config read failure must not block recording — fall back to meeting.
-async function openRecordDialog(vaultId: string) {
-  const vault = store.vaults.find((v) => v.id === vaultId);
-  let defaultMode: "meeting" | "voice-note" = "meeting";
-  try {
-    const cfg = await invoke<CaptureConfig>("get_capture_config", { id: vaultId });
-    defaultMode = cfg.mode;
-  } catch {
-    // stale config never blocks recording — mirror the backend's rule
-  }
-  recordRequest.value = { vaultId, vaultName: vault?.name ?? "", defaultMode };
-}
-
-function startWithMode(mode: "meeting" | "voice-note") {
-  const request = recordRequest.value;
-  recordRequest.value = null;
-  if (request) void capture.start(request.vaultId, mode);
-}
-
-function browseRecordings() {
-  const request = recordRequest.value;
-  recordRequest.value = null;
-  if (request) store.openRecordings(request.vaultId);
-}
 </script>
 
 <template>
@@ -98,7 +61,9 @@ function browseRecordings() {
               ? "Capture settings"
               : view === "recordings"
                 ? "Recordings"
-                : "Vaults"
+                : view === "recordMode"
+                  ? "Record"
+                  : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -109,14 +74,13 @@ function browseRecordings() {
           {{ store.vaults.length }}
         </span>
         <button
+          v-if="view === 'list'"
           type="button"
           class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="{ 'text-violet-300': view === 'settings' }"
-          :aria-label="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
-          :aria-pressed="view === 'settings'"
-          :title="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
+          aria-label="Buddy settings"
+          title="Buddy settings"
           data-testid="settings-toggle"
-          @click="view === 'list' ? store.openSettings() : store.showList()"
+          @click="store.openSettings()"
         >
           <svg
             width="16"
@@ -133,6 +97,29 @@ function browseRecordings() {
             <path
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
+          </svg>
+        </button>
+        <button
+          v-else
+          type="button"
+          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          aria-label="Back"
+          title="Back"
+          data-testid="back-button"
+          @click="store.back()"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
         </button>
       </div>
@@ -211,6 +198,15 @@ function browseRecordings() {
         :vault-id="store.recordingsVaultId"
       />
     </div>
+    <div
+      v-else-if="view === 'recordMode' && store.recordModeVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <RecordMode
+        :key="store.recordModeVaultId"
+        :vault-id="store.recordModeVaultId"
+      />
+    </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
         v-if="filtered.length > 0"
@@ -222,7 +218,7 @@ function browseRecordings() {
         :transcribing-vault-id="capture.transcribingVaultId"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
-        @capture="openRecordDialog($event)"
+        @capture="store.openRecordMode($event)"
         @capture-settings="store.openCaptureSettings($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
@@ -233,13 +229,5 @@ function browseRecordings() {
         has it been opened at least once?
       </p>
     </div>
-    <RecordModeDialog
-      v-if="recordRequest"
-      :vault-name="recordRequest.vaultName"
-      :default-mode="recordRequest.defaultMode"
-      @start="startWithMode($event)"
-      @browse="browseRecordings"
-      @cancel="recordRequest = null"
-    />
   </div>
 </template>
