@@ -64,6 +64,7 @@ pub struct VaultCaptureConfig {
     pub transcription_model: String,
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
+    pub follow_up_template: bool,
 }
 
 impl Default for VaultCaptureConfig {
@@ -79,6 +80,7 @@ impl Default for VaultCaptureConfig {
             transcription_model: "small".to_string(),
             transcription_language: None,
             transcript_timestamps: true,
+            follow_up_template: true,
         }
     }
 }
@@ -178,6 +180,10 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("transcriptTimestamps")
             .and_then(|v| v.as_bool())
             .unwrap_or(defaults.transcript_timestamps),
+        follow_up_template: entry
+            .get("followUpTemplate")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.follow_up_template),
     }
 }
 
@@ -243,6 +249,7 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
             "transcriptTimestamps".to_string(),
             json!(v.transcript_timestamps),
         );
+        entry.insert("followUpTemplate".to_string(), json!(v.follow_up_template));
         vaults.insert(id.clone(), Value::Object(entry));
     }
     let root = json!({ "vaults": Value::Object(vaults) });
@@ -488,6 +495,7 @@ mod tests {
                 transcription_model: "medium".to_string(),
                 transcription_language: Some("es".to_string()),
                 transcript_timestamps: false,
+                follow_up_template: true,
             },
         );
         cfg.vaults
@@ -560,5 +568,29 @@ mod tests {
         update_vault_config_at(&path, "a", VaultCaptureConfig::default()).unwrap();
         let cfg = parse_config(&std::fs::read_to_string(&path).unwrap());
         assert!(cfg.vaults.contains_key("a"));
+    }
+
+    #[test]
+    fn follow_up_template_defaults_on_and_parses() {
+        let cfg = parse_config(
+            r#"{ "vaults": {
+                "a": {},
+                "b": { "followUpTemplate": false }
+            } }"#,
+        );
+        assert!(vault_config(&cfg, "a").follow_up_template, "default on");
+        assert!(!vault_config(&cfg, "b").follow_up_template);
+    }
+
+    #[test]
+    fn follow_up_template_survives_a_round_trip() {
+        let v = VaultCaptureConfig {
+            follow_up_template: false,
+            ..VaultCaptureConfig::default()
+        };
+        let mut cfg = AppConfig::default();
+        cfg.vaults.insert("a".into(), v);
+        let reparsed = parse_config(&serialize_config(&cfg));
+        assert!(!vault_config(&reparsed, "a").follow_up_template);
     }
 }
