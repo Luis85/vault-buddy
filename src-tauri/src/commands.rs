@@ -123,7 +123,14 @@ pub(crate) fn primary_button_down() -> bool {
 /// Applies position and size in one native call. The frontend used to issue
 /// setPosition and setSize as two IPC round-trips, and the intermediate
 /// geometry got painted — the buddy visibly flashed to a corner whenever the
-/// panel opened with a shifted placement.
+/// panel opened with a shifted placement. Folding them into one IPC command
+/// removed that, but `set_position` + `set_size` are still two event-loop
+/// iterations, and on a shifted open (buddy near the bottom/right edge) the
+/// loop composited the moved-but-not-yet-resized window between them — the
+/// buddy flashed to the shifted-up/left corner for a frame before the resize
+/// and layout caught up. On Windows a single `SetWindowPos` moves and resizes
+/// atomically (one WM_WINDOWPOSCHANGED), so only the final geometry is ever
+/// painted.
 #[tauri::command]
 pub fn set_window_geometry(
     window: tauri::WebviewWindow,
@@ -132,12 +139,71 @@ pub fn set_window_geometry(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    #[cfg(windows)]
+    return set_window_geometry_atomic(&window, x, y, width, height);
+
+    // Off-Windows the shell crate isn't shipped (no webkit2gtk build here);
+    // this path only keeps the command compiling and the IPC contract testable.
+    #[cfg(not(windows))]
+    {
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Moves and resizes the window in a single atomic `SetWindowPos`. Runs on the
+/// main (window-owning) thread via `run_on_main_thread`: mutating window
+/// geometry off-main is exactly the cross-thread window poke the metronome
+/// design forbids. The channel makes the command block until the move lands,
+/// preserving the old `set_position`/`set_size` semantics — the next panel
+/// transition reads `outerPosition` and must observe this geometry, not the
+/// pre-move one.
+#[cfg(windows)]
+fn set_window_geometry_atomic(
+    window: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+    // SetWindowPos takes physical pixels; the frontend passes a physical
+    // position but a logical size, so scale the size the way `set_size` would.
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let cx = (width * scale).round() as i32;
+    let cy = (height * scale).round() as i32;
+    // Capture the HWND as an integer so the closure stays Send.
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    let (tx, rx) = std::sync::mpsc::channel();
     window
-        .set_position(tauri::PhysicalPosition::new(x, y))
+        .app_handle()
+        .run_on_main_thread(move || {
+            // SAFETY: `hwnd` is this process's live main window. SWP_NOZORDER
+            // and SWP_NOACTIVATE leave z-order and focus untouched, so this
+            // only moves and resizes.
+            let ok = unsafe {
+                SetWindowPos(
+                    hwnd as _,
+                    std::ptr::null_mut(),
+                    x,
+                    y,
+                    cx,
+                    cy,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
+            let _ = tx.send(ok != 0);
+        })
         .map_err(|e| e.to_string())?;
-    window
-        .set_size(tauri::LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())
+    match rx.recv() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("SetWindowPos failed".into()),
+        Err(_) => Err("window closed before geometry could be applied".into()),
+    }
 }
 
 /// Native context menu for the buddy. The collapsed window is far too small

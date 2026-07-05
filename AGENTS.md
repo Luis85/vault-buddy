@@ -74,7 +74,11 @@ unfolds toward free space; the shift is tracked as an offset that must be
 undone before any position is persisted. Invariants:
 
 - Position + size change in ONE native call (`set_window_geometry`) —
-  two IPC round-trips paint an intermediate geometry (buddy flashes).
+  two IPC round-trips paint an intermediate geometry (buddy flashes). On
+  Windows the command itself is one atomic `SetWindowPos`, not
+  `set_position` + `set_size`: those are two event-loop iterations and the
+  loop composited the moved-but-not-yet-resized window on a shifted open,
+  flashing the buddy to the shifted corner for a frame.
 - The frontend mirrors the offset to Rust (`set_panel_offset`) so exit paths
   that bypass the frontend (tray quit, Alt+F4, updater install) can restore
   the unshifted home position before `tauri-plugin-window-state` saves it.
