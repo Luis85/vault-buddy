@@ -1,7 +1,7 @@
 # Recordings List Design — "Browse past recordings, grouped by type"
 
 - **Date:** 2026-07-05
-- **Status:** Draft
+- **Status:** Approved
 - **Source:** Follow-up to the capture/transcription increments. Once a vault
   has several recordings they're scattered across dated `YYYY/MM` folders and
   (in meeting/voice-note mode) two different roots. There's no in-app way to see
