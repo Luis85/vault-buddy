@@ -13,19 +13,28 @@ where it's going, see the [PRD](PRD.md).
    prompt you to install the Visual Studio C++ Build Tools if missing
 3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
    [Tauri prerequisites](https://tauri.app/start/prerequisites/)
-4. **CMake** — the app statically links whisper.cpp for local speech-to-text,
-   so the `whisper` feature is always on for the shell and *every* app build
-   compiles it from source via `whisper-rs-sys` (which uses CMake):
+4. **LLVM (libclang) and CMake** — the app statically links whisper.cpp for
+   local speech-to-text, so the `whisper` feature is always on for the shell
+   and *every* app build compiles `whisper-rs-sys`, whose build runs `bindgen`
+   (needs `libclang`) and `cmake`. Install both and open a fresh terminal:
 
    ```powershell
-   winget install Kitware.CMake
+   winget install LLVM.LLVM Kitware.CMake
    ```
 
-   Open a fresh terminal afterward. You do **not** need LLVM/libclang: the repo
-   sets `WHISPER_DONT_GENERATE_BINDINGS=1` (in `src-tauri/.cargo/config.toml`)
-   so `whisper-rs-sys` uses its committed bindings instead of running `bindgen`.
-   (Only if you deliberately regenerate bindings — e.g. bumping `whisper-rs` —
-   comment that line out and install LLVM so bindgen can find `libclang`.)
+   If `bindgen` still can't find libclang — the telltale error is
+   `Unable to find libclang: … set the LIBCLANG_PATH environment variable` —
+   point it at the install explicitly and reopen the terminal:
+
+   ```powershell
+   setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
+   ```
+
+   CI's Windows runner ships both tools, so this is a local-only setup step.
+   (bindgen genuinely can't be skipped on Windows: `whisper-rs-sys` ships only
+   Linux-generated committed bindings, and their glibc struct-layout assertions
+   — e.g. `_IO_FILE` sized at 216 bytes — fail to compile on MSVC, so bindgen
+   must regenerate them from the local headers.)
 
 ### Check out and run
 
