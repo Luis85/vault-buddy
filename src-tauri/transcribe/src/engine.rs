@@ -30,6 +30,14 @@ impl Transcriber for WhisperTranscriber {
             .create_state()
             .map_err(|e| format!("whisper state: {e}"))?;
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // Leave CPU headroom so a recording started mid-inference isn't
+        // starved (the worker already postpones STARTING a job while
+        // recording, but whisper.full() is a blocking multi-minute FFI call
+        // that cannot yield once running).
+        let n_threads = std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(2).max(1))
+            .unwrap_or(2) as std::os::raw::c_int;
+        params.set_n_threads(n_threads);
         if let Some(lang) = language {
             params.set_language(Some(lang));
         }
