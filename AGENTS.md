@@ -52,7 +52,7 @@ launched the app on the CI runner and never exited.
 ### IPC surface (Rust commands, registered in `src-tauri/src/lib.rs`)
 
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
-`toggle_panel`, `close_panel`, `close_bubble`, `set_buddy_facing`,
+`toggle_panel`, `close_panel`, `close_bubble`, `get_buddy_facing`,
 `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`,
 `rearm_crash_detection`, plus the
 capture surface: `capture_status`, `start_capture`, `stop_capture`,
@@ -94,15 +94,19 @@ thin wrapper (prefer = `Right`, `Edge`, anchor discarded); the panel always
 opens right. One shell helper, `place_beside_buddy` (in `commands.rs`), feeds
 it the live buddy/monitor geometry for both windows; `position_panel` /
 `show_bubble` call it. Any missing window or monitor info leaves the window
-where it was (best-effort, never an error). The **bubble** opens on the side
-the buddy *faces* and sits level with it: the buddy window mirrors
-`settings.facing` to Rust via `set_buddy_facing` (a lock-free atomic),
-`place_beside` prefers that side with `VMode::Center`, and Rust emits a
-`bubble-anchor` `{side, valign}` event so `BubbleRoot` binds `SpeechBubble`'s
-tail to point back at the buddy (defaulting from facing/`middle` before the
-first event). A `BUBBLE_TUCK_FRAC` overlap (a fraction of the buddy width, so
-it scales with DPI) pulls the bubble into the buddy window's transparent
-padding so it sits snug against the character. While the greeting is up, the
+where it was (best-effort, never an error). Facing is **derived from the
+buddy's position**, not a stored setting: `core::toward_center_side` picks the
+side toward the work-area center (more room), and that drives BOTH the buddy
+sprite and the bubble. `place_beside` prefers that side with `VMode::Center`
+(the bubble sits level with the buddy), and Rust emits a `bubble-anchor`
+`{side, valign}` event so `BubbleRoot` binds `SpeechBubble`'s tail to point
+back at the buddy (defaulting to `right`/`middle` before the first event). The
+buddy sprite gets its initial direction from the `get_buddy_facing` command on
+mount, then flips on a `buddy-facing` event that Rust emits (deduped, from the
+`Moved` handler + startup poll) only when the buddy crosses the screen midline
+— so the character always looks toward the center. A `BUBBLE_TUCK_FRAC` overlap
+(a fraction of the buddy width, so it scales with DPI) pulls the bubble into
+the buddy window's transparent padding so it sits snug against the character. While the greeting is up, the
 buddy's `Moved` handler re-runs `place_beside_buddy` for the bubble
 (`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
 bubble being visible) and re-emits the anchor, so the bubble *follows* a drag
