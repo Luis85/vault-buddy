@@ -1,0 +1,45 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import BuddyRoot from "../src/roots/BuddyRoot.vue";
+
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: () => Promise.resolve(() => {}),
+}));
+
+const calls: string[] = [];
+
+describe("BuddyRoot", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setActivePinia(createPinia());
+    calls.length = 0;
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "start_buddy_drag") return true;
+    });
+  });
+  afterEach(() => clearMocks());
+
+  it("toggles the panel when the buddy is clicked", async () => {
+    const wrapper = mount(BuddyRoot);
+    await wrapper.find("button.buddy").trigger("click");
+    expect(calls).toContain("toggle_panel");
+  });
+
+  it("closes the panel when a drag starts", async () => {
+    const wrapper = mount(BuddyRoot);
+    const buddy = wrapper.find("button.buddy");
+    await buddy.trigger("pointerdown", { button: 0, screenX: 50, screenY: 50 });
+    await buddy.trigger("pointermove", { buttons: 1, screenX: 90, screenY: 90 });
+    await Promise.resolve();
+    expect(calls).toContain("start_buddy_drag");
+    expect(calls).toContain("close_panel");
+  });
+});
