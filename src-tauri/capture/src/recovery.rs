@@ -73,6 +73,7 @@ pub fn recover_root(
     vault_name: &str,
     stale_after: Duration,
     write_note: bool,
+    transcribe: bool,
 ) -> Vec<RecoveryAction> {
     let mut actions = Vec::new();
     walk(root, &mut |path| {
@@ -127,6 +128,7 @@ pub fn recover_root(
                 recording_type: "Recording".to_string(),
                 input_devices: Vec::new(),
                 event: Some("recovered after crash".to_string()),
+                transcribe,
             };
             let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
             let _ = write_note_collision_safe(&note, &render_note(&meta, &mp3_name));
@@ -252,7 +254,7 @@ mod tests {
         let part = month.join(".2026-07-04 1405 Meeting.mp3.part");
         std::fs::write(&part, mp3_bytes()).unwrap();
         // a zero stale_after makes everything stale without clock games
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true, false);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             RecoveryAction::Recovered { mp3 } => {
@@ -281,7 +283,7 @@ mod tests {
         let month = month_dir(dir.path());
         let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
-        recover_root(dir.path(), "Work", Duration::ZERO, false);
+        recover_root(dir.path(), "Work", Duration::ZERO, false, false);
         assert!(!month.join(format!("{BASE} (recovered).md")).exists());
         assert!(month.join(format!("{BASE} (recovered).mp3")).exists());
     }
@@ -292,7 +294,7 @@ mod tests {
         let month = month_dir(dir.path());
         let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, [0u8; 64]).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true, false);
         assert!(matches!(actions[0], RecoveryAction::DeletedEmpty(_)));
         assert!(!part.exists());
         assert!(!month.join(format!("{BASE} (recovered).mp3")).exists());
@@ -310,7 +312,7 @@ mod tests {
         bytes[513] = 0xFB;
         let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, &bytes).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, false);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, false, false);
         assert!(
             matches!(&actions[0], RecoveryAction::Recovered { .. }),
             "expected Recovered, got {actions:?}"
@@ -324,7 +326,7 @@ mod tests {
         let month = month_dir(dir.path());
         let part = month.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::from_secs(3600), true);
+        let actions = recover_root(dir.path(), "Work", Duration::from_secs(3600), true, false);
         assert!(matches!(actions[0], RecoveryAction::Fresh(_)));
         assert!(part.exists());
     }
@@ -337,7 +339,7 @@ mod tests {
         // an earlier recovered capture already claimed the recovered name
         std::fs::write(month.join(format!("{BASE} (recovered).mp3")), "earlier").unwrap();
         std::fs::write(month.join(format!(".{BASE}.mp3.part")), mp3_bytes()).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, false);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, false, false);
         match &actions[0] {
             RecoveryAction::Recovered { mp3 } => {
                 assert_eq!(
@@ -362,7 +364,7 @@ mod tests {
         let month = month_dir(dir.path());
         let foreign = month.join(".download.mp3.part");
         std::fs::write(&foreign, [0u8; 64]).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true, false);
         assert!(
             actions.is_empty(),
             "foreign part produced actions: {actions:?}"
@@ -382,7 +384,7 @@ mod tests {
         std::fs::write(&part, mp3_bytes()).unwrap();
         let root = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), root.path().join("2026")).unwrap();
-        let actions = recover_root(root.path(), "Work", Duration::ZERO, true);
+        let actions = recover_root(root.path(), "Work", Duration::ZERO, true, false);
         assert!(actions.is_empty(), "walked through symlink: {actions:?}");
         assert!(part.exists(), "outside file untouched");
     }
@@ -395,7 +397,7 @@ mod tests {
         let foreign = month.join(".draft.md.tmp");
         std::fs::write(&ours, "half a note").unwrap();
         std::fs::write(&foreign, "another tool's temp").unwrap();
-        recover_root(dir.path(), "Work", Duration::ZERO, true);
+        recover_root(dir.path(), "Work", Duration::ZERO, true, false);
         assert!(!ours.exists(), "our stale temp is cleaned");
         assert!(foreign.exists(), "foreign temp files are never touched");
     }
@@ -408,7 +410,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let part = dir.path().join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true, false);
         assert!(
             actions.is_empty(),
             "root-level part produced actions: {actions:?}"
@@ -425,11 +427,21 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let part = sub.join(format!(".{BASE}.mp3.part"));
         std::fs::write(&part, mp3_bytes()).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true);
+        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true, false);
         assert!(
             actions.is_empty(),
             "non-dated subfolder produced actions: {actions:?}"
         );
         assert!(part.exists());
+    }
+
+    #[test]
+    fn recovered_note_embeds_transcript_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        std::fs::write(month.join(format!(".{BASE}.mp3.part")), mp3_bytes()).unwrap();
+        recover_root(dir.path(), "Work", Duration::ZERO, true, true);
+        let note = std::fs::read_to_string(month.join(format!("{BASE} (recovered).md"))).unwrap();
+        assert!(note.contains("## Transcript"));
     }
 }
