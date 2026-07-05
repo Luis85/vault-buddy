@@ -233,6 +233,7 @@ pub fn start_capture(
             vault_name: vault_name.clone(),
             recording_type: label.to_string(),
             create_note: cfg.create_note,
+            transcribe: cfg.transcribe,
             recorded_at: now.to_rfc3339(),
             flush_every: Duration::from_secs(1),
             fsync_every: Duration::from_secs(30),
@@ -340,6 +341,7 @@ pub fn start_capture(
         }
     };
 
+    let monitor_vault_id = id.clone();
     let payload = StatusPayload {
         recording: true,
         vault_id: Some(id),
@@ -356,7 +358,10 @@ pub fn start_capture(
             .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
         clear_active(&app3);
         match result {
-            Ok(outcome) => emit_saved(&app3, &outcome),
+            Ok(outcome) => {
+                emit_saved(&app3, &outcome);
+                maybe_enqueue_transcription(&app3, &monitor_vault_id, &outcome.mp3);
+            }
             Err(e) => {
                 log::error!("capture: finalize failed: {e}");
                 emit_failed(&app3, &e);
@@ -372,6 +377,25 @@ pub fn start_capture(
     crate::tray::set_recording(&app, true);
     let _ = app.emit("capture:started", payload.clone());
     Ok(payload)
+}
+
+/// After a save, if the vault opted into transcription, drop the
+/// "transcribing…" placeholder (so the note's embed resolves instantly) and
+/// queue the recording. Config is re-read here so a toggle mid-session is
+/// respected.
+fn maybe_enqueue_transcription(app: &AppHandle, vault_id: &str, mp3: &Path) {
+    let cfg = capture_config::vault_config(&capture_config::load_config(), vault_id);
+    if !cfg.transcribe {
+        return;
+    }
+    let _ = vault_buddy_core::transcript::write_placeholder(mp3);
+    enqueue_transcription(
+        app,
+        TranscriptionJob {
+            mp3: mp3.to_path_buf(),
+            vault_id: vault_id.to_string(),
+        },
+    );
 }
 
 /// Ask the device thread to stop and wait until the monitor thread has
@@ -514,6 +538,7 @@ pub fn run_recovery(app: &AppHandle) {
                         &vault.name,
                         stale,
                         v.create_note,
+                        v.transcribe,
                     ) {
                         use vault_buddy_capture::recovery::RecoveryAction;
                         match action {
@@ -523,6 +548,16 @@ pub fn run_recovery(app: &AppHandle) {
                                     .map(|n| n.to_string_lossy().into_owned())
                                     .unwrap_or_default();
                                 toast(&app, "Recording recovered", &name);
+                                if v.transcribe {
+                                    let _ = vault_buddy_core::transcript::write_placeholder(&mp3);
+                                    enqueue_transcription(
+                                        &app,
+                                        TranscriptionJob {
+                                            mp3,
+                                            vault_id: vault.id.clone(),
+                                        },
+                                    );
+                                }
                             }
                             RecoveryAction::Fresh(_) => fresh_found = true,
                             RecoveryAction::DeletedEmpty(_) => {}
