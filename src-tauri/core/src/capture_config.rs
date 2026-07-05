@@ -60,6 +60,11 @@ pub struct VaultCaptureConfig {
     /// stale config never blocks recording.
     pub input_device: Option<String>,
     pub output_device: Option<String>,
+    pub transcribe: bool,
+    pub transcription_model: String,
+    pub transcription_language: Option<String>,
+    pub transcript_timestamps: bool,
+    pub follow_up_template: bool,
 }
 
 impl Default for VaultCaptureConfig {
@@ -71,6 +76,11 @@ impl Default for VaultCaptureConfig {
             create_note: true,
             input_device: None,
             output_device: None,
+            transcribe: false,
+            transcription_model: "small".to_string(),
+            transcription_language: None,
+            transcript_timestamps: true,
+            follow_up_template: true,
         }
     }
 }
@@ -85,6 +95,19 @@ impl VaultCaptureConfig {
                 RecordingMode::Meeting => "Meetings",
                 RecordingMode::VoiceNote => "Voice Notes",
             },
+        }
+    }
+
+    /// Folders that may hold this vault's recordings, for scans that must see
+    /// EVERY past recording (the Recordings list, recovery, transcription
+    /// backfill). A configured custom folder holds them all; without one,
+    /// meetings and voice notes live in their two distinct default homes and
+    /// the mode may have changed over the vault's life, so scan both. This is
+    /// the union of `effective_recording_folder`'s branches.
+    pub fn recording_roots(&self) -> Vec<&str> {
+        match &self.recording_folder {
+            Some(folder) => vec![folder.as_str()],
+            None => vec!["Meetings", "Voice Notes"],
         }
     }
 }
@@ -140,6 +163,27 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("outputDevice")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        transcribe: entry
+            .get("transcribe")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.transcribe),
+        transcription_model: entry
+            .get("transcriptionModel")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| defaults.transcription_model.clone()),
+        transcription_language: entry
+            .get("transcriptionLanguage")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        transcript_timestamps: entry
+            .get("transcriptTimestamps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.transcript_timestamps),
+        follow_up_template: entry
+            .get("followUpTemplate")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.follow_up_template),
     }
 }
 
@@ -147,8 +191,17 @@ pub fn vault_config(cfg: &AppConfig, vault_id: &str) -> VaultCaptureConfig {
     cfg.vaults.get(vault_id).cloned().unwrap_or_default()
 }
 
+/// The app's own data directory: `<config_dir>/vault-buddy`
+/// (`%APPDATA%\vault-buddy` on Windows). Single source of truth for the
+/// app's top-level AppData folder so `config.json` (here) and the
+/// transcription model cache (`transcribe` crate's `model_dir`) always share
+/// ONE folder instead of each hardcoding the name and risking a second one.
+pub fn app_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("vault-buddy"))
+}
+
 pub fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("vault-buddy").join("config.json"))
+    app_config_dir().map(|d| d.join("config.json"))
 }
 
 pub fn load_config() -> AppConfig {
@@ -184,6 +237,19 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         if let Some(device) = &v.output_device {
             entry.insert("outputDevice".to_string(), json!(device));
         }
+        entry.insert("transcribe".to_string(), json!(v.transcribe));
+        entry.insert(
+            "transcriptionModel".to_string(),
+            json!(v.transcription_model),
+        );
+        if let Some(language) = &v.transcription_language {
+            entry.insert("transcriptionLanguage".to_string(), json!(language));
+        }
+        entry.insert(
+            "transcriptTimestamps".to_string(),
+            json!(v.transcript_timestamps),
+        );
+        entry.insert("followUpTemplate".to_string(), json!(v.follow_up_template));
         vaults.insert(id.clone(), Value::Object(entry));
     }
     let root = json!({ "vaults": Value::Object(vaults) });
@@ -241,6 +307,19 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_path_nests_in_the_shared_app_config_dir() {
+        // config.json and the transcription model cache (transcribe crate)
+        // both derive from app_config_dir(), so the app keeps ONE top-level
+        // AppData folder — never a second one. Asserting the derivation here
+        // keeps the co-location structural, not coincidental.
+        if let (Some(cfg), Some(app)) = (config_path(), app_config_dir()) {
+            assert_eq!(cfg.parent(), Some(app.as_path()));
+            assert_eq!(cfg.file_name().unwrap(), "config.json");
+            assert_eq!(app.file_name().unwrap(), "vault-buddy");
+        }
+    }
 
     #[test]
     fn defaults_when_json_is_garbage() {
@@ -324,6 +403,59 @@ mod tests {
     }
 
     #[test]
+    fn transcription_defaults_are_opt_in_small_timestamped() {
+        let v = vault_config(&parse_config("{}"), "any");
+        assert!(!v.transcribe, "opt-in: off by default");
+        assert_eq!(v.transcription_model, "small");
+        assert_eq!(v.transcription_language, None);
+        assert!(v.transcript_timestamps);
+    }
+
+    #[test]
+    fn transcription_fields_parse() {
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": {
+                "transcribe": true,
+                "transcriptionModel": "medium",
+                "transcriptionLanguage": "es",
+                "transcriptTimestamps": false
+            } } }"#,
+        );
+        let v = vault_config(&cfg, "a");
+        assert!(v.transcribe);
+        assert_eq!(v.transcription_model, "medium");
+        assert_eq!(v.transcription_language.as_deref(), Some("es"));
+        assert!(!v.transcript_timestamps);
+    }
+
+    #[test]
+    fn malformed_transcribe_defaults_locally() {
+        // A quoted bool must not enable transcription, nor drop the entry.
+        let cfg =
+            parse_config(r#"{ "vaults": { "a": { "transcribe": "yes", "mode": "voice-note" } } }"#);
+        let v = vault_config(&cfg, "a");
+        assert!(!v.transcribe);
+        assert_eq!(v.mode, RecordingMode::VoiceNote);
+    }
+
+    #[test]
+    fn recording_roots_are_the_custom_folder_or_both_defaults() {
+        let cfg = parse_config(
+            r#"{ "vaults": {
+                "a": { "mode": "voice-note" },
+                "b": { "recordingFolder": "Inbox" }
+            } }"#,
+        );
+        // No custom folder → scan both mode homes (mode may have changed).
+        assert_eq!(
+            vault_config(&cfg, "a").recording_roots(),
+            vec!["Meetings", "Voice Notes"]
+        );
+        // Custom folder → it holds every recording, scan just it.
+        assert_eq!(vault_config(&cfg, "b").recording_roots(), vec!["Inbox"]);
+    }
+
+    #[test]
     fn device_fields_parse_and_default_to_none() {
         let cfg = parse_config(
             r#"{ "vaults": { "a": {
@@ -359,6 +491,11 @@ mod tests {
                 create_note: false,
                 input_device: Some("USB Mic".to_string()),
                 output_device: Some("Speakers (Realtek)".to_string()),
+                transcribe: true,
+                transcription_model: "medium".to_string(),
+                transcription_language: Some("es".to_string()),
+                transcript_timestamps: false,
+                follow_up_template: true,
             },
         );
         cfg.vaults
@@ -431,5 +568,29 @@ mod tests {
         update_vault_config_at(&path, "a", VaultCaptureConfig::default()).unwrap();
         let cfg = parse_config(&std::fs::read_to_string(&path).unwrap());
         assert!(cfg.vaults.contains_key("a"));
+    }
+
+    #[test]
+    fn follow_up_template_defaults_on_and_parses() {
+        let cfg = parse_config(
+            r#"{ "vaults": {
+                "a": {},
+                "b": { "followUpTemplate": false }
+            } }"#,
+        );
+        assert!(vault_config(&cfg, "a").follow_up_template, "default on");
+        assert!(!vault_config(&cfg, "b").follow_up_template);
+    }
+
+    #[test]
+    fn follow_up_template_survives_a_round_trip() {
+        let v = VaultCaptureConfig {
+            follow_up_template: false,
+            ..VaultCaptureConfig::default()
+        };
+        let mut cfg = AppConfig::default();
+        cfg.vaults.insert("a".into(), v);
+        let reparsed = parse_config(&serialize_config(&cfg));
+        assert!(!vault_config(&reparsed, "a").follow_up_template);
     }
 }

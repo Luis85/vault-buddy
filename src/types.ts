@@ -27,6 +27,22 @@ export interface CaptureSaved {
   endedEarly: boolean;
 }
 
+export interface CaptureTranscribed {
+  mp3: string;
+  transcript: string;
+}
+
+export interface CaptureTranscribeFailed {
+  mp3: string;
+  message: string;
+}
+
+export interface ModelDownload {
+  model: string;
+  received: number;
+  total: number | null;
+}
+
 export interface CaptureConfig {
   mode: "meeting" | "voice-note";
   recordingFolder: string | null;
@@ -34,6 +50,11 @@ export interface CaptureConfig {
   createNote: boolean;
   inputDevice: string | null;
   outputDevice: string | null;
+  transcribe: boolean;
+  transcriptionModel: string;
+  transcriptionLanguage: string | null;
+  transcriptTimestamps: boolean;
+  followUpTemplate: boolean;
 }
 
 export interface AudioDevice {
@@ -44,4 +65,16 @@ export interface AudioDevice {
 export interface AudioDevices {
   inputs: AudioDevice[];
   outputs: AudioDevice[];
+}
+
+export interface Recording {
+  mp3: string;
+  title: string;
+  recordedAt: string;
+  /** From the companion note's frontmatter; null when there's no note. */
+  duration: string | null;
+  /** Recording type from the companion note; null → "Ungrouped". */
+  type: string | null;
+  /** Sidecar state — drives the row indicator + re-transcribe confirm. */
+  transcriptStatus: "none" | "pending" | "failed" | "complete";
 }

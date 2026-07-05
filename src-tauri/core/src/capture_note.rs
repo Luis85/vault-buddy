@@ -1,7 +1,8 @@
 //! Companion markdown note: frontmatter metadata + an ![[…]] embed of the
-//! recording — no AI sections in this increment. Written atomically
-//! (temp + fsync + non-replacing rename) so a crash can truncate only a
-//! hidden temp file, never a note in the vault.
+//! recording, plus an optional `## Transcript` embed of the transcript
+//! sidecar when transcription is enabled. Written atomically (temp +
+//! fsync + non-replacing rename) so a crash can truncate only a hidden
+//! temp file, never a note in the vault.
 
 use std::io::Write;
 use std::path::Path;
@@ -16,6 +17,10 @@ pub struct NoteMeta {
     pub paused: Option<String>,
     pub input_devices: Vec<String>,
     pub event: Option<String>,
+    pub transcribe: bool,
+    /// Append a `## Follow-up` scaffold (Action items / Decisions / Notes)
+    /// above the transcript embed. Per-vault opt-out; recovery leaves it off.
+    pub follow_up: bool,
 }
 
 pub fn format_duration(secs: u64) -> String {
@@ -31,12 +36,48 @@ pub fn format_duration(secs: u64) -> String {
 /// newlines to spaces. Vault and device names are user/system input;
 /// unquoted they could break the frontmatter or inject fields — and an
 /// unquoted `1:02:03` duration even parses as YAML sexagesimal.
-fn yaml_quote(value: &str) -> String {
+pub(crate) fn yaml_quote(value: &str) -> String {
     let escaped = value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace(['\n', '\r'], " ");
     format!("\"{escaped}\"")
+}
+
+/// Read one top-level `key:` scalar from a note's leading `---` frontmatter
+/// block, undoing `yaml_quote`'s escaping. Returns None if the note has no
+/// frontmatter block or the key is absent. Deliberately minimal — it only
+/// reads back the handful of top-level fields `render_note` itself writes, so
+/// it needs no general YAML parser (indented list items are skipped, and the
+/// search stops at the closing `---` so the note body is never scanned).
+pub fn note_field(content: &str, key: &str) -> Option<String> {
+    let mut lines = content.lines();
+    // Frontmatter must be the very first line.
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let prefix = format!("{key}:");
+    for line in lines {
+        if line.trim_end() == "---" {
+            break; // end of frontmatter — never scan the body
+        }
+        // `strip_prefix` on the raw line matches top-level keys only: an
+        // indented `  - device` list item has a leading space and can't match.
+        if let Some(rest) = line.strip_prefix(&prefix) {
+            return Some(unquote_yaml(rest.trim()));
+        }
+    }
+    None
+}
+
+/// Inverse of `yaml_quote` for the double-quoted form: strip the surrounding
+/// quotes and unescape `\"` then `\\` (reverse order of the escaping). An
+/// unquoted scalar (older/hand-edited note) is returned as-is.
+fn unquote_yaml(value: &str) -> String {
+    match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
+        None => value.to_string(),
+    }
 }
 
 pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
@@ -60,6 +101,22 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     }
     out.push_str("created-by: Vault Buddy\n---\n\n");
     out.push_str(&format!("![[{mp3_file_name}]]\n"));
+    if meta.follow_up {
+        // A follow-up scaffold above the (possibly long) transcript embed so
+        // the actionable part is visible without scrolling. Static text — the
+        // rename retarget only rewrites the ![[…]] embed line, never this.
+        out.push_str(
+            "\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n",
+        );
+    }
+    if meta.transcribe {
+        // The transcript sidecar's name is derived from the mp3 stem and was
+        // reserved pairwise, so this embed resolves once the sidecar lands
+        // (a "transcribing…" placeholder is written immediately so it never
+        // shows "file not found").
+        let stem = mp3_file_name.strip_suffix(".mp3").unwrap_or(mp3_file_name);
+        out.push_str(&format!("\n## Transcript\n\n![[{stem}.transcript]]\n"));
+    }
     out
 }
 
@@ -177,6 +234,8 @@ mod tests {
             paused: None,
             input_devices: vec!["Headset Mic".into(), "Speakers (loopback)".into()],
             event: None,
+            transcribe: false,
+            follow_up: false,
         }
     }
 
@@ -295,6 +354,59 @@ mod tests {
     }
 
     #[test]
+    fn note_embeds_transcript_when_enabled() {
+        let mut m = meta();
+        m.transcribe = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        assert!(
+            note.contains("![[2026-07-04 1405 Meeting.mp3]]"),
+            "audio embed stays"
+        );
+        assert!(note.contains("## Transcript"));
+        assert!(note.contains("![[2026-07-04 1405 Meeting.transcript]]"));
+    }
+
+    #[test]
+    fn note_has_no_transcript_section_when_disabled() {
+        let note = render_note(&meta(), "b.mp3");
+        assert!(!note.contains("## Transcript"));
+    }
+
+    #[test]
+    fn note_includes_follow_up_template_when_enabled() {
+        let mut m = meta();
+        m.follow_up = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        assert!(note.contains("## Follow-up"));
+        assert!(note.contains("### Action items"));
+        assert!(note.contains("- [ ]"));
+        assert!(note.contains("### Decisions"));
+        assert!(note.contains("### Notes"));
+        // the audio embed still sits above the scaffold
+        assert!(note.contains("![[2026-07-04 1405 Meeting.mp3]]"));
+    }
+
+    #[test]
+    fn note_has_no_follow_up_when_disabled() {
+        // meta() sets follow_up: false (Step 3d), so the default note omits it.
+        assert!(!render_note(&meta(), "x.mp3").contains("## Follow-up"));
+    }
+
+    #[test]
+    fn follow_up_sits_above_the_transcript() {
+        let mut m = meta();
+        m.follow_up = true;
+        m.transcribe = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        let fu = note.find("## Follow-up").unwrap();
+        let tr = note.find("## Transcript").unwrap();
+        assert!(
+            fu < tr,
+            "follow-up must render above the transcript embed: {note}"
+        );
+    }
+
+    #[test]
     fn retarget_rewrites_only_the_embed_line() {
         let note = "---\nvault: \"W\"\n---\n\nSee old.mp3 in prose.\n![[old.mp3]]\n";
         let out = retarget_embed(note, "old.mp3", "new.mp3");
@@ -323,5 +435,70 @@ mod tests {
     fn retarget_handles_a_note_without_trailing_newline() {
         let out = retarget_embed("![[old.mp3]]", "old.mp3", "new.mp3");
         assert_eq!(out, "![[new.mp3]]");
+    }
+
+    #[test]
+    fn note_field_reads_top_level_scalars() {
+        // meta(): type "Meeting", duration 3723s → "1:02:03", vault "Work".
+        let note = render_note(&meta(), "x.mp3");
+        assert_eq!(note_field(&note, "type").as_deref(), Some("Meeting"));
+        assert_eq!(note_field(&note, "duration").as_deref(), Some("1:02:03"));
+        assert_eq!(note_field(&note, "vault").as_deref(), Some("Work"));
+    }
+
+    #[test]
+    fn note_field_is_none_when_absent_or_no_frontmatter() {
+        let note = render_note(&meta(), "x.mp3");
+        assert_eq!(note_field(&note, "nope"), None);
+        // an indented list item (inputs:) is not a top-level scalar
+        assert_eq!(note_field(&note, "Headset Mic"), None);
+        assert_eq!(note_field("no frontmatter here\ntype: X\n", "type"), None);
+        assert_eq!(note_field("", "type"), None);
+    }
+
+    #[test]
+    fn note_field_unescapes_quotes_and_ignores_the_body() {
+        // A quoted value with an embedded quote round-trips; a `type:` mention
+        // in the note body must never be picked up (search stops at the
+        // closing `---`).
+        let mut m = meta();
+        m.recording_type = r#"A "quoted" type"#.into();
+        let note = format!(
+            "{}\nprose mentioning type: fake\n",
+            render_note(&m, "x.mp3")
+        );
+        assert_eq!(
+            note_field(&note, "type").as_deref(),
+            Some(r#"A "quoted" type"#)
+        );
+    }
+
+    #[test]
+    fn note_field_stops_at_the_closing_frontmatter_delimiter() {
+        // A key that appears only in the BODY (after the closing ---) must not
+        // be read: the scan must stop at the delimiter. Without the break this
+        // would return Some("leaked").
+        let note = format!("{}\nnew-field: leaked\n", render_note(&meta(), "x.mp3"));
+        assert_eq!(note_field(&note, "new-field"), None);
+    }
+
+    #[test]
+    fn note_field_unescapes_backslashes() {
+        // The \\ -> \ arm: a value with a literal backslash (plausible on this
+        // Windows-targeted app — device/vault names, paths) must round-trip.
+        let mut m = meta();
+        m.vault_name = r#"C:\Users\me"#.into();
+        let note = render_note(&m, "x.mp3");
+        assert_eq!(
+            note_field(&note, "vault").as_deref(),
+            Some(r#"C:\Users\me"#)
+        );
+    }
+
+    #[test]
+    fn note_field_returns_an_unquoted_scalar_as_is() {
+        // Hand-edited-note path: an unquoted value is returned trimmed, as-is.
+        let note = "---\ntype: Meeting\n---\n\nbody\n";
+        assert_eq!(note_field(note, "type").as_deref(), Some("Meeting"));
     }
 }

@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
+import { announce } from "../announce";
+import { vaultOpenedMessage, dailyNoteOpenedMessage } from "../buddyMessages";
 import type { Vault } from "../types";
 
 export const useVaultsStore = defineStore("vaults", {
@@ -11,9 +13,18 @@ export const useVaultsStore = defineStore("vaults", {
     // the panel window is only hidden/shown, not destroyed — a failed update
     // install must be able to reopen it directly on settings, where the error
     // UI lives.
-    view: "list" as "list" | "settings" | "captureSettings",
+    view: "list" as
+      | "list"
+      | "settings"
+      | "captureSettings"
+      | "recordings"
+      | "recordMode",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
+    // Which vault the recordings view lists.
+    recordingsVaultId: null as string | null,
+    // Which vault the recordMode view shows.
+    recordModeVaultId: null as string | null,
     // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
@@ -80,6 +91,15 @@ export const useVaultsStore = defineStore("vaults", {
       this.error = null;
       try {
         await invoke(command, { id: vaultId });
+        // the buddy acknowledges the launch (panel window is the single
+        // announcer for opens); a failed open falls through to the catch and
+        // stays silent — the inline error banner is the feedback there.
+        const vault = this.vaults.find((v) => v.id === vaultId);
+        announce(
+          command === "open_daily_note"
+            ? dailyNoteOpenedMessage()
+            : vaultOpenedMessage(vault?.name ?? ""),
+        );
         void invoke("close_panel").catch(() => {});
       } catch (e) {
         this.error = String(e);
@@ -92,6 +112,8 @@ export const useVaultsStore = defineStore("vaults", {
     showList() {
       this.view = "list";
       this.captureSettingsVaultId = null;
+      this.recordingsVaultId = null;
+      this.recordModeVaultId = null;
     },
     openSettings() {
       this.view = "settings";
@@ -99,6 +121,22 @@ export const useVaultsStore = defineStore("vaults", {
     openCaptureSettings(vaultId: string) {
       this.view = "captureSettings";
       this.captureSettingsVaultId = vaultId;
+    },
+    openRecordings(vaultId: string) {
+      this.view = "recordings";
+      this.recordingsVaultId = vaultId;
+    },
+    openRecordMode(vaultId: string) {
+      this.view = "recordMode";
+      this.recordModeVaultId = vaultId;
+    },
+    /** Back to the current view's fixed parent (no history stack). */
+    back() {
+      if (this.view === "recordings" && this.recordingsVaultId) {
+        this.openRecordMode(this.recordingsVaultId);
+      } else {
+        this.showList();
+      }
     },
   },
 });

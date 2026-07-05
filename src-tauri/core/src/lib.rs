@@ -8,7 +8,9 @@ pub mod crash;
 pub mod daily_notes;
 pub mod discovery;
 pub mod process;
+pub mod recordings;
 pub mod sync_util;
+pub mod transcript;
 pub mod uri;
 
 use chrono::NaiveDate;

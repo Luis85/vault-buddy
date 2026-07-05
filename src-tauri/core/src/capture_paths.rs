@@ -1,7 +1,8 @@
 //! Recording file layout: dated folders, timestamped base names, and the
 //! pairwise reservation rule — a base name is usable only when the .mp3,
-//! the .md AND the hidden .mp3.part are all free, so a capture can never
-//! overwrite a user note or an unrecovered orphan from an earlier crash.
+//! the .md, the hidden .mp3.part, AND the .transcript.md are all free, so
+//! a capture can never overwrite a user note or an unrecovered orphan from
+//! an earlier crash.
 
 use chrono::NaiveDate;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ pub struct CaptureNames {
     pub final_mp3: PathBuf,
     pub note_md: PathBuf,
     pub part: PathBuf,
+    pub transcript_md: PathBuf,
 }
 
 pub fn dated_folder(root: &Path, date: NaiveDate) -> PathBuf {
@@ -144,13 +146,15 @@ pub fn reserve_names(dir: &Path, base: &str) -> CaptureNames {
         let b = candidate(base, attempt);
         let final_mp3 = dir.join(format!("{b}.mp3"));
         let note_md = dir.join(format!("{b}.md"));
+        let transcript_md = dir.join(format!("{b}.transcript.md"));
         let part = dir.join(part_file_name(&b));
-        if !final_mp3.exists() && !note_md.exists() && !part.exists() {
+        if !final_mp3.exists() && !note_md.exists() && !transcript_md.exists() && !part.exists() {
             return CaptureNames {
                 base: b,
                 final_mp3,
                 note_md,
                 part,
+                transcript_md,
             };
         }
     }
@@ -262,7 +266,8 @@ pub fn reserve_final(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
         let b = candidate(base, attempt);
         let final_mp3 = dir.join(format!("{b}.mp3"));
         let note_md = dir.join(format!("{b}.md"));
-        if !final_mp3.exists() && !note_md.exists() {
+        let transcript_md = dir.join(format!("{b}.transcript.md"));
+        if !final_mp3.exists() && !note_md.exists() && !transcript_md.exists() {
             return (final_mp3, note_md);
         }
     }
@@ -337,6 +342,30 @@ mod tests {
     fn reserve_final_advances_past_existing_mp3() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("b.mp3"), "sync client wrote this").unwrap();
+        let (mp3, _) = reserve_final(dir.path(), "b");
+        assert_eq!(mp3, dir.path().join("b (2).mp3"));
+    }
+
+    #[test]
+    fn reserve_includes_transcript_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = reserve_names(dir.path(), "b");
+        assert_eq!(names.transcript_md, dir.path().join("b.transcript.md"));
+    }
+
+    #[test]
+    fn reserve_advances_when_transcript_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        // a stray transcript sidecar for the plain base blocks it
+        std::fs::write(dir.path().join("b.transcript.md"), "x").unwrap();
+        let names = reserve_names(dir.path(), "b");
+        assert_eq!(names.base, "b (2)");
+    }
+
+    #[test]
+    fn reserve_final_advances_past_existing_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("b.transcript.md"), "x").unwrap();
         let (mp3, _) = reserve_final(dir.path(), "b");
         assert_eq!(mp3, dir.path().join("b (2).mp3"));
     }

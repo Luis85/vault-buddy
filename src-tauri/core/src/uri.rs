@@ -35,6 +35,25 @@ pub fn launch(uri: &str) -> Result<(), String> {
     open::that_detached(uri).map_err(|e| format!("failed to launch {uri}: {e}"))
 }
 
+/// The `file` value for an `obsidian://open?file=` URI: `file`'s location
+/// under `vault_root`, `/`-separated, with the final extension dropped —
+/// Obsidian resolves `2026/07/Meeting` to `Meeting.md`, and a sidecar
+/// `Meeting.transcript.md` to `Meeting.transcript`. Returns `None` when `file`
+/// is not inside `vault_root`.
+pub fn vault_relative_no_ext(
+    file: &std::path::Path,
+    vault_root: &std::path::Path,
+) -> Option<String> {
+    let rel = file.strip_prefix(vault_root).ok()?;
+    let rel = rel.with_extension("");
+    let s = rel.to_string_lossy().replace('\\', "/");
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +78,28 @@ mod tests {
         assert_eq!(
             new_file_uri("a1b2c3", "2026-07-03"),
             "obsidian://new?vault=a1b2c3&file=2026%2D07%2D03"
+        );
+    }
+
+    #[test]
+    fn vault_relative_drops_the_md_extension_and_normalizes_separators() {
+        use std::path::Path;
+        let root = Path::new("/vault");
+        // a note: drop `.md`
+        assert_eq!(
+            vault_relative_no_ext(Path::new("/vault/2026/07/Meeting.md"), root).as_deref(),
+            Some("2026/07/Meeting")
+        );
+        // a sidecar: only the final `.md` goes, the inner `.transcript` stays
+        assert_eq!(
+            vault_relative_no_ext(Path::new("/vault/2026/07/Meeting.transcript.md"), root)
+                .as_deref(),
+            Some("2026/07/Meeting.transcript")
+        );
+        // a file outside the vault → None
+        assert_eq!(
+            vault_relative_no_ext(Path::new("/elsewhere/x.md"), root),
+            None
         );
     }
 }

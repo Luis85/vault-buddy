@@ -175,6 +175,158 @@ describe("capture store", () => {
     expect(store.startedAtMs).toBe(7);
   });
 
+  it("transcribing event sets the transcribing flag", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "/v/m.mp3" } });
+    expect(store.transcribing).toBe(true);
+  });
+
+  it("model download progress is tracked, then cleared on transcribed", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "/v/m.mp3" } });
+    state.eventHandlers["capture:modelDownload"]!({
+      payload: { model: "small", received: 5, total: 10 },
+    });
+    expect(store.modelDownload).toEqual({ model: "small", received: 5, total: 10 });
+    state.eventHandlers["capture:transcribed"]!({
+      payload: { mp3: "/v/m.mp3", transcript: "/v/m.transcript.md" },
+    });
+    expect(store.transcribing).toBe(false);
+    expect(store.modelDownload).toBeNull();
+  });
+
+  it("transcribeFailed surfaces an error and the mp3 for retry", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribeFailed"]!({
+      payload: { mp3: "/v/m.mp3", message: "model unavailable" },
+    });
+    expect(store.transcribing).toBe(false);
+    expect(store.transcriptError).toBe("model unavailable");
+    expect(store.transcriptFailedMp3).toBe("/v/m.mp3");
+  });
+
+  it("retryTranscription re-invokes the command for the failed file", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribeFailed"]!({
+      payload: { mp3: "/v/m.mp3", message: "boom" },
+    });
+    await store.retryTranscription();
+    expect(calls).toContainEqual({
+      cmd: "transcribe_recording_now",
+      args: { path: "/v/m.mp3" },
+    });
+    expect(store.transcriptError).toBeNull();
+  });
+
+  it("transcribed event records the file for the Open action", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribed"]!({
+      payload: { mp3: "/v/m.mp3", transcript: "/v/m.transcript.md" },
+    });
+    expect(store.lastTranscribed).toEqual({ mp3: "/v/m.mp3" });
+  });
+
+  it("a new recording clears the last transcribed marker", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "start_capture") return { recording: true, vaultId: "v2", startedAtMs: 9 };
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/old.mp3" };
+    await store.start("v2");
+    expect(store.lastTranscribed).toBeNull();
+  });
+
+  it("openTranscript invokes open_transcript with the recording path", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    await store.openTranscript();
+    expect(calls).toContainEqual({ cmd: "open_transcript", args: { path: "/v/m.mp3" } });
+  });
+
+  it("openTranscript clears the row on success", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "open_transcript") return undefined;
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    await store.openTranscript();
+    expect(store.lastTranscribed).toBeNull();
+  });
+
+  it("openTranscript keeps the row and warns on failure", async () => {
+    mockIPC(() => {
+      throw "vault gone";
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    await store.openTranscript();
+    expect(store.lastTranscribed).toEqual({ mp3: "/v/m.mp3" });
+    expect(store.warning).toContain("vault gone");
+  });
+
+  it("dismissTranscribed clears the row without opening", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+    });
+    const store = useCaptureStore();
+    store.lastTranscribed = { mp3: "/v/m.mp3" };
+    store.dismissTranscribed();
+    expect(store.lastTranscribed).toBeNull();
+    expect(calls).not.toContain("open_transcript");
+  });
+
+  it("tracks which vault is transcribing, then clears it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "/v/m.mp3", vaultId: "v7" } });
+    expect(store.transcribingVaultId).toBe("v7");
+    state.eventHandlers["capture:transcribed"]!({
+      payload: { mp3: "/v/m.mp3", transcript: "/v/m.transcript.md" },
+    });
+    expect(store.transcribingVaultId).toBeNull();
+  });
+
+  it("clears the transcribing vault on failure too", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "/v/m.mp3", vaultId: "v7" } });
+    state.eventHandlers["capture:transcribeFailed"]!({ payload: { mp3: "/v/m.mp3", message: "x" } });
+    expect(store.transcribingVaultId).toBeNull();
+  });
+
   it("pause and resume flow through IPC and mirror events", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

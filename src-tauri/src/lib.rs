@@ -187,6 +187,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(capture_commands::CaptureState::default())
+        .manage(capture_commands::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
@@ -259,6 +260,7 @@ pub fn run() {
             commands::toggle_panel,
             commands::close_panel,
             commands::close_bubble,
+            commands::announce,
             commands::get_buddy_facing,
             commands::get_bubble_anchor,
             commands::start_buddy_drag,
@@ -268,6 +270,11 @@ pub fn run() {
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status,
+            capture_commands::transcribe_recording_now,
+            capture_commands::retranscribe,
+            capture_commands::open_transcript,
+            capture_commands::list_recordings,
+            capture_commands::open_recording,
             capture_commands::get_capture_config,
             capture_commands::set_capture_config,
             capture_commands::list_audio_devices,
@@ -362,6 +369,7 @@ pub fn run() {
             tray::create_tray(app.handle())?;
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
+            capture_commands::run_transcription(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {

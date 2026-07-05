@@ -1,12 +1,29 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
+import SelectMenu from "./SelectMenu.vue";
 
 const props = defineProps<{ vaultId: string }>();
 
 const BITRATES = [128, 160, 192];
+const MODELS = ["base", "small", "medium"] as const;
+const LANGUAGES = [
+  { code: "", name: "Auto-detect" },
+  { code: "en", name: "English" },
+  { code: "de", name: "German" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "it", name: "Italian" },
+  { code: "pt", name: "Portuguese" },
+  { code: "nl", name: "Dutch" },
+  { code: "pl", name: "Polish" },
+  { code: "zh", name: "Chinese" },
+  { code: "ja", name: "Japanese" },
+  { code: "ru", name: "Russian" },
+  { code: "ar", name: "Arabic" },
+] as const;
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -17,10 +34,15 @@ const folderError = ref<string | null>(null);
 const mode = ref<"meeting" | "voice-note">("meeting");
 const recordingFolder = ref("");
 const createNote = ref(true);
+const followUpTemplate = ref(true);
 const bitrateKbps = ref(128);
 const inputDevice = ref(""); // "" = system default
 const outputDevice = ref("");
 const devices = ref<AudioDevices>({ inputs: [], outputs: [] });
+const transcribe = ref(false);
+const transcriptionModel = ref("small");
+const transcriptionLanguage = ref(""); // "" = auto-detect (maps to null on save)
+const transcriptTimestamps = ref(true);
 
 // A configured device that is not currently connected must stay
 // selectable (unplugging a headset must not silently rewrite the
@@ -43,6 +65,45 @@ const folderPlaceholder = computed(() =>
   mode.value === "meeting" ? "Meetings" : "Voice Notes",
 );
 
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Option lists for the SelectMenu dropdowns ({ value, label }).
+const modelOptions = MODELS.map((m) => ({ value: m, label: capitalize(m) }));
+const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }));
+const bitrateOptions = BITRATES.map((b) => ({ value: b, label: `${b} kbps` }));
+const inputMenuOptions = computed(() => [
+  { value: "", label: "System default" },
+  ...inputOptions.value,
+]);
+const outputMenuOptions = computed(() => [
+  { value: "", label: "System default" },
+  ...outputOptions.value,
+]);
+
+// Any edit invalidates the "Saved ✓" confirmation. During the initial load
+// saveState is already "idle", so the load-time assignments are idle→idle
+// no-ops; this only becomes visible after a save set it to "saved".
+watch(
+  [
+    mode,
+    recordingFolder,
+    createNote,
+    followUpTemplate,
+    bitrateKbps,
+    inputDevice,
+    outputDevice,
+    transcribe,
+    transcriptionModel,
+    transcriptionLanguage,
+    transcriptTimestamps,
+  ],
+  () => {
+    if (saveState.value === "saved") saveState.value = "idle";
+  },
+);
+
 onMounted(async () => {
   try {
     const [cfg, devs] = await Promise.all([
@@ -52,10 +113,15 @@ onMounted(async () => {
     mode.value = cfg.mode;
     recordingFolder.value = cfg.recordingFolder ?? "";
     createNote.value = cfg.createNote;
+    followUpTemplate.value = cfg.followUpTemplate;
     bitrateKbps.value = cfg.bitrateKbps;
     inputDevice.value = cfg.inputDevice ?? "";
     outputDevice.value = cfg.outputDevice ?? "";
     devices.value = devs;
+    transcribe.value = cfg.transcribe;
+    transcriptionModel.value = cfg.transcriptionModel;
+    transcriptionLanguage.value = cfg.transcriptionLanguage ?? "";
+    transcriptTimestamps.value = cfg.transcriptTimestamps;
   } catch (e) {
     loadError.value = String(e);
   } finally {
@@ -76,8 +142,13 @@ async function save() {
         recordingFolder: folder ? folder : null,
         bitrateKbps: bitrateKbps.value,
         createNote: createNote.value,
+        followUpTemplate: followUpTemplate.value,
         inputDevice: inputDevice.value || null,
         outputDevice: outputDevice.value || null,
+        transcribe: transcribe.value,
+        transcriptionModel: transcriptionModel.value,
+        transcriptionLanguage: transcriptionLanguage.value.trim() || null,
+        transcriptTimestamps: transcriptTimestamps.value,
       },
     });
     saveState.value = "saved";
@@ -160,49 +231,103 @@ async function save() {
         class="h-4 w-4 accent-violet-500"
       />
     </section>
+    <div
+      v-if="createNote"
+      class="flex items-center justify-between border-l border-white/10 pl-3"
+    >
+      <label for="capture-follow-up-toggle" class="text-sm text-slate-200">
+        Follow-up template
+        <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
+      </label>
+      <input
+        id="capture-follow-up-toggle"
+        v-model="followUpTemplate"
+        data-testid="follow-up-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+      />
+    </div>
+    <section class="flex items-center justify-between">
+      <label for="capture-transcribe-toggle" class="text-sm text-slate-200">
+        Transcribe recordings
+        <span class="block text-xs text-slate-500">Local speech-to-text · no cloud</span>
+      </label>
+      <input
+        id="capture-transcribe-toggle"
+        v-model="transcribe"
+        data-testid="transcribe-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+      />
+    </section>
+    <div v-if="transcribe" class="flex flex-col gap-3 border-l border-white/10 pl-3">
+      <section class="flex items-center justify-between gap-2">
+        <label for="capture-transcription-model" class="text-sm text-slate-200">Model</label>
+        <SelectMenu
+          id="capture-transcription-model"
+          v-model="transcriptionModel"
+          :options="modelOptions"
+          data-testid="transcription-model-select"
+        />
+      </section>
+      <section class="flex items-center justify-between gap-2">
+        <label for="capture-transcription-language" class="text-sm text-slate-200">Language</label>
+        <SelectMenu
+          id="capture-transcription-language"
+          v-model="transcriptionLanguage"
+          :options="languageOptions"
+          data-testid="transcription-language-select"
+        />
+      </section>
+      <section class="flex items-center justify-between">
+        <label for="capture-transcript-timestamps-toggle" class="text-sm text-slate-200">
+          Timestamps
+          <span class="block text-xs text-slate-500">Insert time markers in the transcript</span>
+        </label>
+        <input
+          id="capture-transcript-timestamps-toggle"
+          v-model="transcriptTimestamps"
+          data-testid="transcript-timestamps-toggle"
+          type="checkbox"
+          class="h-4 w-4 accent-violet-500"
+        />
+      </section>
+    </div>
     <section class="flex items-center justify-between gap-2">
       <label for="capture-bitrate" class="text-sm text-slate-200">Bitrate</label>
-      <select
+      <SelectMenu
         id="capture-bitrate"
-        v-model.number="bitrateKbps"
+        v-model="bitrateKbps"
+        :options="bitrateOptions"
         data-testid="bitrate-select"
-        class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-        <option v-for="b in BITRATES" :key="b" :value="b">{{ b }} kbps</option>
-      </select>
+      />
     </section>
     <section>
       <label class="mb-1 block text-sm text-slate-200" for="capture-input-device">
         Microphone
       </label>
-      <select
+      <SelectMenu
         id="capture-input-device"
         v-model="inputDevice"
+        :options="inputMenuOptions"
+        aria-label="Microphone"
         data-testid="input-device-select"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-        <option value="">System default</option>
-        <option v-for="o in inputOptions" :key="o.value" :value="o.value">
-          {{ o.label }}
-        </option>
-      </select>
+        wide
+      />
     </section>
     <section v-if="mode === 'meeting'">
       <label class="mb-1 block text-sm text-slate-200" for="capture-output-device">
         Desktop audio from
         <span class="block text-xs text-slate-500">Loopback output device</span>
       </label>
-      <select
+      <SelectMenu
         id="capture-output-device"
         v-model="outputDevice"
+        :options="outputMenuOptions"
+        aria-label="Desktop audio device"
         data-testid="output-device-select"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-        <option value="">System default</option>
-        <option v-for="o in outputOptions" :key="o.value" :value="o.value">
-          {{ o.label }}
-        </option>
-      </select>
+        wide
+      />
     </section>
     <p
       v-if="saveError"

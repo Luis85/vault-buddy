@@ -382,6 +382,23 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     emit_bubble_anchor(app, anchor);
 }
 
+/// Speak an acknowledgement in the buddy's bubble. The frontend announcer (the
+/// buddy window for capture progress, the panel window's vaults store for
+/// vault/note opens) composes the text and gates it on the "Buddy messages"
+/// setting before calling this. Positions + reveals the bubble beside the buddy
+/// exactly like the greeting, then pushes the words to `BubbleRoot` via
+/// `bubble-message`; the bubble's own auto-dismiss timer hides it again
+/// (`close_bubble`). Best-effort throughout — a missing window just means no
+/// bubble, never an error to the caller.
+#[tauri::command]
+pub fn announce(app: tauri::AppHandle, text: String) {
+    use tauri::Emitter;
+    // Same placement/reveal path as the launch greeting.
+    show_bubble(&app);
+    // Deliver the text; BubbleRoot renders it and (re)starts its dismiss timer.
+    let _ = app.emit("bubble-message", serde_json::json!({ "text": text }));
+}
+
 /// Keep the greeting bubble beside the buddy as the buddy moves — called from
 /// the buddy window's `Moved` handler so the bubble follows a drag instead of
 /// stranding at its launch spot. A no-op unless the bubble is currently

@@ -13,6 +13,28 @@ where it's going, see the [PRD](PRD.md).
    prompt you to install the Visual Studio C++ Build Tools if missing
 3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
    [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+4. **LLVM (libclang) and CMake** — the app statically links whisper.cpp for
+   local speech-to-text, so the `whisper` feature is always on for the shell
+   and *every* app build compiles `whisper-rs-sys`, whose build runs `bindgen`
+   (needs `libclang`) and `cmake`. Install both and open a fresh terminal:
+
+   ```powershell
+   winget install LLVM.LLVM Kitware.CMake
+   ```
+
+   If `bindgen` still can't find libclang — the telltale error is
+   `Unable to find libclang: … set the LIBCLANG_PATH environment variable` —
+   point it at the install explicitly and reopen the terminal:
+
+   ```powershell
+   setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
+   ```
+
+   CI's Windows runner ships both tools, so this is a local-only setup step.
+   (bindgen genuinely can't be skipped on Windows: `whisper-rs-sys` ships only
+   Linux-generated committed bindings, and their glibc struct-layout assertions
+   — e.g. `_IO_FILE` sized at 216 bytes — fail to compile on MSVC, so bindgen
+   must regenerate them from the local headers.)
 
 ### Check out and run
 
@@ -230,10 +252,26 @@ ever written into your vaults except recordings and their notes.
       "bitrateKbps": 128,          // 128 | 160 | 192
       "createNote": true,          // companion .md with metadata + embed
       "inputDevice": "USB Mic",    // optional — cpal device name; omit for system default
-      "outputDevice": "Speakers"   // optional — loopback source (Meeting mode); omit for system default
+      "outputDevice": "Speakers",  // optional — loopback source (Meeting mode); omit for system default
+      "transcribe": false,         // opt in to local speech-to-text
+      "transcriptionModel": "small", // "base" | "small" | "medium"
+      "transcriptionLanguage": "es", // optional — omit to auto-detect per recording
+      "transcriptTimestamps": true  // prefix each segment with [HH:MM:SS]
     }
   }
 }
 ```
+
+- `transcribe` (bool, default `false`) — opt in to local speech-to-text.
+  Enabling it downloads a Whisper model on the next recording (or backfills
+  existing recordings) and writes a `<name>.transcript.md` sidecar the note
+  embeds.
+- `transcriptionModel` (`"base"` | `"small"` | `"medium"`, default
+  `"small"`) — accuracy/speed/size trade-off. Models download to
+  `%APPDATA%\vault-buddy\models`.
+- `transcriptionLanguage` (string or omit, default auto-detect) — e.g.
+  `"es"`; omit to auto-detect per recording.
+- `transcriptTimestamps` (bool, default `true`) — prefix each segment with
+  `[HH:MM:SS]`.
 
 The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.

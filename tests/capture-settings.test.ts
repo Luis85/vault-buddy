@@ -17,6 +17,11 @@ const config = {
   createNote: true,
   inputDevice: "USB Mic",
   outputDevice: null,
+  transcribe: false,
+  transcriptionModel: "small",
+  transcriptionLanguage: null as string | null,
+  transcriptTimestamps: true,
+  followUpTemplate: true,
 };
 
 const devices = {
@@ -26,6 +31,8 @@ const devices = {
   ],
   outputs: [{ name: "Speakers", isDefault: true }],
 };
+
+let lastWrapper: ReturnType<typeof mount> | null = null;
 
 const mountLoaded = async (
   overrides: {
@@ -41,14 +48,38 @@ const mountLoaded = async (
     if (cmd === "list_audio_devices") return overrides.devices ?? devices;
     if (cmd === "set_capture_config") return overrides.onSet?.(args);
   });
-  const wrapper = mount(CaptureSettings, { props: { vaultId: "v1" } });
+  // attachTo document.body so the SelectMenu's Teleported popups land in a
+  // queryable place; afterEach unmounts and clears the body.
+  const wrapper = mount(CaptureSettings, {
+    props: { vaultId: "v1" },
+    attachTo: document.body,
+  });
+  lastWrapper = wrapper;
   await flushPromises();
   return { wrapper, calls };
 };
 
+// Open a SelectMenu dropdown and click one of its (Teleported) options.
+const pickOption = async (
+  wrapper: ReturnType<typeof mount>,
+  testid: string,
+  value: string | number,
+) => {
+  await wrapper.get(`[data-testid="${testid}"]`).trigger("click");
+  (
+    document.body.querySelector(`[data-testid="${testid}-option-${value}"]`) as HTMLElement
+  ).click();
+  await flushPromises();
+};
+
 describe("CaptureSettings", () => {
   beforeEach(() => clearMocks());
-  afterEach(() => clearMocks());
+  afterEach(() => {
+    lastWrapper?.unmount();
+    lastWrapper = null;
+    document.body.innerHTML = "";
+    clearMocks();
+  });
 
   it("loads the config into the form", async () => {
     const { wrapper, calls } = await mountLoaded();
@@ -56,18 +87,17 @@ describe("CaptureSettings", () => {
     expect(calls.map((c) => c.cmd)).toContain("list_audio_devices");
     const folder = wrapper.get<HTMLInputElement>('[data-testid="folder-input"]');
     expect(folder.element.value).toBe("Meetings");
-    const bitrate = wrapper.get<HTMLSelectElement>('[data-testid="bitrate-select"]');
-    expect(bitrate.element.value).toBe("160");
-    const input = wrapper.get<HTMLSelectElement>('[data-testid="input-device-select"]');
-    expect(input.element.value).toBe("USB Mic");
+    expect(wrapper.get('[data-testid="bitrate-select"]').text()).toContain("160 kbps");
+    expect(wrapper.get('[data-testid="input-device-select"]').text()).toContain("USB Mic");
   });
 
   it("System default is the first option in both device pickers", async () => {
     const { wrapper } = await mountLoaded();
     for (const testid of ["input-device-select", "output-device-select"]) {
-      const options = wrapper.get(`[data-testid="${testid}"]`).findAll("option");
-      expect(options[0]!.text()).toBe("System default");
-      expect(options[0]!.attributes("value")).toBe("");
+      await wrapper.get(`[data-testid="${testid}"]`).trigger("click");
+      const first = document.body.querySelectorAll('[role="option"]')[0];
+      expect(first?.textContent?.trim()).toBe("System default");
+      await wrapper.get(`[data-testid="${testid}"]`).trigger("click"); // close before the next
     }
   });
 
@@ -75,9 +105,9 @@ describe("CaptureSettings", () => {
     const { wrapper } = await mountLoaded({
       config: { inputDevice: "Unplugged Headset" },
     });
-    const select = wrapper.get<HTMLSelectElement>('[data-testid="input-device-select"]');
-    expect(select.element.value).toBe("Unplugged Headset");
-    expect(select.text()).toContain("Unplugged Headset (not connected)");
+    expect(wrapper.get('[data-testid="input-device-select"]').text()).toContain(
+      "Unplugged Headset (not connected)",
+    );
   });
 
   it("hides the output picker in voice-note mode", async () => {
@@ -88,8 +118,8 @@ describe("CaptureSettings", () => {
   it("saves the edited form through set_capture_config", async () => {
     const { wrapper, calls } = await mountLoaded();
     await wrapper.get('[data-testid="folder-input"]').setValue("Inbox/Audio");
-    await wrapper.get('[data-testid="bitrate-select"]').setValue("192");
-    await wrapper.get('[data-testid="input-device-select"]').setValue("");
+    await pickOption(wrapper, "bitrate-select", 192);
+    await pickOption(wrapper, "input-device-select", "");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     const set = calls.find((c) => c.cmd === "set_capture_config");
@@ -100,11 +130,25 @@ describe("CaptureSettings", () => {
         recordingFolder: "Inbox/Audio",
         bitrateKbps: 192,
         createNote: true,
+        followUpTemplate: true,
         inputDevice: null,
         outputDevice: null,
+        transcribe: false,
+        transcriptionModel: "small",
+        transcriptionLanguage: null,
+        transcriptTimestamps: true,
       },
     });
     expect(wrapper.text()).toContain("Saved");
+  });
+
+  it("clears the Saved confirmation when a field is edited", async () => {
+    const { wrapper } = await mountLoaded();
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Saved");
+    await wrapper.get('[data-testid="folder-input"]').setValue("Elsewhere");
+    expect(wrapper.text()).not.toContain("Saved ✓");
   });
 
   it("shows a folder error inline and keeps the form state", async () => {
@@ -145,5 +189,84 @@ describe("CaptureSettings", () => {
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("settings save failed"),
     );
+  });
+
+  it("shows the transcribe toggle reflecting the loaded value", async () => {
+    const off = await mountLoaded({ config: { transcribe: false } });
+    expect(
+      off.wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(false);
+
+    const on = await mountLoaded({ config: { transcribe: true } });
+    expect(
+      on.wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(true);
+  });
+
+  it("hides the model/language/timestamps controls while transcribe is off", async () => {
+    const { wrapper } = await mountLoaded({ config: { transcribe: false } });
+    expect(wrapper.find('[data-testid="transcription-model-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcription-language-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcript-timestamps-toggle"]').exists()).toBe(false);
+  });
+
+  it("shows the model/language/timestamps controls, loaded correctly, once transcribe is on", async () => {
+    const { wrapper } = await mountLoaded({
+      config: {
+        transcribe: true,
+        transcriptionModel: "medium",
+        transcriptionLanguage: "es",
+        transcriptTimestamps: false,
+      },
+    });
+    expect(wrapper.get('[data-testid="transcription-model-select"]').text()).toContain(
+      "Medium",
+    );
+    expect(wrapper.get('[data-testid="transcription-language-select"]').text()).toContain(
+      "Spanish",
+    );
+    const timestamps = wrapper.get<HTMLInputElement>(
+      '[data-testid="transcript-timestamps-toggle"]',
+    );
+    expect(timestamps.element.checked).toBe(false);
+  });
+
+  it("saves transcription settings after enabling transcribe and picking a model/language", async () => {
+    const { wrapper, calls } = await mountLoaded();
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await pickOption(wrapper, "transcription-model-select", "medium");
+    await pickOption(wrapper, "transcription-language-select", "es");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_capture_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      cfg: {
+        mode: "meeting",
+        recordingFolder: "Meetings",
+        bitrateKbps: 160,
+        createNote: true,
+        followUpTemplate: true,
+        inputDevice: "USB Mic",
+        outputDevice: null,
+        transcribe: true,
+        transcriptionModel: "medium",
+        transcriptionLanguage: "es",
+        transcriptTimestamps: true,
+      },
+    });
+  });
+
+  it("saves the follow-up template toggle", async () => {
+    let saved: { cfg: { followUpTemplate: boolean } } | undefined;
+    const { wrapper } = await mountLoaded({
+      onSet: (args) => {
+        saved = args as typeof saved;
+      },
+    });
+    await wrapper.get('[data-testid="follow-up-toggle"]').setValue(false);
+    await wrapper.get('[data-testid="save-button"]').trigger("click");
+    await flushPromises();
+    expect(saved?.cfg.followUpTemplate).toBe(false);
   });
 });

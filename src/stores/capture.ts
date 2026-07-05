@@ -2,7 +2,14 @@ import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { logBreadcrumb, logWarning } from "../logging";
-import type { CaptureRenamed, CaptureSaved, CaptureStatus } from "../types";
+import type {
+  CaptureRenamed,
+  CaptureSaved,
+  CaptureStatus,
+  CaptureTranscribed,
+  CaptureTranscribeFailed,
+  ModelDownload,
+} from "../types";
 
 /** How long the post-save "Name this recording" window stays open. */
 export const RENAME_PROMPT_MS = 30_000;
@@ -23,6 +30,14 @@ export const useCaptureStore = defineStore("capture", {
     error: null as string | null,
     warning: null as string | null,
     lastSavedFile: null as string | null,
+    transcribing: false as boolean,
+    transcriptError: null as string | null,
+    transcriptFailedMp3: null as string | null,
+    modelDownload: null as { model: string; received: number; total: number | null } | null,
+    /** Most recent finished transcription; drives the "Open in Obsidian" row. */
+    lastTranscribed: null as { mp3: string } | null,
+    /** Which vault is currently transcribing — drives the vault-row dot. */
+    transcribingVaultId: null as string | null,
     /** Post-save rename window; null once renamed/dismissed/expired. */
     lastSaved: null as { mp3: string; note: string | null } | null,
     renameError: null as string | null,
@@ -56,6 +71,27 @@ export const useCaptureStore = defineStore("capture", {
       });
       await listen<{ message: string }>("capture:warning", (event) => {
         this.warning = event.payload.message;
+      });
+      await listen<{ mp3: string; vaultId: string }>("capture:transcribing", (event) => {
+        this.transcribing = true;
+        this.transcriptError = null;
+        this.transcribingVaultId = event.payload.vaultId;
+      });
+      await listen<CaptureTranscribed>("capture:transcribed", (event) => {
+        this.transcribing = false;
+        this.modelDownload = null;
+        this.lastTranscribed = { mp3: event.payload.mp3 };
+        this.transcribingVaultId = null;
+      });
+      await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
+        this.transcribing = false;
+        this.modelDownload = null;
+        this.transcriptError = event.payload.message;
+        this.transcriptFailedMp3 = event.payload.mp3;
+        this.transcribingVaultId = null;
+      });
+      await listen<ModelDownload>("capture:modelDownload", (event) => {
+        this.modelDownload = event.payload;
       });
       await listen<{ atMs: number }>("capture:paused", (event) => {
         this.paused = true;
@@ -101,6 +137,7 @@ export const useCaptureStore = defineStore("capture", {
       this.warning = null;
       // New recording: the previous save's rename window is over.
       this.dismissRename();
+      this.lastTranscribed = null;
       try {
         logBreadcrumb(`capture: start requested (vault ${vaultId})`);
         const s = await invoke<CaptureStatus>("start_capture", {
@@ -134,6 +171,32 @@ export const useCaptureStore = defineStore("capture", {
         this.error = String(e);
         logWarning(`capture stop rejected: ${String(e)}`);
       }
+    },
+    async retryTranscription() {
+      if (!this.transcriptFailedMp3) return;
+      const path = this.transcriptFailedMp3;
+      this.transcriptError = null;
+      try {
+        await invoke("transcribe_recording_now", { path });
+        this.transcribing = true;
+      } catch (e) {
+        this.transcriptError = String(e);
+      }
+    },
+    async openTranscript() {
+      if (!this.lastTranscribed) return;
+      try {
+        await invoke("open_transcript", { path: this.lastTranscribed.mp3 });
+        this.lastTranscribed = null;
+      } catch (e) {
+        // A failed open (recording moved, launch error) is non-fatal — warn
+        // and keep the row so the user can retry.
+        this.warning = String(e);
+        logWarning(`open transcript rejected: ${String(e)}`);
+      }
+    },
+    dismissTranscribed() {
+      this.lastTranscribed = null;
     },
     async pause() {
       if (this.status !== "recording" || this.paused) return;

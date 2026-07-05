@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { invoke } from "@tauri-apps/api/core";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
+import TranscriptionStatus from "./TranscriptionStatus.vue";
 import RenamePrompt from "./RenamePrompt.vue";
-import RecordModeDialog from "./RecordModeDialog.vue";
-import type { CaptureConfig } from "../types";
+import RecordMode from "./RecordMode.vue";
+import Recordings from "./Recordings.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -44,47 +44,20 @@ function onFilterEscape(event: KeyboardEvent) {
   }
 }
 
-// One-shot, component-local dialog state: nothing persisted, nothing in Pinia.
-const recordRequest = ref<{
-  vaultId: string;
-  vaultName: string;
-  defaultMode: "meeting" | "voice-note";
-} | null>(null);
-
 // The panel window is only hidden/shown, not unmounted, so onUnmounted no
-// longer fires on close and this local state used to survive a close-and-
-// reopen. `shownNonce` bumps each time Rust re-shows the panel (see
-// PanelRoot / toggle_panel's panel-shown event): treat it as the reopen
-// signal and clear what a close used to reset — a still-open record dialog,
-// the filter text, and a lingering post-save rename prompt.
+// longer fires on close and transient UI used to survive a close-and-reopen.
+// `shownNonce` bumps each time Rust re-shows the panel (see PanelRoot /
+// toggle_panel's panel-shown event): treat it as the reopen signal and clear
+// what a close used to reset — the filter text and a lingering post-save
+// rename prompt. (The record chooser is now a store-owned view, reset by
+// `refresh`/`showList`, so it needs no local teardown here.)
 watch(
   () => store.shownNonce,
   () => {
-    recordRequest.value = null;
     filter.value = "";
     capture.dismissRename();
   },
 );
-
-// The chooser needs the vault's DEFAULT mode; fetch it, then show. A
-// config read failure must not block recording — fall back to meeting.
-async function openRecordDialog(vaultId: string) {
-  const vault = store.vaults.find((v) => v.id === vaultId);
-  let defaultMode: "meeting" | "voice-note" = "meeting";
-  try {
-    const cfg = await invoke<CaptureConfig>("get_capture_config", { id: vaultId });
-    defaultMode = cfg.mode;
-  } catch {
-    // stale config never blocks recording — mirror the backend's rule
-  }
-  recordRequest.value = { vaultId, vaultName: vault?.name ?? "", defaultMode };
-}
-
-function startWithMode(mode: "meeting" | "voice-note") {
-  const request = recordRequest.value;
-  recordRequest.value = null;
-  if (request) void capture.start(request.vaultId, mode);
-}
 </script>
 
 <template>
@@ -98,7 +71,11 @@ function startWithMode(mode: "meeting" | "voice-note") {
             ? "Buddy settings"
             : view === "captureSettings"
               ? "Capture settings"
-              : "Vaults"
+              : view === "recordings"
+                ? "Recordings"
+                : view === "recordMode"
+                  ? "Record"
+                  : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -109,14 +86,13 @@ function startWithMode(mode: "meeting" | "voice-note") {
           {{ store.vaults.length }}
         </span>
         <button
+          v-if="view === 'list'"
           type="button"
           class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="{ 'text-violet-300': view === 'settings' }"
-          :aria-label="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
-          :aria-pressed="view === 'settings'"
-          :title="view === 'list' ? 'Buddy settings' : 'Back to vaults'"
+          aria-label="Buddy settings"
+          title="Buddy settings"
           data-testid="settings-toggle"
-          @click="view === 'list' ? store.openSettings() : store.showList()"
+          @click="store.openSettings()"
         >
           <svg
             width="16"
@@ -133,6 +109,29 @@ function startWithMode(mode: "meeting" | "voice-note") {
             <path
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
+          </svg>
+        </button>
+        <button
+          v-else
+          type="button"
+          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          aria-label="Back"
+          title="Back"
+          data-testid="back-button"
+          @click="store.back()"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
         </button>
       </div>
@@ -173,6 +172,7 @@ function startWithMode(mode: "meeting" | "voice-note") {
     >
       {{ capture.error }}
     </p>
+    <TranscriptionStatus v-if="view === 'list'" class="mb-2" />
     <p
       v-if="view === 'list' && capture.status === 'idle' && capture.warning"
       class="mb-2 rounded-lg bg-amber-500/15 px-2 py-1 text-xs text-amber-200"
@@ -201,6 +201,24 @@ function startWithMode(mode: "meeting" | "voice-note") {
         :vault-id="store.captureSettingsVaultId"
       />
     </div>
+    <div
+      v-else-if="view === 'recordings' && store.recordingsVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Recordings
+        :key="store.recordingsVaultId"
+        :vault-id="store.recordingsVaultId"
+      />
+    </div>
+    <div
+      v-else-if="view === 'recordMode' && store.recordModeVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <RecordMode
+        :key="store.recordModeVaultId"
+        :vault-id="store.recordModeVaultId"
+      />
+    </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
         v-if="filtered.length > 0"
@@ -209,9 +227,10 @@ function startWithMode(mode: "meeting" | "voice-note") {
         :busy-command="store.busyCommand"
         :capture-disabled="capture.status !== 'idle'"
         :recording-vault-id="capture.vaultId"
+        :transcribing-vault-id="capture.transcribingVaultId"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
-        @capture="openRecordDialog($event)"
+        @capture="store.openRecordMode($event)"
         @capture-settings="store.openCaptureSettings($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
@@ -222,12 +241,5 @@ function startWithMode(mode: "meeting" | "voice-note") {
         has it been opened at least once?
       </p>
     </div>
-    <RecordModeDialog
-      v-if="recordRequest"
-      :vault-name="recordRequest.vaultName"
-      :default-mode="recordRequest.defaultMode"
-      @start="startWithMode($event)"
-      @cancel="recordRequest = null"
-    />
   </div>
 </template>

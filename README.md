@@ -9,7 +9,7 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Status:** Increment 1 — desktop companion with Obsidian vault access
+- **Status:** vault access · one-click meeting & voice recording · local offline transcription
 
 See the [Product Requirements Document](docs/PRD.md) for the full vision,
 principles, capabilities, and roadmap.
@@ -43,10 +43,24 @@ The buddy appears as a small, always-on-top character on your desktop.
 - **Tray icon**: Show/Hide the buddy, quit the app.
 - The panel gets out of your way on its own: Escape, clicking the desktop,
   or launching a vault all close it.
+- **Record** a meeting or voice note into a vault: click the **capture
+  button** on a vault row, choose Meeting (desktop audio + mic) or Voice
+  Note (mic only), and the buddy shows a red dot while it records. Pause,
+  resume, or stop from the recording bar or the tray. Each vault has its own
+  capture settings — folder, audio quality, companion note, and
+  transcription — in the panel.
+- **Transcribe** locally, opt-in per vault: after a recording finishes,
+  Vault Buddy runs speech-to-text on-device with whisper.cpp and writes a
+  transcript that the note embeds. It downloads a small speech model on
+  first use; transcription itself is fully offline — no cloud, no API.
 
-Vault Buddy never writes into your vaults — opening notes and creating
-daily notes is delegated to Obsidian itself via `obsidian://` URIs, and
-every launched URI is logged.
+Vault Buddy is careful with your vault. Browsing vaults and opening notes
+never writes anything — that stays delegated to Obsidian via `obsidian://`
+URIs, and every launched URI is logged. **Recording is the one feature that
+writes into a vault**, and only for vaults you opt in: it saves the audio,
+an optional companion note, and (if enabled) a transcript sidecar into a
+dated folder you choose, and it never overwrites or edits files you already
+have. Everything stays on your machine — no account, nothing uploaded.
 
 ## Contributing
 

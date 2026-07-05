@@ -8,5 +8,7 @@ app-icon.png
 .vite
 .obsidian
 
+# SDD controller scratch (ledger + task briefs/reports)
+.superpowers/
 /Meetings
 /Voice Notes

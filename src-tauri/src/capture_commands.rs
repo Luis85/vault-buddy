@@ -1,3 +1,4 @@
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Condvar, Mutex};
@@ -6,7 +7,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_paths, discovery};
+use vault_buddy_core::{capture_config, capture_paths, discovery, recordings, transcript, uri};
+use vault_buddy_transcribe::engine::WhisperTranscriber;
+use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
+use vault_buddy_transcribe::{transcribe_recording, TranscribeOptions};
 
 pub struct ActiveCapture {
     pub control_tx: Sender<Control>,
@@ -29,6 +33,40 @@ pub struct ActiveCapture {
 /// of polling (see `request_stop_and_wait` / `clear_active`).
 #[derive(Default)]
 pub struct CaptureState(pub Mutex<Option<ActiveCapture>>, pub Condvar);
+
+#[derive(Clone)]
+struct TranscriptionJob {
+    mp3: PathBuf,
+    vault_id: String,
+    force: bool,
+}
+
+#[derive(Default)]
+struct TranscriptionQueue {
+    pending: VecDeque<TranscriptionJob>,
+    /// Paths currently queued or in flight — dedupes the save-time enqueue
+    /// against the startup/late-recovery scans.
+    known: HashSet<PathBuf>,
+}
+
+/// Background transcription queue. One worker (see `run_transcription`)
+/// drains it, yielding to any active recording so inference never steals
+/// CPU from live capture.
+#[derive(Default)]
+pub struct TranscriptionState {
+    inner: Mutex<TranscriptionQueue>,
+    cv: Condvar,
+}
+
+fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
+    let state = app.state::<TranscriptionState>();
+    let mut guard = state.inner.lock().unwrap();
+    if guard.known.insert(job.mp3.clone()) {
+        log::info!("transcribe: queued {}", job.mp3.display());
+        guard.pending.push_back(job);
+        state.cv.notify_all();
+    }
+}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +170,7 @@ pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
 pub struct ConfigWriteLock(pub Mutex<()>);
 
 pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
+pub const TRANSCRIPTION_MODELS: [&str; 3] = ["base", "small", "medium"];
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,6 +181,11 @@ pub struct CaptureConfigDto {
     pub create_note: bool,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
+    pub transcribe: bool,
+    pub transcription_model: String,
+    pub transcription_language: Option<String>,
+    pub transcript_timestamps: bool,
+    pub follow_up_template: bool,
 }
 
 impl CaptureConfigDto {
@@ -153,6 +197,11 @@ impl CaptureConfigDto {
             create_note: v.create_note,
             input_device: v.input_device.clone(),
             output_device: v.output_device.clone(),
+            transcribe: v.transcribe,
+            transcription_model: v.transcription_model.clone(),
+            transcription_language: v.transcription_language.clone(),
+            transcript_timestamps: v.transcript_timestamps,
+            follow_up_template: v.follow_up_template,
         }
     }
 }
@@ -177,6 +226,12 @@ pub fn set_capture_config(
     if !BITRATES_KBPS.contains(&cfg.bitrate_kbps) {
         return Err(format!("Bitrate must be one of {BITRATES_KBPS:?} kbps"));
     }
+    if !TRANSCRIPTION_MODELS.contains(&cfg.transcription_model.as_str()) {
+        return Err(format!(
+            "Unknown transcription model: {}",
+            cfg.transcription_model
+        ));
+    }
     // Validate the folder against the real vault path BEFORE writing —
     // an invalid folder is an inline field error, nothing gets written.
     let vault = discovery::discover_vaults()
@@ -192,6 +247,7 @@ pub fn set_capture_config(
     if let Some(folder) = &folder {
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
+    let _guard = lock_ignoring_poison(&lock.0);
     let value = capture_config::VaultCaptureConfig {
         mode,
         recording_folder: folder,
@@ -199,18 +255,23 @@ pub fn set_capture_config(
         create_note: cfg.create_note,
         input_device: cfg.input_device.clone().filter(|d| !d.is_empty()),
         output_device: cfg.output_device.clone().filter(|d| !d.is_empty()),
+        transcribe: cfg.transcribe,
+        transcription_model: cfg.transcription_model.clone(),
+        transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
+        transcript_timestamps: cfg.transcript_timestamps,
+        follow_up_template: cfg.follow_up_template,
     };
-    let _guard = lock_ignoring_poison(&lock.0);
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {
         log::info!(
-            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}",
+            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}, transcribe={}",
             value.mode.as_key(),
             value.recording_folder,
             value.bitrate_kbps,
             value.create_note,
             value.input_device,
-            value.output_device
+            value.output_device,
+            value.transcribe
         );
     }
     result
@@ -241,6 +302,56 @@ pub fn list_audio_devices() -> DeviceListDto {
         inputs: list.inputs.into_iter().map(map).collect(),
         outputs: list.outputs.into_iter().map(map).collect(),
     }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingDto {
+    pub mp3: String,
+    pub title: String,
+    pub recorded_at: String,
+    pub duration: Option<String>,
+    // `type` is a Rust keyword — expose the camelCase `type` the frontend wants.
+    #[serde(rename = "type")]
+    pub recording_type: Option<String>,
+    pub transcript_status: String,
+}
+
+/// Read-only list of a vault's past recordings for the Recordings view.
+/// Scans the vault's recording roots (custom folder, or both mode defaults)
+/// and reads each recording's companion note for type/duration. An unknown
+/// vault or unreadable roots yield an empty list — never an error (mirrors
+/// discovery's degrade-to-empty rule). Never writes into the vault.
+#[tauri::command]
+pub fn list_recordings(id: String) -> Vec<RecordingDto> {
+    let Some(vault) = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+    else {
+        return Vec::new();
+    };
+    let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    // No swallowed error: a rejected (unsafe) folder is skipped WITH a warning,
+    // matching run_recovery/scan_and_enqueue — a silent filter_map would hide it.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for folder in cfg.recording_roots() {
+        let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), folder) else {
+            log::warn!("list_recordings: skipping unsafe recording folder {folder:?}");
+            continue;
+        };
+        roots.push(root);
+    }
+    recordings::list_recordings(&roots)
+        .into_iter()
+        .map(|e| RecordingDto {
+            mp3: e.mp3_path.to_string_lossy().into_owned(),
+            title: e.title,
+            recorded_at: e.recorded_at,
+            duration: e.duration,
+            recording_type: e.recording_type,
+            transcript_status: e.transcript_status.as_dto_str().to_string(),
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -378,6 +489,8 @@ pub fn start_capture(
                 vault_name: vault_name.clone(),
                 recording_type: label.to_string(),
                 create_note: cfg.create_note,
+                transcribe: cfg.transcribe,
+                follow_up: cfg.follow_up_template,
                 recorded_at: now.to_rfc3339(),
                 flush_every: Duration::from_secs(1),
                 fsync_every: Duration::from_secs(30),
@@ -493,6 +606,7 @@ pub fn start_capture(
         }
     };
 
+    let monitor_vault_id = id.clone();
     let payload = StatusPayload {
         recording: true,
         vault_id: Some(id),
@@ -514,7 +628,10 @@ pub fn start_capture(
                 .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
             clear_active(&app3);
             match result {
-                Ok(outcome) => emit_saved(&app3, &outcome),
+                Ok(outcome) => {
+                    emit_saved(&app3, &outcome);
+                    maybe_enqueue_transcription(&app3, &monitor_vault_id, &outcome.mp3);
+                }
                 Err(e) => {
                     log::error!("capture: finalize failed: {e}");
                     emit_failed(&app3, &e);
@@ -531,6 +648,26 @@ pub fn start_capture(
     crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
     let _ = app.emit("capture:started", payload.clone());
     Ok(payload)
+}
+
+/// After a save, if the vault opted into transcription, drop the
+/// "transcribing…" placeholder (so the note's embed resolves instantly) and
+/// queue the recording. Config is re-read here so a toggle mid-session is
+/// respected.
+fn maybe_enqueue_transcription(app: &AppHandle, vault_id: &str, mp3: &Path) {
+    let cfg = capture_config::vault_config(&capture_config::load_config(), vault_id);
+    if !cfg.transcribe {
+        return;
+    }
+    let _ = vault_buddy_core::transcript::write_placeholder(mp3);
+    enqueue_transcription(
+        app,
+        TranscriptionJob {
+            mp3: mp3.to_path_buf(),
+            vault_id: vault_id.to_string(),
+            force: false,
+        },
+    );
 }
 
 /// Ask the device thread to stop and wait until the monitor thread has
@@ -774,13 +911,9 @@ pub fn run_recovery(app: &AppHandle) {
                     let v = capture_config::vault_config(&cfg, &vault.id);
                     // Configured folder, or BOTH mode defaults when no config
                     // entry exists — a first-ever crash may have used either.
-                    let roots: Vec<String> = match &v.recording_folder {
-                        Some(folder) => vec![folder.clone()],
-                        None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
-                    };
-                    for folder in roots {
+                    for folder in v.recording_roots() {
                         let Ok(root) =
-                            capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
+                            capture_paths::safe_recording_root(Path::new(&vault.path), folder)
                         else {
                             log::warn!("recovery: skipping unsafe configured folder {folder:?}");
                             continue;
@@ -799,6 +932,7 @@ pub fn run_recovery(app: &AppHandle) {
                             &vault.name,
                             stale,
                             v.create_note,
+                            v.transcribe,
                         ) {
                             use vault_buddy_capture::recovery::RecoveryAction;
                             match action {
@@ -808,6 +942,18 @@ pub fn run_recovery(app: &AppHandle) {
                                         .map(|n| n.to_string_lossy().into_owned())
                                         .unwrap_or_default();
                                     toast(&app, "Recording recovered", &name);
+                                    if v.transcribe {
+                                        let _ =
+                                            vault_buddy_core::transcript::write_placeholder(&mp3);
+                                        enqueue_transcription(
+                                            &app,
+                                            TranscriptionJob {
+                                                mp3,
+                                                vault_id: vault.id.clone(),
+                                                force: false,
+                                            },
+                                        );
+                                    }
                                 }
                                 RecoveryAction::Fresh(_) => fresh_found = true,
                                 RecoveryAction::DeletedEmpty(_) => {}
@@ -833,4 +979,278 @@ pub fn run_recovery(app: &AppHandle) {
             }
         })
         .expect("failed to spawn capture-recovery thread");
+}
+
+/// Startup + on-demand worker: drains the transcription queue, postponing
+/// while a recording is active. The loaded whisper model is cached across
+/// jobs of the same tier. Mirrors `run_recovery`'s shape (own thread, coarse
+/// is-recording gate).
+pub fn run_transcription(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Backfill: transcribe anything already on disk missing a transcript
+        // (previous-session saves, crash-recovered captures, freshly enabled
+        // vaults).
+        scan_and_enqueue(&app);
+        let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
+        loop {
+            // Block until a job is available; peek without claiming it.
+            let job = {
+                let state = app.state::<TranscriptionState>();
+                let mut guard = state.inner.lock().unwrap();
+                while guard.pending.is_empty() {
+                    guard = state.cv.wait(guard).unwrap();
+                }
+                guard.pending.front().cloned().unwrap()
+            };
+            // Never contend with a live recording for CPU — re-check soon.
+            if is_recording(&app) {
+                std::thread::sleep(Duration::from_secs(30));
+                continue;
+            }
+            {
+                let state = app.state::<TranscriptionState>();
+                state.inner.lock().unwrap().pending.pop_front();
+            }
+            process_transcription(&app, &job, &mut loaded);
+            // Drop from the dedupe set: success leaves a `complete` sidecar
+            // (won't rescan); failure leaves a `failed` one (a later launch's
+            // scan or a manual retry re-queues it).
+            {
+                let state = app.state::<TranscriptionState>();
+                state.inner.lock().unwrap().known.remove(&job.mp3);
+            }
+        }
+    });
+}
+
+/// Enqueue every capture recording still needing a transcript, across all
+/// vaults that opted in. Same root discipline as `run_recovery`.
+fn scan_and_enqueue(app: &AppHandle) {
+    let cfg = capture_config::load_config();
+    for vault in discovery::discover_vaults() {
+        let v = capture_config::vault_config(&cfg, &vault.id);
+        if !v.transcribe {
+            continue;
+        }
+        for folder in v.recording_roots() {
+            let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), folder)
+            else {
+                continue;
+            };
+            if !root.is_dir() {
+                continue;
+            }
+            if capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root).is_err() {
+                continue;
+            }
+            for mp3 in vault_buddy_core::transcript::pending_transcriptions(&root) {
+                enqueue_transcription(
+                    app,
+                    TranscriptionJob {
+                        mp3,
+                        vault_id: vault.id.clone(),
+                        force: false,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn process_transcription(
+    app: &AppHandle,
+    job: &TranscriptionJob,
+    loaded: &mut Option<(ModelTier, WhisperTranscriber)>,
+) {
+    let cfg = capture_config::vault_config(&capture_config::load_config(), &job.vault_id);
+    // A forced (explicit) re-transcribe ignores the vault's auto-transcribe
+    // setting; the automatic path still bails when disabled.
+    if !cfg.transcribe && !job.force {
+        return;
+    }
+    let tier = ModelTier::from_str(&cfg.transcription_model);
+    let _ = app.emit(
+        "capture:transcribing",
+        serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "vaultId": job.vault_id }),
+    );
+    if job.force {
+        // Reflect the in-flight regeneration in the note embed by swapping our
+        // own regenerable sidecar for the "transcribing…" placeholder — but
+        // NEVER overwrite a Complete/hand-edited transcript up-front. If this
+        // forced job then fails, the original must survive: fail_transcription
+        // writes via replace_if_ours, which skips a non-regenerable sidecar, so
+        // leaving it untouched means a failed re-transcribe can't destroy it.
+        // On success, transcribe_recording's force_write_sidecar swaps the
+        // finished transcript for the freshly generated one.
+        if vault_buddy_core::transcript::transcript_status(&job.mp3)
+            != vault_buddy_core::transcript::TranscriptStatus::Complete
+        {
+            let name = job
+                .mp3
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let _ = vault_buddy_core::transcript::force_write_sidecar(
+                &vault_buddy_core::transcript::transcript_path(&job.mp3),
+                &vault_buddy_core::transcript::render_placeholder(&name),
+            );
+        }
+    } else {
+        let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
+    }
+
+    let model = match ensure_model(app, tier) {
+        Ok(p) => p,
+        Err(e) => return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}")),
+    };
+    if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
+        match WhisperTranscriber::load(&model) {
+            Ok(w) => *loaded = Some((tier, w)),
+            Err(e) => return fail_transcription(app, &job.mp3, &e),
+        }
+    }
+    let transcriber = &loaded.as_ref().unwrap().1;
+    let opts = TranscribeOptions {
+        language: cfg.transcription_language.clone(),
+        timestamps: cfg.transcript_timestamps,
+        model_label: tier.label(),
+    };
+    let generated_at = chrono::Local::now().to_rfc3339();
+    match transcribe_recording(&job.mp3, transcriber, &opts, &generated_at, job.force) {
+        Ok(path) => {
+            log::info!("transcribe: wrote {}", path.display());
+            let _ = app.emit(
+                "capture:transcribed",
+                serde_json::json!({
+                    "mp3": job.mp3.to_string_lossy(),
+                    "transcript": path.to_string_lossy(),
+                }),
+            );
+        }
+        Err(e) => fail_transcription(app, &job.mp3, &e),
+    }
+}
+
+/// Ensure the tier's model is on disk, downloading with progress if not.
+fn ensure_model(app: &AppHandle, tier: ModelTier) -> Result<PathBuf, String> {
+    if let Some(p) = model_path(tier) {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    log::info!("transcribe: downloading model {}", tier.as_str());
+    let app = app.clone();
+    let mut last_emit: u64 = 0;
+    download_model(tier, &mut |received, total| {
+        // Throttle: an event every ~4 MB (and the final byte).
+        if received.saturating_sub(last_emit) >= 4_000_000 || Some(received) == total {
+            last_emit = received;
+            let _ = app.emit(
+                "capture:modelDownload",
+                serde_json::json!({ "model": tier.as_str(), "received": received, "total": total }),
+            );
+        }
+    })
+}
+
+/// Best-effort failure: leave the audio + note untouched, replace the
+/// sidecar with a retryable `failed` note, and surface it.
+fn fail_transcription(app: &AppHandle, mp3: &Path, message: &str) {
+    log::warn!("transcribe: {} failed: {message}", mp3.display());
+    let name = mp3
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let path = vault_buddy_core::transcript::transcript_path(mp3);
+    let content = vault_buddy_core::transcript::render_error(&name, message);
+    let _ = vault_buddy_core::transcript::replace_if_ours(&path, &content);
+    let _ = app.emit(
+        "capture:transcribeFailed",
+        serde_json::json!({ "mp3": mp3.to_string_lossy(), "message": message }),
+    );
+    toast(app, "Transcription failed", message);
+}
+
+/// The vault whose folder contains `mp3` (for the retry command).
+fn owning_vault_id(mp3: &Path) -> Option<String> {
+    discovery::discover_vaults()
+        .into_iter()
+        .find(|v| mp3.starts_with(&v.path))
+        .map(|v| v.id)
+}
+
+/// Retry / on-demand transcription of a specific recording.
+#[tauri::command]
+pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    if !mp3.is_file() {
+        return Err("Recording not found.".to_string());
+    }
+    let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
+    enqueue_transcription(
+        &app,
+        TranscriptionJob {
+            mp3,
+            vault_id,
+            force: false,
+        },
+    );
+    Ok(())
+}
+
+/// Explicit, forced re-transcription of a specific recording: regenerates even
+/// a finished transcript and ignores the vault's auto-transcribe setting.
+#[tauri::command]
+pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    if !mp3.is_file() {
+        return Err("Recording not found.".to_string());
+    }
+    let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
+    enqueue_transcription(
+        &app,
+        TranscriptionJob {
+            mp3,
+            vault_id,
+            force: true,
+        },
+    );
+    Ok(())
+}
+
+/// Shared by `open_transcript` and `open_recording`: launch an
+/// `obsidian://open` for a recording's companion note `<base>.md` when it
+/// exists (the richest view — it embeds the transcript and the audio player),
+/// otherwise the `<base>.transcript.md` sidecar. Read-only: never writes into
+/// the vault; the launch is logged by `uri::launch`, the same audit trail as
+/// every other vault open.
+fn open_recording_note(path: &str) -> Result<(), String> {
+    let mp3 = PathBuf::from(path);
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| mp3.starts_with(&v.path))
+        .ok_or_else(|| format!("no vault owns {path}"))?;
+    let note = mp3.with_extension("md");
+    let target = if note.exists() {
+        note
+    } else {
+        transcript::transcript_path(&mp3)
+    };
+    let rel = uri::vault_relative_no_ext(&target, Path::new(&vault.path))
+        .ok_or_else(|| format!("recording is outside its vault: {}", target.display()))?;
+    uri::launch(&uri::open_file_uri(&vault.id, &rel))
+}
+
+/// Open a finished recording's note (or transcript sidecar) — the
+/// TranscriptionStatus "Open in Obsidian" row.
+#[tauri::command]
+pub fn open_transcript(path: String) -> Result<(), String> {
+    open_recording_note(&path)
+}
+
+/// Open a recording's note from the Recordings list row.
+#[tauri::command]
+pub fn open_recording(path: String) -> Result<(), String> {
+    open_recording_note(&path)
 }

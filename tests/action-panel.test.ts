@@ -1,10 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import ActionPanel from "../src/components/ActionPanel.vue";
 import { useVaultsStore } from "../src/stores/vaults";
 import { useCaptureStore } from "../src/stores/capture";
+import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
@@ -55,6 +56,7 @@ describe("ActionPanel", () => {
       .trigger("click");
     expect(calls).toEqual([
       { cmd: "open_daily_note", args: { id: "d4e5f6" } },
+      { cmd: "announce", args: { text: dailyNoteOpenedMessage() } },
       { cmd: "close_panel", args: {} },
     ]);
   });
@@ -139,15 +141,16 @@ describe("ActionPanel", () => {
     store.vaults = sampleVaults;
     store.loaded = true;
     const wrapper = mount(ActionPanel);
-    const gear = wrapper.find('[data-testid="settings-toggle"]');
-    expect(gear.exists()).toBe(true);
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(true);
 
-    await gear.trigger("click");
+    await wrapper.get('[data-testid="settings-toggle"]').trigger("click");
     expect(wrapper.text()).toContain("Buddy settings");
     expect(wrapper.text()).toContain("Classic");
     expect(wrapper.text()).not.toContain("Personal");
 
-    await gear.trigger("click");
+    // the header cog is list-only; getting back to the list is the back button
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
     expect(wrapper.text()).toContain("Vaults");
     expect(wrapper.text()).toContain("Personal");
   });
@@ -252,106 +255,54 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).not.toContain("name this recording");
   });
 
-  it("clicking a vault's capture button opens the mode chooser instead of recording immediately", async () => {
-    const calls: Array<{ cmd: string; args: unknown }> = [];
-    mockIPC((cmd, args) => {
-      calls.push({ cmd, args });
-      if (cmd === "get_capture_config") {
-        return { mode: "meeting", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
-      }
-    });
-    const store = useVaultsStore();
-    store.vaults = sampleVaults;
-    store.loaded = true;
-    const wrapper = mount(ActionPanel);
-    await wrapper
-      .find('[aria-label="Capture knowledge in Personal"]')
-      .trigger("click");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
-    expect(calls.map((c) => c.cmd)).not.toContain("start_capture");
-  });
-
-  it("preselects the vault's configured default mode in the chooser", async () => {
+  it("opens the record view from a vault's capture button", async () => {
     mockIPC((cmd) => {
-      if (cmd === "get_capture_config") {
-        return { mode: "voice-note", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
-      }
+      if (cmd === "get_capture_config") return { mode: "meeting" };
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
     const wrapper = mount(ActionPanel);
-    await wrapper
-      .find('[aria-label="Capture knowledge in Personal"]')
-      .trigger("click");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-    const voiceNote = wrapper.get('[data-testid="mode-voice-note"]');
-    expect(voiceNote.classes()).toContain("border-violet-400");
+    await wrapper.get('[aria-label="Capture knowledge in Personal"]').trigger("click");
+    expect(store.view).toBe("recordMode");
+    expect(store.recordModeVaultId).toBe("d4e5f6");
   });
 
-  it("choosing meeting invokes start_capture with the mode and closes the dialog", async () => {
-    const calls: Array<{ cmd: string; args: unknown }> = [];
-    mockIPC((cmd, args) => {
-      calls.push({ cmd, args });
-      if (cmd === "get_capture_config") {
-        return { mode: "voice-note", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
-      }
-      if (cmd === "start_capture") {
-        return { recording: true, vaultId: "d4e5f6", startedAtMs: 1 };
-      }
-    });
-    const store = useVaultsStore();
-    store.vaults = sampleVaults;
-    store.loaded = true;
-    const wrapper = mount(ActionPanel);
-    await wrapper
-      .find('[aria-label="Capture knowledge in Personal"]')
-      .trigger("click");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-    await wrapper.get('[data-testid="mode-meeting"]').trigger("click");
-    await wrapper.vm.$nextTick();
-    expect(calls).toContainEqual({
-      cmd: "start_capture",
-      args: { id: "d4e5f6", mode: "meeting" },
-    });
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
-  });
-
-  it("clears a stale record dialog and filter when the panel is shown again", async () => {
-    // The panel window is only hidden/shown, not unmounted, so local dialog
-    // and filter state used to survive a close. Reopening (shownNonce bump)
-    // must reset them, or a reopen shows a stale dialog over the vault list.
+  it("shows a back button in non-list views that returns to the parent", async () => {
     mockIPC((cmd) => {
-      if (cmd === "get_capture_config") {
-        return {
-          mode: "meeting",
-          recordingFolder: null,
-          bitrateKbps: 128,
-          createNote: true,
-          inputDevice: null,
-          outputDevice: null,
-        };
-      }
+      if (cmd === "list_recordings") return [];
+      if (cmd === "get_capture_config") return { mode: "meeting" };
     });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openRecordings("d4e5f6");
+    const wrapper = mount(ActionPanel);
+    await flushPromises();
+    // no cog in a non-list view; a back button instead
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("recordMode"); // recordings → record view
+  });
+
+  it("clears the filter text when the panel is shown again", async () => {
+    // The panel window is only hidden/shown, not unmounted, so onUnmounted no
+    // longer clears local state on close. Filter text used to survive a close;
+    // reopening (shownNonce bump) must reset it, or a reopen shows the vault
+    // list still filtered. (The record chooser is now a store-owned view —
+    // reset by refresh/showList — not a local dialog that could go stale.)
+    mockIPC(() => undefined);
     const store = useVaultsStore();
     store.vaults = manyVaults;
     store.loaded = true;
     const wrapper = mount(ActionPanel);
     await wrapper.find('input[type="search"]').setValue("Vault"); // keeps all
-    await wrapper
-      .find('[aria-label="Capture knowledge in Vault 0"]')
-      .trigger("click");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+    expect(
+      (wrapper.find('input[type="search"]').element as HTMLInputElement).value,
+    ).toBe("Vault");
 
     store.shownNonce++; // the panel was reopened
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     expect(
       (wrapper.find('input[type="search"]').element as HTMLInputElement).value,
     ).toBe("");
@@ -370,26 +321,17 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).not.toContain("name this recording");
   });
 
-  it("cancel closes the chooser without starting a recording", async () => {
-    const calls: Array<{ cmd: string; args: unknown }> = [];
-    mockIPC((cmd, args) => {
-      calls.push({ cmd, args });
-      if (cmd === "get_capture_config") {
-        return { mode: "meeting", recordingFolder: null, bitrateKbps: 128, createNote: true, inputDevice: null, outputDevice: null };
-      }
+  it("renders the Recordings view with its title", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_recordings") return [];
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
+    store.openRecordings("d4e5f6");
     const wrapper = mount(ActionPanel);
-    await wrapper
-      .find('[aria-label="Capture knowledge in Personal"]')
-      .trigger("click");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-    await wrapper.get('[aria-label="Cancel recording"]').trigger("click");
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
-    expect(calls.map((c) => c.cmd)).not.toContain("start_capture");
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Recordings");
+    expect(wrapper.text()).toContain("No recordings yet.");
   });
 });

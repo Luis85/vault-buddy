@@ -290,4 +290,44 @@ describe("CompanionCharacter", () => {
     expect(dot.classes()).toContain("bg-amber-400");
     expect(dot.classes()).not.toContain("bg-red-500");
   });
+
+  it("shows a violet transcribing dot while transcribing", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, transcribing: true },
+    });
+    const dot = wrapper.get(".transcribe-dot");
+    expect(dot.classes()).toContain("bg-violet-400");
+    expect(wrapper.get("button").classes()).toContain("transcribing");
+  });
+
+  it("hides the transcribing dot while recording takes precedence", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, transcribing: true, recording: true },
+    });
+    expect(wrapper.find(".transcribe-dot").exists()).toBe(false);
+    expect(wrapper.find(".rec-dot").exists()).toBe(true);
+  });
+
+  // The drawn character sits bottom-center of a larger 64x64 box, so a dot
+  // pinned to the box's top-right corner floats up-and-away from the buddy.
+  // Both status dots hug the buddy: centered over it, just above the head.
+  it("floats the transcribing dot centered above the buddy, not in the corner", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, transcribing: true },
+    });
+    const dot = wrapper.get(".transcribe-dot");
+    expect(dot.classes()).toContain("left-1/2");
+    expect(dot.classes()).toContain("-translate-x-1/2");
+    expect(dot.classes()).not.toContain("-right-1");
+  });
+
+  it("floats the recording dot centered above the buddy, not in the corner", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, recording: true },
+    });
+    const dot = wrapper.get(".rec-dot");
+    expect(dot.classes()).toContain("left-1/2");
+    expect(dot.classes()).toContain("-translate-x-1/2");
+    expect(dot.classes()).not.toContain("-right-1");
+  });
 });

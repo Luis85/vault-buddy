@@ -72,6 +72,14 @@ describe("BuddySettings", () => {
     expect(useSettingsStore().animationsEnabled).toBe(false);
   });
 
+  it("mirrors the buddy-messages toggle", async () => {
+    const wrapper = mount(BuddySettings);
+    const toggle = wrapper.find("#messages-toggle");
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+    await toggle.setValue(false);
+    expect(useSettingsStore().buddyMessagesEnabled).toBe(false);
+  });
+
   it("shows the Updates section with the current version", async () => {
     const wrapper = mount(BuddySettings);
     await flush();
