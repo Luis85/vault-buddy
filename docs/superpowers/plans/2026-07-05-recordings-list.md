@@ -6,6 +6,8 @@
 
 **Architecture:** Two new pure-core pieces (a minimal frontmatter reader `note_field`, and a `pending_transcriptions`-style `list_recordings` scan) feed a thin shell command; the frontend adds a `recordings` panel view (mirroring `captureSettings`) rendered by a new `Recordings.vue`, launched by a "Browse recordings" option in `RecordModeDialog`. Read-only throughout: opening a row hands off to Obsidian via the audit-logged `uri::launch`.
 
+**Two parts.** **Part 1 (Tasks 1–7)** is the read-only Recordings list above. **Part 2 (Tasks 8–12)** folds in an independent, approved feature — a per-vault `follow_up_template` setting (default on) that appends a `## Follow-up` scaffold to each recording's companion note. It's one boolean threaded config → `SessionParams` → `NoteMeta` → `render_note`; **no new vault-write path** (the companion note is already written atomically). See the spec's Addendum. The two parts are independent — Part 2's only shared file with Part 1 is `capture_note.rs` (Task 1 adds `note_field`; Task 8 adds `follow_up`), touched in disjoint places.
+
 **Tech Stack:** Rust (`vault_buddy_core` pure/Linux-tested; `vault-buddy` shell Windows-only compile), Vue 3 + Pinia + Tailwind, Vitest + @vue/test-utils + `mockIPC`.
 
 ## Global Constraints
@@ -1235,6 +1237,482 @@ record modal, not a new vault-row icon."
 
 ---
 
+## Part 2 — Follow-up template in the companion note
+
+An approved, independent feature folded into this increment (see the spec's
+Addendum). A per-vault `follow_up_template` setting (default **on**, opt-out)
+appends a `## Follow-up` scaffold — Action items / Decisions / Notes — to each
+recording's companion note, above the `## Transcript` embed.
+
+**Part 2 constraints:**
+- **No new vault-write path** — the scaffold is extra content in the companion
+  note the capture path already writes atomically (`write_note_collision_safe`).
+- **Gated by `create_note`** — `render_note` runs only when a note is written.
+- **Default on**; **recovered notes stay minimal** (`follow_up: false` hardcoded
+  in recovery — no `recover_root` signature change).
+- **Cross-crate compile note:** Task 8 adds a required `NoteMeta.follow_up`
+  field, so the `capture` crate stops compiling until Task 10 sets it at its two
+  literals. Tasks 8–9 verify with `cargo test -p vault_buddy_core` (core builds
+  standalone); the workspace is whole again after Task 10.
+
+---
+
+### Task 8: `## Follow-up` scaffold in `render_note` (core)
+
+**Files:**
+- Modify: `src-tauri/core/src/capture_note.rs` (add `NoteMeta.follow_up`; emit the block in `render_note`; update the `meta()` test helper; add tests)
+
+**Interfaces:**
+- Produces: `NoteMeta.follow_up: bool`; `render_note` emits `## Follow-up` (Action items / Decisions / Notes) before any `## Transcript` block when true.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `src-tauri/core/src/capture_note.rs`, inside `#[cfg(test)] mod tests`, add:
+
+```rust
+    #[test]
+    fn note_includes_follow_up_template_when_enabled() {
+        let mut m = meta();
+        m.follow_up = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        assert!(note.contains("## Follow-up"));
+        assert!(note.contains("### Action items"));
+        assert!(note.contains("- [ ]"));
+        assert!(note.contains("### Decisions"));
+        assert!(note.contains("### Notes"));
+        // the audio embed still sits above the scaffold
+        assert!(note.contains("![[2026-07-04 1405 Meeting.mp3]]"));
+    }
+
+    #[test]
+    fn note_has_no_follow_up_when_disabled() {
+        // meta() sets follow_up: false (Step 3d), so the default note omits it.
+        assert!(!render_note(&meta(), "x.mp3").contains("## Follow-up"));
+    }
+
+    #[test]
+    fn follow_up_sits_above_the_transcript() {
+        let mut m = meta();
+        m.follow_up = true;
+        m.transcribe = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        let fu = note.find("## Follow-up").unwrap();
+        let tr = note.find("## Transcript").unwrap();
+        assert!(fu < tr, "follow-up must render above the transcript embed: {note}");
+    }
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run (from `src-tauri/`): `cargo test -p vault_buddy_core capture_note`
+Expected: FAIL to compile — `NoteMeta` has no field `follow_up`.
+
+- [ ] **Step 3: Implement**
+
+In `src-tauri/core/src/capture_note.rs`:
+
+(a) Add the field to `NoteMeta` (after `transcribe`):
+
+```rust
+    pub transcribe: bool,
+    /// Append a `## Follow-up` scaffold (Action items / Decisions / Notes)
+    /// above the transcript embed. Per-vault opt-out; recovery leaves it off.
+    pub follow_up: bool,
+```
+
+(b) In `render_note`, insert the block between the audio embed and the transcript block. Change the tail from:
+
+```rust
+    out.push_str(&format!("![[{mp3_file_name}]]\n"));
+    if meta.transcribe {
+```
+
+to:
+
+```rust
+    out.push_str(&format!("![[{mp3_file_name}]]\n"));
+    if meta.follow_up {
+        // A follow-up scaffold above the (possibly long) transcript embed so
+        // the actionable part is visible without scrolling. Static text — the
+        // rename retarget only rewrites the ![[…]] embed line, never this.
+        out.push_str(
+            "\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n",
+        );
+    }
+    if meta.transcribe {
+```
+
+(c) Update the `meta()` test helper — add `follow_up: false` (after `transcribe: false`), so every existing `render_note` assertion (which doesn't expect the scaffold) still holds:
+
+```rust
+            transcribe: false,
+            follow_up: false,
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run (from `src-tauri/`): `cargo test -p vault_buddy_core capture_note`
+Expected: PASS (new + existing note tests). The `capture` crate won't build until Task 10 — that's expected; do not run a workspace-wide build here.
+
+- [ ] **Step 5: Format, clippy, commit**
+
+```bash
+cd src-tauri && cargo fmt && cargo clippy -p vault_buddy_core --all-targets -- -D warnings && cd ..
+git add src-tauri/core/src/capture_note.rs
+git commit -m "feat(core): add an optional follow-up scaffold to the companion note
+
+render_note appends a ## Follow-up section (Action items / Decisions / Notes)
+above the transcript embed when NoteMeta.follow_up is set. Static text, so
+the rename embed-retarget never touches it; gated by the caller so a note
+without create_note never gets one."
+```
+
+---
+
+### Task 9: `follow_up_template` config field (core)
+
+**Files:**
+- Modify: `src-tauri/core/src/capture_config.rs` (struct field, `Default`, `vault_entry` parse, `serialize_config`; add tests)
+
+**Interfaces:**
+- Produces: `VaultCaptureConfig.follow_up_template: bool` (default `true`), parsed from/serialized to `followUpTemplate`.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `src-tauri/core/src/capture_config.rs`, inside `#[cfg(test)] mod tests`, add:
+
+```rust
+    #[test]
+    fn follow_up_template_defaults_on_and_parses() {
+        let cfg = parse_config(
+            r#"{ "vaults": {
+                "a": {},
+                "b": { "followUpTemplate": false }
+            } }"#,
+        );
+        assert!(vault_config(&cfg, "a").follow_up_template, "default on");
+        assert!(!vault_config(&cfg, "b").follow_up_template);
+    }
+
+    #[test]
+    fn follow_up_template_survives_a_round_trip() {
+        let mut v = VaultCaptureConfig::default();
+        v.follow_up_template = false;
+        let mut cfg = AppConfig::default();
+        cfg.vaults.insert("a".into(), v);
+        let reparsed = parse_config(&serialize_config(&cfg));
+        assert!(!vault_config(&reparsed, "a").follow_up_template);
+    }
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run (from `src-tauri/`): `cargo test -p vault_buddy_core follow_up_template`
+Expected: FAIL to compile — no field `follow_up_template`.
+
+- [ ] **Step 3: Implement**
+
+In `src-tauri/core/src/capture_config.rs`:
+
+(a) Add the field to `VaultCaptureConfig` (after `transcript_timestamps`):
+
+```rust
+    pub transcript_timestamps: bool,
+    pub follow_up_template: bool,
+```
+
+(b) Add to `Default` (after `transcript_timestamps: true,`):
+
+```rust
+            transcript_timestamps: true,
+            follow_up_template: true,
+```
+
+(c) Add to `vault_entry` (after the `transcript_timestamps` field):
+
+```rust
+        transcript_timestamps: entry
+            .get("transcriptTimestamps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.transcript_timestamps),
+        follow_up_template: entry
+            .get("followUpTemplate")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.follow_up_template),
+```
+
+(d) Add to `serialize_config` (after the `transcriptTimestamps` insert):
+
+```rust
+        entry.insert(
+            "transcriptTimestamps".to_string(),
+            json!(v.transcript_timestamps),
+        );
+        entry.insert(
+            "followUpTemplate".to_string(),
+            json!(v.follow_up_template),
+        );
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run (from `src-tauri/`): `cargo test -p vault_buddy_core capture_config`
+Expected: PASS (new + existing config tests).
+
+- [ ] **Step 5: Format, clippy, commit**
+
+```bash
+cd src-tauri && cargo fmt && cargo clippy -p vault_buddy_core --all-targets -- -D warnings && cd ..
+git add src-tauri/core/src/capture_config.rs
+git commit -m "feat(core): per-vault follow_up_template setting (default on)
+
+Parsed per-field defensively (followUpTemplate) and round-tripped in
+serialize_config, like every other capture setting. Drives whether the
+companion note gets a ## Follow-up scaffold."
+```
+
+---
+
+### Task 10: thread `follow_up` through the capture crate
+
+Makes the workspace whole again (Task 8 added the required `NoteMeta.follow_up`) and wires the recording save path. The `capture` crate compiles/tests on Linux **with `libasound2-dev`** (CI installs it; locally `sudo apt-get install -y libasound2-dev` if `cargo` reports a missing `alsa`).
+
+**Files:**
+- Modify: `src-tauri/capture/src/session.rs` (`SessionParams.follow_up`; finalize `NoteMeta`; `params()` test helper)
+- Modify: `src-tauri/capture/src/recovery.rs` (recovery `NoteMeta`: `follow_up: false`)
+
+**Interfaces:**
+- Consumes: `NoteMeta.follow_up` (Task 8).
+- Produces: `SessionParams.follow_up: bool` (consumed by the shell in Task 11).
+
+- [ ] **Step 1: Add the field to `SessionParams`**
+
+In `src-tauri/capture/src/session.rs`, in `pub struct SessionParams` (after `pub transcribe: bool,`):
+
+```rust
+    pub transcribe: bool,
+    pub follow_up: bool,
+```
+
+- [ ] **Step 2: Set it on the finalize `NoteMeta`**
+
+In `src-tauri/capture/src/session.rs`, in the `if params.create_note` block, the `NoteMeta` literal — after `transcribe: params.transcribe,`:
+
+```rust
+            transcribe: params.transcribe,
+            follow_up: params.follow_up,
+```
+
+- [ ] **Step 3: Set the two remaining literals**
+
+In `src-tauri/capture/src/session.rs`, the `params()` test helper (after `transcribe: false,`) — neutral `false` so existing note-content assertions are unchanged:
+
+```rust
+            transcribe: false,
+            follow_up: false,
+```
+
+In `src-tauri/capture/src/recovery.rs`, the recovery `NoteMeta` literal (after `transcribe,`) — recovered notes stay minimal:
+
+```rust
+                transcribe,
+                // Recovered notes are intentionally minimal (no recorded_at,
+                // devices, or duration); skip the follow-up scaffold too.
+                follow_up: false,
+```
+
+- [ ] **Step 4: Build + run the capture tests**
+
+Run (from `src-tauri/`): `cargo test -p vault_buddy_capture`
+Expected: PASS (the crate compiles with the new field and all existing session/recovery tests pass). If `cargo` errors that `alsa`/`libasound2` is missing, install `libasound2-dev` first (CI already has it).
+
+- [ ] **Step 5: Format, commit**
+
+```bash
+cd src-tauri && cargo fmt --check && cd ..
+git add src-tauri/capture/src/session.rs src-tauri/capture/src/recovery.rs
+git commit -m "feat(capture): thread the follow-up flag into the saved note
+
+SessionParams carries follow_up into the finalize NoteMeta so a normally
+saved recording honors the vault setting; recovered notes stay minimal
+(follow_up: false)."
+```
+
+---
+
+### Task 11: config DTO + save/start wiring (shell)
+
+**Windows-only compile — verified by CI's `windows-app` job; run `cargo fmt --check` locally.**
+
+**Files:**
+- Modify: `src-tauri/src/capture_commands.rs` (`CaptureConfigDto` field + `from_config`; `set_capture_config` `VaultCaptureConfig` literal; `start_capture` `SessionParams` literal)
+
+**Interfaces:**
+- Consumes: `VaultCaptureConfig.follow_up_template` (Task 9), `SessionParams.follow_up` (Task 10).
+- Produces: `CaptureConfigDto.follow_up_template` (camelCase `followUpTemplate` over IPC).
+
+- [ ] **Step 1: DTO field + mapping**
+
+In `src-tauri/src/capture_commands.rs`, in `pub struct CaptureConfigDto` (after `transcript_timestamps: bool,`):
+
+```rust
+    pub transcript_timestamps: bool,
+    pub follow_up_template: bool,
+```
+
+And in `CaptureConfigDto::from_config` (after `transcript_timestamps: v.transcript_timestamps,`):
+
+```rust
+            transcript_timestamps: v.transcript_timestamps,
+            follow_up_template: v.follow_up_template,
+```
+
+- [ ] **Step 2: Persist it in `set_capture_config`**
+
+In `src-tauri/src/capture_commands.rs`, in `set_capture_config`, the `VaultCaptureConfig { … }` value (after `transcript_timestamps: cfg.transcript_timestamps,`):
+
+```rust
+        transcript_timestamps: cfg.transcript_timestamps,
+        follow_up_template: cfg.follow_up_template,
+```
+
+- [ ] **Step 3: Pass it into the recording session**
+
+In `src-tauri/src/capture_commands.rs`, in `start_capture`, the `SessionParams { … }` literal (after `transcribe: cfg.transcribe,`):
+
+```rust
+                transcribe: cfg.transcribe,
+                follow_up: cfg.follow_up_template,
+```
+
+- [ ] **Step 4: Format check + commit**
+
+```bash
+cd src-tauri && cargo fmt --check && cd ..
+git add src-tauri/src/capture_commands.rs
+git commit -m "feat(shell): carry follow_up_template through config IPC and into capture
+
+get/set_capture_config round-trip the setting; start_capture passes it to
+SessionParams so a new recording's note gets the scaffold. Windows compile
+via CI."
+```
+
+---
+
+### Task 12: settings toggle (frontend)
+
+The UI: a "Follow-up template" toggle nested under "Companion note" (shown only when the note is enabled), default on.
+
+**Files:**
+- Modify: `src/types.ts` (`CaptureConfig.followUpTemplate`)
+- Modify: `src/components/CaptureSettings.vue` (ref + load + save + watch + nested toggle)
+- Modify: `tests/capture-settings.test.ts` (fixture field + a save test)
+
+**Interfaces:**
+- Consumes: `list`/`get`/`set_capture_config` IPC (mocked); the `followUpTemplate` DTO field (Task 11).
+
+- [ ] **Step 1: Write the failing test**
+
+In `tests/capture-settings.test.ts`, add `followUpTemplate: true,` to the `config` fixture (after `transcriptTimestamps: true,`), then add:
+
+```ts
+  it("saves the follow-up template toggle", async () => {
+    let saved: { cfg: { followUpTemplate: boolean } } | undefined;
+    const { wrapper } = await mountLoaded({
+      onSet: (args) => {
+        saved = args as typeof saved;
+      },
+    });
+    await wrapper.get('[data-testid="follow-up-toggle"]').setValue(false);
+    await wrapper.get('[data-testid="save-button"]').trigger("click");
+    await flushPromises();
+    expect(saved?.cfg.followUpTemplate).toBe(false);
+  });
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run (from repo root): `npx vitest run tests/capture-settings.test.ts`
+Expected: FAIL — no `[data-testid="follow-up-toggle"]`.
+
+- [ ] **Step 3: Implement**
+
+(a) In `src/types.ts`, add to `CaptureConfig` (after `transcriptTimestamps: boolean;`):
+
+```ts
+  transcriptTimestamps: boolean;
+  followUpTemplate: boolean;
+```
+
+(b) In `src/components/CaptureSettings.vue` `<script setup>`:
+
+Add the ref (after `const createNote = ref(true);`):
+
+```ts
+const createNote = ref(true);
+const followUpTemplate = ref(true);
+```
+
+Add to the edit-invalidates-Saved watch array (after `createNote,`):
+
+```ts
+    createNote,
+    followUpTemplate,
+```
+
+Load it in `onMounted` (after `createNote.value = cfg.createNote;`):
+
+```ts
+    createNote.value = cfg.createNote;
+    followUpTemplate.value = cfg.followUpTemplate;
+```
+
+Save it in `save()`'s `cfg` payload (after `createNote: createNote.value,`):
+
+```ts
+        createNote: createNote.value,
+        followUpTemplate: followUpTemplate.value,
+```
+
+(c) In the `<template>`, add the nested toggle right after the "Companion note" `</section>` (the `create-note` block) and before the "Transcribe recordings" section:
+
+```vue
+    <div
+      v-if="createNote"
+      class="flex items-center justify-between border-l border-white/10 pl-3"
+    >
+      <label for="capture-follow-up-toggle" class="text-sm text-slate-200">
+        Follow-up template
+        <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
+      </label>
+      <input
+        id="capture-follow-up-toggle"
+        v-model="followUpTemplate"
+        data-testid="follow-up-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+      />
+    </div>
+```
+
+- [ ] **Step 4: Run the test, then the full suite + typecheck**
+
+Run (from repo root): `npx vitest run tests/capture-settings.test.ts` → PASS.
+Then: `npm test && npm run build` → full Vitest suite green; `vue-tsc` clean.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/types.ts src/components/CaptureSettings.vue tests/capture-settings.test.ts
+git commit -m "feat(ui): follow-up template toggle in capture settings
+
+Nested under Companion note (shown only when the note is enabled, since the
+scaffold lives in that note), default on — mirrors how transcription
+sub-options nest under Transcribe."
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
@@ -1248,7 +1726,13 @@ record modal, not a new vault-row icon."
 - `recording_roots` (custom or both defaults) → Task 2, used Task 4. ✅
 - Scan discipline / degrade-not-error → Task 3 (dir_entries, is_capture_base) + Task 4 (empty-on-missing). ✅
 - Empty state / load error → Task 6 tests + template. ✅
+- *(Part 2)* `## Follow-up` scaffold above transcript → Task 8 (`render_note`). ✅
+- *(Part 2)* `follow_up_template` setting, default on, defensive parse + round-trip → Task 9. ✅
+- *(Part 2)* Threaded into the saved note; recovered notes minimal → Task 10. ✅
+- *(Part 2)* Config IPC + `start_capture` wiring → Task 11. ✅
+- *(Part 2)* Settings toggle nested under Companion note, default on → Task 12. ✅
+- *(Part 2)* No new vault-write path / gated by `create_note` → Task 8 emits only when a note is written; Task 12 hides the toggle when `createNote` is off. ✅
 
 **Placeholder scan:** none — every code step is concrete. The `todo!()` in Task 3 Step 3 is deliberate red-phase scaffolding, replaced in Step 5.
 
-**Type consistency:** `note_field(&str,&str)->Option<String>` (T1) consumed in T3 `entry_for`. `recording_roots(&self)->Vec<&str>` (T2) consumed in T4 (`filter_map(|folder| safe_recording_root(_, folder))`) and the two refactors. `RecordingEntry` fields (T3) map 1:1 to `RecordingDto` camelCase (T4) → `Recording` TS interface (T5: `mp3,title,recordedAt,duration,type`) consumed by `Recordings.vue` (T6). Store `openRecordings`/`recordingsVaultId`/`view:'recordings'` (T5) consumed by `ActionPanel` (T7) and `panelOpen` by `Recordings.vue` (T6). `browse` emit (T7 dialog) handled by `browseRecordings` (T7 panel). Command names `list_recordings`/`open_recording` consistent shell (T4) ↔ frontend invokes (T6). ✅
+**Type consistency:** `note_field(&str,&str)->Option<String>` (T1) consumed in T3 `entry_for`. `recording_roots(&self)->Vec<&str>` (T2) consumed in T4 (`filter_map(|folder| safe_recording_root(_, folder))`) and the two refactors. `RecordingEntry` fields (T3) map 1:1 to `RecordingDto` camelCase (T4) → `Recording` TS interface (T5: `mp3,title,recordedAt,duration,type`) consumed by `Recordings.vue` (T6). Store `openRecordings`/`recordingsVaultId`/`view:'recordings'` (T5) consumed by `ActionPanel` (T7) and `panelOpen` by `Recordings.vue` (T6). `browse` emit (T7 dialog) handled by `browseRecordings` (T7 panel). Command names `list_recordings`/`open_recording` consistent shell (T4) ↔ frontend invokes (T6). *(Part 2)* `follow_up` bool chain: `NoteMeta.follow_up` (T8) ← `SessionParams.follow_up` (T10) ← `cfg.follow_up_template` in `start_capture` (T11); `VaultCaptureConfig.follow_up_template` (T9) ↔ `CaptureConfigDto.follow_up_template` (T11) ↔ `CaptureConfig.followUpTemplate` TS (T12); config key `followUpTemplate` consistent parse/serialize (T9). ✅

@@ -218,3 +218,61 @@ like `CaptureSettings` fetches its config.
 - **No in-view search/filter** in v1 (small window, bounded per-vault list).
 - **No persistence of the group toggle** — per-view, resets each open.
 - **No new frontmatter fields** — we only read back what `render_note` writes.
+
+---
+
+## Addendum — Follow-up template in the companion note
+
+Folded into this increment (approved 2026-07-05). Originally floated as an
+auto-created "task note" in a configurable Tasks folder; refined to a scaffold
+**inside the existing companion note**, which collapses the risk: it's extra
+content in the `<base>.md` the capture path already writes atomically — **no new
+vault-write path, no new never-clobber logic.**
+
+**What it is:** a per-vault setting `follow_up_template` (default **on**,
+opt-out) that appends a `## Follow-up` scaffold to each recording's companion
+note, above the `## Transcript` embed so the actionable part is visible without
+scrolling past a long transcript. One template for all recordings:
+
+```markdown
+![[2026-07-04 1405 Meeting.mp3]]
+
+## Follow-up
+
+### Action items
+- [ ] 
+
+### Decisions
+
+### Notes
+
+## Transcript
+
+![[2026-07-04 1405 Meeting.transcript]]
+```
+
+**Architecture — one boolean threaded through the existing note pipeline:**
+
+| Layer | Change |
+| --- | --- |
+| `core/capture_note.rs` | `NoteMeta.follow_up: bool`; `render_note` emits the `## Follow-up` block (before `## Transcript`) when true. Pure, Linux-tested — the heart. |
+| `core/capture_config.rs` | `VaultCaptureConfig.follow_up_template: bool` (default **true**), parsed per-field defensively, round-tripped in `serialize_config` (`followUpTemplate`). |
+| `capture/session.rs` | `SessionParams.follow_up`; set on the finalize `NoteMeta`; test helper updated. |
+| `capture/recovery.rs` | Recovered notes stay minimal — `follow_up: false` hardcoded (they already omit `recorded_at`, devices, duration). No `recover_root` signature change. |
+| `src/capture_commands.rs` | `CaptureConfigDto.follow_up_template`; `get`/`set_capture_config`; `start_capture` sets `SessionParams.follow_up = cfg.follow_up_template`. |
+| `src/types.ts` + `CaptureSettings.vue` | `followUpTemplate` toggle, **nested under "Companion note"** (shown only when `createNote` is on — no note, nowhere to put the scaffold), mirroring the transcription sub-options' nesting under Transcribe. |
+
+**Invariants preserved:**
+- **No new vault-write path** — same atomic, never-clobber companion-note write
+  (`write_note_collision_safe`), just more content.
+- **Gated by `create_note`** — `render_note` runs only when a note is written,
+  so `follow_up_template=true` + `create_note=false` is a no-op, and the UI
+  hides the toggle then.
+- **Rename-safe** — `retarget_embed` rewrites only the `![[…]]` embed line; the
+  static scaffold is untouched.
+
+**Scope guards (YAGNI):** one template for all recordings (no per-mode
+variants); default on ("toggled off" framing = opt-out); follow-up above the
+transcript; **recovered notes stay minimal** (no scaffold — a defensible edge,
+trivially threadable later if wanted); the original Tasks-folder / separate-note
+idea is **parked**, not built.
