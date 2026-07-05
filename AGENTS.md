@@ -82,21 +82,26 @@ resize entirely:
 
 `panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
 window has no stale-frame flash. Placement is one pure function,
-`core::companion_placement::place_beside(buddy, work_area, w, h, prefer) ->
-(Point, Anchor)` (unit-tested on Linux): it sits the window on the `prefer`
-side of the buddy, flips to the other side when that overflows the screen
-edge, and clamps into the monitor work area so a bottom-/edge-anchored buddy
-unfolds toward free space. `panel_position` is a thin wrapper (prefer =
-`Right`, anchor discarded); the panel always opens right. One shell helper,
-`place_beside_buddy` (in `commands.rs`), feeds it the live buddy/monitor
-geometry for both windows; `position_panel` / `show_bubble` call it. Any
-missing window or monitor info leaves the window where it was (best-effort,
-never an error). The **bubble** opens on the side the buddy *faces*: the buddy
-window mirrors `settings.facing` to Rust via `set_buddy_facing` (a lock-free
-atomic), `place_beside` prefers that side, and Rust emits a `bubble-anchor`
-`{side, valign}` event so `BubbleRoot` binds `SpeechBubble`'s tail to point
-back at the buddy (defaulting from facing before the first event). A small
-`BUBBLE_TUCK_PX` overlap pulls the bubble into the buddy window's transparent
+`core::companion_placement::place_beside(buddy, work_area, w, h, prefer, vmode)
+-> (Point, Anchor)` (unit-tested on Linux): it sits the window on the `prefer`
+side of the buddy, flips to the other side when that overflows the screen edge,
+and aligns vertically per `vmode` — `Edge` top-aligns (the panel, flipping to
+bottom-align near the bottom edge) and `Center` sits level with the buddy's
+center (the bubble). It clamps into the monitor work area and returns the
+`Anchor` (`side` + `valign` ∈ `Top`/`Middle`/`Bottom`) derived from where the
+card actually landed, so the tail points at the buddy. `panel_position` is a
+thin wrapper (prefer = `Right`, `Edge`, anchor discarded); the panel always
+opens right. One shell helper, `place_beside_buddy` (in `commands.rs`), feeds
+it the live buddy/monitor geometry for both windows; `position_panel` /
+`show_bubble` call it. Any missing window or monitor info leaves the window
+where it was (best-effort, never an error). The **bubble** opens on the side
+the buddy *faces* and sits level with it: the buddy window mirrors
+`settings.facing` to Rust via `set_buddy_facing` (a lock-free atomic),
+`place_beside` prefers that side with `VMode::Center`, and Rust emits a
+`bubble-anchor` `{side, valign}` event so `BubbleRoot` binds `SpeechBubble`'s
+tail to point back at the buddy (defaulting from facing/`middle` before the
+first event). A `BUBBLE_TUCK_FRAC` overlap (a fraction of the buddy width, so
+it scales with DPI) pulls the bubble into the buddy window's transparent
 padding so it sits snug against the character. While the greeting is up, the
 buddy's `Moved` handler re-runs `place_beside_buddy` for the bubble
 (`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
