@@ -162,6 +162,7 @@ onUnmounted(() => {
         :facing="settings.facing"
         :recording="capture.status === 'recording' || capture.status === 'saving'"
         :paused="capture.paused"
+        :transcribing="capture.transcribing"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
         @drag-cancelled="onDragCancelled"

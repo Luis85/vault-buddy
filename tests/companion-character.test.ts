@@ -283,4 +283,21 @@ describe("CompanionCharacter", () => {
     expect(dot.classes()).toContain("bg-amber-400");
     expect(dot.classes()).not.toContain("bg-red-500");
   });
+
+  it("shows a violet transcribing dot while transcribing", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, transcribing: true },
+    });
+    const dot = wrapper.get(".transcribe-dot");
+    expect(dot.classes()).toContain("bg-violet-400");
+    expect(wrapper.get("button").classes()).toContain("transcribing");
+  });
+
+  it("hides the transcribing dot while recording takes precedence", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, transcribing: true, recording: true },
+    });
+    expect(wrapper.find(".transcribe-dot").exists()).toBe(false);
+    expect(wrapper.find(".rec-dot").exists()).toBe(true);
+  });
 });

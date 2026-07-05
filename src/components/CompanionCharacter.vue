@@ -12,6 +12,7 @@ const props = withDefaults(
     facing?: "right" | "left";
     recording?: boolean;
     paused?: boolean;
+    transcribing?: boolean;
   }>(),
   {
     animated: true,
@@ -20,6 +21,7 @@ const props = withDefaults(
     facing: "right",
     recording: false,
     paused: false,
+    transcribing: false,
   },
 );
 const emit = defineEmits<{
@@ -143,7 +145,7 @@ function onContextMenu() {
       class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
       :class="[
         draggable ? 'cursor-grab' : 'cursor-pointer',
-        { working, still: !animated, recording, paused },
+        { working, still: !animated, recording, paused, transcribing },
       ]"
       :aria-label="
         draggable
@@ -169,6 +171,11 @@ function onContextMenu() {
           v-if="recording"
           class="rec-dot absolute -right-1 -top-1 h-3 w-3 rounded-full ring-2 ring-slate-900"
           :class="paused ? 'bg-amber-400' : 'bg-red-500'"
+          aria-hidden="true"
+        ></span>
+        <span
+          v-if="transcribing && !recording"
+          class="transcribe-dot absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full bg-violet-400 ring-2 ring-slate-900"
           aria-hidden="true"
         ></span>
       </span>
