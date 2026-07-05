@@ -65,3 +65,13 @@ export interface AudioDevices {
   inputs: AudioDevice[];
   outputs: AudioDevice[];
 }
+
+export interface Recording {
+  mp3: string;
+  title: string;
+  recordedAt: string;
+  /** From the companion note's frontmatter; null when there's no note. */
+  duration: string | null;
+  /** Recording type from the companion note; null → "Ungrouped". */
+  type: string | null;
+}

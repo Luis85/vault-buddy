@@ -164,4 +164,19 @@ describe("vaults store", () => {
       expect.stringContaining("open_vault failed"),
     );
   });
+
+  it("openRecordings switches to the recordings view for a vault", () => {
+    const store = useVaultsStore();
+    store.openRecordings("a1b2c3");
+    expect(store.view).toBe("recordings");
+    expect(store.recordingsVaultId).toBe("a1b2c3");
+  });
+
+  it("showList clears the recordings vault id", () => {
+    const store = useVaultsStore();
+    store.openRecordings("a1b2c3");
+    store.showList();
+    expect(store.view).toBe("list");
+    expect(store.recordingsVaultId).toBe(null);
+  });
 });
