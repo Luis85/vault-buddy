@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
@@ -66,6 +66,27 @@ const folderPlaceholder = computed(() =>
 function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+// Any edit invalidates the "Saved ✓" confirmation. During the initial load
+// saveState is already "idle", so the load-time assignments are idle→idle
+// no-ops; this only becomes visible after a save set it to "saved".
+watch(
+  [
+    mode,
+    recordingFolder,
+    createNote,
+    bitrateKbps,
+    inputDevice,
+    outputDevice,
+    transcribe,
+    transcriptionModel,
+    transcriptionLanguage,
+    transcriptTimestamps,
+  ],
+  () => {
+    if (saveState.value === "saved") saveState.value = "idle";
+  },
+);
 
 onMounted(async () => {
   try {

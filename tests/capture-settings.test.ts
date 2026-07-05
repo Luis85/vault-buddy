@@ -115,6 +115,15 @@ describe("CaptureSettings", () => {
     expect(wrapper.text()).toContain("Saved");
   });
 
+  it("clears the Saved confirmation when a field is edited", async () => {
+    const { wrapper } = await mountLoaded();
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Saved");
+    await wrapper.get('[data-testid="folder-input"]').setValue("Elsewhere");
+    expect(wrapper.text()).not.toContain("Saved ✓");
+  });
+
   it("shows a folder error inline and keeps the form state", async () => {
     const { wrapper } = await mountLoaded({
       onSet: () => {
