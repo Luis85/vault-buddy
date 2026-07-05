@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { getCharacter } from "../characters";
 
 const props = withDefaults(
@@ -9,8 +9,16 @@ const props = withDefaults(
     animated?: boolean;
     /** home view direction — sprite strips are drawn facing right */
     facing?: "right" | "left";
+    /** bumped by the parent to play one idle burst — click/drop feedback */
+    playNonce?: number;
   }>(),
-  { characterId: "classic", working: false, animated: true, facing: "right" },
+  {
+    characterId: "classic",
+    working: false,
+    animated: true,
+    facing: "right",
+    playNonce: 0,
+  },
 );
 
 const character = computed(() => getCharacter(props.characterId));
@@ -76,6 +84,24 @@ function onSheetAnimationEnd() {
   idlePlaying.value = false;
   if (idleEligible.value) scheduleIdleBurst();
 }
+
+// Play a single idle burst on demand — click/drop feedback from the parent,
+// which bumps `playNonce`. Force-restart (drop `.playing` for a tick before
+// re-adding it) so a rapid second tap replays the burst instead of no-op'ing
+// while the first is still running. Gated by idleEligible, so it respects the
+// animations-off setting, never fights the working run loop, and is a no-op for
+// the classic buddy (no sprite strip — it bobs continuously anyway).
+async function playIdleOnce() {
+  if (!idleEligible.value) return;
+  idlePlaying.value = false;
+  await nextTick();
+  idlePlaying.value = true;
+}
+
+watch(
+  () => props.playNonce,
+  () => void playIdleOnce(),
+);
 
 watch(
   idleEligible,

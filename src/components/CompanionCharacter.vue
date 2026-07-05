@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import { logWarning } from "../logging";
@@ -35,6 +36,14 @@ const DRAG_THRESHOLD_PX = 5;
 let pressedAt: { x: number; y: number } | null = null;
 let dragged = false;
 
+// A little acknowledgement: play one idle burst whenever the buddy is clicked
+// or dropped in a new spot. Passed to BuddyAvatar, which restarts its idle
+// animation each time this changes (and ignores it while animations are off).
+const playNonce = ref(0);
+function bobOnce() {
+  playNonce.value++;
+}
+
 function onPointerDown(e: PointerEvent) {
   if (e.button !== 0) return;
   // Capture the pointer: the buddy is only 64px, so a fast flick can leave
@@ -56,6 +65,10 @@ function onPointerMove(e: PointerEvent) {
     // consumes the release without a trailing click at all
     // (tauri-apps/tauri#10767) — without this reset the suppression
     // would eat the user's next deliberate click.
+    // If we were mid-drag, the buddy just landed here — bob once. Guarded on
+    // `dragged` so a plain hover (no preceding drag) never bobs, and so a drop
+    // whose trailing click already bobbed (below) isn't double-counted.
+    if (dragged) bobOnce();
     dragged = false;
     return;
   }
@@ -104,11 +117,15 @@ function onClick(e: MouseEvent) {
   // detail 0 = keyboard activation (Enter/Space) — never a drag's
   // trailing click, so it must not be suppressed.
   if (dragged && e.detail !== 0) {
-    // trailing click of a drag gesture — not an intent to open the panel
+    // trailing click of a drag gesture — the buddy was dropped, not an intent
+    // to open the panel. Acknowledge the drop with one bob.
     dragged = false;
+    bobOnce();
     return;
   }
   dragged = false;
+  // a real click (opens/closes the panel) — bob once
+  bobOnce();
   emit("toggle");
 }
 
@@ -153,6 +170,7 @@ function onContextMenu() {
           :working="working"
           :animated="animated"
           :facing="facing"
+          :play-nonce="playNonce"
         />
         <span
           v-if="recording"
