@@ -150,22 +150,24 @@ pub fn close_bubble(app: tauri::AppHandle) {
     }
 }
 
-/// Pull the greeting bubble this many px toward the buddy (overlapping the
-/// buddy window's transparent padding) so it sits snug against the character
-/// instead of floating a full buddy-window-width away. Cosmetic — a manual
-/// Windows check is the place to tune it. The panel uses 0 (a clean edge).
-const BUBBLE_TUCK_PX: i32 = 16;
+/// Pull the greeting bubble toward the buddy by this fraction of the buddy
+/// window's width, overlapping the window's transparent padding so the bubble
+/// sits snug against the character instead of floating a full buddy-width away.
+/// A fraction rather than a fixed px so it scales with display DPI. Cosmetic —
+/// a manual Windows check is the place to tune it. The panel uses 0.0.
+const BUBBLE_TUCK_FRAC: f64 = 0.20;
 
 /// Top-left AND the resolved anchor for a companion window (panel or bubble)
-/// placed beside the buddy on the `prefer` side, respecting screen edges.
-/// `overlap` pulls the window that many px toward the buddy (0 = flush beside).
-/// `None` when the buddy or target geometry isn't available yet — callers then
-/// leave the window where it was (best-effort).
+/// placed beside the buddy on the `prefer` side with vertical mode `vmode`.
+/// `tuck_frac` pulls the window toward the buddy by that fraction of the buddy
+/// width (0.0 = flush beside). `None` when the buddy or target geometry isn't
+/// available yet — callers then leave the window where it was (best-effort).
 fn place_beside_buddy(
     app: &tauri::AppHandle,
     target: &tauri::WebviewWindow,
     prefer: vault_buddy_core::companion_placement::Side,
-    overlap: i32,
+    vmode: vault_buddy_core::companion_placement::VMode,
+    tuck_frac: f64,
 ) -> Option<(
     tauri::PhysicalPosition<i32>,
     vault_buddy_core::companion_placement::Anchor,
@@ -200,9 +202,12 @@ fn place_beside_buddy(
         tsize.width as i32,
         tsize.height as i32,
         prefer,
+        vmode,
     );
     // Tuck toward the buddy along the side the window actually landed on, so the
-    // tail nearly touches the character.
+    // tail nearly touches the character. Scaled by the buddy width so it tracks
+    // display DPI.
+    let overlap = (bsize.width as f64 * tuck_frac) as i32;
     let x = match anchor.side {
         Side::Right => point.x - overlap,
         Side::Left => point.x + overlap,
@@ -227,8 +232,9 @@ fn emit_bubble_anchor(
             Side::Right => "right",
         },
         "valign": match anchor.valign {
-            VAlign::Up => "up",
-            VAlign::Down => "down",
+            VAlign::Top => "top",
+            VAlign::Middle => "middle",
+            VAlign::Bottom => "bottom",
         },
     });
     let _ = app.emit("bubble-anchor", payload);
@@ -236,14 +242,15 @@ fn emit_bubble_anchor(
 
 /// Move the (hidden) panel window beside the buddy, respecting screen edges.
 /// Best-effort: any missing window/monitor info leaves the panel where it was.
-/// The panel always prefers the right side and ignores the anchor.
+/// The panel prefers the right side, edge-aligns vertically, and ignores the
+/// anchor.
 pub(crate) fn position_panel(app: &tauri::AppHandle) {
     use tauri::Manager;
-    use vault_buddy_core::companion_placement::Side;
+    use vault_buddy_core::companion_placement::{Side, VMode};
     let Some(panel) = app.get_webview_window("panel") else {
         return;
     };
-    if let Some((pos, _anchor)) = place_beside_buddy(app, &panel, Side::Right, 0) {
+    if let Some((pos, _anchor)) = place_beside_buddy(app, &panel, Side::Right, VMode::Edge, 0.0) {
         if let Err(e) = panel.set_position(pos) {
             log::warn!("position_panel: set_position failed: {e}");
         }
@@ -259,8 +266,13 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let Some(bubble) = app.get_webview_window("bubble") else {
         return;
     };
-    let Some((pos, anchor)) = place_beside_buddy(app, &bubble, buddy_facing(), BUBBLE_TUCK_PX)
-    else {
+    let Some((pos, anchor)) = place_beside_buddy(
+        app,
+        &bubble,
+        buddy_facing(),
+        vault_buddy_core::companion_placement::VMode::Center,
+        BUBBLE_TUCK_FRAC,
+    ) else {
         return;
     };
     // Diagnostic: if the buddy is read pre-restore, the bubble lands at the
@@ -303,7 +315,13 @@ pub(crate) fn reposition_bubble_if_visible(app: &tauri::AppHandle) {
     if !bubble.is_visible().unwrap_or(false) {
         return;
     }
-    if let Some((pos, anchor)) = place_beside_buddy(app, &bubble, buddy_facing(), BUBBLE_TUCK_PX) {
+    if let Some((pos, anchor)) = place_beside_buddy(
+        app,
+        &bubble,
+        buddy_facing(),
+        vault_buddy_core::companion_placement::VMode::Center,
+        BUBBLE_TUCK_FRAC,
+    ) {
         let _ = bubble.set_position(pos);
         // Re-emit the anchor: a drag can carry the buddy across the midline or
         // to an edge, flipping which side the bubble sits on — the tail must
