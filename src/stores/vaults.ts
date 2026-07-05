@@ -42,6 +42,10 @@ export const useVaultsStore = defineStore("vaults", {
         await this.loadVaults();
       }
     },
+    async refresh() {
+      this.showList();
+      await this.loadVaults();
+    },
     async runAction(
       command: "open_vault" | "open_daily_note",
       vaultId: string,
@@ -51,6 +55,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.error = null;
       try {
         await invoke(command, { id: vaultId });
+        void invoke("close_panel").catch(() => {});
         // Obsidian is taking over — get out of the way.
         this.panelOpen = false;
       } catch (e) {

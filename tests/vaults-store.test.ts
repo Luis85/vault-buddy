@@ -66,7 +66,10 @@ describe("vaults store", () => {
     });
     const store = useVaultsStore();
     await store.runAction("open_daily_note", "a1b2c3");
-    expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "a1b2c3" } }]);
+    expect(calls).toEqual([
+      { cmd: "open_daily_note", args: { id: "a1b2c3" } },
+      { cmd: "close_panel", args: {} },
+    ]);
     expect(store.busyVaultId).toBe(null);
     expect(store.busyCommand).toBe(null);
     expect(store.error).toBe(null);
@@ -163,5 +166,20 @@ describe("vaults store", () => {
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("open_vault failed"),
     );
+  });
+
+  it("refresh() lands on the vault list and re-runs discovery", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_vaults") return sampleVaults;
+    });
+    const store = useVaultsStore();
+    store.openSettings();
+    expect(store.view).toBe("settings");
+    await store.refresh();
+    expect(store.view).toBe("list");
+    expect(calls).toContain("list_vaults");
+    expect(store.vaults).toEqual(sampleVaults);
   });
 });

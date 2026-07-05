@@ -53,7 +53,10 @@ describe("ActionPanel", () => {
     await wrapper
       .find('[aria-label="Open today\'s daily note in Personal"]')
       .trigger("click");
-    expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "d4e5f6" } }]);
+    expect(calls).toEqual([
+      { cmd: "open_daily_note", args: { id: "d4e5f6" } },
+      { cmd: "close_panel", args: {} },
+    ]);
   });
 
   it("hides the filter for short lists", () => {
