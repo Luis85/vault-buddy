@@ -212,6 +212,28 @@ fn place_beside_buddy(
         Side::Right => point.x - overlap,
         Side::Left => point.x + overlap,
     };
+    // Diagnostic for the "bubble misplaced on startup but correct after a move"
+    // report: logs every bubble placement (initial show, startup re-pins, and
+    // drag) so the buddy vs bubble scale factors and sizes can be compared. A
+    // buddy scale != bubble scale (or a bubble size that doesn't match the
+    // buddy's monitor) points at a cross-monitor / not-yet-realized DPI read.
+    if target.label() == "bubble" {
+        log::info!(
+            "bubble place: buddy pos=({},{}) size={}x{} scale={:.2}; bubble size={}x{} scale={:.2} vis={:?}; -> pos=({},{}) {:?}",
+            bpos.x,
+            bpos.y,
+            bsize.width,
+            bsize.height,
+            buddy.scale_factor().unwrap_or(0.0),
+            tsize.width,
+            tsize.height,
+            target.scale_factor().unwrap_or(0.0),
+            target.is_visible().ok(),
+            x,
+            point.y,
+            anchor
+        );
+    }
     Some((tauri::PhysicalPosition::new(x, point.y), anchor))
 }
 
@@ -275,21 +297,6 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     ) else {
         return;
     };
-    // Diagnostic: if the buddy is read pre-restore, the bubble lands at the
-    // default corner (the "bubble too high on startup" bug) — the follow-up
-    // re-pins in schedule_show_bubble then correct it.
-    if let Some(bp) = app
-        .get_webview_window("main")
-        .and_then(|b| b.outer_position().ok())
-    {
-        log::info!(
-            "greeting: buddy at ({},{}), bubble at ({},{})",
-            bp.x,
-            bp.y,
-            pos.x,
-            pos.y
-        );
-    }
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
     let _ = bubble.show();
