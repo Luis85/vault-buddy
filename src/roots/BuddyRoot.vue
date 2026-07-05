@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import CompanionCharacter from "../components/CompanionCharacter.vue";
@@ -29,6 +29,17 @@ function onDragStart() {
 
 let unlistenAnimation: (() => void) | undefined;
 let unlistenDragging: (() => void) | undefined;
+
+// Mirror the buddy's facing to Rust so the greeting bubble opens on the side
+// the buddy faces. The buddy window is the single owner of this push: every
+// facing change (buddy menu or panel settings) funnels through the settings
+// store, so watching it here covers them all. `immediate` also pushes the
+// initial value on mount.
+watch(
+  () => settings.facing,
+  (facing) => invokeQuiet("set_buddy_facing", { facing }),
+  { immediate: true },
+);
 
 onMounted(async () => {
   void capture.init();

@@ -51,4 +51,12 @@ describe("BuddyRoot", () => {
     window.dispatchEvent(new Event("storage"));
     expect(useSettingsStore().animationsEnabled).toBe(false);
   });
+
+  it("pushes the buddy facing to Rust so the greeting bubble opens on the right side", async () => {
+    mount(BuddyRoot);
+    await Promise.resolve();
+    // Rust needs the facing to place the bubble; the buddy window is the
+    // single owner that pushes it.
+    expect(calls).toContain("set_buddy_facing");
+  });
 });
