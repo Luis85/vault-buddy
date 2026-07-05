@@ -43,6 +43,7 @@ pub struct SessionParams {
     pub recording_type: String,
     pub create_note: bool,
     pub transcribe: bool,
+    pub follow_up: bool,
     pub recorded_at: String,
     pub flush_every: Duration,
     pub fsync_every: Duration,
@@ -406,6 +407,7 @@ fn run_worker(
             input_devices: device_names,
             event: warning.clone(),
             transcribe: params.transcribe,
+            follow_up: params.follow_up,
         };
         let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
         // Collision-safe: a user or sync client grabbing the reserved
@@ -458,6 +460,7 @@ mod tests {
             recording_type: "Meeting".into(),
             create_note: true,
             transcribe: false,
+            follow_up: false,
             recorded_at: "2026-07-04T14:05:00+02:00".into(),
             flush_every: Duration::from_millis(100),
             fsync_every: Duration::from_secs(30),
