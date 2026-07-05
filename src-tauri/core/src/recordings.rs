@@ -124,6 +124,7 @@ mod tests {
                 input_devices: vec![],
                 event: None,
                 transcribe: false,
+                follow_up: false,
             };
             std::fs::write(
                 dir.join(format!("{base}.md")),

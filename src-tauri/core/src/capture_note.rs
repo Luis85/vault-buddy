@@ -18,6 +18,9 @@ pub struct NoteMeta {
     pub input_devices: Vec<String>,
     pub event: Option<String>,
     pub transcribe: bool,
+    /// Append a `## Follow-up` scaffold (Action items / Decisions / Notes)
+    /// above the transcript embed. Per-vault opt-out; recovery leaves it off.
+    pub follow_up: bool,
 }
 
 pub fn format_duration(secs: u64) -> String {
@@ -98,6 +101,14 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     }
     out.push_str("created-by: Vault Buddy\n---\n\n");
     out.push_str(&format!("![[{mp3_file_name}]]\n"));
+    if meta.follow_up {
+        // A follow-up scaffold above the (possibly long) transcript embed so
+        // the actionable part is visible without scrolling. Static text — the
+        // rename retarget only rewrites the ![[…]] embed line, never this.
+        out.push_str(
+            "\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n",
+        );
+    }
     if meta.transcribe {
         // The transcript sidecar's name is derived from the mp3 stem and was
         // reserved pairwise, so this embed resolves once the sidecar lands
@@ -224,6 +235,7 @@ mod tests {
             input_devices: vec!["Headset Mic".into(), "Speakers (loopback)".into()],
             event: None,
             transcribe: false,
+            follow_up: false,
         }
     }
 
@@ -358,6 +370,40 @@ mod tests {
     fn note_has_no_transcript_section_when_disabled() {
         let note = render_note(&meta(), "b.mp3");
         assert!(!note.contains("## Transcript"));
+    }
+
+    #[test]
+    fn note_includes_follow_up_template_when_enabled() {
+        let mut m = meta();
+        m.follow_up = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        assert!(note.contains("## Follow-up"));
+        assert!(note.contains("### Action items"));
+        assert!(note.contains("- [ ]"));
+        assert!(note.contains("### Decisions"));
+        assert!(note.contains("### Notes"));
+        // the audio embed still sits above the scaffold
+        assert!(note.contains("![[2026-07-04 1405 Meeting.mp3]]"));
+    }
+
+    #[test]
+    fn note_has_no_follow_up_when_disabled() {
+        // meta() sets follow_up: false (Step 3d), so the default note omits it.
+        assert!(!render_note(&meta(), "x.mp3").contains("## Follow-up"));
+    }
+
+    #[test]
+    fn follow_up_sits_above_the_transcript() {
+        let mut m = meta();
+        m.follow_up = true;
+        m.transcribe = true;
+        let note = render_note(&m, "2026-07-04 1405 Meeting.mp3");
+        let fu = note.find("## Follow-up").unwrap();
+        let tr = note.find("## Transcript").unwrap();
+        assert!(
+            fu < tr,
+            "follow-up must render above the transcript embed: {note}"
+        );
     }
 
     #[test]
