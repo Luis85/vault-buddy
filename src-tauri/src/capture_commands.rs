@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_paths, discovery};
+use vault_buddy_core::{capture_config, capture_paths, discovery, transcript, uri};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
 use vault_buddy_transcribe::{transcribe_recording, TranscribeOptions};
@@ -1114,4 +1114,29 @@ pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), Stri
     let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
     enqueue_transcription(&app, TranscriptionJob { mp3, vault_id });
     Ok(())
+}
+
+/// Open a finished recording's note (or its transcript sidecar) in Obsidian.
+/// Given the recording's `.mp3` path, resolve the owning vault and launch an
+/// `obsidian://open` URI for the companion note `<base>.md` when it exists (it
+/// embeds the transcript and the audio player — the richest view), otherwise
+/// the `<base>.transcript.md` sidecar. Read-only: never writes into the vault;
+/// the launch is logged by `uri::launch`, the same audit trail as every other
+/// vault open.
+#[tauri::command]
+pub fn open_transcript(path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| mp3.starts_with(&v.path))
+        .ok_or_else(|| format!("no vault owns {path}"))?;
+    let note = mp3.with_extension("md");
+    let target = if note.exists() {
+        note
+    } else {
+        transcript::transcript_path(&mp3)
+    };
+    let rel = uri::vault_relative_no_ext(&target, Path::new(&vault.path))
+        .ok_or_else(|| format!("recording is outside its vault: {}", target.display()))?;
+    uri::launch(&uri::open_file_uri(&vault.id, &rel))
 }
