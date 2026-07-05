@@ -7,6 +7,7 @@ import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
 const props = defineProps<{ vaultId: string }>();
 
 const BITRATES = [128, 160, 192];
+const MODELS = ["base", "small", "medium"] as const;
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -21,6 +22,10 @@ const bitrateKbps = ref(128);
 const inputDevice = ref(""); // "" = system default
 const outputDevice = ref("");
 const devices = ref<AudioDevices>({ inputs: [], outputs: [] });
+const transcribe = ref(false);
+const transcriptionModel = ref("small");
+const transcriptionLanguage = ref(""); // "" = auto-detect (maps to null on save)
+const transcriptTimestamps = ref(true);
 
 // A configured device that is not currently connected must stay
 // selectable (unplugging a headset must not silently rewrite the
@@ -43,6 +48,10 @@ const folderPlaceholder = computed(() =>
   mode.value === "meeting" ? "Meetings" : "Voice Notes",
 );
 
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 onMounted(async () => {
   try {
     const [cfg, devs] = await Promise.all([
@@ -56,6 +65,10 @@ onMounted(async () => {
     inputDevice.value = cfg.inputDevice ?? "";
     outputDevice.value = cfg.outputDevice ?? "";
     devices.value = devs;
+    transcribe.value = cfg.transcribe;
+    transcriptionModel.value = cfg.transcriptionModel;
+    transcriptionLanguage.value = cfg.transcriptionLanguage ?? "";
+    transcriptTimestamps.value = cfg.transcriptTimestamps;
   } catch (e) {
     loadError.value = String(e);
   } finally {
@@ -78,6 +91,10 @@ async function save() {
         createNote: createNote.value,
         inputDevice: inputDevice.value || null,
         outputDevice: outputDevice.value || null,
+        transcribe: transcribe.value,
+        transcriptionModel: transcriptionModel.value,
+        transcriptionLanguage: transcriptionLanguage.value.trim() || null,
+        transcriptTimestamps: transcriptTimestamps.value,
       },
     });
     saveState.value = "saved";
@@ -160,6 +177,59 @@ async function save() {
         class="h-4 w-4 accent-violet-500"
       />
     </section>
+    <section class="flex items-center justify-between">
+      <label for="capture-transcribe-toggle" class="text-sm text-slate-200">
+        Transcribe recordings
+        <span class="block text-xs text-slate-500">Local speech-to-text · no cloud</span>
+      </label>
+      <input
+        id="capture-transcribe-toggle"
+        v-model="transcribe"
+        data-testid="transcribe-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+      />
+    </section>
+    <template v-if="transcribe">
+      <section class="flex items-center justify-between gap-2">
+        <label for="capture-transcription-model" class="text-sm text-slate-200">Model</label>
+        <select
+          id="capture-transcription-model"
+          v-model="transcriptionModel"
+          data-testid="transcription-model-select"
+          class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
+        >
+          <option v-for="m in MODELS" :key="m" :value="m">{{ capitalize(m) }}</option>
+        </select>
+      </section>
+      <section>
+        <label class="mb-1 block text-sm text-slate-200" for="capture-transcription-language">
+          Language
+          <span class="block text-xs text-slate-500">e.g. en, es — blank = auto</span>
+        </label>
+        <input
+          id="capture-transcription-language"
+          v-model="transcriptionLanguage"
+          data-testid="transcription-language-input"
+          type="text"
+          placeholder="auto-detect"
+          class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        />
+      </section>
+      <section class="flex items-center justify-between">
+        <label for="capture-transcript-timestamps-toggle" class="text-sm text-slate-200">
+          Timestamps
+          <span class="block text-xs text-slate-500">Insert time markers in the transcript</span>
+        </label>
+        <input
+          id="capture-transcript-timestamps-toggle"
+          v-model="transcriptTimestamps"
+          data-testid="transcript-timestamps-toggle"
+          type="checkbox"
+          class="h-4 w-4 accent-violet-500"
+        />
+      </section>
+    </template>
     <section class="flex items-center justify-between gap-2">
       <label for="capture-bitrate" class="text-sm text-slate-200">Bitrate</label>
       <select

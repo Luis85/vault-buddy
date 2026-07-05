@@ -17,6 +17,10 @@ const config = {
   createNote: true,
   inputDevice: "USB Mic",
   outputDevice: null,
+  transcribe: false,
+  transcriptionModel: "small",
+  transcriptionLanguage: null as string | null,
+  transcriptTimestamps: true,
 };
 
 const devices = {
@@ -102,6 +106,10 @@ describe("CaptureSettings", () => {
         createNote: true,
         inputDevice: null,
         outputDevice: null,
+        transcribe: false,
+        transcriptionModel: "small",
+        transcriptionLanguage: null,
+        transcriptTimestamps: true,
       },
     });
     expect(wrapper.text()).toContain("Saved");
@@ -145,5 +153,70 @@ describe("CaptureSettings", () => {
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("settings save failed"),
     );
+  });
+
+  it("shows the transcribe toggle reflecting the loaded value", async () => {
+    const off = await mountLoaded({ config: { transcribe: false } });
+    expect(
+      off.wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(false);
+
+    const on = await mountLoaded({ config: { transcribe: true } });
+    expect(
+      on.wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(true);
+  });
+
+  it("hides the model/language/timestamps controls while transcribe is off", async () => {
+    const { wrapper } = await mountLoaded({ config: { transcribe: false } });
+    expect(wrapper.find('[data-testid="transcription-model-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcription-language-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcript-timestamps-toggle"]').exists()).toBe(false);
+  });
+
+  it("shows the model/language/timestamps controls, loaded correctly, once transcribe is on", async () => {
+    const { wrapper } = await mountLoaded({
+      config: {
+        transcribe: true,
+        transcriptionModel: "medium",
+        transcriptionLanguage: "es",
+        transcriptTimestamps: false,
+      },
+    });
+    const model = wrapper.get<HTMLSelectElement>('[data-testid="transcription-model-select"]');
+    expect(model.element.value).toBe("medium");
+    const language = wrapper.get<HTMLInputElement>(
+      '[data-testid="transcription-language-input"]',
+    );
+    expect(language.element.value).toBe("es");
+    const timestamps = wrapper.get<HTMLInputElement>(
+      '[data-testid="transcript-timestamps-toggle"]',
+    );
+    expect(timestamps.element.checked).toBe(false);
+  });
+
+  it("saves transcription settings after enabling transcribe and picking a model/language", async () => {
+    const { wrapper, calls } = await mountLoaded();
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await wrapper.get('[data-testid="transcription-model-select"]').setValue("medium");
+    await wrapper.get('[data-testid="transcription-language-input"]').setValue("es");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_capture_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      cfg: {
+        mode: "meeting",
+        recordingFolder: "Meetings",
+        bitrateKbps: 160,
+        createNote: true,
+        inputDevice: "USB Mic",
+        outputDevice: null,
+        transcribe: true,
+        transcriptionModel: "medium",
+        transcriptionLanguage: "es",
+        transcriptTimestamps: true,
+      },
+    });
   });
 });

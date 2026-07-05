@@ -50,6 +50,10 @@ export interface CaptureConfig {
   createNote: boolean;
   inputDevice: string | null;
   outputDevice: string | null;
+  transcribe: boolean;
+  transcriptionModel: string;
+  transcriptionLanguage: string | null;
+  transcriptTimestamps: boolean;
 }
 
 export interface AudioDevice {

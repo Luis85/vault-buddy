@@ -169,6 +169,7 @@ pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
 pub struct ConfigWriteLock(pub Mutex<()>);
 
 pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
+pub const TRANSCRIPTION_MODELS: [&str; 3] = ["base", "small", "medium"];
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,6 +180,10 @@ pub struct CaptureConfigDto {
     pub create_note: bool,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
+    pub transcribe: bool,
+    pub transcription_model: String,
+    pub transcription_language: Option<String>,
+    pub transcript_timestamps: bool,
 }
 
 impl CaptureConfigDto {
@@ -190,6 +195,10 @@ impl CaptureConfigDto {
             create_note: v.create_note,
             input_device: v.input_device.clone(),
             output_device: v.output_device.clone(),
+            transcribe: v.transcribe,
+            transcription_model: v.transcription_model.clone(),
+            transcription_language: v.transcription_language.clone(),
+            transcript_timestamps: v.transcript_timestamps,
         }
     }
 }
@@ -214,6 +223,12 @@ pub fn set_capture_config(
     if !BITRATES_KBPS.contains(&cfg.bitrate_kbps) {
         return Err(format!("Bitrate must be one of {BITRATES_KBPS:?} kbps"));
     }
+    if !TRANSCRIPTION_MODELS.contains(&cfg.transcription_model.as_str()) {
+        return Err(format!(
+            "Unknown transcription model: {}",
+            cfg.transcription_model
+        ));
+    }
     // Validate the folder against the real vault path BEFORE writing —
     // an invalid folder is an inline field error, nothing gets written.
     let vault = discovery::discover_vaults()
@@ -230,11 +245,6 @@ pub fn set_capture_config(
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
     let _guard = lock_ignoring_poison(&lock.0);
-    // The settings form owns only the fields above; transcription is
-    // config-file-only (no UI). Carry the existing transcription fields
-    // forward so a device/mode save never wipes a hand-enabled transcript
-    // config. Read under the write lock so it can't race a sibling save.
-    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
     let value = capture_config::VaultCaptureConfig {
         mode,
         recording_folder: folder,
@@ -242,21 +252,22 @@ pub fn set_capture_config(
         create_note: cfg.create_note,
         input_device: cfg.input_device.clone().filter(|d| !d.is_empty()),
         output_device: cfg.output_device.clone().filter(|d| !d.is_empty()),
-        transcribe: existing.transcribe,
-        transcription_model: existing.transcription_model,
-        transcription_language: existing.transcription_language,
-        transcript_timestamps: existing.transcript_timestamps,
+        transcribe: cfg.transcribe,
+        transcription_model: cfg.transcription_model.clone(),
+        transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
+        transcript_timestamps: cfg.transcript_timestamps,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {
         log::info!(
-            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}",
+            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}, transcribe={}",
             value.mode.as_key(),
             value.recording_folder,
             value.bitrate_kbps,
             value.create_note,
             value.input_device,
-            value.output_device
+            value.output_device,
+            value.transcribe
         );
     }
     result
