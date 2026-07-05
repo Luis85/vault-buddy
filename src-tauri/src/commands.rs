@@ -212,28 +212,6 @@ fn place_beside_buddy(
         Side::Right => point.x - overlap,
         Side::Left => point.x + overlap,
     };
-    // Diagnostic for the "bubble misplaced on startup but correct after a move"
-    // report: logs every bubble placement (initial show, startup re-pins, and
-    // drag) so the buddy vs bubble scale factors and sizes can be compared. A
-    // buddy scale != bubble scale (or a bubble size that doesn't match the
-    // buddy's monitor) points at a cross-monitor / not-yet-realized DPI read.
-    if target.label() == "bubble" {
-        log::info!(
-            "bubble place: buddy pos=({},{}) size={}x{} scale={:.2}; bubble size={}x{} scale={:.2} vis={:?}; -> pos=({},{}) {:?}",
-            bpos.x,
-            bpos.y,
-            bsize.width,
-            bsize.height,
-            buddy.scale_factor().unwrap_or(0.0),
-            tsize.width,
-            tsize.height,
-            target.scale_factor().unwrap_or(0.0),
-            target.is_visible().ok(),
-            x,
-            point.y,
-            anchor
-        );
-    }
     Some((tauri::PhysicalPosition::new(x, point.y), anchor))
 }
 
@@ -297,9 +275,26 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     ) else {
         return;
     };
+    // A window created `visible: false` can ignore `set_position` until it has
+    // been shown and realized on its monitor — the cause of "the greeting is
+    // placed right only after I move the buddy" (a drag's set_position lands
+    // because the window is realized by then, but the startup pre-show one is
+    // dropped). So position, show, then position again: the post-show call is
+    // the authoritative one.
+    let _ = bubble.set_position(pos);
+    let _ = bubble.show();
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
-    let _ = bubble.show();
+    // Confirm where it actually landed vs where we asked (the startup case).
+    if let Ok(actual) = bubble.outer_position() {
+        log::info!(
+            "greeting shown: asked ({},{}), actual ({},{})",
+            pos.x,
+            pos.y,
+            actual.x,
+            actual.y
+        );
+    }
 }
 
 /// Keep the greeting bubble beside the buddy as the buddy moves — called from
