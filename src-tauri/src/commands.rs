@@ -142,17 +142,16 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
         w: bsize.width as i32,
         h: bsize.height as i32,
     };
-    // Monitor bounds as the work area. Tauri exposes monitor size/position;
-    // the taskbar overlap is harmless here because a bottom-edge buddy bottom-
-    // aligns the panel to the buddy (already above the taskbar).
     let work = buddy.current_monitor().ok().flatten().map(|m| {
-        let p = m.position();
-        let s = m.size();
+        // The taskbar-excluding work area, NOT full monitor bounds: a panel
+        // clamped to full bounds can draw behind the taskbar for a buddy parked
+        // lower-middle (only a bottom-edge buddy bottom-aligns clear of it).
+        let wa = m.work_area();
         Rect {
-            x: p.x,
-            y: p.y,
-            w: s.width as i32,
-            h: s.height as i32,
+            x: wa.position.x,
+            y: wa.position.y,
+            w: wa.size.width as i32,
+            h: wa.size.height as i32,
         }
     });
     let point = panel_position(buddy_rect, work, psize.width as i32, psize.height as i32);
@@ -185,13 +184,15 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
         h: bsize.height as i32,
     };
     let work = buddy.current_monitor().ok().flatten().map(|m| {
-        let p = m.position();
-        let s = m.size();
+        // The taskbar-excluding work area, NOT full monitor bounds: a panel
+        // clamped to full bounds can draw behind the taskbar for a buddy parked
+        // lower-middle (only a bottom-edge buddy bottom-aligns clear of it).
+        let wa = m.work_area();
         Rect {
-            x: p.x,
-            y: p.y,
-            w: s.width as i32,
-            h: s.height as i32,
+            x: wa.position.x,
+            y: wa.position.y,
+            w: wa.size.width as i32,
+            h: wa.size.height as i32,
         }
     });
     let point = panel_position(buddy_rect, work, size.width as i32, size.height as i32);
