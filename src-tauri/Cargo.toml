@@ -1,6 +1,6 @@
 [package]
 name = "vault-buddy"
-version = "0.2.3"
+version = "0.3.0"
 description = "AI-native desktop companion for Obsidian"
 edition = "2021"
 
