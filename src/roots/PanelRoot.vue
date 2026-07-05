@@ -4,8 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ActionPanel from "../components/ActionPanel.vue";
 import { useVaultsStore } from "../stores/vaults";
+import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 
 const store = useVaultsStore();
+useSuppressContextMenu();
 
 function closePanel() {
   void invoke("close_panel").catch(() => {});

@@ -5,9 +5,11 @@ import { listen } from "@tauri-apps/api/event";
 import CompanionCharacter from "../components/CompanionCharacter.vue";
 import { useSettingsStore } from "../stores/settings";
 import { useCaptureStore } from "../stores/capture";
+import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 
 const settings = useSettingsStore();
 const capture = useCaptureStore();
+useSuppressContextMenu();
 
 function invokeQuiet(cmd: string, args?: Record<string, unknown>) {
   void invoke(cmd, args).catch(() => {
