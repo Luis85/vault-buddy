@@ -207,6 +207,85 @@ fn set_window_geometry_atomic(
     }
 }
 
+/// Show/hide the panel window. A sync command, so it runs on the main thread
+/// (where window show/hide and the placement getters are valid). Positioned
+/// while still hidden, then shown — the panel window never resizes and is
+/// only moved, so there is no WebView2 stale-frame flash. Opening hides the
+/// greeting bubble.
+#[tauri::command]
+pub fn toggle_panel(app: tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(panel) = app.get_webview_window("panel") else {
+        log::warn!("toggle_panel: no panel window");
+        return;
+    };
+    if panel.is_visible().unwrap_or(false) {
+        let _ = panel.hide();
+        return;
+    }
+    position_panel(&app);
+    if let Err(e) = panel.show() {
+        log::warn!("toggle_panel: show failed: {e}");
+    }
+    let _ = panel.set_focus();
+    if let Some(bubble) = app.get_webview_window("bubble") {
+        let _ = bubble.hide();
+    }
+}
+
+/// Hide the panel window. Idempotent; called by Escape, drag start, a launched
+/// vault action, and the updater.
+#[tauri::command]
+pub fn close_panel(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(panel) = app.get_webview_window("panel") {
+        let _ = panel.hide();
+    }
+}
+
+/// Move the (hidden) panel window beside the buddy, respecting screen edges.
+/// Best-effort: any missing window/monitor info leaves the panel where it was.
+pub(crate) fn position_panel(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    use vault_buddy_core::companion_placement::{panel_position, Rect};
+    let (Some(buddy), Some(panel)) = (
+        app.get_webview_window("main"),
+        app.get_webview_window("panel"),
+    ) else {
+        return;
+    };
+    let (Ok(bpos), Ok(bsize), Ok(psize)) = (
+        buddy.outer_position(),
+        buddy.outer_size(),
+        panel.outer_size(),
+    ) else {
+        return;
+    };
+    let buddy_rect = Rect {
+        x: bpos.x,
+        y: bpos.y,
+        w: bsize.width as i32,
+        h: bsize.height as i32,
+    };
+    // Monitor bounds as the work area. Tauri exposes monitor size/position;
+    // the taskbar overlap is harmless here because a bottom-edge buddy bottom-
+    // aligns the panel to the buddy (already above the taskbar).
+    let work = buddy.current_monitor().ok().flatten().map(|m| {
+        let p = m.position();
+        let s = m.size();
+        Rect {
+            x: p.x,
+            y: p.y,
+            w: s.width as i32,
+            h: s.height as i32,
+        }
+    });
+    let point = panel_position(buddy_rect, work, psize.width as i32, psize.height as i32);
+    if let Err(e) = panel.set_position(tauri::PhysicalPosition::new(point.x, point.y)) {
+        log::warn!("position_panel: set_position failed: {e}");
+    }
+}
+
 /// Native context menu for the buddy. The collapsed window is far too small
 /// to host an HTML menu; the OS popup renders outside the window bounds and
 /// matches the tray menu. Item events are handled in `lib.rs`. `animated`

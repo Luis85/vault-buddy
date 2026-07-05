@@ -150,6 +150,8 @@ pub fn run() {
             commands::prepare_update_install,
             commands::set_panel_offset,
             commands::set_window_geometry,
+            commands::toggle_panel,
+            commands::close_panel,
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
