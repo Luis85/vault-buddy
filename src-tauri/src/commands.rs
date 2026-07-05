@@ -42,6 +42,13 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
 /// the process without the normal close/quit hooks, so restore the
 /// unshifted home position first — otherwise installing with the panel
 /// open at a screen edge would persist the shifted point for next launch.
+///
+/// Must stay a SYNCHRONOUS command: it runs on the main thread, where
+/// `save_window_state` (which takes the window-state plugin's cache lock and
+/// then reads window geometry) is serialized against the plugin's own
+/// main-thread Moved listener. Marking it `async` would move it to the
+/// runtime thread pool and re-open the off-main cache-lock-vs-Moved deadlock
+/// this codebase fixed — see `window_upkeep_tick`.
 #[tauri::command]
 pub fn prepare_update_install(app: tauri::AppHandle) {
     use tauri::Manager;
@@ -65,6 +72,52 @@ pub fn prepare_update_install(app: tauri::AppHandle) {
     // now or every update would false-positive as a crash next launch.
     log::info!("clean shutdown (update install)");
     crate::diagnostics::mark_clean_shutdown();
+}
+
+/// Enters the OS window-move loop for the buddy. A Rust-side chokepoint
+/// instead of the raw `startDragging()` JS API because a drag request can
+/// go stale in transit: a fast flick releases the button while the IPC is
+/// still in flight, and the runtime would post the synthetic
+/// WM_NCLBUTTONDOWN anyway — Windows then runs a "sticky" move loop with
+/// no button held, gluing the buddy to the cursor and eating the next real
+/// press. Being a synchronous command it runs on the main thread (like
+/// `show_buddy_menu`/`set_window_geometry`, which call main-thread-only Win32
+/// APIs), so the button re-check happens on the input-owning thread right
+/// before the move loop is entered. Returns whether the drag actually
+/// started so the frontend can retract its blur suppression when a stale
+/// request is dropped. `pointer_type` is the webview's pointer kind: the
+/// button re-check is mouse-only, because a touch/pen contact reports
+/// buttons=1 to the webview yet need not surface as WM_LBUTTONDOWN, so a
+/// GetKeyState re-check would wrongly drop every touch/pen drag.
+#[tauri::command]
+pub fn start_buddy_drag(
+    window: tauri::WebviewWindow,
+    pointer_type: String,
+) -> Result<bool, String> {
+    #[cfg(windows)]
+    if pointer_type == "mouse" && !primary_button_down() {
+        log::info!("buddy drag dropped: primary button already released");
+        return Ok(false);
+    }
+    #[cfg(not(windows))]
+    let _ = &pointer_type;
+    window.start_dragging().map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// True while the primary (swap-aware "logical") mouse button is physically
+/// held, as of the last message this thread processed. Used to drop stale
+/// drag requests and to keep the upkeep tick away from a window the user is
+/// mid-drag. Must be called on the main (input-owning) thread — `GetKeyState`
+/// reflects that thread's input queue. Windows-only: both callers guard the
+/// call with `cfg(windows)`, so no cross-platform stub is needed.
+#[cfg(windows)]
+pub(crate) fn primary_button_down() -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LBUTTON};
+    // High-order bit set => down. GetKeyState follows SwapMouseButton, so
+    // VK_LBUTTON tracks whichever physical button is the primary — matching
+    // the webview's own notion of "button 0".
+    (unsafe { GetKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
 }
 
 /// Applies position and size in one native call. The frontend used to issue

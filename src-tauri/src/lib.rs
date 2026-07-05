@@ -3,8 +3,40 @@ mod commands;
 mod diagnostics;
 mod tray;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+
+/// How long the window must sit still before the upkeep tick may touch it.
+/// A live OS move loop floods the main thread with Moved events; window
+/// work colliding with that flood is what used to deadlock the app
+/// (see `window_upkeep_tick`).
+const QUIESCE_MS: u64 = 2_000;
+
+/// Consecutive unserviced upkeep ticks before the watchdog reports the main
+/// thread as wedged. Upkeep closures are normally dispatched within the
+/// second — even during a drag, whose modal loop still pumps posted work.
+const MAIN_THREAD_STALL_TICKS: u32 = 10;
+
+/// Instant of the last window Moved event; `None` until the window first
+/// moves. Stamped by the window-event hook on the main thread, read by the
+/// upkeep tick so every window touch stays away from a window in motion.
+/// A plain `Mutex<Option<Instant>>` (the codebase's shared-state idiom — see
+/// `PanelOffset`, `MARKER_GATE`) rather than a hand-encoded atomic sentinel.
+static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn stamp_window_moved() {
+    *lock_ignoring_poison(&LAST_MOVE) = Some(Instant::now());
+}
+
+fn ms_since_last_move() -> Option<u64> {
+    // Copy the Option out of the guard (Instant is Copy) before mapping —
+    // Option::map takes self by value and can't move out of a MutexGuard.
+    (*lock_ignoring_poison(&LAST_MOVE)).map(|at| at.elapsed().as_millis() as u64)
+}
 
 pub fn run() {
     // Before anything else: a panic during builder construction or in any
@@ -74,8 +106,11 @@ pub fn run() {
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction — restore the unshifted home position first so a
         // panel-open-at-the-edge close can't persist the shifted point.
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            // Every move re-arms the upkeep tick's quiescence gate — window
+            // work must never collide with a window in motion.
+            tauri::WindowEvent::Moved(_) => stamp_window_moved(),
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
                 if capture_commands::is_recording(app) {
                     // Alt+F4 / session shutdown bypass tray::quit — the
@@ -107,6 +142,7 @@ pub fn run() {
                     diagnostics::mark_clean_shutdown();
                 }
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_vaults,
@@ -115,6 +151,7 @@ pub fn run() {
             commands::prepare_update_install,
             commands::set_panel_offset,
             commands::set_window_geometry,
+            commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
             commands::rearm_crash_detection,
@@ -221,30 +258,51 @@ pub fn run() {
             // buddy behind the taskbar. No event reaches us when that
             // happens, so periodically re-assert always-on-top — a cheap
             // z-order-only SetWindowPos that never moves, resizes, or
-            // steals focus.
+            // steals focus. The same tick checkpoints the buddy's parked
+            // position: exit paths that save state can silently fail or be
+            // bypassed (the updater kills the process via
+            // std::process::exit), so the state file must always hold a
+            // recent correct position, whatever the exit path.
+            //
+            // This thread is a pure metronome: it only sleeps, heartbeats
+            // the run marker, and posts the window work to the MAIN thread.
+            // It must never touch the window itself — saving window state
+            // off-main while the window was being dragged deadlocked the
+            // main thread against the window-state plugin's cache lock and
+            // froze the whole app (see window_upkeep_tick).
             let handle = app.handle().clone();
-            // Checkpoint of the buddy's parked position. Exit paths that save
-            // state can silently fail or be bypassed (the updater kills the
-            // process via std::process::exit) — persisting within a second of
-            // any move means the state file always holds a recent correct
-            // position, whatever the exit path. These counters live across
-            // ticks, so they are owned by the loop closure below.
-            let mut last_pos: Option<(i32, i32)> = None;
+            // Held only for state flips, never across a window call — this
+            // mutex cannot recreate the lock-plus-blocking-wait pattern the
+            // metronome design removes.
+            let checkpointer = Arc::new(Mutex::new(
+                vault_buddy_core::checkpoint::PositionCheckpointer::new(),
+            ));
+            let upkeep_pending = Arc::new(AtomicBool::new(false));
             let mut ticks: u32 = 0;
-            let mut saved_once = false;
+            let mut stalled: u32 = 0;
             std::thread::Builder::new()
                 .name("topmost-checkpoint".into())
                 .spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    // One bad tick must never permanently kill always-on-top
-                    // re-assertion + position checkpointing. Isolate each tick: a
-                    // panic here is captured by the crash hook and this line, and
-                    // the loop keeps running.
+                    // Isolate the whole tick: a panic in the metronome body
+                    // (e.g. a future edit to the heartbeat, or the log
+                    // backend panicking while formatting) must not kill this
+                    // thread — losing it silently stops the run-marker
+                    // heartbeat, always-on-top re-assert, and position
+                    // checkpoint for the rest of the session. `continue`
+                    // can't cross the closure boundary, so skips are early
+                    // returns inside `metronome_tick`.
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
+                        metronome_tick(
+                            &handle,
+                            &checkpointer,
+                            &upkeep_pending,
+                            &mut ticks,
+                            &mut stalled,
+                        );
                     }));
                     if outcome.is_err() {
-                        log::error!("background checkpoint tick panicked; continuing");
+                        log::error!("metronome tick panicked; continuing");
                     }
                 })
                 .expect("failed to spawn topmost-checkpoint thread");
@@ -270,27 +328,102 @@ pub fn run() {
         });
 }
 
-/// One iteration of the always-on-top / position-checkpoint loop. Split out of
-/// the loop so it can run inside `catch_unwind` (a `continue` can't cross a
-/// closure boundary — skips become early `return`s here). `Manager` is in
-/// scope via the module-level `use`, so `get_webview_window`/`state` resolve.
-fn checkpoint_tick(
+/// One iteration of the metronome loop: heartbeat the run marker, then post
+/// the window work to the main thread with backpressure so at most one
+/// upkeep closure is ever outstanding. Split out of the loop so the whole
+/// body runs inside `catch_unwind` (skips are early returns, not `continue`).
+fn metronome_tick(
     handle: &tauri::AppHandle,
-    last_pos: &mut Option<(i32, i32)>,
+    checkpointer: &Arc<Mutex<vault_buddy_core::checkpoint::PositionCheckpointer>>,
+    upkeep_pending: &Arc<AtomicBool>,
     ticks: &mut u32,
-    saved_once: &mut bool,
+    stalled: &mut u32,
+) {
+    *ticks = ticks.saturating_add(1);
+    // Re-stamp the run marker every ~15s, whatever the window or main thread
+    // are doing: a hidden buddy or a busy UI is still a running session and
+    // must keep heartbeating. This is a backstop once re-armed — see
+    // `heartbeat_running_marker`'s doc for why a premature "clean" stamp
+    // needs an explicit re-arm, not just this.
+    if ticks.is_multiple_of(15) {
+        crate::diagnostics::heartbeat_running_marker();
+    }
+    if upkeep_pending.load(Ordering::Acquire) {
+        // The previous tick's closure was never serviced. Don't stack more
+        // work behind it; report a wedge once it is clearly not a transient
+        // stall — this exact silence used to be an invisible mid-drag
+        // deadlock, so it must reach the log.
+        *stalled = stalled.saturating_add(1);
+        if *stalled == MAIN_THREAD_STALL_TICKS {
+            log::error!(
+                "main thread has not serviced window upkeep for \
+                 ~{MAIN_THREAD_STALL_TICKS}s — the UI may be wedged; \
+                 last window move {:?} ms ago",
+                ms_since_last_move()
+            );
+        }
+        return;
+    }
+    if *stalled >= MAIN_THREAD_STALL_TICKS {
+        log::info!("main thread responsive again after ~{stalled}s of window-upkeep backlog");
+    }
+    *stalled = 0;
+    upkeep_pending.store(true, Ordering::Release);
+    let handle2 = handle.clone();
+    let cp = checkpointer.clone();
+    let pending = upkeep_pending.clone();
+    let posted = handle.run_on_main_thread(move || {
+        // A panic here would unwind into the native event loop (a process
+        // abort on Windows) — isolate it, and always clear the pending flag
+        // so one bad tick can't wedge the backpressure gate forever.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            window_upkeep_tick(&handle2, &cp);
+        }));
+        if outcome.is_err() {
+            log::error!("window upkeep tick panicked; continuing");
+        }
+        pending.store(false, Ordering::Release);
+    });
+    if posted.is_err() {
+        // Event loop gone (shutdown in progress) — not a stall. Clear the
+        // gate so a late tick before teardown doesn't false-report a wedge.
+        log::warn!("window upkeep post skipped: event loop unavailable");
+        upkeep_pending.store(false, Ordering::Release);
+    }
+}
+
+/// One round of window upkeep: re-assert always-on-top and checkpoint the
+/// parked position.
+///
+/// MUST run on the main thread. Saving window state takes the window-state
+/// plugin's cache lock and then reads window geometry, and the plugin's own
+/// Moved listener takes the same lock on the main thread. Run off-main, a
+/// save colliding with a drag's Moved flood deadlocked both threads — the
+/// background thread held the cache lock while waiting for the main thread
+/// to answer a geometry query, the main thread sat in the Moved listener
+/// waiting for the cache lock — and the app froze mid-drag with no crash
+/// record (nothing panicked, nothing faulted; the frozen process was killed
+/// externally). On the main thread the same lock pair is serialized by
+/// construction, so the deadlock is gone regardless. The Moved-age gate plus
+/// the button-down gate keep even main-thread window work away from a live
+/// drag, and only a settled position is ever persisted, so a save never
+/// coincides with a move in practice.
+fn window_upkeep_tick(
+    handle: &tauri::AppHandle,
+    checkpointer: &Mutex<vault_buddy_core::checkpoint::PositionCheckpointer>,
 ) {
     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-    *ticks = ticks.saturating_add(1);
-    // Re-stamp the run marker every ~15s, regardless of window state: a
-    // hidden buddy (tray-hidden, or mid-recording with no visible window)
-    // is still a running session and must keep heartbeating, so this runs
-    // ABOVE the window-visibility early-returns below. This is a backstop
-    // once re-armed — see `heartbeat_running_marker`'s doc for why a
-    // premature "clean" stamp needs an explicit re-arm, not just this.
-    if (*ticks).is_multiple_of(15) {
-        crate::diagnostics::heartbeat_running_marker();
+    if !vault_buddy_core::checkpoint::is_quiescent(ms_since_last_move(), QUIESCE_MS) {
+        return;
+    }
+    // The Moved-age gate above misses a drag the user pauses for >2s with the
+    // button still held (the move loop is live but emits no Moved events). We
+    // run on the main thread here, so a direct button-state read is valid and
+    // catches exactly that case — never touch a window the user is dragging.
+    #[cfg(windows)]
+    if commands::primary_button_down() {
+        return;
     }
     let Some(window) = handle.get_webview_window("main") else {
         return;
@@ -303,7 +436,9 @@ fn checkpoint_tick(
     // taskbar. No event reaches us, so re-assert always-on-top every tick — a
     // cheap z-order-only SetWindowPos that never moves, resizes, or steals
     // focus. Log a failure instead of swallowing it: a persistent failure is
-    // how the buddy silently sinks behind the taskbar.
+    // how the buddy silently sinks behind the taskbar. (Mid-drag ticks are
+    // skipped above, but the window is moving itself then — its z-order
+    // cannot be usurped while it owns the move loop.)
     if let Err(e) = window.set_always_on_top(true) {
         log::warn!("always-on-top re-assert failed: {e}");
     }
@@ -313,22 +448,14 @@ fn checkpoint_tick(
         return;
     }
     if let Ok(pos) = window.outer_position() {
-        let pos = (pos.x, pos.y);
-        let moved = last_pos.is_some() && *last_pos != Some(pos);
-        // The early ticks must not write: a save that lands before the
-        // window-state plugin's restore would poison its cache with the
-        // pre-restore default position. But a drag within that window would be
-        // absorbed into the baseline and lost until the next move — so once
-        // restore has certainly landed, one unconditional save persists
-        // whatever the baseline is. Any successful save (moved or initial)
-        // counts.
-        let initial = !*saved_once && *ticks >= 3;
-        if moved || initial {
+        // The checkpointer defers the first save past the window-state
+        // plugin's restore and asks for one only once a changed position has
+        // settled; failed writes stay dirty and are retried next tick.
+        if lock_ignoring_poison(checkpointer).observe((pos.x, pos.y)) {
             match handle.save_window_state(StateFlags::POSITION) {
-                Ok(()) => *saved_once = true,
+                Ok(()) => lock_ignoring_poison(checkpointer).mark_saved(),
                 Err(e) => log::warn!("position checkpoint failed: {e}"),
             }
         }
-        *last_pos = Some(pos);
     }
 }

@@ -2,6 +2,7 @@ pub mod app_diagnostics;
 pub mod capture_config;
 pub mod capture_note;
 pub mod capture_paths;
+pub mod checkpoint;
 pub mod crash;
 pub mod daily_notes;
 pub mod discovery;

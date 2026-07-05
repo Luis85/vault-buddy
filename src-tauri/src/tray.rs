@@ -62,25 +62,43 @@ pub fn quit(app: &AppHandle) {
 }
 
 /// Final shutdown steps, shared by the immediate path and the
-/// finalize-first worker thread above. Safe to run off the main thread:
-/// in Tauri 2, Window::destroy and AppHandle::exit proxy their work to the
-/// event loop (tauri-runtime-wry sends destroy through the event-loop
-/// proxy) rather than requiring it, and the window-state plugin reads
-/// positions through the same thread-safe dispatchers.
+/// finalize-first worker thread above. The window tail is marshalled onto
+/// the MAIN thread: saving window state takes the window-state plugin's
+/// cache lock and then reads window geometry, and the plugin's Moved
+/// listener takes the same lock on the main thread — run from the
+/// shutdown-finalize worker while the user drags the still-visible buddy,
+/// the two would wedge forever (the same deadlock that froze the app
+/// mid-drag from the old off-main checkpoint save). From a menu callback
+/// this executes inline (already on the main thread), so the immediate
+/// path behaves exactly as before.
 fn finish_quit(app: &AppHandle) {
     log::info!("clean shutdown (quit)");
     crate::diagnostics::mark_clean_shutdown();
-    restore_home_position(app);
-    // app.exit bypasses window destruction, which is what the window-state
-    // plugin normally saves on — save explicitly.
-    let _ = app.save_window_state(StateFlags::POSITION);
-    // Destroy the webview before exiting so WebView2 can unregister its
-    // window class in order — otherwise dev consoles log a harmless
-    // "Failed to unregister class Chrome_WidgetWin_0" (ERROR_CLASS_HAS_WINDOWS).
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.destroy();
+    let app2 = app.clone();
+    let posted = app.run_on_main_thread(move || {
+        restore_home_position(&app2);
+        // app.exit bypasses window destruction, which is what the window-state
+        // plugin normally saves on — save explicitly. Log a failure: the
+        // process is dead moments later, so this line is the only evidence a
+        // buddy that respawns at a stale position leaves behind (the update
+        // path logs the same failure for the same reason).
+        if let Err(e) = app2.save_window_state(StateFlags::POSITION) {
+            log::error!("quit: saving window state failed: {e}");
+        }
+        // Destroy the webview before exiting so WebView2 can unregister its
+        // window class in order — otherwise dev consoles log a harmless
+        // "Failed to unregister class Chrome_WidgetWin_0" (ERROR_CLASS_HAS_WINDOWS).
+        if let Some(window) = app2.get_webview_window("main") {
+            let _ = window.destroy();
+        }
+        app2.exit(0);
+    });
+    if posted.is_err() {
+        // Event loop already gone — nothing left to save through; the clean
+        // marker is stamped, so just end the process.
+        log::warn!("quit: main thread unreachable — exiting directly");
+        std::process::exit(0);
     }
-    app.exit(0);
 }
 
 /// Recording indicator states the tray can show. Paused is deliberately

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import BuddyAvatar from "./BuddyAvatar.vue";
+import { logWarning } from "../logging";
 
 const props = withDefaults(
   defineProps<{
@@ -25,6 +25,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "toggle"): void;
   (e: "drag-start"): void;
+  (e: "drag-cancelled"): void;
 }>();
 
 // The buddy is both the click target (toggle panel) and the drag handle
@@ -61,14 +62,46 @@ function onPointerMove(e: PointerEvent) {
   }
   const moved = Math.hypot(e.screenX - pressedAt.x, e.screenY - pressedAt.y);
   if (moved < DRAG_THRESHOLD_PX) return;
+  // Past the threshold the press is a drag gesture, not a click — consume it
+  // (swallow the trailing click) whatever happens next.
   pressedAt = null;
   dragged = true;
+  // A fast flick can queue a pointermove that is only dispatched after the
+  // button was released. Starting the native drag from it would hand
+  // Windows a buttonless WM_NCLBUTTONDOWN — a "sticky" move loop that glues
+  // the buddy to the cursor and eats the next real press. The button is
+  // already visibly up here, so drop the drag but keep the gesture consumed.
+  if ((e.buttons & 1) === 0) return;
   // The OS move loop takes the mouse from here; let go of the capture.
   (e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(
     e.pointerId,
   );
+  // Arm App.vue's blur suppression BEFORE the move loop starts, so the
+  // focus loss it causes is recognised. Emitted synchronously (the OS blur
+  // arrives on a later turn) even though the command may still drop the
+  // request — a drop is retracted below.
   emit("drag-start");
-  void getCurrentWindow().startDragging();
+  // Rust-side chokepoint, not window.startDragging(): the command re-checks
+  // the primary button on the main thread right before entering the OS move
+  // loop, dropping requests that went stale in IPC transit. It reports
+  // whether the drag actually started; the pointer type lets it skip the
+  // mouse-only button re-check for touch/pen. `pointerType` can be absent on
+  // synthetic events — default to mouse so the guard still applies.
+  invoke<boolean>("start_buddy_drag", {
+    pointerType: e.pointerType || "mouse",
+  })
+    .then((started) => {
+      // Dropped in transit: no move loop began, so no blur will consume the
+      // suppression we just armed — retract it, or a later desktop click is
+      // wrongly swallowed and the panel stays open over the desktop.
+      if (!started) emit("drag-cancelled");
+    })
+    .catch((e) => {
+      // A genuine command failure (not just the no-Tauri unit-test path,
+      // which logWarning no-ops) still means no drag started.
+      logWarning(`start_buddy_drag failed: ${String(e)}`);
+      emit("drag-cancelled");
+    });
 }
 
 function onPointerEnd(e: PointerEvent) {
