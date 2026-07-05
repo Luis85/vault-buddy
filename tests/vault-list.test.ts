@@ -10,9 +10,17 @@ const mountList = (
   busyCommand: Busy = null,
   captureDisabled = false,
   recordingVaultId: string | null = null,
+  transcribingVaultId: string | null = null,
 ) =>
   mount(VaultList, {
-    props: { vaults, busyVaultId, busyCommand, captureDisabled, recordingVaultId },
+    props: {
+      vaults,
+      busyVaultId,
+      busyCommand,
+      captureDisabled,
+      recordingVaultId,
+      transcribingVaultId,
+    },
   });
 
 const sample = [
@@ -25,6 +33,12 @@ describe("VaultList", () => {
     const wrapper = mountList(sample);
     await wrapper.find('[aria-label="Open vault Personal"]').trigger("click");
     expect(wrapper.emitted("open-vault")).toEqual([["aaa111"]]);
+  });
+
+  it("shows a transcribing indicator on the transcribing vault", () => {
+    const wrapper = mountList(sample, null, null, false, null, "aaa111");
+    const dot = wrapper.get('[title="Transcribing…"]');
+    expect(dot.classes()).toContain("bg-violet-400");
   });
 
   it("opens the daily note from the calendar button", async () => {

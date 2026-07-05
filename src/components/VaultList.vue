@@ -8,6 +8,7 @@ const props = defineProps<{
   busyCommand: "open_vault" | "open_daily_note" | null;
   captureDisabled: boolean;
   recordingVaultId: string | null;
+  transcribingVaultId: string | null;
 }>();
 defineEmits<{
   (e: "open-vault", id: string): void;
@@ -102,6 +103,12 @@ const groups = computed(() => {
                 v-if="vault.id === recordingVaultId"
                 class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-red-500"
                 title="Recording…"
+                aria-hidden="true"
+              ></span>
+              <span
+                v-if="vault.id === transcribingVaultId"
+                class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-400"
+                title="Transcribing…"
                 aria-hidden="true"
               ></span>
             </span>

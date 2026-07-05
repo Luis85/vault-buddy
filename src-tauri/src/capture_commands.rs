@@ -1020,7 +1020,7 @@ fn process_transcription(
     let tier = ModelTier::from_str(&cfg.transcription_model);
     let _ = app.emit(
         "capture:transcribing",
-        serde_json::json!({ "mp3": job.mp3.to_string_lossy() }),
+        serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "vaultId": job.vault_id }),
     );
     let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
 

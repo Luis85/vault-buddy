@@ -201,6 +201,7 @@ function startWithMode(mode: "meeting" | "voice-note") {
         :busy-command="store.busyCommand"
         :capture-disabled="capture.status !== 'idle'"
         :recording-vault-id="capture.vaultId"
+        :transcribing-vault-id="capture.transcribingVaultId"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
         @capture="openRecordDialog($event)"

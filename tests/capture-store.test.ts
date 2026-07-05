@@ -302,6 +302,31 @@ describe("capture store", () => {
     expect(calls).not.toContain("open_transcript");
   });
 
+  it("tracks which vault is transcribing, then clears it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "/v/m.mp3", vaultId: "v7" } });
+    expect(store.transcribingVaultId).toBe("v7");
+    state.eventHandlers["capture:transcribed"]!({
+      payload: { mp3: "/v/m.mp3", transcript: "/v/m.transcript.md" },
+    });
+    expect(store.transcribingVaultId).toBeNull();
+  });
+
+  it("clears the transcribing vault on failure too", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "/v/m.mp3", vaultId: "v7" } });
+    state.eventHandlers["capture:transcribeFailed"]!({ payload: { mp3: "/v/m.mp3", message: "x" } });
+    expect(store.transcribingVaultId).toBeNull();
+  });
+
   it("pause and resume flow through IPC and mirror events", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

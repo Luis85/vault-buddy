@@ -36,6 +36,8 @@ export const useCaptureStore = defineStore("capture", {
     modelDownload: null as { model: string; received: number; total: number | null } | null,
     /** Most recent finished transcription; drives the "Open in Obsidian" row. */
     lastTranscribed: null as { mp3: string } | null,
+    /** Which vault is currently transcribing — drives the vault-row dot. */
+    transcribingVaultId: null as string | null,
     /** Post-save rename window; null once renamed/dismissed/expired. */
     lastSaved: null as { mp3: string; note: string | null } | null,
     renameError: null as string | null,
@@ -70,20 +72,23 @@ export const useCaptureStore = defineStore("capture", {
       await listen<{ message: string }>("capture:warning", (event) => {
         this.warning = event.payload.message;
       });
-      await listen<{ mp3: string }>("capture:transcribing", () => {
+      await listen<{ mp3: string; vaultId: string }>("capture:transcribing", (event) => {
         this.transcribing = true;
         this.transcriptError = null;
+        this.transcribingVaultId = event.payload.vaultId;
       });
       await listen<CaptureTranscribed>("capture:transcribed", (event) => {
         this.transcribing = false;
         this.modelDownload = null;
         this.lastTranscribed = { mp3: event.payload.mp3 };
+        this.transcribingVaultId = null;
       });
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
         this.transcribing = false;
         this.modelDownload = null;
         this.transcriptError = event.payload.message;
         this.transcriptFailedMp3 = event.payload.mp3;
+        this.transcribingVaultId = null;
       });
       await listen<ModelDownload>("capture:modelDownload", (event) => {
         this.modelDownload = event.payload;
