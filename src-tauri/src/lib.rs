@@ -273,6 +273,7 @@ pub fn run() {
             commands::close_panel,
             commands::close_bubble,
             commands::get_buddy_facing,
+            commands::get_bubble_anchor,
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,

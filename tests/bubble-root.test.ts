@@ -45,6 +45,20 @@ describe("BubbleRoot", () => {
     );
   });
 
+  it("pulls the anchor on mount so the tail is right before any event", async () => {
+    // The bubble webview mounts after Rust's startup emits, so it must PULL the
+    // anchor, not only wait for the event (the "bubble too high until I drag"
+    // race).
+    mockIPC((cmd) => {
+      if (cmd === "get_bubble_anchor") return { side: "left", valign: "bottom" };
+    });
+    const wrapper = mount(BubbleRoot);
+    await flushPromises();
+    const bubble = wrapper.get('[data-testid="speech-bubble"]');
+    expect(bubble.classes()).toContain("side-left");
+    expect(bubble.classes()).toContain("valign-bottom");
+  });
+
   it("points the tail per the bubble-anchor event from Rust", async () => {
     const wrapper = mount(BubbleRoot);
     await flushPromises();

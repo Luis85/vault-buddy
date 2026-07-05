@@ -27,6 +27,20 @@ watch(bubbleVisible, (visible) => {
 });
 
 onMounted(async () => {
+  // Pull the current anchor first: the bubble webview is hidden until the
+  // greeting shows, so it can register the listener below only AFTER Rust's
+  // startup anchor emits have fired — leaving the tail on its default until a
+  // drag re-emits. Pulling on mount closes that race.
+  try {
+    const anchor = await invoke<{
+      side: "left" | "right";
+      valign: "top" | "middle" | "bottom";
+    }>("get_bubble_anchor");
+    side.value = anchor.side;
+    valign.value = anchor.valign;
+  } catch {
+    // not under Tauri (unit tests) — keep the defaults
+  }
   try {
     unlistenAnchor = await listen<{
       side: "left" | "right";

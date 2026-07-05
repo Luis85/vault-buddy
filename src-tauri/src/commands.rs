@@ -276,18 +276,11 @@ fn place_beside_buddy(
     Some((tauri::PhysicalPosition::new(x, point.y), anchor))
 }
 
-/// Tell the bubble window which side/valign it landed on so it can draw its
-/// tail pointing back at the buddy. Emitted on every (re)placement, so the tail
-/// flips live when a drag carries the buddy across the screen midline or to an
-/// edge. Emitted app-wide (only the bubble window listens) — the payload keys
-/// match the SpeechBubble `side`/`valign` props.
-fn emit_bubble_anchor(
-    app: &tauri::AppHandle,
-    anchor: vault_buddy_core::companion_placement::Anchor,
-) {
-    use tauri::Emitter;
+/// The `{side, valign}` payload (matching the SpeechBubble props) for an anchor.
+/// Shared by the `bubble-anchor` event and the `get_bubble_anchor` pull.
+fn anchor_payload(anchor: vault_buddy_core::companion_placement::Anchor) -> serde_json::Value {
     use vault_buddy_core::companion_placement::{Side, VAlign};
-    let payload = serde_json::json!({
+    serde_json::json!({
         "side": match anchor.side {
             Side::Left => "left",
             Side::Right => "right",
@@ -297,8 +290,44 @@ fn emit_bubble_anchor(
             VAlign::Middle => "middle",
             VAlign::Bottom => "bottom",
         },
+    })
+}
+
+/// Tell the bubble window which side/valign it landed on so it can draw its
+/// tail pointing back at the buddy. Emitted on every (re)placement, so the tail
+/// flips live when a drag carries the buddy across the screen midline or to an
+/// edge. Emitted app-wide (only the bubble window listens).
+fn emit_bubble_anchor(
+    app: &tauri::AppHandle,
+    anchor: vault_buddy_core::companion_placement::Anchor,
+) {
+    use tauri::Emitter;
+    let _ = app.emit("bubble-anchor", anchor_payload(anchor));
+}
+
+/// The bubble's current placement anchor, so `BubbleRoot` can render its tail
+/// correctly on mount instead of racing the `bubble-anchor` event: the bubble
+/// webview is hidden until the greeting shows, so it can register its listener
+/// after the startup emits have already fired (the "bubble too high until I
+/// drag" bug). Mirrors the facing pull (`get_buddy_facing`). Defaults to
+/// right/middle when the geometry isn't available.
+#[tauri::command]
+pub fn get_bubble_anchor(app: tauri::AppHandle) -> serde_json::Value {
+    use tauri::Manager;
+    let anchor = app.get_webview_window("bubble").and_then(|bubble| {
+        place_beside_buddy(
+            &app,
+            &bubble,
+            SidePref::TowardCenter,
+            vault_buddy_core::companion_placement::VMode::Center,
+            BUBBLE_TUCK_FRAC,
+        )
+        .map(|(_, a)| a)
     });
-    let _ = app.emit("bubble-anchor", payload);
+    match anchor {
+        Some(a) => anchor_payload(a),
+        None => serde_json::json!({ "side": "right", "valign": "middle" }),
+    }
 }
 
 /// Move the (hidden) panel window beside the buddy, respecting screen edges.
