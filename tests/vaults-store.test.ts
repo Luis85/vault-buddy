@@ -33,23 +33,23 @@ describe("vaults store", () => {
     expect(store.loaded).toBe(true);
   });
 
-  it("opening the panel triggers the first load", async () => {
+  it("refresh triggers a load", async () => {
     mockIPC((cmd) => {
       if (cmd === "list_vaults") return sampleVaults;
     });
     const store = useVaultsStore();
-    expect(store.panelOpen).toBe(false);
-    await store.togglePanel();
-    expect(store.panelOpen).toBe(true);
+    expect(store.loaded).toBe(false);
+    await store.refresh();
+    expect(store.loaded).toBe(true);
     expect(store.vaults).toEqual(sampleVaults);
   });
 
-  it("reopening the panel always lands on the vault list", async () => {
+  it("refresh always lands on the vault list", async () => {
     mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();
     store.openSettings();
     expect(store.view).toBe("settings");
-    await store.togglePanel(); // open
+    await store.refresh();
     expect(store.view).toBe("list");
     store.openCaptureSettings("v1");
     expect(store.view).toBe("captureSettings");
@@ -66,28 +66,24 @@ describe("vaults store", () => {
     });
     const store = useVaultsStore();
     await store.runAction("open_daily_note", "a1b2c3");
-    expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "a1b2c3" } }]);
+    expect(calls).toEqual([
+      { cmd: "open_daily_note", args: { id: "a1b2c3" } },
+      { cmd: "close_panel", args: {} },
+    ]);
     expect(store.busyVaultId).toBe(null);
     expect(store.busyCommand).toBe(null);
     expect(store.error).toBe(null);
   });
 
-  it("closes the panel after a successful action", async () => {
-    mockIPC(() => undefined);
-    const store = useVaultsStore();
-    store.panelOpen = true;
-    await store.runAction("open_vault", "a1b2c3");
-    expect(store.panelOpen).toBe(false);
-  });
-
-  it("keeps the panel open when an action fails", async () => {
-    mockIPC(() => {
+  it("does not close the panel when an action fails", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
       throw "vault not found: nope";
     });
     const store = useVaultsStore();
-    store.panelOpen = true;
     await store.runAction("open_vault", "nope");
-    expect(store.panelOpen).toBe(true);
+    expect(calls).not.toContain("close_panel");
     expect(store.error).toContain("vault not found");
   });
 
@@ -112,18 +108,17 @@ describe("vaults store", () => {
     expect(store.error).toContain("ipc unavailable");
   });
 
-  it("re-runs discovery on every panel open so an empty first load can recover", async () => {
+  it("re-runs discovery on every refresh so an empty first load can recover", async () => {
     let discovered: typeof sampleVaults = [];
     mockIPC((cmd) => {
       if (cmd === "list_vaults") return discovered;
     });
     const store = useVaultsStore();
-    await store.togglePanel(); // Obsidian not set up yet
+    await store.refresh(); // Obsidian not set up yet
     expect(store.vaults).toEqual([]);
-    await store.togglePanel(); // close
 
     discovered = sampleVaults; // user has now opened Obsidian
-    await store.togglePanel(); // reopen
+    await store.refresh(); // reopen
     expect(store.vaults).toEqual(sampleVaults);
   });
 
@@ -201,5 +196,51 @@ describe("vaults store", () => {
     store.openCaptureSettings("a1b2c3");
     store.back();
     expect(store.view).toBe("list");
+  });
+
+  it("refresh() lands on the vault list and re-runs discovery", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_vaults") return sampleVaults;
+    });
+    const store = useVaultsStore();
+    store.openSettings();
+    expect(store.view).toBe("settings");
+    await store.refresh();
+    expect(store.view).toBe("list");
+    expect(calls).toContain("list_vaults");
+    expect(store.vaults).toEqual(sampleVaults);
+  });
+
+  it("requestView survives the next open refresh, then reverts to list", async () => {
+    // a failed update install requests the settings view before reopening the
+    // panel; the panel-shown refresh must honor it once (not clobber to list),
+    // then a later open falls back to the vault list.
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestView("settings");
+    expect(store.view).toBe("settings"); // reflected immediately
+    await store.refresh(); // simulates the panel-shown refresh
+    expect(store.view).toBe("settings"); // honored, not reset to list
+    await store.refresh(); // a subsequent open
+    expect(store.view).toBe("list"); // request was one-shot
+  });
+
+  it("requestView can target the capture settings of a specific vault", async () => {
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestView("captureSettings", "v1");
+    await store.refresh();
+    expect(store.view).toBe("captureSettings");
+    expect(store.captureSettingsVaultId).toBe("v1");
+  });
+
+  it("refresh bumps shownNonce so the panel can reset transient UI on open", async () => {
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    const before = store.shownNonce;
+    await store.refresh();
+    expect(store.shownNonce).toBe(before + 1);
   });
 });

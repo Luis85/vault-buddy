@@ -16,6 +16,16 @@ Tasks become first-class knowledge objects that are directly connected to projec
 
 Users should be able to create, organize and complete tasks without ever opening Obsidian.
 
+## Domain Model: Task vs Task Tag vs Todo
+
+Vault Buddy draws a hard line between three concepts that everyday language flattens into "task":
+
+- **Task** — always its own Markdown document, with frontmatter, living in the Vault's Task Folder. A Task optionally names a parent Task, so Tasks can form hierarchies (a large Task broken into child Tasks) without ever leaving the file system.
+- **Task Tag** — a tag on any other Note (one whose frontmatter type is not Task) marking that Note itself as something to be done — a meeting note awaiting follow-up, a project note with an open action. The Note keeps its own type, location and purpose; it does not move into the Task Folder and does not gain Task properties like Status or Parent Task. Task Management surfaces it without owning it.
+- **Todo** — an inline checklist line (`- [ ] description`) inside any Note's body — a Task, a Task-tagged Note, or any other Note — used to track granular progress or present a checklist. A Todo has no frontmatter and no identity outside the Note containing it.
+
+Every capability below that says "Task" means the Markdown document; where Task Tags or Todos are involved, this PRD says so explicitly.
+
 ## Mission
 
 Provide a fast, desktop-native task management experience that integrates seamlessly with every configured Vault while remaining completely independent from the Obsidian application.
@@ -156,10 +166,28 @@ Each task contains structured metadata.
 - Tags
 - Project
 - Task List
+- Parent Task
 - Related Notes
 - Attachments
 
+`Parent Task` is optional and references another Task, so Tasks can be organized into hierarchies (e.g. a large Task broken into child Tasks) purely through frontmatter — no nested folders required.
+
 This allows compatibility with Obsidian Properties, Dataview and future AI capabilities.
+
+## Task Tag Model
+
+Any Note that is not itself a Task can carry a Task Tag — e.g. a `Task` entry in its `tags` frontmatter, or an inline `#Task` — to mark it as something to be done. Tagging a Note this way never moves it into the Task Folder, never gives it a Parent Task, and never adds Task properties like Status or Priority; it only marks an existing Note as actionable so Task Management can surface it alongside real Tasks.
+
+## Todo Model
+
+Todos live inside a Note's Markdown body, not in frontmatter. This applies equally to a Task, a Task-tagged Note, or any other Note in the Vault:
+
+```markdown
+- [ ] Draft the cutover checklist
+- [x] Confirm release window with stakeholders
+```
+
+A Todo is a plain checklist line — no properties, no filename, no identity beyond its position in the Note's body. Todos let a single Note carry its own granular checklist (e.g. the steps of a release) without spawning a file per step. Toggling a Todo's checkbox is the primary way progress is recorded within a Note; on a Task, it does not, by itself, change the Task's own `Status` property.
 
 ## Functional Requirements
 
@@ -180,6 +208,19 @@ This allows compatibility with Obsidian Properties, Dataview and future AI capab
 - Archive
 - Delete
 - Duplicate
+
+### Task Tags
+
+- Apply a Task Tag to any Note that is not itself a Task
+- Remove a Task Tag from a Note
+- Surface Task-tagged Notes in the Aggregated Task View alongside Tasks
+
+### Todos
+
+- Add a Todo line to any Note's body (Task, Task-tagged Note, or otherwise)
+- Toggle a Todo's checked state
+- Remove a Todo line
+- Reorder Todos within a Note
 
 ### Task Lists
 
@@ -202,7 +243,7 @@ Custom lists are stored as metadata rather than physical folders.
 
 ### Aggregated Task View
 
-Vault Buddy aggregates every configured Vault into a unified task dashboard.
+Vault Buddy aggregates every configured Vault into a unified task dashboard, including both Tasks and Task-tagged Notes. Todos are surfaced within whichever Note or Task contains them, not as separate rows.
 
 Users can filter by:
 
@@ -250,7 +291,8 @@ The desktop dashboard displays:
 
 ### AI Features (Future)
 
-- Generate subtasks
+- Generate child Tasks
+- Generate Todos
 - Estimate effort
 - Suggest priority
 - Suggest due date
@@ -375,7 +417,7 @@ Obsidian is never required for creating or editing tasks.
 
 Task Management becomes the operational layer of the personal knowledge system.
 
-Instead of isolated todos, users manage interconnected work items that are directly linked to the knowledge from which they originated.
+Instead of isolated checklists scattered across sticky notes and chat threads, users manage interconnected Tasks that are directly linked to the knowledge from which they originated.
 
 Every task has context. Every task is searchable. Every task is connected.
 

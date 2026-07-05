@@ -2,12 +2,10 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useVaultsStore } from "../stores/vaults";
 import { logWarning } from "../logging";
 import type { Recording } from "../types";
 
 const props = defineProps<{ vaultId: string }>();
-const store = useVaultsStore();
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -112,7 +110,10 @@ async function open(mp3: string) {
   openError.value = null;
   try {
     await invoke("open_recording", { path: mp3 });
-    store.panelOpen = false; // Obsidian takes over — get out of the way
+    // Obsidian takes over — get the panel out of the way. Panel visibility is
+    // owned by Rust in the split-window architecture (close_panel), not a store
+    // flag; best-effort, mirroring the vault-open path in the vaults store.
+    void invoke("close_panel").catch(() => {});
   } catch (e) {
     // A failed open (recording moved, launch error) is non-fatal — surface it
     // and keep the list so the user can pick another.

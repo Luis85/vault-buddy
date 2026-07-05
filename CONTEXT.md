@@ -25,8 +25,16 @@ The seven-stage journey every piece of information follows inside Vault Buddy: C
 _Avoid_: Workflow — a Workflow is one concrete automation; the Lifecycle is the overarching journey every capability serves
 
 **Task**:
-A first-class knowledge object, stored as its own Markdown document inside a Vault's Task Folder, connected to the notes, Projects, or Captures it originated from.
-_Avoid_: Todo, checklist item
+A first-class knowledge object, stored as its own Markdown document inside a Vault's Task Folder, connected via frontmatter to the notes, Projects, or Captures it originated from, and optionally to a parent Task — letting Tasks form hierarchies of child Tasks. Progress inside a single Task is tracked with Todos in its body; a Todo is never itself a Task, and a Note carrying only a Task Tag is not a Task either.
+_Avoid_: Task Note (redundant — a Task is always a note, "Task" alone is canonical), subtask (ambiguous — say "child Task" for a Task-level hierarchy or "Todo" for an inline checklist line), checklist item
+
+**Task Tag**:
+A tag placed on a Note whose frontmatter type is not Task, marking that Note itself as something to be done. The Note keeps its own type, location and purpose — Task Management surfaces it as actionable without relocating it into the Task Folder or granting it Task properties (Status, Priority, Parent Task, …).
+_Avoid_: Task, tagged Task — a Task-tagged Note is not a Task
+
+**Todo**:
+An inline checklist line, written `- [ ] description`, inside any Note's body — a Task, a Task-tagged Note, or any other Note — used to track granular progress or present a checklist for that Note. A Todo has no frontmatter, no file of its own, and no identity outside the Note containing it.
+_Avoid_: Task, subtask, todo item
 
 **Task List**:
 A named grouping of Tasks (e.g. Inbox, Today, Someday) held as metadata on a Task, not as a physical folder.

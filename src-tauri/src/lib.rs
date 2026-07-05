@@ -25,7 +25,7 @@ const MAIN_THREAD_STALL_TICKS: u32 = 10;
 /// moves. Stamped by the window-event hook on the main thread, read by the
 /// upkeep tick so every window touch stays away from a window in motion.
 /// A plain `Mutex<Option<Instant>>` (the codebase's shared-state idiom — see
-/// `PanelOffset`, `MARKER_GATE`) rather than a hand-encoded atomic sentinel.
+/// `MARKER_GATE`) rather than a hand-encoded atomic sentinel.
 static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
 
 fn stamp_window_moved() {
@@ -36,6 +36,85 @@ fn ms_since_last_move() -> Option<u64> {
     // Copy the Option out of the guard (Instant is Copy) before mapping —
     // Option::map takes self by value and can't move out of a MutexGuard.
     (*lock_ignoring_poison(&LAST_MOVE)).map(|at| at.elapsed().as_millis() as u64)
+}
+
+/// Hide the panel once focus has really left the app. Clicking from the panel
+/// to the buddy (or back) fires the source window's blur BEFORE the
+/// destination's focus lands, so a check run at blur time would see neither
+/// window focused and wrongly hide a panel that is merely handing focus to the
+/// buddy. The check must therefore be deferred until focus settles.
+///
+/// It cannot be deferred with `run_on_main_thread` alone: that runs the closure
+/// INLINE when called from the main thread, and window events are dispatched on
+/// the main thread — so the closure would run synchronously inside the blur
+/// event, before focus settles. A real delay on a worker thread is required;
+/// only then is the check marshaled back to the main thread (where window
+/// getters/`hide` are valid). The check only ever HIDES — never shows — so it
+/// can never fight `toggle_panel` into a reopen: a buddy click that closes the
+/// panel via `toggle_panel` leaves this deferred check a no-op.
+fn schedule_focus_out_check(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("focus-out-check".into())
+        .spawn(move || {
+            // Let the OS focus transition (WM_KILLFOCUS → WM_SETFOCUS) complete
+            // before sampling focus. Imperceptible to the user; a click-away
+            // just closes the panel a fraction of a second later.
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let checked = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                use tauri::Manager;
+                let focused = |label: &str| {
+                    checked
+                        .get_webview_window(label)
+                        .and_then(|w| w.is_focused().ok())
+                        .unwrap_or(false)
+                };
+                if !focused("main") && !focused("panel") {
+                    if let Some(panel) = checked.get_webview_window("panel") {
+                        if panel.is_visible().unwrap_or(false) {
+                            let _ = panel.hide();
+                        }
+                    }
+                }
+            });
+        });
+    // This runs inside the window-event handler on the main thread; a panic
+    // there aborts across the WebView2 FFI boundary. A spawn failure must not
+    // do that — dropping one click-away check is harmless (the panel's next
+    // blur reschedules), so log it instead of `.expect`.
+    if let Err(e) = spawned {
+        log::warn!("could not spawn focus-out-check thread: {e}");
+    }
+}
+
+/// Show the greeting bubble beside the buddy, a beat after launch so the buddy
+/// is visibly settled before it greets. The buddy's parked position is restored
+/// synchronously in `setup` (before this runs), so — unlike the old design —
+/// there is nothing to wait out and no need to re-pin the bubble repeatedly: a
+/// single settle then show suffices. The frontend pulls both the facing and the
+/// bubble anchor on mount (`get_buddy_facing` / `get_bubble_anchor`), so one
+/// post-show facing emit is enough to cover a buddy webview that happened to
+/// mount before the restore landed. Best-effort: a spawn failure just skips the
+/// greeting.
+fn schedule_show_bubble(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("show-bubble".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let a = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                commands::show_bubble(&a);
+                // The restored position need not have surfaced as a Moved event,
+                // so emit the facing once here — the sprite then faces correctly
+                // even if the buddy webview mounted before the restore landed.
+                commands::emit_buddy_facing(&a);
+            });
+        });
+    if let Err(e) = spawned {
+        log::warn!("could not spawn show-bubble thread: {e}");
+    }
 }
 
 pub fn run() {
@@ -91,6 +170,15 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
+                // The panel and bubble are transient — positioned fresh beside
+                // the buddy every time — so persisting their positions is
+                // pointless (it only wrote garbage coords to the state file).
+                .with_denylist(&["panel", "bubble"])
+                // The plugin's implicit restore of the buddy lands a beat AFTER
+                // the visible window is first painted at the OS default — the
+                // startup "buddy jumps from the default corner to home" bug.
+                // Skip it and restore explicitly in `setup`, before showing.
+                .skip_initial_state("main")
                 .build(),
         )
         // In-app updates: the settings panel checks GitHub Releases'
@@ -98,18 +186,30 @@ pub fn run() {
         // relaunch after install.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
         .manage(capture_commands::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
-        // destruction — restore the unshifted home position first so a
-        // panel-open-at-the-edge close can't persist the shifted point.
+        // destruction.
         .on_window_event(|window, event| match event {
             // Every move re-arms the upkeep tick's quiescence gate — window
             // work must never collide with a window in motion.
-            tauri::WindowEvent::Moved(_) => stamp_window_moved(),
+            tauri::WindowEvent::Moved(_) => {
+                stamp_window_moved();
+                // The buddy faces toward the screen center: a move can carry it
+                // across the midline, flipping the sprite (emit is deduped, so
+                // this is cheap on the Moved flood). The greeting bubble tracks
+                // the buddy too — while visible, reposition it so it stays
+                // beside the buddy instead of stranding. Keyed on the buddy
+                // window so the bubble's own resulting Moved can't recurse; both
+                // run here on the main thread and touch no shared lock, so they
+                // cannot recreate the off-main save-vs-Moved deadlock.
+                if window.label() == "main" {
+                    commands::emit_buddy_facing(window.app_handle());
+                    commands::reposition_bubble_if_visible(window.app_handle());
+                }
+            }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
                 if capture_commands::is_recording(app) {
@@ -127,20 +227,28 @@ pub fn run() {
                             capture_commands::finalize_if_recording(&app);
                             // The recording is finalized, so is_recording is
                             // now false and the re-triggered CloseRequested
-                            // takes the else branch below (restore + pass
-                            // through to destruction) — no loop.
+                            // takes the else branch below (pass through to
+                            // destruction) — no loop.
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.close();
                             }
                         })
                         .expect("failed to spawn close-finalize thread");
                 } else {
-                    tray::restore_home_position(app);
                     // Alt+F4 / session end: the window is about to be
                     // destroyed and the process exits with it.
                     log::info!("clean shutdown (window close)");
                     diagnostics::mark_clean_shutdown();
                 }
+            }
+            // Only the panel's OWN blur can mean "clicked away from the
+            // panel". Scheduling on every window's blur spawned a worker
+            // thread per blur (the buddy blurs constantly) and, worse, the
+            // buddy blurs AS the panel takes focus on open — a check fired
+            // from that could hide the just-opened panel before its focus
+            // landed. Keying on the panel's blur removes both.
+            tauri::WindowEvent::Focused(false) if window.label() == "panel" => {
+                schedule_focus_out_check(window.app_handle())
             }
             _ => {}
         })
@@ -149,8 +257,11 @@ pub fn run() {
             commands::open_vault,
             commands::open_daily_note,
             commands::prepare_update_install,
-            commands::set_panel_offset,
-            commands::set_window_geometry,
+            commands::toggle_panel,
+            commands::close_panel,
+            commands::close_bubble,
+            commands::get_buddy_facing,
+            commands::get_bubble_anchor,
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
@@ -239,7 +350,23 @@ pub fn run() {
                     log::warn!("could not write the run marker: {e}");
                 }
             }
+            // Restore the buddy to its parked position and only THEN show it.
+            // The window is created hidden (visible:false) and the plugin's
+            // implicit restore is skipped (skip_initial_state), so it never
+            // paints at the OS default corner first — removing the startup
+            // "buddy jumps from the default to home" flash, and letting the
+            // greeting (scheduled below) land against the real home position.
+            if let Some(main) = app.get_webview_window("main") {
+                use tauri_plugin_window_state::{StateFlags, WindowExt};
+                if let Err(e) = main.restore_state(StateFlags::POSITION) {
+                    log::warn!("could not restore the buddy position: {e}");
+                }
+                if let Err(e) = main.show() {
+                    log::warn!("could not show the buddy window: {e}");
+                }
+            }
             tray::create_tray(app.handle())?;
+            schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
             capture_commands::run_transcription(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
@@ -445,11 +572,6 @@ fn window_upkeep_tick(
     // cannot be usurped while it owns the move loop.)
     if let Err(e) = window.set_always_on_top(true) {
         log::warn!("always-on-top re-assert failed: {e}");
-    }
-    // Never persist while the panel has the window shifted — only the
-    // unshifted home position may reach disk.
-    if handle.state::<commands::PanelOffset>().get() != (0, 0) {
-        return;
     }
     if let Ok(pos) = window.outer_position() {
         // The checkpointer defers the first save past the window-state

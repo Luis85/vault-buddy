@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
@@ -44,8 +44,20 @@ function onFilterEscape(event: KeyboardEvent) {
   }
 }
 
-// The panel component is destroyed on close — that IS the close signal.
-onUnmounted(() => capture.dismissRename());
+// The panel window is only hidden/shown, not unmounted, so onUnmounted no
+// longer fires on close and transient UI used to survive a close-and-reopen.
+// `shownNonce` bumps each time Rust re-shows the panel (see PanelRoot /
+// toggle_panel's panel-shown event): treat it as the reopen signal and clear
+// what a close used to reset — the filter text and a lingering post-save
+// rename prompt. (The record chooser is now a store-owned view, reset by
+// `refresh`/`showList`, so it needs no local teardown here.)
+watch(
+  () => store.shownNonce,
+  () => {
+    filter.value = "";
+    capture.dismissRename();
+  },
+);
 </script>
 
 <template>

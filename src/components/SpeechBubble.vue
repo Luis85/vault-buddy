@@ -1,11 +1,12 @@
 <script setup lang="ts">
 defineProps<{
   text: string;
-  // mirror the layout so the tail sits on the buddy's side; when the window
-  // is edge-shifted the bubble unfolds away from the edge and the tail still
-  // points back toward the buddy
+  // The tail points back at the buddy: `side` puts it on the buddy-facing
+  // face; `valign` sets its vertical position — `middle` (level with the
+  // buddy) is the common case, `top`/`bottom` only when a screen edge pushes
+  // the bubble above or below the buddy's center.
   side: "left" | "right";
-  valign: "up" | "down";
+  valign: "top" | "middle" | "bottom";
 }>();
 </script>
 
@@ -46,11 +47,17 @@ defineProps<{
   height: 10px;
   background: inherit;
   transform: rotate(45deg);
-  top: 24px;
 }
-.bubble.valign-up::after {
-  top: auto;
-  bottom: 24px;
+/* Vertical tail position, aimed at the buddy. */
+.bubble.valign-top::after {
+  top: 20px;
+}
+.bubble.valign-middle::after {
+  top: 50%;
+  margin-top: -5px; /* centre the 10px diamond on the card's vertical middle */
+}
+.bubble.valign-bottom::after {
+  bottom: 20px;
 }
 .bubble.side-right::after {
   left: -4px;

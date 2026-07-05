@@ -2,17 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import CompanionCharacter from "../src/components/CompanionCharacter.vue";
+import BuddyAvatar from "../src/components/BuddyAvatar.vue";
 
 const ipcCalls: Array<{ cmd: string; args: unknown }> = [];
 // The OS drag must go through the Rust-side start_buddy_drag command (which
 // drops requests whose mouse button is already up again) — never through the
 // raw window API.
 const dragCalls = () => ipcCalls.filter((c) => c.cmd === "start_buddy_drag");
-
-// Whether the mocked start_buddy_drag reports the OS drag actually started.
-// The command drops a request whose button went up in IPC transit and
-// answers `false`; tests that exercise that path flip this.
-let dragStarted = true;
 
 // The standard mouse flick: press, then a move past the threshold with the
 // button still physically down. Centralized so the gesture contract lives in
@@ -35,10 +31,9 @@ async function flick(
 describe("CompanionCharacter", () => {
   beforeEach(() => {
     ipcCalls.length = 0;
-    dragStarted = true;
     mockIPC((cmd, args) => {
       ipcCalls.push({ cmd, args });
-      if (cmd === "start_buddy_drag") return dragStarted;
+      if (cmd === "start_buddy_drag") return true;
     });
   });
 
@@ -119,30 +114,6 @@ describe("CompanionCharacter", () => {
     await flick(wrapper.find("button.buddy"), { pointerType: "touch" });
     expect(dragCalls()).toHaveLength(1);
     expect(dragCalls()[0].args).toEqual({ pointerType: "touch" });
-  });
-
-  it("cancels the drag suppression when the command drops a stale request", async () => {
-    // The button can go up in IPC transit: the frontend already emitted
-    // drag-start (arming App.vue's blur suppression), but the OS move loop
-    // never begins, so no drag-induced blur will arrive to consume it. The
-    // component must retract the arm, or a later real desktop-click blur is
-    // wrongly swallowed and the panel stays open over the desktop.
-    dragStarted = false;
-    const wrapper = mount(CompanionCharacter, { props: { working: false } });
-    await flick(wrapper.find("button.buddy"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(wrapper.emitted("drag-start")).toHaveLength(1);
-    expect(wrapper.emitted("drag-cancelled")).toHaveLength(1);
-  });
-
-  it("leaves the suppression armed when the drag actually starts", async () => {
-    const wrapper = mount(CompanionCharacter, { props: { working: false } });
-    await flick(wrapper.find("button.buddy"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(wrapper.emitted("drag-start")).toHaveLength(1);
-    expect(wrapper.emitted("drag-cancelled")).toBeUndefined();
   });
 
   it("never starts an OS drag from a move that arrives after the button is up", async () => {
@@ -260,6 +231,42 @@ describe("CompanionCharacter", () => {
     await buddy.trigger("click", { detail: 1 }); // swallowed trailing click
     await buddy.trigger("click", { detail: 1 }); // genuine follow-up click
     expect(wrapper.emitted("toggle")).toHaveLength(1);
+  });
+
+  // A click and a drop each bob the buddy once (one idle burst), driven by an
+  // incrementing nonce passed down to BuddyAvatar. The nonce is the observable
+  // contract; whether the sprite actually animates is BuddyAvatar's own tested
+  // concern (and gated on the animations-off setting there).
+  const playNonce = (w: ReturnType<typeof mount>) =>
+    w.findComponent(BuddyAvatar).props("playNonce");
+
+  it("bobs the buddy once on a real click", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    expect(playNonce(wrapper)).toBe(0);
+    await wrapper.find("button.buddy").trigger("click");
+    expect(playNonce(wrapper)).toBe(1);
+  });
+
+  it("bobs the buddy when a drag ends via the trailing click, not on pickup", async () => {
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    await flick(buddy);
+    // picking the buddy up must not bob — only landing does
+    expect(playNonce(wrapper)).toBe(0);
+    await buddy.trigger("click", { detail: 1 }); // the drop's trailing click
+    expect(playNonce(wrapper)).toBe(1);
+    // the trailing click still must not open the panel
+    expect(wrapper.emitted("toggle")).toBeUndefined();
+  });
+
+  it("bobs the buddy when the drag ends with no trailing click", async () => {
+    // Windows can swallow the release (tauri-apps/tauri#10767); the drop is
+    // then detected from the first hover move — the bob must still fire.
+    const wrapper = mount(CompanionCharacter, { props: { working: false } });
+    const buddy = wrapper.find("button.buddy");
+    await flick(buddy);
+    await buddy.trigger("pointermove", { screenX: 91, screenY: 91 });
+    expect(playNonce(wrapper)).toBe(1);
   });
 
   it("shows the recording dot when recording", () => {

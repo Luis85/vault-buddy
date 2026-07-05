@@ -3,7 +3,6 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import Recordings from "../src/components/Recordings.vue";
-import { useVaultsStore } from "../src/stores/vaults";
 
 const state = vi.hoisted(() => ({
   eventHandlers: {} as Record<string, (event: { payload: unknown }) => void>,
@@ -86,13 +85,13 @@ describe("Recordings", () => {
 
   it("opens a recording and closes the panel", async () => {
     const { wrapper, calls } = await mountView();
-    const store = useVaultsStore();
-    store.panelOpen = true;
     await wrapper.findAll('[data-testid="recording-row"]')[0].trigger("click");
     await flushPromises();
     const open = calls.find((c) => c.cmd === "open_recording");
     expect(open?.args).toEqual({ path: sample[0].mp3 }); // first row = Meeting/Standup
-    expect(store.panelOpen).toBe(false);
+    // Panel visibility is Rust-owned in the split-window architecture: a
+    // successful open fires close_panel (not the old store.panelOpen flag).
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(true);
   });
 
   it("surfaces a load error", async () => {
@@ -107,18 +106,16 @@ describe("Recordings", () => {
   });
 
   it("keeps the list visible and shows an error when opening fails", async () => {
-    const { wrapper } = await mountView({
+    const { wrapper, calls } = await mountView({
       onOpen: () => {
         throw new Error("launch boom");
       },
     });
-    const store = useVaultsStore();
-    store.panelOpen = true;
     await wrapper.findAll('[data-testid="recording-row"]')[0].trigger("click");
     await flushPromises();
     // list stays visible, panel NOT closed, error surfaced
     expect(wrapper.findAll('[data-testid="recording-row"]').length).toBeGreaterThan(0);
-    expect(store.panelOpen).toBe(true);
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
     expect(wrapper.text()).toContain("launch boom");
   });
 

@@ -53,7 +53,10 @@ describe("ActionPanel", () => {
     await wrapper
       .find('[aria-label="Open today\'s daily note in Personal"]')
       .trigger("click");
-    expect(calls).toEqual([{ cmd: "open_daily_note", args: { id: "d4e5f6" } }]);
+    expect(calls).toEqual([
+      { cmd: "open_daily_note", args: { id: "d4e5f6" } },
+      { cmd: "close_panel", args: {} },
+    ]);
   });
 
   it("hides the filter for short lists", () => {
@@ -278,6 +281,42 @@ describe("ActionPanel", () => {
     expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
     await wrapper.get('[data-testid="back-button"]').trigger("click");
     expect(store.view).toBe("recordMode"); // recordings → record view
+  });
+
+  it("clears the filter text when the panel is shown again", async () => {
+    // The panel window is only hidden/shown, not unmounted, so onUnmounted no
+    // longer clears local state on close. Filter text used to survive a close;
+    // reopening (shownNonce bump) must reset it, or a reopen shows the vault
+    // list still filtered. (The record chooser is now a store-owned view —
+    // reset by refresh/showList — not a local dialog that could go stale.)
+    mockIPC(() => undefined);
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper.find('input[type="search"]').setValue("Vault"); // keeps all
+    expect(
+      (wrapper.find('input[type="search"]').element as HTMLInputElement).value,
+    ).toBe("Vault");
+
+    store.shownNonce++; // the panel was reopened
+    await wrapper.vm.$nextTick();
+    expect(
+      (wrapper.find('input[type="search"]').element as HTMLInputElement).value,
+    ).toBe("");
+  });
+
+  it("dismisses a stale rename prompt when the panel is shown again", async () => {
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
+
+    const store = useVaultsStore();
+    store.shownNonce++; // the panel was reopened
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).not.toContain("name this recording");
   });
 
   it("renders the Recordings view with its title", async () => {

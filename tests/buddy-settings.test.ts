@@ -50,17 +50,10 @@ describe("BuddySettings", () => {
     ).toBe("true");
   });
 
-  it("selects the buddy's home view direction", async () => {
+  it("no longer shows a manual view-direction control (facing is derived from position)", () => {
     const wrapper = mount(BuddySettings);
-    const options = wrapper.findAll(".facing-option");
-    expect(options).toHaveLength(2);
-    // right is the default
-    expect(options[1].attributes("aria-checked")).toBe("true");
-
-    await options[0].trigger("click");
-    expect(useSettingsStore().facing).toBe("left");
-    expect(localStorage.getItem("vault-buddy.facing")).toBe("left");
-    expect(options[0].attributes("aria-checked")).toBe("true");
+    expect(wrapper.findAll(".facing-option")).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("View direction");
   });
 
   it("mirrors the dragging toggle", async () => {
