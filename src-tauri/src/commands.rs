@@ -78,7 +78,7 @@ pub(crate) fn primary_button_down() -> bool {
 /// greeting bubble.
 #[tauri::command]
 pub fn toggle_panel(app: tauri::AppHandle) {
-    use tauri::Manager;
+    use tauri::{Emitter, Manager};
     let Some(panel) = app.get_webview_window("panel") else {
         log::warn!("toggle_panel: no panel window");
         return;
@@ -92,6 +92,11 @@ pub fn toggle_panel(app: tauri::AppHandle) {
         log::warn!("toggle_panel: show failed: {e}");
     }
     let _ = panel.set_focus();
+    // Tell the panel webview it was just revealed: it re-runs vault discovery
+    // and picks its view here (see PanelRoot). A precise "opened" signal —
+    // unlike window focus, which also fires on a mere refocus and would re-run
+    // discovery on every alt-tab and reset the view mid-use.
+    let _ = app.emit("panel-shown", ());
     if let Some(bubble) = app.get_webview_window("bubble") {
         let _ = bubble.hide();
     }
@@ -118,85 +123,66 @@ pub fn close_bubble(app: tauri::AppHandle) {
     }
 }
 
+/// Top-left for a companion window (panel or bubble) placed beside the buddy,
+/// respecting screen edges. `None` when the buddy or target geometry isn't
+/// available yet — callers then leave the window where it was (best-effort).
+fn place_beside_buddy(
+    app: &tauri::AppHandle,
+    target: &tauri::WebviewWindow,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    use tauri::Manager;
+    use vault_buddy_core::companion_placement::{panel_position, Rect};
+    let buddy = app.get_webview_window("main")?;
+    let bpos = buddy.outer_position().ok()?;
+    let bsize = buddy.outer_size().ok()?;
+    let tsize = target.outer_size().ok()?;
+    let buddy_rect = Rect {
+        x: bpos.x,
+        y: bpos.y,
+        w: bsize.width as i32,
+        h: bsize.height as i32,
+    };
+    let work = buddy.current_monitor().ok().flatten().map(|m| {
+        // The taskbar-excluding work area, NOT full monitor bounds: a panel
+        // clamped to full bounds can draw behind the taskbar for a buddy parked
+        // lower-middle (only a bottom-edge buddy bottom-aligns clear of it).
+        let wa = m.work_area();
+        Rect {
+            x: wa.position.x,
+            y: wa.position.y,
+            w: wa.size.width as i32,
+            h: wa.size.height as i32,
+        }
+    });
+    let point = panel_position(buddy_rect, work, tsize.width as i32, tsize.height as i32);
+    Some(tauri::PhysicalPosition::new(point.x, point.y))
+}
+
 /// Move the (hidden) panel window beside the buddy, respecting screen edges.
 /// Best-effort: any missing window/monitor info leaves the panel where it was.
 pub(crate) fn position_panel(app: &tauri::AppHandle) {
     use tauri::Manager;
-    use vault_buddy_core::companion_placement::{panel_position, Rect};
-    let (Some(buddy), Some(panel)) = (
-        app.get_webview_window("main"),
-        app.get_webview_window("panel"),
-    ) else {
+    let Some(panel) = app.get_webview_window("panel") else {
         return;
     };
-    let (Ok(bpos), Ok(bsize), Ok(psize)) = (
-        buddy.outer_position(),
-        buddy.outer_size(),
-        panel.outer_size(),
-    ) else {
-        return;
-    };
-    let buddy_rect = Rect {
-        x: bpos.x,
-        y: bpos.y,
-        w: bsize.width as i32,
-        h: bsize.height as i32,
-    };
-    let work = buddy.current_monitor().ok().flatten().map(|m| {
-        // The taskbar-excluding work area, NOT full monitor bounds: a panel
-        // clamped to full bounds can draw behind the taskbar for a buddy parked
-        // lower-middle (only a bottom-edge buddy bottom-aligns clear of it).
-        let wa = m.work_area();
-        Rect {
-            x: wa.position.x,
-            y: wa.position.y,
-            w: wa.size.width as i32,
-            h: wa.size.height as i32,
+    if let Some(pos) = place_beside_buddy(app, &panel) {
+        if let Err(e) = panel.set_position(pos) {
+            log::warn!("position_panel: set_position failed: {e}");
         }
-    });
-    let point = panel_position(buddy_rect, work, psize.width as i32, psize.height as i32);
-    if let Err(e) = panel.set_position(tauri::PhysicalPosition::new(point.x, point.y)) {
-        log::warn!("position_panel: set_position failed: {e}");
     }
 }
 
-/// Position + show the greeting bubble beside the buddy on launch. Best-effort.
+/// Position + show the greeting bubble beside the buddy on launch. Best-effort;
+/// shown only once positioned — a moved-only window has no stale-frame flash.
 pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     use tauri::Manager;
-    use vault_buddy_core::companion_placement::{panel_position, Rect};
-    let (Some(buddy), Some(bubble)) = (
-        app.get_webview_window("main"),
-        app.get_webview_window("bubble"),
-    ) else {
+    let Some(bubble) = app.get_webview_window("bubble") else {
         return;
     };
-    let (Ok(bpos), Ok(bsize), Ok(size)) = (
-        buddy.outer_position(),
-        buddy.outer_size(),
-        bubble.outer_size(),
-    ) else {
+    let Some(pos) = place_beside_buddy(app, &bubble) else {
         return;
     };
-    let buddy_rect = Rect {
-        x: bpos.x,
-        y: bpos.y,
-        w: bsize.width as i32,
-        h: bsize.height as i32,
-    };
-    let work = buddy.current_monitor().ok().flatten().map(|m| {
-        // The taskbar-excluding work area, NOT full monitor bounds: a panel
-        // clamped to full bounds can draw behind the taskbar for a buddy parked
-        // lower-middle (only a bottom-edge buddy bottom-aligns clear of it).
-        let wa = m.work_area();
-        Rect {
-            x: wa.position.x,
-            y: wa.position.y,
-            w: wa.size.width as i32,
-            h: wa.size.height as i32,
-        }
-    });
-    let point = panel_position(buddy_rect, work, size.width as i32, size.height as i32);
-    let _ = bubble.set_position(tauri::PhysicalPosition::new(point.x, point.y));
+    let _ = bubble.set_position(pos);
     let _ = bubble.show();
 }
 

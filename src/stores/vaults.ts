@@ -8,11 +8,22 @@ export const useVaultsStore = defineStore("vaults", {
     vaults: [] as Vault[],
     loaded: false,
     // Which panel view is showing. Lives here (not in ActionPanel) because
-    // the panel is destroyed while closed — a failed update install must be
-    // able to reopen it directly on settings, where the error UI lives.
+    // the panel window is only hidden/shown, not destroyed — a failed update
+    // install must be able to reopen it directly on settings, where the error
+    // UI lives.
     view: "list" as "list" | "settings" | "captureSettings",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
+    // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
+    // defaults to the vault list on every open (`refresh`); a caller that must
+    // reopen elsewhere (a failed update install → settings) sets this so the
+    // open can't clobber it back to the list.
+    pendingView: null as "list" | "settings" | "captureSettings" | null,
+    pendingCaptureVaultId: null as string | null,
+    // Bumped on every panel-shown refresh. The panel window is only
+    // hidden/shown (never unmounted), so components watch this to reset
+    // transient UI (open dialogs, filter text) that a close used to clear.
+    shownNonce: 0,
     busyVaultId: null as string | null,
     busyCommand: null as "open_vault" | "open_daily_note" | null,
     error: null as string | null,
@@ -31,9 +42,34 @@ export const useVaultsStore = defineStore("vaults", {
         this.loaded = true;
       }
     },
+    // The panel-shown handler: re-run discovery (one JSON read — a user who
+    // saw the empty state, then opened Obsidian, must not stay stuck on the
+    // cached result) and pick the view. Defaults to the vault list on every
+    // open, unless a one-shot `requestView` asked for somewhere else.
     async refresh() {
-      this.showList();
+      if (this.pendingView) {
+        this.view = this.pendingView;
+        this.captureSettingsVaultId = this.pendingCaptureVaultId;
+        this.pendingView = null;
+        this.pendingCaptureVaultId = null;
+      } else {
+        this.showList();
+      }
+      this.shownNonce++;
       await this.loadVaults();
+    },
+    // Ask the next panel open to land on `view` instead of the vault list.
+    // Reflected immediately (a still-open panel updates now) and stored as
+    // pending so the panel-shown `refresh` re-applies it rather than resetting
+    // to the list.
+    requestView(
+      view: "list" | "settings" | "captureSettings",
+      captureVaultId: string | null = null,
+    ) {
+      this.pendingView = view;
+      this.pendingCaptureVaultId = captureVaultId;
+      this.view = view;
+      this.captureSettingsVaultId = captureVaultId;
     },
     async runAction(
       command: "open_vault" | "open_daily_note",

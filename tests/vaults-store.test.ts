@@ -174,4 +174,35 @@ describe("vaults store", () => {
     expect(calls).toContain("list_vaults");
     expect(store.vaults).toEqual(sampleVaults);
   });
+
+  it("requestView survives the next open refresh, then reverts to list", async () => {
+    // a failed update install requests the settings view before reopening the
+    // panel; the panel-shown refresh must honor it once (not clobber to list),
+    // then a later open falls back to the vault list.
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestView("settings");
+    expect(store.view).toBe("settings"); // reflected immediately
+    await store.refresh(); // simulates the panel-shown refresh
+    expect(store.view).toBe("settings"); // honored, not reset to list
+    await store.refresh(); // a subsequent open
+    expect(store.view).toBe("list"); // request was one-shot
+  });
+
+  it("requestView can target the capture settings of a specific vault", async () => {
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestView("captureSettings", "v1");
+    await store.refresh();
+    expect(store.view).toBe("captureSettings");
+    expect(store.captureSettingsVaultId).toBe("v1");
+  });
+
+  it("refresh bumps shownNonce so the panel can reset transient UI on open", async () => {
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    const before = store.shownNonce;
+    await store.refresh();
+    expect(store.shownNonce).toBe(before + 1);
+  });
 });

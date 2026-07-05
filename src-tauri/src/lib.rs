@@ -54,7 +54,7 @@ fn ms_since_last_move() -> Option<u64> {
 /// panel via `toggle_panel` leaves this deferred check a no-op.
 fn schedule_focus_out_check(app: &tauri::AppHandle) {
     let app = app.clone();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("focus-out-check".into())
         .spawn(move || {
             // Let the OS focus transition (WM_KILLFOCUS → WM_SETFOCUS) complete
@@ -78,8 +78,35 @@ fn schedule_focus_out_check(app: &tauri::AppHandle) {
                     }
                 }
             });
-        })
-        .expect("failed to spawn focus-out-check thread");
+        });
+    // This runs inside the window-event handler on the main thread; a panic
+    // there aborts across the WebView2 FFI boundary. A spawn failure must not
+    // do that — dropping one click-away check is harmless (the panel's next
+    // blur reschedules), so log it instead of `.expect`.
+    if let Err(e) = spawned {
+        log::warn!("could not spawn focus-out-check thread: {e}");
+    }
+}
+
+/// Show the greeting bubble beside the buddy, deferred until the window-state
+/// plugin has restored the buddy's parked position. Shown synchronously in
+/// `setup`, the bubble reads the buddy's pre-restore (default-corner) position
+/// and is left orphaned across the screen once the buddy jumps home. A short
+/// worker-thread settle (like `schedule_focus_out_check`), then the
+/// main-thread-only `show_bubble`, avoids that. Best-effort: a spawn failure
+/// just skips the greeting.
+fn schedule_show_bubble(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("show-bubble".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || commands::show_bubble(&app2));
+        });
+    if let Err(e) = spawned {
+        log::warn!("could not spawn show-bubble thread: {e}");
+    }
 }
 
 pub fn run() {
@@ -182,7 +209,15 @@ pub fn run() {
                     diagnostics::mark_clean_shutdown();
                 }
             }
-            tauri::WindowEvent::Focused(false) => schedule_focus_out_check(window.app_handle()),
+            // Only the panel's OWN blur can mean "clicked away from the
+            // panel". Scheduling on every window's blur spawned a worker
+            // thread per blur (the buddy blurs constantly) and, worse, the
+            // buddy blurs AS the panel takes focus on open — a check fired
+            // from that could hide the just-opened panel before its focus
+            // landed. Keying on the panel's blur removes both.
+            tauri::WindowEvent::Focused(false) if window.label() == "panel" => {
+                schedule_focus_out_check(window.app_handle())
+            }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
@@ -277,7 +312,7 @@ pub fn run() {
                 }
             }
             tray::create_tray(app.handle())?;
-            commands::show_bubble(app.handle());
+            schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).

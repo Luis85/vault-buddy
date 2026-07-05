@@ -3,6 +3,8 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import PanelRoot from "../src/roots/PanelRoot.vue";
+import { useVaultsStore } from "../src/stores/vaults";
+import { useSettingsStore } from "../src/stores/settings";
 
 vi.mock("@tauri-apps/plugin-log", () => ({
   info: vi.fn(),
@@ -10,15 +12,19 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
 }));
 
-const focusHandlers: Array<(e: { payload: boolean }) => void> = [];
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
-    onFocusChanged: (cb: (e: { payload: boolean }) => void) => {
-      focusHandlers.push(cb);
-      return Promise.resolve(() => {});
-    },
-  }),
+// Capture every Tauri event listener the roots install, keyed by event name,
+// so a test can fire "panel-shown" the way Rust's toggle_panel does.
+const listeners: Record<string, Array<(e: { payload: unknown }) => void>> = {};
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (event: string, cb: (e: { payload: unknown }) => void) => {
+    (listeners[event] ??= []).push(cb);
+    return Promise.resolve(() => {});
+  },
 }));
+
+function firePanelShown() {
+  (listeners["panel-shown"] ?? []).forEach((cb) => cb({ payload: undefined }));
+}
 
 const calls: string[] = [];
 
@@ -27,7 +33,7 @@ describe("PanelRoot", () => {
     localStorage.clear();
     setActivePinia(createPinia());
     calls.length = 0;
-    focusHandlers.length = 0;
+    for (const key of Object.keys(listeners)) delete listeners[key];
     mockIPC((cmd) => {
       calls.push(cmd);
       if (cmd === "list_vaults") return [];
@@ -35,10 +41,27 @@ describe("PanelRoot", () => {
   });
   afterEach(() => clearMocks());
 
-  it("refreshes vaults on mount", async () => {
+  it("initializes the capture store on mount so the panel reflects recording", async () => {
     mount(PanelRoot);
-    await Promise.resolve();
+    await flushPromises();
+    // capture.init() resyncs via capture_status; without it the panel's own
+    // capture store never sees capture:* events (dead level meter, stuck save).
+    expect(calls).toContain("capture_status");
+  });
+
+  it("runs discovery each time the panel is shown, not on mount", async () => {
+    mount(PanelRoot);
+    await flushPromises();
+    // hidden at startup: no discovery until the panel is actually shown
+    expect(calls).not.toContain("list_vaults");
+    firePanelShown();
+    await flushPromises();
     expect(calls).toContain("list_vaults");
+
+    calls.length = 0;
+    firePanelShown();
+    await flushPromises();
+    expect(calls).toContain("list_vaults"); // re-runs on every open
   });
 
   it("closes the panel on Escape", async () => {
@@ -48,21 +71,40 @@ describe("PanelRoot", () => {
     expect(calls).toContain("close_panel");
   });
 
-  it("re-runs discovery each time the panel window regains focus", async () => {
-    mount(PanelRoot);
+  it("closes the panel when the transparent gutter is clicked", async () => {
+    const wrapper = mount(PanelRoot);
     await flushPromises();
-    calls.length = 0; // drop the mount refresh
-    focusHandlers.forEach((cb) => cb({ payload: true }));
-    await flushPromises();
-    expect(calls).toContain("list_vaults");
+    // clicking the gutter itself (target === currentTarget), not the card
+    await wrapper.find("div.h-screen").trigger("click");
+    expect(calls).toContain("close_panel");
   });
 
-  it("does not refresh when the panel window loses focus", async () => {
+  it("defaults to the vault list when the panel is shown", async () => {
     mount(PanelRoot);
     await flushPromises();
-    calls.length = 0;
-    focusHandlers.forEach((cb) => cb({ payload: false }));
+    const store = useVaultsStore();
+    store.openSettings();
+    firePanelShown();
     await flushPromises();
-    expect(calls).not.toContain("list_vaults");
+    expect(store.view).toBe("list");
+  });
+
+  it("honors a requested view on open instead of resetting to the list", async () => {
+    mount(PanelRoot);
+    await flushPromises();
+    const store = useVaultsStore();
+    // a failed update install requests settings before the panel reopens
+    store.requestView("settings");
+    firePanelShown();
+    await flushPromises();
+    expect(store.view).toBe("settings");
+  });
+
+  it("re-syncs settings from a cross-window storage event", async () => {
+    mount(PanelRoot);
+    await flushPromises();
+    localStorage.setItem("vault-buddy.animations", "off");
+    window.dispatchEvent(new Event("storage"));
+    expect(useSettingsStore().animationsEnabled).toBe(false);
   });
 });

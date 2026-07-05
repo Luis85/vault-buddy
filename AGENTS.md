@@ -84,28 +84,44 @@ window has no stale-frame flash. Placement is one pure function,
 `core::companion_placement::panel_position(buddy, work_area, w, h)`
 (unit-tested on Linux): it sits the window beside the buddy and clamps it into
 the monitor work area so a bottom-/edge-anchored buddy unfolds toward free
-space. `position_panel` / `show_bubble` (in `commands.rs`) feed it the live
-buddy/monitor geometry; any missing window or monitor info leaves the window
-where it was (best-effort, never an error). Invariants:
+space. One shell helper, `place_beside_buddy` (in `commands.rs`), feeds it the
+live buddy/monitor geometry for both windows; `position_panel` / `show_bubble`
+call it. Any missing window or monitor info leaves the window where it was
+(best-effort, never an error). The greeting is shown via `schedule_show_bubble`
+(a ~250 ms worker-thread settle, then a main-thread `show_bubble`), not
+synchronously in `setup`: the window-state plugin restores the buddy's parked
+position slightly after setup, and a synchronous placement would anchor the
+bubble to the buddy's pre-restore default corner. Invariants:
 
 - **Window show/hide and the placement getters run on the MAIN thread only.**
   `toggle_panel`, `close_panel`, `close_bubble` are *synchronous* commands
   (custom commands aren't capability-gated — only `core:`/`plugin:` are), so
   they run on the main thread where the window getters, `set_position`,
   `show`/`hide` and `set_focus` are valid. `toggle_panel` positions the hidden
-  panel, shows it, focuses it, and hides the bubble; opening never touches the
-  buddy window. Every exit path and the updater reuse these commands — there
-  is no offset/shift to undo, because the buddy never moves to make room.
+  panel, shows it, focuses it, emits `panel-shown`, and hides the bubble;
+  opening never touches the buddy window. `panel-shown` is the panel webview's
+  precise "opened" signal — `PanelRoot` re-runs discovery and picks its view on
+  it (window focus is a leaky proxy that also fires on a mere refocus). Every
+  exit path and the updater reuse these commands — there is no offset/shift to
+  undo, because the buddy never moves to make room.
 - **The panel closes itself when focus really leaves the app.**
-  `schedule_focus_out_check` (fired from `WindowEvent::Focused(false)`) cannot
-  sample focus inline: clicking from panel to buddy fires the source window's
-  blur BEFORE the destination's focus lands, so an inline check would see
-  neither focused and wrongly hide. `run_on_main_thread` alone won't defer it
-  — that runs the closure INLINE when called from the main thread (where
-  window events are dispatched). So it sleeps 120 ms on a named worker thread,
-  then marshals the check back to the main thread. The check only ever HIDES,
-  never shows, so it can never fight `toggle_panel` into a reopen: a buddy
-  click that closed the panel leaves the deferred check a no-op.
+  `schedule_focus_out_check` is fired only from the **panel** window's
+  `WindowEvent::Focused(false)` (keyed on `window.label() == "panel"`): only
+  the panel's own blur can mean "clicked away from the panel". Scheduling on
+  every window's blur spawned a worker thread per blur (the buddy blurs
+  constantly) and, worse, the buddy blurs AS the panel takes focus on open, so
+  a check fired from that could hide the just-opened panel before its focus
+  landed. The check cannot sample focus inline: clicking from panel to buddy
+  fires the panel's blur BEFORE the buddy's focus lands, so an inline check
+  would see neither focused and wrongly hide. `run_on_main_thread` alone won't
+  defer it — that runs the closure INLINE when called from the main thread
+  (where window events are dispatched). So it sleeps 120 ms on a named worker
+  thread, then marshals the check back to the main thread. A thread-spawn
+  failure is logged, never `.expect`-panicked (the handler runs on the main
+  thread, where a panic aborts across the WebView2 FFI boundary). The check
+  only ever HIDES, never shows, so it can never fight `toggle_panel` into a
+  reopen: a buddy click that closed the panel leaves the deferred check a
+  no-op.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -272,14 +288,26 @@ Each window loads the same bundle and mounts a different root by its label:
 unexpected label → `BuddyRoot`. The roots are thin: `BuddyRoot` hosts
 `CompanionCharacter` and invokes `toggle_panel`/`close_panel`; `PanelRoot`
 hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
-`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss.
+`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss. Each
+window is its own webview with its own Pinia stores, so any store that mirrors
+Rust state must be wired up per window: **both** `BuddyRoot` and `PanelRoot`
+call `capture.init()` (or the panel never sees `capture:*` events — dead level
+meter, stuck "saving") and both install `useSettingsStorageSync` (or a tray
+toggle handled in one window is invisible to, and gets reverted by, the other).
 
 Panel visibility is no longer a store flag — it IS the panel window's
 show/hide state, owned by Rust. So the `vaults` store lost `panelOpen`/
-`togglePanel` and gained `refresh()` (re-run discovery on panel mount). It
-still holds the list and the panel view state (`view: list | settings |
-captureSettings` with `captureSettingsVaultId`) because that must survive the
-panel window being hidden.
+`togglePanel` and gained `refresh()`, which `PanelRoot` runs on the Rust
+`panel-shown` event (each open), NOT on mount or window focus. `refresh()`
+re-runs discovery and defaults the view to the vault list, unless a one-shot
+`requestView(view)` asked otherwise — a failed update install `requestView`s
+`settings` so the reopen lands on the error/retry UI instead of being reset to
+the list. It also bumps `shownNonce`; because the panel window is only
+hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
+transient UI a close used to reset (an open record dialog, the filter, a
+lingering rename prompt). The store still holds the list and the panel view
+state (`view: list | settings | captureSettings` with `captureSettingsVaultId`)
+because that must survive the panel window being hidden.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
@@ -289,9 +317,11 @@ state mirrored from Rust: `paused`, `pausedTotalMs`, `level`, `vaultId`,
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture
-level/state), and localStorage `storage` events — a settings change in the
-panel window fires `settings.syncFromStorage()` in the buddy window so the
-buddy re-reads character/animation without an IPC round-trip.
+level/state; `panel-shown`), and localStorage `storage` events — a settings
+change in one window fires `settings.syncFromStorage()` in the others (via the
+shared `useSettingsStorageSync` composable, installed by the buddy and panel
+roots that read settings) so they re-read character/animation without an IPC
+round-trip.
 
 ## Testing conventions
 
