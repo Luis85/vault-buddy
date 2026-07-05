@@ -184,6 +184,7 @@ pub struct CaptureConfigDto {
     pub transcription_model: String,
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
+    pub follow_up_template: bool,
 }
 
 impl CaptureConfigDto {
@@ -199,6 +200,7 @@ impl CaptureConfigDto {
             transcription_model: v.transcription_model.clone(),
             transcription_language: v.transcription_language.clone(),
             transcript_timestamps: v.transcript_timestamps,
+            follow_up_template: v.follow_up_template,
         }
     }
 }
@@ -256,6 +258,7 @@ pub fn set_capture_config(
         transcription_model: cfg.transcription_model.clone(),
         transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
         transcript_timestamps: cfg.transcript_timestamps,
+        follow_up_template: cfg.follow_up_template,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {
@@ -481,6 +484,7 @@ pub fn start_capture(
                 recording_type: label.to_string(),
                 create_note: cfg.create_note,
                 transcribe: cfg.transcribe,
+                follow_up: cfg.follow_up_template,
                 recorded_at: now.to_rfc3339(),
                 flush_every: Duration::from_secs(1),
                 fsync_every: Duration::from_secs(30),
