@@ -38,6 +38,50 @@ fn ms_since_last_move() -> Option<u64> {
     (*lock_ignoring_poison(&LAST_MOVE)).map(|at| at.elapsed().as_millis() as u64)
 }
 
+/// Hide the panel once focus has really left the app. Clicking from the panel
+/// to the buddy (or back) fires the source window's blur BEFORE the
+/// destination's focus lands, so a check run at blur time would see neither
+/// window focused and wrongly hide a panel that is merely handing focus to the
+/// buddy. The check must therefore be deferred until focus settles.
+///
+/// It cannot be deferred with `run_on_main_thread` alone: that runs the closure
+/// INLINE when called from the main thread, and window events are dispatched on
+/// the main thread — so the closure would run synchronously inside the blur
+/// event, before focus settles. A real delay on a worker thread is required;
+/// only then is the check marshaled back to the main thread (where window
+/// getters/`hide` are valid). The check only ever HIDES — never shows — so it
+/// can never fight `toggle_panel` into a reopen: a buddy click that closes the
+/// panel via `toggle_panel` leaves this deferred check a no-op.
+fn schedule_focus_out_check(app: &tauri::AppHandle) {
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("focus-out-check".into())
+        .spawn(move || {
+            // Let the OS focus transition (WM_KILLFOCUS → WM_SETFOCUS) complete
+            // before sampling focus. Imperceptible to the user; a click-away
+            // just closes the panel a fraction of a second later.
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let checked = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                use tauri::Manager;
+                let focused = |label: &str| {
+                    checked
+                        .get_webview_window(label)
+                        .and_then(|w| w.is_focused().ok())
+                        .unwrap_or(false)
+                };
+                if !focused("main") && !focused("panel") {
+                    if let Some(panel) = checked.get_webview_window("panel") {
+                        if panel.is_visible().unwrap_or(false) {
+                            let _ = panel.hide();
+                        }
+                    }
+                }
+            });
+        })
+        .expect("failed to spawn focus-out-check thread");
+}
+
 pub fn run() {
     // Before anything else: a panic during builder construction or in any
     // thread should still be captured on disk.
@@ -141,6 +185,7 @@ pub fn run() {
                     diagnostics::mark_clean_shutdown();
                 }
             }
+            tauri::WindowEvent::Focused(false) => schedule_focus_out_check(window.app_handle()),
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
