@@ -380,27 +380,6 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let _ = bubble.show();
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
-    // One-time startup diagnostic. The buddy window is usually larger than the
-    // 88px we asked for — Windows clamps it up to its minimum window size — so
-    // its outer_size confirms how much transparent padding the tuck crosses (why
-    // the character must be centered in it). A buddy not at its parked position
-    // would mean the window-state restore hadn't happened yet.
-    let buddy = app.get_webview_window("main");
-    let buddy_pos = buddy.as_ref().and_then(|b| b.outer_position().ok());
-    let buddy_size = buddy.as_ref().and_then(|b| b.outer_size().ok());
-    if let (Ok(actual), Ok(bsize)) = (bubble.outer_position(), bubble.outer_size()) {
-        log::info!(
-            "greeting shown: buddy pos {:?} size {:?}, bubble asked ({},{}) actual ({},{}) size {}x{}",
-            buddy_pos.map(|b| (b.x, b.y)),
-            buddy_size.map(|s| (s.width, s.height)),
-            pos.x,
-            pos.y,
-            actual.x,
-            actual.y,
-            bsize.width,
-            bsize.height,
-        );
-    }
 }
 
 /// Keep the greeting bubble beside the buddy as the buddy moves — called from
@@ -452,12 +431,6 @@ pub fn show_buddy_menu(
 ) -> Result<(), String> {
     use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
-    // Locate the "sometimes a lot of delay before the menu appears" report: time
-    // the menu build and the foreground activation separately. popup_menu itself
-    // is a modal loop (it blocks until dismissed), so it is timed up to its call
-    // only.
-    let started = std::time::Instant::now();
-
     let animation = CheckMenuItem::with_id(
         &app,
         "buddy-animation",
@@ -486,16 +459,10 @@ pub fn show_buddy_menu(
         .map_err(|e| e.to_string())?;
     let menu = Menu::with_items(&app, &[&animation, &dragging, &separator, &hide, &quit])
         .map_err(|e| e.to_string())?;
-    let built = started.elapsed();
     // Win32 popup menus require the owning window to be foreground —
     // without this the menu is delayed or silently ignored until the user
     // left-clicks the (unfocused) buddy first.
     let _ = window.set_focus();
-    log::info!(
-        "buddy menu: build {} ms, set_focus {} ms",
-        built.as_millis(),
-        (started.elapsed() - built).as_millis(),
-    );
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
