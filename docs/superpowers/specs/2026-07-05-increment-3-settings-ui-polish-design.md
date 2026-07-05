@@ -10,10 +10,10 @@
 
 ## Goal
 
-Five UI improvements to the capture settings panel and the transcription
-status row. Four are small; the fifth (a custom dropdown) is the bulk of the
-work and is cleanly separable. None changes the config schema, IPC surface, or
-any write-safety rule.
+Six improvements to the capture settings panel, the transcription status row,
+and the vault list. Five are small; the custom dropdown (#5) is the bulk of the
+work and is cleanly separable. None changes the config schema, the IPC command
+surface, or any write-safety rule.
 
 ## 1. `color-scheme: dark` baseline (`src/style.css`)
 
@@ -138,13 +138,38 @@ existing `v-model.number` semantics via `number` option values).
   unchanged** — the point is that swapping the control doesn't change what gets
   saved.
 
+## 6. Vault-row transcription indicator (`capture_commands.rs`, `stores/capture.ts`, `components/VaultList.vue`)
+
+**Problem.** While a recording transcribes in the background, nothing on the
+vault list shows *which* vault it's for — unlike recording, which already
+pulses a red dot on its row (`VaultList.vue`).
+
+**Change.** Mirror the recording indicator with a transcription one:
+- **Backend:** `process_transcription` already emits `capture:transcribing`;
+  add `"vaultId": job.vault_id` to that payload. No new events — the single
+  transcription worker means exactly one vault transcribes at a time.
+- **Store:** add `transcribingVaultId: string | null`, set from the
+  `capture:transcribing` payload and cleared on both `capture:transcribed` and
+  `capture:transcribeFailed` (whichever ends the current job).
+- **VaultList:** beside the existing open/recording dots, show a pulsing
+  **violet** dot (matching the transcribing status color) titled
+  "Transcribing…" when `vault.id === capture.transcribingVaultId`.
+
+**Testing.** `capture-store.test.ts`: `capture:transcribing` with a `vaultId`
+sets `transcribingVaultId`; `transcribed`/`transcribeFailed` clear it.
+`vault-list.test.ts`: the transcribing dot renders on the matching vault row.
+The backend one-field addition is compiled by CI's Windows job (shell); an
+event field has no unit test.
+
 ## Invariants preserved
 
 - **Config schema + IPC unchanged.** `SelectMenu` is a presentation swap; the
   `get/set_capture_config` payloads and the `transcriptionLanguage` null↔""
   mapping are untouched.
-- **No new writes, no vault interaction** — this round is frontend-only
-  (`src/` + `style.css`); no Rust changes.
+- **Minimal backend touch.** The only Rust change is adding a `vaultId` field
+  to the existing `capture:transcribing` event (#6) — no new events, no new
+  writes, no vault interaction, no schema or IPC-command change. Everything
+  else is frontend (`src/` + `style.css`).
 
 ## Non-goals / scope guards
 
