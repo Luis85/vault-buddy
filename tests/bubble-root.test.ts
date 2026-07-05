@@ -52,13 +52,13 @@ describe("BubbleRoot", () => {
       "side-right",
     );
 
-    // Rust placed the bubble to the LEFT (e.g. buddy at the right edge) and
-    // bottom-aligned it — the tail must follow.
-    listeners["bubble-anchor"]?.({ payload: { side: "left", valign: "up" } });
+    // Rust placed the bubble to the LEFT (e.g. buddy at the right edge) with
+    // the tail low (buddy near the bottom edge) — the tail must follow.
+    listeners["bubble-anchor"]?.({ payload: { side: "left", valign: "bottom" } });
     await flushPromises();
 
     const bubble = wrapper.get('[data-testid="speech-bubble"]');
     expect(bubble.classes()).toContain("side-left");
-    expect(bubble.classes()).toContain("valign-up");
+    expect(bubble.classes()).toContain("valign-bottom");
   });
 });

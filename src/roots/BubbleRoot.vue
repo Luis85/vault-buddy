@@ -20,7 +20,9 @@ useSuppressContextMenu();
 const side = ref<"left" | "right">(
   settings.facing === "left" ? "left" : "right",
 );
-const valign = ref<"up" | "down">("down");
+// `middle` is the resting case (bubble centered level with the buddy); the
+// anchor event switches it to `top`/`bottom` only near a screen edge.
+const valign = ref<"top" | "middle" | "bottom">("middle");
 
 let unlistenAnchor: (() => void) | undefined;
 
@@ -32,7 +34,7 @@ onMounted(async () => {
   try {
     unlistenAnchor = await listen<{
       side: "left" | "right";
-      valign: "up" | "down";
+      valign: "top" | "middle" | "bottom";
     }>("bubble-anchor", (event) => {
       side.value = event.payload.side;
       valign.value = event.payload.valign;
@@ -45,15 +47,19 @@ onUnmounted(() => unlistenAnchor?.());
 </script>
 
 <template>
-  <!-- Hug the bubble into the corner of the window nearest the buddy so it sits
-       against the character, not adrift in the window's dead space: justify
-       toward the buddy horizontally, align toward it vertically. The tail then
-       points straight at the buddy. -->
+  <!-- Hug the bubble toward the buddy so it sits against the character, not
+       adrift in the window's dead space: justify toward the buddy horizontally,
+       align toward it vertically (middle = centered on the buddy). The tail
+       then points straight at the buddy. -->
   <div
     class="flex h-screen w-screen p-1"
     :class="[
       side === 'right' ? 'justify-start' : 'justify-end',
-      valign === 'down' ? 'items-start' : 'items-end',
+      valign === 'top'
+        ? 'items-start'
+        : valign === 'bottom'
+          ? 'items-end'
+          : 'items-center',
     ]"
   >
     <SpeechBubble :text="bubbleText" :side="side" :valign="valign" />
