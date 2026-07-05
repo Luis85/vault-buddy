@@ -39,11 +39,11 @@ jobs:
         working-directory: src-tauri
       - name: Install ALSA headers (cpal build dependency on Linux)
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: clippy (core + capture crates)
-        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture --all-targets -- -D warnings
+      - name: clippy (core + capture + transcribe crates)
+        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --all-targets -- -D warnings
         working-directory: src-tauri
-      - name: tests (core + capture crates)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture
+      - name: tests (core + capture + transcribe crates)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
         working-directory: src-tauri
 
   windows-app:
