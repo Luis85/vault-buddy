@@ -267,11 +267,11 @@ pub fn pending_transcriptions(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn is_digit_dir(name: &str, len: usize) -> bool {
+pub(crate) fn is_digit_dir(name: &str, len: usize) -> bool {
     name.len() == len && name.chars().all(|c| c.is_ascii_digit())
 }
 
-fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
+pub(crate) fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
