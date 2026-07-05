@@ -240,6 +240,7 @@ pub fn run() {
             commands::toggle_panel,
             commands::close_panel,
             commands::close_bubble,
+            commands::set_buddy_facing,
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
