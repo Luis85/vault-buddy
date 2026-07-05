@@ -19,6 +19,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | Path | What it is | Compiles on |
 | --- | --- | --- |
 | `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection. No GUI deps. | Anywhere — test and lint locally |
+| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere with default features (no whisper.cpp); the `whisper` feature + real engine build on **Windows** (CI gate). |
 | `src-tauri/` (root crate) | Tauri shell: window, tray, IPC commands, plugins. | **Windows only** (Linux lacks webkit2gtk); CI's Windows job is the compile gate |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
@@ -97,10 +98,17 @@ every real install would throw.
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. The **one sanctioned write path**
-is the capture domain (below), which stores recordings and their companion
+logged (`uri::launch`) as the audit trail. Two sanctioned write paths exist,
+both below: the capture domain, which stores recordings and their companion
 notes under strict safety rules; see
 `docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`.
+The transcription worker (increment 3) adds a second sanctioned write, a
+`<base>.transcript.md` sidecar the note embeds, extending the same write
+path rather than inventing a new one — same never-clobber/atomic rules, and
+a `vault-buddy-transcript: pending/failed/complete` frontmatter marker means
+only `pending`/`failed` sidecars are ours to replace, so a completed
+transcript or a user's hand edit is never overwritten; see
+`docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`.
 Any other code touching vault contents directly is a design change, not a
 patch.
 

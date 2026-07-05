@@ -171,8 +171,24 @@ ever written into your vaults except recordings and their notes.
       "mode": "meeting",          // "meeting" (mic + desktop audio) | "voice-note" (mic only)
       "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
       "bitrateKbps": 128,          // 128 | 160 | 192
-      "createNote": true           // companion .md with metadata + embed
+      "createNote": true,          // companion .md with metadata + embed
+      "transcribe": false,         // opt in to local speech-to-text
+      "transcriptionModel": "small", // "base" | "small" | "medium"
+      "transcriptionLanguage": "es", // optional — omit to auto-detect per recording
+      "transcriptTimestamps": true  // prefix each segment with [HH:MM:SS]
     }
   }
 }
 ```
+
+- `transcribe` (bool, default `false`) — opt in to local speech-to-text.
+  Enabling it downloads a Whisper model on the next recording (or backfills
+  existing recordings) and writes a `<name>.transcript.md` sidecar the note
+  embeds.
+- `transcriptionModel` (`"base"` | `"small"` | `"medium"`, default
+  `"small"`) — accuracy/speed/size trade-off. Models download to
+  `%APPDATA%\vault-buddy\models`.
+- `transcriptionLanguage` (string or omit, default auto-detect) — e.g.
+  `"es"`; omit to auto-detect per recording.
+- `transcriptTimestamps` (bool, default `true`) — prefix each segment with
+  `[HH:MM:SS]`.
