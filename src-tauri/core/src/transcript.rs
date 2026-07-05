@@ -179,6 +179,40 @@ pub fn write_placeholder(mp3: &Path) -> std::io::Result<()> {
     }
 }
 
+/// The state of a recording's transcript sidecar, for the Recordings list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptStatus {
+    Missing,
+    Pending,
+    Failed,
+    Complete,
+}
+
+impl TranscriptStatus {
+    /// Lowercased wire form for the frontend (`Missing` → "none").
+    pub fn as_dto_str(&self) -> &'static str {
+        match self {
+            TranscriptStatus::Missing => "none",
+            TranscriptStatus::Pending => "pending",
+            TranscriptStatus::Failed => "failed",
+            TranscriptStatus::Complete => "complete",
+        }
+    }
+}
+
+/// Classify a recording's sidecar. A non-regenerable file (the `complete`
+/// marker, or a user's hand-edit) reads as `Complete` so the re-transcribe
+/// confirm fires before it is overwritten. Unreadable → `Missing` (best-effort).
+pub fn transcript_status(mp3: &Path) -> TranscriptStatus {
+    match std::fs::read_to_string(transcript_path(mp3)) {
+        Ok(c) if c.contains(MARKER_PENDING) => TranscriptStatus::Pending,
+        Ok(c) if c.contains(MARKER_FAILED) => TranscriptStatus::Failed,
+        Ok(_) => TranscriptStatus::Complete,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => TranscriptStatus::Missing,
+        Err(_) => TranscriptStatus::Missing,
+    }
+}
+
 pub enum ReplaceOutcome {
     Written,
     SkippedForeign,
@@ -195,15 +229,26 @@ pub fn replace_if_ours(transcript_path: &Path, content: &str) -> std::io::Result
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // fine, create it
         Err(e) => return Err(e),
     }
+    write_sidecar_atomic(transcript_path, content).map(|()| ReplaceOutcome::Written)
+}
+
+/// Forced atomic overwrite of a transcript sidecar, skipping the never-clobber
+/// guard. ONLY for the explicit `retranscribe` command — the user asked to
+/// regenerate this sidecar. Still touches nothing but the sidecar.
+pub fn force_write_sidecar(transcript_path: &Path, content: &str) -> std::io::Result<()> {
+    write_sidecar_atomic(transcript_path, content)
+}
+
+/// The atomic temp + fsync + REPLACING-rename shared by `replace_if_ours` and
+/// `force_write_sidecar`. Exclusive-creates a marker-suffixed temp (numbered on
+/// collision) so recovery's cleanup can sweep it; mirrors capture_note's writer
+/// deliberately so the never-replace audio writer is untouched.
+fn write_sidecar_atomic(transcript_path: &Path, content: &str) -> std::io::Result<()> {
     let dir = transcript_path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = transcript_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // Exclusive-create an owned temp (numbered on collision), carrying the
-    // ownership marker so recovery's cleanup can sweep it. Mirrors
-    // capture_note::write_note_atomic deliberately — kept separate so the
-    // audio-note writer (which must NEVER replace) is not touched.
     let (tmp, mut f) = {
         let mut attempt = 0u32;
         loop {
@@ -226,13 +271,11 @@ pub fn replace_if_ours(transcript_path: &Path, content: &str) -> std::io::Result
     f.write_all(content.as_bytes())?;
     f.sync_all()?;
     drop(f);
-    // Replacing rename is correct here: we verified the destination is our
-    // own regenerable sidecar (or absent) above.
     let result = std::fs::rename(&tmp, transcript_path);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    result.map(|()| ReplaceOutcome::Written)
+    result
 }
 
 /// Capture MP3s under `<root>/YYYY/MM` that still need a transcript (missing
@@ -548,5 +591,50 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(sub.join("2026-07-04 1405 Meeting.mp3"), b"a").unwrap();
         assert!(pending_transcriptions(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn transcript_status_classifies_the_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Missing);
+        std::fs::write(transcript_path(&mp3), render_placeholder("x.mp3")).unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Pending);
+        std::fs::write(transcript_path(&mp3), render_error("x.mp3", "boom")).unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Failed);
+        // A finished sidecar (complete marker) — or any non-regenerable content.
+        std::fs::write(
+            transcript_path(&mp3),
+            "---\nvault-buddy-transcript: complete\n---\nhi",
+        )
+        .unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Complete);
+        assert_eq!(TranscriptStatus::Missing.as_dto_str(), "none");
+        assert_eq!(TranscriptStatus::Complete.as_dto_str(), "complete");
+    }
+
+    #[test]
+    fn force_write_sidecar_overwrites_a_complete_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("2026-07-04 1405 Meeting.transcript.md");
+        std::fs::write(&path, "---\nvault-buddy-transcript: complete\n---\nold").unwrap();
+        // replace_if_ours refuses (never-clobbers a finished transcript)...
+        assert!(matches!(
+            replace_if_ours(&path, "new").unwrap(),
+            ReplaceOutcome::SkippedForeign
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "---\nvault-buddy-transcript: complete\n---\nold"
+        );
+        // ...but force does overwrite, and cleans its temp.
+        force_write_sidecar(&path, "regenerated").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "regenerated");
+        let temps: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(temps.is_empty(), "temp not cleaned: {temps:?}");
     }
 }
