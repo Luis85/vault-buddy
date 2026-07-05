@@ -28,7 +28,10 @@ use vault_buddy_core::transcript::{self, TranscriptMeta};
 /// transcript. `generated_at` (RFC3339) is passed in so this stays
 /// clock-free and testable. On any error the sidecar is left as-is (the
 /// caller writes a retryable `failed` note); a `complete` transcript is only
-/// ever written on success.
+/// ever written on success. `force` (the explicit re-transcribe path)
+/// overwrites even a finished `complete` sidecar via `force_write_sidecar`;
+/// otherwise the write goes through `replace_if_ours`, which never clobbers a
+/// non-regenerable transcript.
 pub fn transcribe_recording(
     mp3: &Path,
     transcriber: &dyn Transcriber,

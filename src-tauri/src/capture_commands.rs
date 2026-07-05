@@ -1075,17 +1075,27 @@ fn process_transcription(
         serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "vaultId": job.vault_id }),
     );
     if job.force {
-        // Overwrite a finished sidecar with the "transcribing…" placeholder so
-        // the note embed reflects the in-flight regeneration.
-        let name = job
-            .mp3
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let _ = vault_buddy_core::transcript::force_write_sidecar(
-            &vault_buddy_core::transcript::transcript_path(&job.mp3),
-            &vault_buddy_core::transcript::render_placeholder(&name),
-        );
+        // Reflect the in-flight regeneration in the note embed by swapping our
+        // own regenerable sidecar for the "transcribing…" placeholder — but
+        // NEVER overwrite a Complete/hand-edited transcript up-front. If this
+        // forced job then fails, the original must survive: fail_transcription
+        // writes via replace_if_ours, which skips a non-regenerable sidecar, so
+        // leaving it untouched means a failed re-transcribe can't destroy it.
+        // On success, transcribe_recording's force_write_sidecar swaps the
+        // finished transcript for the freshly generated one.
+        if vault_buddy_core::transcript::transcript_status(&job.mp3)
+            != vault_buddy_core::transcript::TranscriptStatus::Complete
+        {
+            let name = job
+                .mp3
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let _ = vault_buddy_core::transcript::force_write_sidecar(
+                &vault_buddy_core::transcript::transcript_path(&job.mp3),
+                &vault_buddy_core::transcript::render_placeholder(&name),
+            );
+        }
     } else {
         let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
     }

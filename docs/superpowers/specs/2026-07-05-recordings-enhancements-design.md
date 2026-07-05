@@ -174,3 +174,31 @@ every non-list view — the misleading part.
   transcript-sidecar surface.
 - No batch/select-all re-transcribe; no per-recording model/language override
   (uses the vault config).
+
+## Addendum — 2026-07-05 (post-review data-safety hardening)
+
+The final whole-branch review surfaced two narrow corners in the Part 3 design;
+both are refined here (the approved body above is left intact as the review
+trail — this addendum is the correction of record).
+
+- **Forced placeholder must not clobber a finished transcript up-front.** Part 3
+  had the forced job stamp the "transcribing…" placeholder via
+  `force_write_sidecar` *before* the regenerated transcript exists. For a
+  `Complete`/hand-edited sidecar that destroys the original immediately, so a
+  forced re-transcribe that then fails (model download, model load, or decode
+  error) leaves a `failed` placeholder and the user's transcript gone — a
+  never-clobber violation, since the user asked to *replace* the transcript, not
+  discard it on failure. **Refinement:** the up-front placeholder is written only
+  when the sidecar is **not** already `Complete`. A `Complete`/hand-edited sidecar
+  is left in place; on success `transcribe_recording`'s `force_write_sidecar`
+  swaps in the finished transcript, and on failure `fail_transcription`'s
+  `replace_if_ours` skips the non-regenerable original, so it survives intact.
+  `force_write_sidecar` is thus the **final** transcript write; the forced
+  placeholder covers only missing/`pending`/`failed` sidecars. The row still
+  reflects the in-flight "transcribing…" state via `capture:transcribing`.
+- **Re-transcribe button must not strand a stuck `pending` recording.** The
+  button's `disabled` guard included `transcriptStatus === 'pending'`, which
+  permanently disables re-transcribe for a sidecar stuck at `pending` (a crash
+  left a placeholder, no job running) — unrecoverable. **Refinement:** the button
+  is gated **only** on this session's transient in-flight set
+  (`transcribingMp3.has(mp3)`), never on the persisted `pending` status.
