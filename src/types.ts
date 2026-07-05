@@ -75,4 +75,6 @@ export interface Recording {
   duration: string | null;
   /** Recording type from the companion note; null → "Ungrouped". */
   type: string | null;
+  /** Sidecar state — drives the row indicator + re-transcribe confirm. */
+  transcriptStatus: "none" | "pending" | "failed" | "complete";
 }

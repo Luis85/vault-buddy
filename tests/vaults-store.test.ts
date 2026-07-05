@@ -179,4 +179,27 @@ describe("vaults store", () => {
     expect(store.view).toBe("list");
     expect(store.recordingsVaultId).toBe(null);
   });
+
+  it("openRecordMode switches to the record view for a vault", () => {
+    const store = useVaultsStore();
+    store.openRecordMode("a1b2c3");
+    expect(store.view).toBe("recordMode");
+    expect(store.recordModeVaultId).toBe("a1b2c3");
+  });
+
+  it("back() returns each view to its parent", () => {
+    const store = useVaultsStore();
+    // recordings' parent is the record view (same vault)
+    store.openRecordings("a1b2c3");
+    store.back();
+    expect(store.view).toBe("recordMode");
+    expect(store.recordModeVaultId).toBe("a1b2c3");
+    // record view's parent is the list
+    store.back();
+    expect(store.view).toBe("list");
+    // capture settings' parent is the list
+    store.openCaptureSettings("a1b2c3");
+    store.back();
+    expect(store.view).toBe("list");
+  });
 });

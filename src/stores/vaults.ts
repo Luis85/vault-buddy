@@ -11,11 +11,18 @@ export const useVaultsStore = defineStore("vaults", {
     // Which panel view is showing. Lives here (not in ActionPanel) because
     // the panel is destroyed while closed — a failed update install must be
     // able to reopen it directly on settings, where the error UI lives.
-    view: "list" as "list" | "settings" | "captureSettings" | "recordings",
+    view: "list" as
+      | "list"
+      | "settings"
+      | "captureSettings"
+      | "recordings"
+      | "recordMode",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
     recordingsVaultId: null as string | null,
+    // Which vault the recordMode view shows.
+    recordModeVaultId: null as string | null,
     busyVaultId: null as string | null,
     busyCommand: null as "open_vault" | "open_daily_note" | null,
     error: null as string | null,
@@ -67,6 +74,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = "list";
       this.captureSettingsVaultId = null;
       this.recordingsVaultId = null;
+      this.recordModeVaultId = null;
     },
     openSettings() {
       this.view = "settings";
@@ -78,6 +86,18 @@ export const useVaultsStore = defineStore("vaults", {
     openRecordings(vaultId: string) {
       this.view = "recordings";
       this.recordingsVaultId = vaultId;
+    },
+    openRecordMode(vaultId: string) {
+      this.view = "recordMode";
+      this.recordModeVaultId = vaultId;
+    },
+    /** Back to the current view's fixed parent (no history stack). */
+    back() {
+      if (this.view === "recordings" && this.recordingsVaultId) {
+        this.openRecordMode(this.recordingsVaultId);
+      } else {
+        this.showList();
+      }
     },
   },
 });
