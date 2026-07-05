@@ -1,0 +1,14 @@
+# Skip whisper-rs-sys's bindgen step and use its committed, pre-generated
+# bindings instead. Otherwise whisper-rs-sys runs bindgen at build time, which
+# needs libclang (a ~1 GB LLVM install) just to compile the shell — and on
+# MSVC bindgen has emitted glibc-specific types (a known bug). The committed
+# bindings ship with, and match, the whisper.cpp that whisper-rs-sys vendors,
+# so this is the more robust path as well as the lighter one.
+#
+# This removes ONLY the libclang dependency. CMake + a C++ compiler are still
+# required to build whisper.cpp itself (unconditional in whisper-rs-sys 0.15).
+# Applies to every cargo build in this workspace — local and the windows-app
+# CI job. To regenerate bindings (e.g. when bumping whisper-rs to a version
+# with a changed C API), comment this out and install LLVM so bindgen runs.
+[env]
+WHISPER_DONT_GENERATE_BINDINGS = "1"
