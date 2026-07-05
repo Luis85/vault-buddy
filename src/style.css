@@ -8,6 +8,9 @@ body,
   background: transparent;
   overflow: hidden;
   user-select: none;
+  /* Render native controls (select popups, checkboxes, scrollbars) dark, so
+     option lists aren't low-contrast on the dark glass panel. */
+  color-scheme: dark;
 }
 
 /* Slim translucent scrollbar matching the dark glass panel. The standard
