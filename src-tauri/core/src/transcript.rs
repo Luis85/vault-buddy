@@ -28,6 +28,7 @@ pub struct TranscriptMeta {
     pub duration_secs: u64,
     pub generated_at: String,
     pub timestamps: bool,
+    pub processing_secs: u64,
 }
 
 /// `[HH:MM:SS]` — meetings can exceed an hour, so always render hours.
@@ -88,7 +89,47 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
             out.push_str(&format!("{text}\n\n"));
         }
     }
+    out.push_str(&render_stats(meta, segments));
     out
+}
+
+/// The `## Statistics` footer: metadata that's otherwise hidden in the note's
+/// frontmatter embed, plus figures computed from the transcript. Pure — every
+/// value comes from `meta`/`segments`, so it's deterministic and unit-tested.
+pub fn render_stats(meta: &TranscriptMeta, segments: &[Segment]) -> String {
+    let mut words = 0usize;
+    let mut segment_count = 0usize;
+    for s in segments {
+        let t = s.text.trim();
+        if t.is_empty() {
+            continue;
+        }
+        segment_count += 1;
+        words += t.split_whitespace().count();
+    }
+    let speaking_rate = if meta.duration_secs > 0 {
+        format!("{} wpm", (words as u64 * 60) / meta.duration_secs)
+    } else {
+        "—".to_string()
+    };
+    let language = meta.language.as_deref().unwrap_or("auto");
+    format!(
+        "## Statistics\n\n\
+         | Metric | Value |\n\
+         | --- | --- |\n\
+         | Duration | {} |\n\
+         | Words | {words} |\n\
+         | Segments | {segment_count} |\n\
+         | Speaking rate | {speaking_rate} |\n\
+         | Model | {} |\n\
+         | Language | {language} |\n\
+         | Processing time | {} |\n\
+         | Generated | {} |\n",
+        format_duration(meta.duration_secs),
+        meta.model_label,
+        format_duration(meta.processing_secs),
+        meta.generated_at,
+    )
 }
 
 pub fn transcript_file_name(mp3_file_name: &str) -> String {
@@ -264,6 +305,7 @@ mod tests {
             duration_secs: 3723,
             generated_at: "2026-07-04T15:10:00+02:00".into(),
             timestamps: true,
+            processing_secs: 47,
         }
     }
 
@@ -303,6 +345,41 @@ mod tests {
             !is_regenerable(&t),
             "a finished transcript must never be overwritten"
         );
+    }
+
+    #[test]
+    fn transcript_ends_with_a_stats_table() {
+        // meta(): model "whisper-small", language "es", duration 3723s.
+        let t = render_transcript(
+            &meta(),
+            &[
+                seg(0, 1000, "hola a todos"), // 3 words
+                seg(1000, 2000, "que tal"),   // 2 words
+                seg(2000, 2500, "   "),       // empty → skipped
+            ],
+        );
+        assert!(t.contains("## Statistics"));
+        assert!(t.contains("| Words | 5 |"));
+        assert!(t.contains("| Segments | 2 |"));
+        assert!(t.contains("| Model | whisper-small |"));
+        assert!(t.contains("| Language | es |"));
+        assert!(t.contains("| Processing time |"));
+    }
+
+    #[test]
+    fn stats_speaking_rate_computes_and_guards_zero() {
+        let mut m = meta();
+        m.duration_secs = 60; // 12 words over one minute → 12 wpm
+        let t = render_transcript(&m, &[seg(0, 60_000, "a b c d e f g h i j k l")]);
+        assert!(t.contains("| Speaking rate | 12 wpm |"));
+
+        let mut z = meta();
+        z.duration_secs = 0; // must not divide by zero
+        assert!(render_transcript(&z, &[seg(0, 0, "hi there")]).contains("| Speaking rate | — |"));
+
+        let mut a = meta();
+        a.language = None; // None renders "auto" in the footer too
+        assert!(render_transcript(&a, &[]).contains("| Language | auto |"));
     }
 
     #[test]

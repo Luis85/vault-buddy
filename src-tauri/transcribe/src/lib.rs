@@ -35,9 +35,13 @@ pub fn transcribe_recording(
     opts: &TranscribeOptions,
     generated_at: &str,
 ) -> Result<PathBuf, String> {
+    let started = std::time::Instant::now();
     let samples = decode::decode_to_16k_mono(mp3)?;
     let duration_secs = samples.len() as u64 / decode::WHISPER_RATE as u64;
     let segments = transcriber.transcribe(&samples, opts.language.as_deref())?;
+    // Wall-clock of the actual work (decode + inference). Measured here, not in
+    // core, so render_transcript stays clock-free and deterministic.
+    let processing_secs = started.elapsed().as_secs();
     let mp3_file_name = mp3
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -49,6 +53,7 @@ pub fn transcribe_recording(
         duration_secs,
         generated_at: generated_at.to_string(),
         timestamps: opts.timestamps,
+        processing_secs,
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);
@@ -138,6 +143,8 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("vault-buddy-transcript: complete"));
         assert!(text.contains("[00:00:00] hello world"));
+        assert!(text.contains("## Statistics"));
+        assert!(text.contains("| Model | whisper-small |"));
     }
 
     #[test]
