@@ -1,47 +1,10 @@
 use chrono::Local;
 use std::path::Path;
-use std::sync::Mutex;
 use vault_buddy_core::{daily_note_uri, discovery, process, uri};
 
-/// Physical pixels the frontend subtracted from the window position while
-/// the panel is open (so it can unfold toward free screen space). The quit
-/// path adds it back before persisting the position — otherwise a quit with
-/// the panel open would save the shifted point and the buddy would respawn
-/// away from where the user parked it.
-#[derive(Default)]
-pub struct PanelOffset(pub Mutex<(i32, i32)>);
-
-impl PanelOffset {
-    // All access goes through lock_ignoring_poison: if any thread ever
-    // panics while holding this lock, `.lock().unwrap()` on the main thread
-    // would abort the whole app (a panic across the WebView2 FFI boundary on
-    // Windows). Recovering the poisoned guard degrades to the last value.
-    pub fn set(&self, value: (i32, i32)) {
-        *vault_buddy_core::sync_util::lock_ignoring_poison(&self.0) = value;
-    }
-
-    /// Read and zero the offset in one locked step (used by the restore path
-    /// so the close handler and the quit path can't double-add).
-    pub fn take(&self) -> (i32, i32) {
-        std::mem::take(&mut *vault_buddy_core::sync_util::lock_ignoring_poison(
-            &self.0,
-        ))
-    }
-
-    pub fn get(&self) -> (i32, i32) {
-        *vault_buddy_core::sync_util::lock_ignoring_poison(&self.0)
-    }
-}
-
-#[tauri::command]
-pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
-    state.set((x, y));
-}
-
 /// Called right before the updater installs and restarts: that path exits
-/// the process without the normal close/quit hooks, so restore the
-/// unshifted home position first — otherwise installing with the panel
-/// open at a screen edge would persist the shifted point for next launch.
+/// the process without the normal close/quit hooks, so make sure the panel
+/// is closed and the buddy position is persisted first.
 ///
 /// Must stay a SYNCHRONOUS command: it runs on the main thread, where
 /// `save_window_state` (which takes the window-state plugin's cache lock and
@@ -51,25 +14,13 @@ pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
 /// this codebase fixed — see `window_upkeep_tick`.
 #[tauri::command]
 pub fn prepare_update_install(app: tauri::AppHandle) {
-    use tauri::Manager;
     use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-    crate::tray::restore_home_position(&app);
-    // the installer exits without window destruction, which is what the
-    // window-state plugin saves on — persist explicitly, like the quit path.
-    // Logged on both sides: this save silently failing is exactly how a
-    // buddy loses its position across an update, and the process is dead
-    // moments later — the log line is the only evidence that survives.
-    if let Some(pos) = app
-        .get_webview_window("main")
-        .and_then(|w| w.outer_position().ok())
-    {
-        log::info!("update install: saving window position {},{}", pos.x, pos.y);
-    }
+    // The buddy window never shifts, so there is no home position to restore —
+    // just make sure the panel is closed and persist the buddy position.
+    close_panel(app.clone());
     if let Err(e) = app.save_window_state(StateFlags::POSITION) {
         log::error!("update install: saving window state failed: {e}");
     }
-    // The updater kills the process via std::process::exit — stamp clean
-    // now or every update would false-positive as a crash next launch.
     log::info!("clean shutdown (update install)");
     crate::diagnostics::mark_clean_shutdown();
 }
@@ -81,8 +32,8 @@ pub fn prepare_update_install(app: tauri::AppHandle) {
 /// WM_NCLBUTTONDOWN anyway — Windows then runs a "sticky" move loop with
 /// no button held, gluing the buddy to the cursor and eating the next real
 /// press. Being a synchronous command it runs on the main thread (like
-/// `show_buddy_menu`/`set_window_geometry`, which call main-thread-only Win32
-/// APIs), so the button re-check happens on the input-owning thread right
+/// `show_buddy_menu`, which calls main-thread-only Win32 APIs), so the
+/// button re-check happens on the input-owning thread right
 /// before the move loop is entered. Returns whether the drag actually
 /// started so the frontend can retract its blur suppression when a stale
 /// request is dropped. `pointer_type` is the webview's pointer kind: the
@@ -118,93 +69,6 @@ pub(crate) fn primary_button_down() -> bool {
     // VK_LBUTTON tracks whichever physical button is the primary — matching
     // the webview's own notion of "button 0".
     (unsafe { GetKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
-}
-
-/// Applies position and size in one native call. The frontend used to issue
-/// setPosition and setSize as two IPC round-trips, and the intermediate
-/// geometry got painted — the buddy visibly flashed to a corner whenever the
-/// panel opened with a shifted placement. Folding them into one IPC command
-/// removed that, but `set_position` + `set_size` are still two event-loop
-/// iterations, and on a shifted open (buddy near the bottom/right edge) the
-/// loop composited the moved-but-not-yet-resized window between them — the
-/// buddy flashed to the shifted-up/left corner for a frame before the resize
-/// and layout caught up. On Windows a single `SetWindowPos` moves and resizes
-/// atomically (one WM_WINDOWPOSCHANGED), so only the final geometry is ever
-/// painted.
-#[tauri::command]
-pub fn set_window_geometry(
-    window: tauri::WebviewWindow,
-    x: i32,
-    y: i32,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    #[cfg(windows)]
-    return set_window_geometry_atomic(&window, x, y, width, height);
-
-    // Off-Windows the shell crate isn't shipped (no webkit2gtk build here);
-    // this path only keeps the command compiling and the IPC contract testable.
-    #[cfg(not(windows))]
-    {
-        window
-            .set_position(tauri::PhysicalPosition::new(x, y))
-            .map_err(|e| e.to_string())?;
-        window
-            .set_size(tauri::LogicalSize::new(width, height))
-            .map_err(|e| e.to_string())
-    }
-}
-
-/// Moves and resizes the window in a single atomic `SetWindowPos`. Runs on the
-/// main (window-owning) thread via `run_on_main_thread`: mutating window
-/// geometry off-main is exactly the cross-thread window poke the metronome
-/// design forbids. The channel makes the command block until the move lands,
-/// preserving the old `set_position`/`set_size` semantics — the next panel
-/// transition reads `outerPosition` and must observe this geometry, not the
-/// pre-move one.
-#[cfg(windows)]
-fn set_window_geometry_atomic(
-    window: &tauri::WebviewWindow,
-    x: i32,
-    y: i32,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    use tauri::Manager; // brings `app_handle()` into scope
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
-    // SetWindowPos takes physical pixels; the frontend passes a physical
-    // position but a logical size, so scale the size the way `set_size` would.
-    let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    let cx = (width * scale).round() as i32;
-    let cy = (height * scale).round() as i32;
-    // Capture the HWND as an integer so the closure stays Send.
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
-    let (tx, rx) = std::sync::mpsc::channel();
-    window
-        .app_handle()
-        .run_on_main_thread(move || {
-            // SAFETY: `hwnd` is this process's live main window. SWP_NOZORDER
-            // and SWP_NOACTIVATE leave z-order and focus untouched, so this
-            // only moves and resizes.
-            let ok = unsafe {
-                SetWindowPos(
-                    hwnd as _,
-                    std::ptr::null_mut(),
-                    x,
-                    y,
-                    cx,
-                    cy,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                )
-            };
-            let _ = tx.send(ok != 0);
-        })
-        .map_err(|e| e.to_string())?;
-    match rx.recv() {
-        Ok(true) => Ok(()),
-        Ok(false) => Err("SetWindowPos failed".into()),
-        Err(_) => Err("window closed before geometry could be applied".into()),
-    }
 }
 
 /// Show/hide the panel window. A sync command, so it runs on the main thread

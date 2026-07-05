@@ -1,12 +1,12 @@
-use crate::commands::PanelOffset;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, PhysicalPosition,
+    AppHandle, Manager,
 };
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-/// Hide the companion; the tray "Show / Hide" brings it back.
+/// Hide the companion (and its panel/bubble); the tray "Show / Hide" brings
+/// the buddy back.
 ///
 /// THE single hide chokepoint: the buddy is the recording indicator, and
 /// hiding it mid-capture would violate the spec's no-hidden-recordings
@@ -18,22 +18,9 @@ pub fn hide_buddy(app: &AppHandle) {
         log::info!("hide ignored: recording in progress");
         return;
     }
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-}
-
-/// If the panel is open the frontend may have shifted the window to unfold
-/// toward free screen space; move back to the unshifted home position so
-/// that is what any position save persists. Takes the offset (zeroing it)
-/// so running both the close handler and the quit path can't double-add.
-pub fn restore_home_position(app: &AppHandle) {
-    let (dx, dy) = app.state::<PanelOffset>().take();
-    if (dx, dy) != (0, 0) {
-        if let Some(window) = app.get_webview_window("main") {
-            if let Ok(pos) = window.outer_position() {
-                let _ = window.set_position(PhysicalPosition::new(pos.x + dx, pos.y + dy));
-            }
+    for label in ["panel", "bubble", "main"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.hide();
         }
     }
 }
@@ -76,7 +63,6 @@ fn finish_quit(app: &AppHandle) {
     crate::diagnostics::mark_clean_shutdown();
     let app2 = app.clone();
     let posted = app.run_on_main_thread(move || {
-        restore_home_position(&app2);
         // app.exit bypasses window destruction, which is what the window-state
         // plugin normally saves on — save explicitly. Log a failure: the
         // process is dead moments later, so this line is the only evidence a

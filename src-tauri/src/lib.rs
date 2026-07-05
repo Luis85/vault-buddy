@@ -25,7 +25,7 @@ const MAIN_THREAD_STALL_TICKS: u32 = 10;
 /// moves. Stamped by the window-event hook on the main thread, read by the
 /// upkeep tick so every window touch stays away from a window in motion.
 /// A plain `Mutex<Option<Instant>>` (the codebase's shared-state idiom — see
-/// `PanelOffset`, `MARKER_GATE`) rather than a hand-encoded atomic sentinel.
+/// `MARKER_GATE`) rather than a hand-encoded atomic sentinel.
 static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
 
 fn stamp_window_moved() {
@@ -142,13 +142,11 @@ pub fn run() {
         // relaunch after install.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
         .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
-        // destruction — restore the unshifted home position first so a
-        // panel-open-at-the-edge close can't persist the shifted point.
+        // destruction.
         .on_window_event(|window, event| match event {
             // Every move re-arms the upkeep tick's quiescence gate — window
             // work must never collide with a window in motion.
@@ -170,15 +168,14 @@ pub fn run() {
                             capture_commands::finalize_if_recording(&app);
                             // The recording is finalized, so is_recording is
                             // now false and the re-triggered CloseRequested
-                            // takes the else branch below (restore + pass
-                            // through to destruction) — no loop.
+                            // takes the else branch below (pass through to
+                            // destruction) — no loop.
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.close();
                             }
                         })
                         .expect("failed to spawn close-finalize thread");
                 } else {
-                    tray::restore_home_position(app);
                     // Alt+F4 / session end: the window is about to be
                     // destroyed and the process exits with it.
                     log::info!("clean shutdown (window close)");
@@ -193,8 +190,6 @@ pub fn run() {
             commands::open_vault,
             commands::open_daily_note,
             commands::prepare_update_install,
-            commands::set_panel_offset,
-            commands::set_window_geometry,
             commands::toggle_panel,
             commands::close_panel,
             commands::close_bubble,
@@ -487,11 +482,6 @@ fn window_upkeep_tick(
     // cannot be usurped while it owns the move loop.)
     if let Err(e) = window.set_always_on_top(true) {
         log::warn!("always-on-top re-assert failed: {e}");
-    }
-    // Never persist while the panel has the window shifted — only the
-    // unshifted home position may reach disk.
-    if handle.state::<commands::PanelOffset>().get() != (0, 0) {
-        return;
     }
     if let Ok(pos) = window.outer_position() {
         // The checkpointer defers the first save past the window-state

@@ -28,15 +28,11 @@ vault_buddy_core = { path = "core" }
 vault_buddy_capture = { path = "capture" }
 crash-handler = "0.7.0"
 
-# GetKeyState for the start_buddy_drag stale-request guard, and SetWindowPos
-# for the atomic panel-toggle geometry change. windows-sys is already in the
-# dependency tree via tauri, so these features add no new crate to the build.
+# GetKeyState for the start_buddy_drag stale-request guard. windows-sys is
+# already in the dependency tree via tauri, so this feature adds no new
+# crate to the build.
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
 [workspace]
 members = ["core", "capture"]
