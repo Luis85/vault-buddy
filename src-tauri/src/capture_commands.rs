@@ -38,6 +38,7 @@ pub struct CaptureState(pub Mutex<Option<ActiveCapture>>, pub Condvar);
 struct TranscriptionJob {
     mp3: PathBuf,
     vault_id: String,
+    force: bool,
 }
 
 #[derive(Default)]
@@ -313,6 +314,7 @@ pub struct RecordingDto {
     // `type` is a Rust keyword — expose the camelCase `type` the frontend wants.
     #[serde(rename = "type")]
     pub recording_type: Option<String>,
+    pub transcript_status: String,
 }
 
 /// Read-only list of a vault's past recordings for the Recordings view.
@@ -347,6 +349,7 @@ pub fn list_recordings(id: String) -> Vec<RecordingDto> {
             recorded_at: e.recorded_at,
             duration: e.duration,
             recording_type: e.recording_type,
+            transcript_status: e.transcript_status.as_dto_str().to_string(),
         })
         .collect()
 }
@@ -662,6 +665,7 @@ fn maybe_enqueue_transcription(app: &AppHandle, vault_id: &str, mp3: &Path) {
         TranscriptionJob {
             mp3: mp3.to_path_buf(),
             vault_id: vault_id.to_string(),
+            force: false,
         },
     );
 }
@@ -946,6 +950,7 @@ pub fn run_recovery(app: &AppHandle) {
                                             TranscriptionJob {
                                                 mp3,
                                                 vault_id: vault.id.clone(),
+                                                force: false,
                                             },
                                         );
                                     }
@@ -1045,6 +1050,7 @@ fn scan_and_enqueue(app: &AppHandle) {
                     TranscriptionJob {
                         mp3,
                         vault_id: vault.id.clone(),
+                        force: false,
                     },
                 );
             }
@@ -1058,15 +1064,31 @@ fn process_transcription(
     loaded: &mut Option<(ModelTier, WhisperTranscriber)>,
 ) {
     let cfg = capture_config::vault_config(&capture_config::load_config(), &job.vault_id);
-    if !cfg.transcribe {
-        return; // disabled since it was queued
+    // A forced (explicit) re-transcribe ignores the vault's auto-transcribe
+    // setting; the automatic path still bails when disabled.
+    if !cfg.transcribe && !job.force {
+        return;
     }
     let tier = ModelTier::from_str(&cfg.transcription_model);
     let _ = app.emit(
         "capture:transcribing",
         serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "vaultId": job.vault_id }),
     );
-    let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
+    if job.force {
+        // Overwrite a finished sidecar with the "transcribing…" placeholder so
+        // the note embed reflects the in-flight regeneration.
+        let name = job
+            .mp3
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _ = vault_buddy_core::transcript::force_write_sidecar(
+            &vault_buddy_core::transcript::transcript_path(&job.mp3),
+            &vault_buddy_core::transcript::render_placeholder(&name),
+        );
+    } else {
+        let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
+    }
 
     let model = match ensure_model(app, tier) {
         Ok(p) => p,
@@ -1085,7 +1107,7 @@ fn process_transcription(
         model_label: tier.label(),
     };
     let generated_at = chrono::Local::now().to_rfc3339();
-    match transcribe_recording(&job.mp3, transcriber, &opts, &generated_at) {
+    match transcribe_recording(&job.mp3, transcriber, &opts, &generated_at, job.force) {
         Ok(path) => {
             log::info!("transcribe: wrote {}", path.display());
             let _ = app.emit(
@@ -1156,7 +1178,34 @@ pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), Stri
         return Err("Recording not found.".to_string());
     }
     let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
-    enqueue_transcription(&app, TranscriptionJob { mp3, vault_id });
+    enqueue_transcription(
+        &app,
+        TranscriptionJob {
+            mp3,
+            vault_id,
+            force: false,
+        },
+    );
+    Ok(())
+}
+
+/// Explicit, forced re-transcription of a specific recording: regenerates even
+/// a finished transcript and ignores the vault's auto-transcribe setting.
+#[tauri::command]
+pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    if !mp3.is_file() {
+        return Err("Recording not found.".to_string());
+    }
+    let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
+    enqueue_transcription(
+        &app,
+        TranscriptionJob {
+            mp3,
+            vault_id,
+            force: true,
+        },
+    );
     Ok(())
 }
 

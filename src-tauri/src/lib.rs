@@ -159,6 +159,7 @@ pub fn run() {
             capture_commands::stop_capture,
             capture_commands::capture_status,
             capture_commands::transcribe_recording_now,
+            capture_commands::retranscribe,
             capture_commands::open_transcript,
             capture_commands::list_recordings,
             capture_commands::open_recording,
