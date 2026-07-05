@@ -95,6 +95,19 @@ impl VaultCaptureConfig {
             },
         }
     }
+
+    /// Folders that may hold this vault's recordings, for scans that must see
+    /// EVERY past recording (the Recordings list, recovery, transcription
+    /// backfill). A configured custom folder holds them all; without one,
+    /// meetings and voice notes live in their two distinct default homes and
+    /// the mode may have changed over the vault's life, so scan both. This is
+    /// the union of `effective_recording_folder`'s branches.
+    pub fn recording_roots(&self) -> Vec<&str> {
+        match &self.recording_folder {
+            Some(folder) => vec![folder.as_str()],
+            None => vec!["Meetings", "Voice Notes"],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -416,6 +429,23 @@ mod tests {
         let v = vault_config(&cfg, "a");
         assert!(!v.transcribe);
         assert_eq!(v.mode, RecordingMode::VoiceNote);
+    }
+
+    #[test]
+    fn recording_roots_are_the_custom_folder_or_both_defaults() {
+        let cfg = parse_config(
+            r#"{ "vaults": {
+                "a": { "mode": "voice-note" },
+                "b": { "recordingFolder": "Inbox" }
+            } }"#,
+        );
+        // No custom folder → scan both mode homes (mode may have changed).
+        assert_eq!(
+            vault_config(&cfg, "a").recording_roots(),
+            vec!["Meetings", "Voice Notes"]
+        );
+        // Custom folder → it holds every recording, scan just it.
+        assert_eq!(vault_config(&cfg, "b").recording_roots(), vec!["Inbox"]);
     }
 
     #[test]
