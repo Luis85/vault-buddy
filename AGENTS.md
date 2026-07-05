@@ -52,7 +52,7 @@ launched the app on the CI runner and never exited.
 ### IPC surface (Rust commands, registered in `src-tauri/src/lib.rs`)
 
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
-`set_panel_offset`, `set_window_geometry`, `start_buddy_drag`,
+`toggle_panel`, `close_panel`, `close_bubble`, `start_buddy_drag`,
 `show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, plus the
 capture surface: `capture_status`, `start_capture`, `stop_capture`,
 `pause_capture`, `resume_capture`, `get_capture_config`,
@@ -65,27 +65,47 @@ The app is single-instance (`tauri-plugin-single-instance`, registered
 FIRST in the builder — keep it first): a second launch exits immediately
 and the surviving instance reveals the buddy instead.
 
-### The window geometry system (most invariant-heavy area)
+### The window system (most invariant-heavy area)
 
-The transparent window is 88×88 collapsed and grows to 440×340 when the
-panel opens (`useCompanionWindow.ts`), so the invisible window never blocks
-desktop clicks. Near screen edges the window is *shifted* so the panel
-unfolds toward free space; the shift is tracked as an offset that must be
-undone before any position is persisted. Invariants:
+Three separate always-on-top transparent windows, so the buddy window never
+resizes. The old design was one window that grew from 88×88 to hold the
+panel; WebView2 repaints its stale last frame at the new bounds for a frame
+on resize, flashing the buddy to a corner. Splitting the concerns removed the
+resize entirely:
 
-- Position + size change in ONE native call (`set_window_geometry`) —
-  two IPC round-trips paint an intermediate geometry (buddy flashes). On
-  Windows the command itself is one atomic `SetWindowPos`, not
-  `set_position` + `set_size`: those are two event-loop iterations and the
-  loop composited the moved-but-not-yet-resized window on a shifted open,
-  flashing the buddy to the shifted corner for a frame.
-- The frontend mirrors the offset to Rust (`set_panel_offset`) so exit paths
-  that bypass the frontend (tray quit, Alt+F4, updater install) can restore
-  the unshifted home position before `tauri-plugin-window-state` saves it.
-  The plugin persists POSITION only — size is always managed dynamically.
-- Panel open/close transitions are serialized in a queue;
-  `panelTransitionsSettled()` exposes its tail. The updater awaits it before
-  installing — never replace that with a sleep (it races; see git history).
+- **`main`** — the buddy, fixed 88×88, the only window the user drags and the
+  only one whose position is persisted. It never changes size, so it is
+  structurally flicker-proof.
+- **`panel`** — the vault/settings panel (360×340), created hidden.
+- **`bubble`** — the greeting speech bubble (260×150), created hidden.
+
+`panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
+window has no stale-frame flash. Placement is one pure function,
+`core::companion_placement::panel_position(buddy, work_area, w, h)`
+(unit-tested on Linux): it sits the window beside the buddy and clamps it into
+the monitor work area so a bottom-/edge-anchored buddy unfolds toward free
+space. `position_panel` / `show_bubble` (in `commands.rs`) feed it the live
+buddy/monitor geometry; any missing window or monitor info leaves the window
+where it was (best-effort, never an error). Invariants:
+
+- **Window show/hide and the placement getters run on the MAIN thread only.**
+  `toggle_panel`, `close_panel`, `close_bubble` are *synchronous* commands
+  (custom commands aren't capability-gated — only `core:`/`plugin:` are), so
+  they run on the main thread where the window getters, `set_position`,
+  `show`/`hide` and `set_focus` are valid. `toggle_panel` positions the hidden
+  panel, shows it, focuses it, and hides the bubble; opening never touches the
+  buddy window. Every exit path and the updater reuse these commands — there
+  is no offset/shift to undo, because the buddy never moves to make room.
+- **The panel closes itself when focus really leaves the app.**
+  `schedule_focus_out_check` (fired from `WindowEvent::Focused(false)`) cannot
+  sample focus inline: clicking from panel to buddy fires the source window's
+  blur BEFORE the destination's focus lands, so an inline check would see
+  neither focused and wrongly hide. `run_on_main_thread` alone won't defer it
+  — that runs the closure INLINE when called from the main thread (where
+  window events are dispatched). So it sleeps 120 ms on a named worker thread,
+  then marshals the check back to the main thread. The check only ever HIDES,
+  never shows, so it can never fight `toggle_panel` into a reopen: a buddy
+  click that closed the panel leaves the deferred check a no-op.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -94,10 +114,11 @@ undone before any position is persisted. Invariants:
   WM_NCLBUTTONDOWN starts a buttonless "sticky" move loop on Windows). The
   re-check is **mouse-only** (a touch/pen contact reports `buttons=1` to the
   webview but need not surface as `WM_LBUTTONDOWN`), so the frontend passes
-  the pointer type. The command returns whether the drag actually started;
-  the frontend refuses to start one from a pointermove whose button is
-  already up and, on a dropped request, emits `drag-cancelled` so App.vue
-  retracts the blur suppression it armed (`CompanionCharacter.vue`).
+  the pointer type. The command returns whether the drag actually started, and
+  the frontend refuses to start one from a pointermove whose button is already
+  up. Dragging the buddy closes the panel (`BuddyRoot` invokes `close_panel`
+  on drag-start): the panel is its own window now, so it simply hides instead
+  of riding the buddy along.
 - **Window-state saves and window getters run on the MAIN thread only.**
   `save_window_state` takes the plugin's cache lock and then reads window
   geometry; the plugin's Moved listener takes the same lock on the main
@@ -122,17 +143,21 @@ undone before any position is persisted. Invariants:
   in the core crate) that detects unclean shutdowns the panic hook
   structurally cannot see (native faults, kills, power loss) — every
   graceful exit path (tray/buddy quit, Alt+F4 close, update install) must
-  stamp `diagnostics::mark_clean_shutdown()`.
+  stamp `diagnostics::mark_clean_shutdown()`. All hide paths funnel through
+  `tray::hide_buddy`, which hides all three windows (`panel`, `bubble`,
+  `main`) and no-ops mid-recording (the buddy is the recording indicator).
 
 ### Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
 
-Check → download (panel stays open so spinner/errors are visible) → close
-panel + await transitions settle → `prepare_update_install` (Rust restores
-home position and saves window state) → `install()` → `relaunch()`. On
-failure the panel reopens on the settings view and `available` is kept so
-the install button stays visible for retry. The `Update` object is stored
-with `markRaw()` — a Vue reactive proxy breaks its private-field `rid` and
-every real install would throw.
+Check → download (panel stays open so spinner/errors are visible) →
+`close_panel` (hide the panel window) → `prepare_update_install` (Rust saves
+the buddy position and stamps a clean shutdown) → `install()` → `relaunch()`.
+The buddy window never shifts, so there is no home position to restore. On
+failure the panel reopens on the settings view via `toggle_panel`, `available`
+is kept so the install button stays visible for retry, and
+`rearm_crash_detection` turns the run marker back on (the prepare step latched
+it off). The `Update` object is stored with `markRaw()` — a Vue reactive
+proxy breaks its private-field `rid` and every real install would throw.
 
 ### The vault domain (core crate + `vaults` store)
 
@@ -240,15 +265,33 @@ found the failure it prevents:
 
 ### Frontend state
 
-Pinia stores: `vaults` (list, panel open/closed, panel view state
-`view: list | settings | captureSettings` with `captureSettingsVaultId`
-tracking which vault's settings are open — view state lives in the store
-because the panel component is destroyed while closed), `updates` (phase
-machine: idle/checking/upToDate/available/installing/error), `settings`
-(buddy character/animation, persisted to localStorage), and `capture`
-(recording state mirrored from Rust: `paused`, `pausedTotalMs`, `level`,
-`vaultId`, `lastSaved`). Rust-driven toggles (animation, dragging) arrive
-as Tauri events emitted from menu handlers.
+Each window loads the same bundle and mounts a different root by its label:
+`main.ts` reads `getCurrentWindow().label` and `rootFor(label)`
+(`src/roots/index.ts`, a pure map, unit-tested) picks the component —
+`main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`, any
+unexpected label → `BuddyRoot`. The roots are thin: `BuddyRoot` hosts
+`CompanionCharacter` and invokes `toggle_panel`/`close_panel`; `PanelRoot`
+hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
+`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss.
+
+Panel visibility is no longer a store flag — it IS the panel window's
+show/hide state, owned by Rust. So the `vaults` store lost `panelOpen`/
+`togglePanel` and gained `refresh()` (re-run discovery on panel mount). It
+still holds the list and the panel view state (`view: list | settings |
+captureSettings` with `captureSettingsVaultId`) because that must survive the
+panel window being hidden.
+
+Other Pinia stores: `updates` (phase machine:
+idle/checking/upToDate/available/installing/error), `settings` (buddy
+character/animation, persisted to localStorage), and `capture` (recording
+state mirrored from Rust: `paused`, `pausedTotalMs`, `level`, `vaultId`,
+`lastSaved`).
+
+Cross-window state travels two ways: Tauri events broadcast to every window
+(Rust-driven animation/dragging toggles from the menu handlers; capture
+level/state), and localStorage `storage` events — a settings change in the
+panel window fires `settings.syncFromStorage()` in the buddy window so the
+buddy re-reads character/animation without an IPC round-trip.
 
 ## Testing conventions
 
