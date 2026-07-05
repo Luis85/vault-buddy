@@ -170,7 +170,7 @@ describe("CaptureSettings", () => {
   it("hides the model/language/timestamps controls while transcribe is off", async () => {
     const { wrapper } = await mountLoaded({ config: { transcribe: false } });
     expect(wrapper.find('[data-testid="transcription-model-select"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="transcription-language-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcription-language-select"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="transcript-timestamps-toggle"]').exists()).toBe(false);
   });
 
@@ -185,8 +185,8 @@ describe("CaptureSettings", () => {
     });
     const model = wrapper.get<HTMLSelectElement>('[data-testid="transcription-model-select"]');
     expect(model.element.value).toBe("medium");
-    const language = wrapper.get<HTMLInputElement>(
-      '[data-testid="transcription-language-input"]',
+    const language = wrapper.get<HTMLSelectElement>(
+      '[data-testid="transcription-language-select"]',
     );
     expect(language.element.value).toBe("es");
     const timestamps = wrapper.get<HTMLInputElement>(
@@ -199,7 +199,7 @@ describe("CaptureSettings", () => {
     const { wrapper, calls } = await mountLoaded();
     await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
     await wrapper.get('[data-testid="transcription-model-select"]').setValue("medium");
-    await wrapper.get('[data-testid="transcription-language-input"]').setValue("es");
+    await wrapper.get('[data-testid="transcription-language-select"]').setValue("es");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     const set = calls.find((c) => c.cmd === "set_capture_config");

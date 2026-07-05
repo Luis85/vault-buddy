@@ -8,6 +8,21 @@ const props = defineProps<{ vaultId: string }>();
 
 const BITRATES = [128, 160, 192];
 const MODELS = ["base", "small", "medium"] as const;
+const LANGUAGES = [
+  { code: "", name: "Auto-detect" },
+  { code: "en", name: "English" },
+  { code: "de", name: "German" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "it", name: "Italian" },
+  { code: "pt", name: "Portuguese" },
+  { code: "nl", name: "Dutch" },
+  { code: "pl", name: "Polish" },
+  { code: "zh", name: "Chinese" },
+  { code: "ja", name: "Japanese" },
+  { code: "ru", name: "Russian" },
+  { code: "ar", name: "Arabic" },
+] as const;
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -202,19 +217,16 @@ async function save() {
           <option v-for="m in MODELS" :key="m" :value="m">{{ capitalize(m) }}</option>
         </select>
       </section>
-      <section>
-        <label class="mb-1 block text-sm text-slate-200" for="capture-transcription-language">
-          Language
-          <span class="block text-xs text-slate-500">e.g. en, es — blank = auto</span>
-        </label>
-        <input
+      <section class="flex items-center justify-between gap-2">
+        <label for="capture-transcription-language" class="text-sm text-slate-200">Language</label>
+        <select
           id="capture-transcription-language"
           v-model="transcriptionLanguage"
-          data-testid="transcription-language-input"
-          type="text"
-          placeholder="auto-detect"
-          class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-        />
+          data-testid="transcription-language-select"
+          class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
+        >
+          <option v-for="l in LANGUAGES" :key="l.code" :value="l.code">{{ l.name }}</option>
+        </select>
       </section>
       <section class="flex items-center justify-between">
         <label for="capture-transcript-timestamps-toggle" class="text-sm text-slate-200">
