@@ -1,10 +1,20 @@
 mod capture_commands;
 mod commands;
+mod diagnostics;
 mod tray;
 
 use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 pub fn run() {
+    // Before anything else: a panic during builder construction or in any
+    // thread should still be captured on disk.
+    diagnostics::install_panic_hook();
+    // SEH/signal-level net under the panic hook: catches native faults the
+    // Rust hook can never see. Installed this early so even plugin/builder
+    // construction is covered.
+    diagnostics::install_native_crash_handler();
+
     tauri::Builder::default()
         // Registered first (per the plugin's docs) so a second launch bails
         // before any other plugin runs. Two instances would mean two buddies,
@@ -20,7 +30,29 @@ pub fn run() {
         }))
         // Recording saved/failed toasts.
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_log::Builder::new().build())
+        // Persist to a rotating file in the app log dir — the bare `.build()`
+        // logged only to stdout, which is invisible in a release GUI build,
+        // so crashes left no trail. `targets` REPLACES the plugin defaults
+        // (which are Stdout + an unnamed LogDir): set them explicitly to
+        // Stdout (kept for `tauri dev`) + a single `vault-buddy.log`, so we
+        // don't also spawn a second, default-named log file. 5 MB + KeepOne
+        // bounds disk while keeping the one rotated-out file that usually
+        // holds the crash preceding a restart. Local timestamps so lines
+        // match the user's clock.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("vault-buddy".into()),
+                    }),
+                ])
+                .level(log::LevelFilter::Info)
+                .max_file_size(5 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
         // Remember where the user parked the buddy across restarts. Only the
         // position: the window size is managed dynamically by the panel
         // open/close logic and must never be restored from disk.
@@ -37,6 +69,7 @@ pub fn run() {
         .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
         .manage(capture_commands::TranscriptionState::default())
+        .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction — restore the unshifted home position first so a
@@ -53,18 +86,25 @@ pub fn run() {
                     // re-trigger it via the app handle.
                     api.prevent_close();
                     let app = app.clone();
-                    std::thread::spawn(move || {
-                        capture_commands::finalize_if_recording(&app);
-                        // The recording is finalized, so is_recording is
-                        // now false and the re-triggered CloseRequested
-                        // takes the else branch below (restore + pass
-                        // through to destruction) — no loop.
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.close();
-                        }
-                    });
+                    std::thread::Builder::new()
+                        .name("close-finalize".into())
+                        .spawn(move || {
+                            capture_commands::finalize_if_recording(&app);
+                            // The recording is finalized, so is_recording is
+                            // now false and the re-triggered CloseRequested
+                            // takes the else branch below (restore + pass
+                            // through to destruction) — no loop.
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.close();
+                            }
+                        })
+                        .expect("failed to spawn close-finalize thread");
                 } else {
                     tray::restore_home_position(app);
+                    // Alt+F4 / session end: the window is about to be
+                    // destroyed and the process exits with it.
+                    log::info!("clean shutdown (window close)");
+                    diagnostics::mark_clean_shutdown();
                 }
             }
         })
@@ -76,12 +116,88 @@ pub fn run() {
             commands::set_panel_offset,
             commands::set_window_geometry,
             commands::show_buddy_menu,
+            commands::open_logs_folder,
+            commands::rearm_crash_detection,
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status,
-            capture_commands::transcribe_recording_now
+            capture_commands::transcribe_recording_now,
+            capture_commands::get_capture_config,
+            capture_commands::set_capture_config,
+            capture_commands::list_audio_devices,
+            capture_commands::pause_capture,
+            capture_commands::resume_capture,
+            capture_commands::rename_capture
         ])
         .setup(|app| {
+            // Give the panic hook the real log dir; until now it falls back to
+            // the temp dir.
+            if let Ok(dir) = app.path().app_log_dir() {
+                diagnostics::set_log_dir(dir);
+            }
+            log::info!(
+                "Vault Buddy v{} starting (pid {})",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id()
+            );
+            // install_native_crash_handler ran before this logger existed —
+            // replay any install failure it stashed, now that logging works.
+            diagnostics::report_startup_diagnostics();
+            if let Ok(dir) = app.path().app_log_dir() {
+                // A panic before setup wrote its record to the temp dir —
+                // fold it in where "Open logs folder" points.
+                match vault_buddy_core::app_diagnostics::adopt_stray_crash_log(
+                    &diagnostics::stray_crash_file(),
+                    &dir,
+                ) {
+                    Ok(true) => log::info!("adopted a pre-setup crash record into crash.log"),
+                    Ok(false) => {}
+                    Err(e) => log::warn!("could not adopt stray crash log: {e}"),
+                }
+                // The panic hook only sees Rust panics; the marker catches
+                // every other ending too (native fault, kill, power loss).
+                if let vault_buddy_core::app_diagnostics::PreviousRun::Unclean(previous) =
+                    vault_buddy_core::app_diagnostics::check_previous_run(&dir)
+                {
+                    // Freshness is judged against the stale marker's mtime,
+                    // so this must run before write_running_marker re-stamps.
+                    let (headline, body) =
+                        if vault_buddy_core::app_diagnostics::crash_record_looks_fresh(&dir) {
+                            log::warn!(
+                                "previous session did not shut down cleanly ({previous}); \
+                                 crash.log holds a matching record"
+                            );
+                            (
+                                "Vault Buddy crashed last time",
+                                "Details are in crash.log — tray → Open logs folder",
+                            )
+                        } else {
+                            log::warn!(
+                                "previous session did not shut down cleanly ({previous}) and \
+                                 no crash record was written — a native fault (graphics/\
+                                 WebView2/audio driver) or a kill; the tail of vault-buddy.log \
+                                 shows its last moments. For native dumps enable WER LocalDumps."
+                            );
+                            (
+                                "Vault Buddy didn't shut down cleanly",
+                                "No crash record was written (native fault or kill) — \
+                                 see vault-buddy.log via tray → Open logs folder",
+                            )
+                        };
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title(headline)
+                        .body(body)
+                        .show();
+                }
+                if let Err(e) = vault_buddy_core::app_diagnostics::write_running_marker(
+                    &dir,
+                    env!("CARGO_PKG_VERSION"),
+                ) {
+                    log::warn!("could not write the run marker: {e}");
+                }
+            }
             tray::create_tray(app.handle())?;
             capture_commands::run_recovery(app.handle());
             capture_commands::run_transcription(app.handle());
@@ -107,56 +223,112 @@ pub fn run() {
             // z-order-only SetWindowPos that never moves, resizes, or
             // steals focus.
             let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                // Checkpoint of the buddy's parked position. Exit paths that
-                // save state can silently fail or be bypassed (the updater
-                // kills the process via std::process::exit) — persisting
-                // within a second of any move means the state file always
-                // holds a recent correct position, whatever the exit path.
-                let mut last_pos: Option<(i32, i32)> = None;
-                let mut ticks: u32 = 0;
-                let mut saved_once = false;
-                loop {
+            // Checkpoint of the buddy's parked position. Exit paths that save
+            // state can silently fail or be bypassed (the updater kills the
+            // process via std::process::exit) — persisting within a second of
+            // any move means the state file always holds a recent correct
+            // position, whatever the exit path. These counters live across
+            // ticks, so they are owned by the loop closure below.
+            let mut last_pos: Option<(i32, i32)> = None;
+            let mut ticks: u32 = 0;
+            let mut saved_once = false;
+            std::thread::Builder::new()
+                .name("topmost-checkpoint".into())
+                .spawn(move || loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    ticks = ticks.saturating_add(1);
-                    let Some(window) = handle.get_webview_window("main") else {
-                        continue;
-                    };
-                    if !window.is_visible().unwrap_or(false) {
-                        continue;
+                    // One bad tick must never permanently kill always-on-top
+                    // re-assertion + position checkpointing. Isolate each tick: a
+                    // panic here is captured by the crash hook and this line, and
+                    // the loop keeps running.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        checkpoint_tick(&handle, &mut last_pos, &mut ticks, &mut saved_once);
+                    }));
+                    if outcome.is_err() {
+                        log::error!("background checkpoint tick panicked; continuing");
                     }
-                    let _ = window.set_always_on_top(true);
-                    // Never persist while the panel has the window shifted —
-                    // only the unshifted home position may reach disk.
-                    let offset = *handle.state::<commands::PanelOffset>().0.lock().unwrap();
-                    if offset != (0, 0) {
-                        continue;
-                    }
-                    if let Ok(pos) = window.outer_position() {
-                        let pos = (pos.x, pos.y);
-                        let moved = last_pos.is_some() && last_pos != Some(pos);
-                        // The early ticks must not write: a save that lands
-                        // before the window-state plugin's restore would
-                        // poison its cache with the pre-restore default
-                        // position. But a drag within that window would be
-                        // absorbed into the baseline and lost until the next
-                        // move — so once restore has certainly landed, one
-                        // unconditional save persists whatever the baseline
-                        // is. Any successful save (moved or initial) counts.
-                        let initial = !saved_once && ticks >= 3;
-                        if moved || initial {
-                            match handle.save_window_state(StateFlags::POSITION) {
-                                Ok(()) => saved_once = true,
-                                Err(e) => log::warn!("position checkpoint failed: {e}"),
-                            }
-                        }
-                        last_pos = Some(pos);
-                    }
-                }
-            });
+                })
+                .expect("failed to spawn topmost-checkpoint thread");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Vault Buddy");
+        .build(tauri::generate_context!())
+        .unwrap_or_else(|e| {
+            // Building the app is fatal, but `.expect` would panic with no
+            // persisted reason — log it first so the cause survives in the
+            // app log. This fires before any run loop exists (that's
+            // `.run()` below) — building the app itself failed.
+            log::error!("fatal: Tauri app failed to build: {e}");
+            std::process::exit(1);
+        })
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Every event-loop exit — whatever future path triggered it —
+                // stamps clean. The enumerated stamps on quit/close/update
+                // remain for the std::process::exit path that bypasses this.
+                log::info!("clean shutdown (event loop exit)");
+                diagnostics::mark_clean_shutdown();
+            }
+        });
+}
+
+/// One iteration of the always-on-top / position-checkpoint loop. Split out of
+/// the loop so it can run inside `catch_unwind` (a `continue` can't cross a
+/// closure boundary — skips become early `return`s here). `Manager` is in
+/// scope via the module-level `use`, so `get_webview_window`/`state` resolve.
+fn checkpoint_tick(
+    handle: &tauri::AppHandle,
+    last_pos: &mut Option<(i32, i32)>,
+    ticks: &mut u32,
+    saved_once: &mut bool,
+) {
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+    *ticks = ticks.saturating_add(1);
+    // Re-stamp the run marker every ~15s, regardless of window state: a
+    // hidden buddy (tray-hidden, or mid-recording with no visible window)
+    // is still a running session and must keep heartbeating, so this runs
+    // ABOVE the window-visibility early-returns below. This is a backstop
+    // once re-armed — see `heartbeat_running_marker`'s doc for why a
+    // premature "clean" stamp needs an explicit re-arm, not just this.
+    if (*ticks).is_multiple_of(15) {
+        crate::diagnostics::heartbeat_running_marker();
+    }
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    // Windows re-shuffles the topmost band when other topmost windows appear
+    // (taskbar previews, flyouts), which can drop the buddy behind the
+    // taskbar. No event reaches us, so re-assert always-on-top every tick — a
+    // cheap z-order-only SetWindowPos that never moves, resizes, or steals
+    // focus. Log a failure instead of swallowing it: a persistent failure is
+    // how the buddy silently sinks behind the taskbar.
+    if let Err(e) = window.set_always_on_top(true) {
+        log::warn!("always-on-top re-assert failed: {e}");
+    }
+    // Never persist while the panel has the window shifted — only the
+    // unshifted home position may reach disk.
+    if handle.state::<commands::PanelOffset>().get() != (0, 0) {
+        return;
+    }
+    if let Ok(pos) = window.outer_position() {
+        let pos = (pos.x, pos.y);
+        let moved = last_pos.is_some() && *last_pos != Some(pos);
+        // The early ticks must not write: a save that lands before the
+        // window-state plugin's restore would poison its cache with the
+        // pre-restore default position. But a drag within that window would be
+        // absorbed into the baseline and lost until the next move — so once
+        // restore has certainly landed, one unconditional save persists
+        // whatever the baseline is. Any successful save (moved or initial)
+        // counts.
+        let initial = !*saved_once && *ticks >= 3;
+        if moved || initial {
+            match handle.save_window_state(StateFlags::POSITION) {
+                Ok(()) => *saved_once = true,
+                Err(e) => log::warn!("position checkpoint failed: {e}"),
+            }
+        }
+        *last_pos = Some(pos);
+    }
 }

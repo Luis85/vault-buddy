@@ -53,9 +53,13 @@ launched the app on the CI runner and never exited.
 ### IPC surface (Rust commands, registered in `src-tauri/src/lib.rs`)
 
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
-`set_panel_offset`, `set_window_geometry`, `show_buddy_menu` — all defined in
-`src-tauri/src/commands.rs`. Tray + buddy context menu live in
-`src-tauri/src/tray.rs`; menu item events are handled in `lib.rs`.
+`set_panel_offset`, `set_window_geometry`, `show_buddy_menu`, plus the
+capture surface: `capture_status`, `start_capture`, `stop_capture`,
+`pause_capture`, `resume_capture`, `get_capture_config`,
+`set_capture_config`, `list_audio_devices`, `rename_capture` — commands
+live in `src-tauri/src/commands.rs` and `src-tauri/src/capture_commands.rs`.
+Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
+are handled in `lib.rs`.
 
 The app is single-instance (`tauri-plugin-single-instance`, registered
 FIRST in the builder — keep it first): a second launch exits immediately
@@ -82,6 +86,11 @@ undone before any position is persisted. Invariants:
   checkpoints the parked position to the window-state file whenever it
   changed — but only while the offset is zero. Exit-time saves alone proved
   lossy (the updater kills the process via `std::process::exit`).
+- The same loop heartbeat-refreshes a run marker (`app_diagnostics` in the
+  core crate) that detects unclean shutdowns the panic hook structurally
+  cannot see (native faults, kills, power loss) — every graceful exit path
+  (tray/buddy quit, Alt+F4 close, update install) must stamp
+  `diagnostics::mark_clean_shutdown()`.
 
 ### Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
 
@@ -172,18 +181,49 @@ found the failure it prevents:
   `tray::hide_buddy` (the single guarded chokepoint); quit/close finalize
   on worker threads — never block the event loop — and the app exits only
   after the save lands.
+- **Pause is a session Control message** (`Control { Stop, Pause, Resume }`
+  on the one channel the shell's device thread forwards): streams stay
+  open, drained samples are discarded, nothing is encoded, the fsync
+  cadence keeps running — and pause can never block shutdown
+  (stop-while-paused finalizes normally). Level metering (`capture:level`,
+  ~5 Hz, 0–1) is advisory and lossy by design.
+- **Rename never breaks the capture contract**: `rename_plan` (core)
+  keeps the `YYYY-MM-DD HHmm ` prefix and refuses non-capture files;
+  execution reuses the reservation + `rename_noreplace` + suffix-retry
+  loop, retargets exactly the note's embed line, and a note-side failure
+  after a successful audio move degrades to a warning (audio first).
+  Config writes stay app-side: owned temp + REPLACING rename is correct
+  for `config.json` only, serialized behind `ConfigWriteLock`.
 - Per-vault settings live app-side in `%APPDATA%\vault-buddy\config.json`
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
 
+### Diagnostics invariants
+
+- Every spawned thread is named (`std::thread::Builder`) — crash records
+  must identify the dying thread.
+- No swallowed error: anything caught-and-hidden goes through
+  `log::warn!`/`log::error!` (Rust) or `src/logging.ts` (frontend);
+  user-facing failures funnel through their domain chokepoint (e.g.
+  `emit_failed`).
+- Exit paths: the run loop stamps the clean-shutdown marker
+  automatically; any code that terminates via `std::process::exit` must
+  call `diagnostics::mark_clean_shutdown()` first or the next launch
+  reports a crash.
+- The panic hook + native crash handler are installed before the
+  builder — nothing may be moved ahead of them.
+
 ### Frontend state
 
-Pinia stores: `vaults` (list, panel open/closed, which panel view is showing
-— view state lives in the store because the panel component is destroyed
-while closed), `updates` (phase machine: idle/checking/upToDate/available/
-installing/error), `settings` (buddy character/animation, persisted to
-localStorage). Rust-driven toggles (animation, dragging) arrive as Tauri
-events emitted from menu handlers.
+Pinia stores: `vaults` (list, panel open/closed, panel view state
+`view: list | settings | captureSettings` with `captureSettingsVaultId`
+tracking which vault's settings are open — view state lives in the store
+because the panel component is destroyed while closed), `updates` (phase
+machine: idle/checking/upToDate/available/installing/error), `settings`
+(buddy character/animation, persisted to localStorage), and `capture`
+(recording state mirrored from Rust: `paused`, `pausedTotalMs`, `level`,
+`vaultId`, `lastSaved`). Rust-driven toggles (animation, dragging) arrive
+as Tauri events emitted from menu handlers.
 
 ## Testing conventions
 

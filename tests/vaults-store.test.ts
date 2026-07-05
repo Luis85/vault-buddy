@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+
+vi.mock("../src/logging", () => ({
+  logWarning: vi.fn(),
+}));
+
+import { logWarning } from "../src/logging";
 import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
@@ -38,16 +44,19 @@ describe("vaults store", () => {
     expect(store.vaults).toEqual(sampleVaults);
   });
 
-  it("reopening the panel lands on the vault list, not settings", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "list_vaults") return sampleVaults;
-    });
+  it("reopening the panel always lands on the vault list", async () => {
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();
-    await store.togglePanel();
-    store.showSettings = true;
-    await store.togglePanel(); // close while on settings
-    await store.togglePanel(); // reopen
-    expect(store.showSettings).toBe(false);
+    store.openSettings();
+    expect(store.view).toBe("settings");
+    await store.togglePanel(); // open
+    expect(store.view).toBe("list");
+    store.openCaptureSettings("v1");
+    expect(store.view).toBe("captureSettings");
+    expect(store.captureSettingsVaultId).toBe("v1");
+    store.showList();
+    expect(store.view).toBe("list");
+    expect(store.captureSettingsVaultId).toBeNull();
   });
 
   it("runAction passes the vault id and tracks busy state", async () => {
@@ -132,5 +141,27 @@ describe("vaults store", () => {
     await store.loadVaults();
     expect(store.vaults).toEqual(sampleVaults);
     expect(store.error).toContain("ipc unavailable");
+  });
+
+  it("a failing list_vaults logs a warning through the log bridge", async () => {
+    mockIPC(() => {
+      throw "ipc unavailable";
+    });
+    const store = useVaultsStore();
+    await store.loadVaults();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("vault discovery failed"),
+    );
+  });
+
+  it("a failing open_vault logs a warning through the log bridge", async () => {
+    mockIPC(() => {
+      throw "vault not found: nope";
+    });
+    const store = useVaultsStore();
+    await store.runAction("open_vault", "nope");
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("open_vault failed"),
+    );
   });
 });

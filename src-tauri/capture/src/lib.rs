@@ -6,4 +6,5 @@ pub mod devices;
 pub mod encoder;
 pub mod mixer;
 pub mod recovery;
+pub mod rename;
 pub mod session;

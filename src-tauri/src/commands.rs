@@ -11,9 +11,31 @@ use vault_buddy_core::{daily_note_uri, discovery, process, uri};
 #[derive(Default)]
 pub struct PanelOffset(pub Mutex<(i32, i32)>);
 
+impl PanelOffset {
+    // All access goes through lock_ignoring_poison: if any thread ever
+    // panics while holding this lock, `.lock().unwrap()` on the main thread
+    // would abort the whole app (a panic across the WebView2 FFI boundary on
+    // Windows). Recovering the poisoned guard degrades to the last value.
+    pub fn set(&self, value: (i32, i32)) {
+        *vault_buddy_core::sync_util::lock_ignoring_poison(&self.0) = value;
+    }
+
+    /// Read and zero the offset in one locked step (used by the restore path
+    /// so the close handler and the quit path can't double-add).
+    pub fn take(&self) -> (i32, i32) {
+        std::mem::take(&mut *vault_buddy_core::sync_util::lock_ignoring_poison(
+            &self.0,
+        ))
+    }
+
+    pub fn get(&self) -> (i32, i32) {
+        *vault_buddy_core::sync_util::lock_ignoring_poison(&self.0)
+    }
+}
+
 #[tauri::command]
 pub fn set_panel_offset(state: tauri::State<PanelOffset>, x: i32, y: i32) {
-    *state.0.lock().unwrap() = (x, y);
+    state.set((x, y));
 }
 
 /// Called right before the updater installs and restarts: that path exits
@@ -39,6 +61,10 @@ pub fn prepare_update_install(app: tauri::AppHandle) {
     if let Err(e) = app.save_window_state(StateFlags::POSITION) {
         log::error!("update install: saving window state failed: {e}");
     }
+    // The updater kills the process via std::process::exit — stamp clean
+    // now or every update would false-positive as a crash next launch.
+    log::info!("clean shutdown (update install)");
+    crate::diagnostics::mark_clean_shutdown();
 }
 
 /// Applies position and size in one native call. The frontend used to issue
@@ -145,4 +171,20 @@ pub fn open_daily_note(id: String) -> Result<(), String> {
     let today = Local::now().date_naive();
     let target = daily_note_uri(&vault.id, Path::new(&vault.path), today);
     uri::launch(&target)
+}
+
+/// Reveal the app log folder (holding `vault-buddy.log` and `crash.log`) in
+/// the OS file manager, so a user can attach logs after a crash.
+#[tauri::command]
+pub fn open_logs_folder(app: tauri::AppHandle) {
+    crate::diagnostics::open_log_dir(&app);
+}
+
+/// The frontend calls this when an update install fails after
+/// prepare_update_install stamped a clean shutdown — the app keeps
+/// running, so crash detection must come back on.
+#[tauri::command]
+pub fn rearm_crash_detection() {
+    log::warn!("update install failed after shutdown prep — re-arming crash detection");
+    crate::diagnostics::rearm_running_marker();
 }

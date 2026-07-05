@@ -12,6 +12,9 @@ pub struct NoteMeta {
     pub duration_secs: u64,
     pub vault_name: String,
     pub recording_type: String,
+    /// Total paused time (pre-formatted, e.g. "1:05"); None when the
+    /// recording was never paused — the line is omitted entirely then.
+    pub paused: Option<String>,
     pub input_devices: Vec<String>,
     pub event: Option<String>,
     pub transcribe: bool,
@@ -45,6 +48,9 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         "duration: {}\n",
         yaml_quote(&format_duration(meta.duration_secs))
     ));
+    if let Some(paused) = &meta.paused {
+        out.push_str(&format!("paused: {}\n", yaml_quote(paused)));
+    }
     out.push_str(&format!("vault: {}\n", yaml_quote(&meta.vault_name)));
     out.push_str(&format!("type: {}\n", yaml_quote(&meta.recording_type)));
     out.push_str("inputs:\n");
@@ -63,6 +69,26 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         // shows "file not found").
         let stem = mp3_file_name.strip_suffix(".mp3").unwrap_or(mp3_file_name);
         out.push_str(&format!("\n## Transcript\n\n![[{stem}.transcript]]\n"));
+    }
+    out
+}
+
+/// Rewrite exactly the `![[old]]` embed line(s) to point at the new file
+/// name. Line-anchored on purpose: the user may have written prose
+/// mentioning the old name, and only the embed our own render_note wrote
+/// may change.
+pub fn retarget_embed(note: &str, old_mp3: &str, new_mp3: &str) -> String {
+    let old_line = format!("![[{old_mp3}]]");
+    let new_line = format!("![[{new_mp3}]]");
+    let mut out = String::with_capacity(note.len());
+    for line in note.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        if body == old_line {
+            out.push_str(&new_line);
+            out.push_str(&line[body.len()..]);
+        } else {
+            out.push_str(line);
+        }
     }
     out
 }
@@ -158,10 +184,21 @@ mod tests {
             duration_secs: 3723,
             vault_name: "Work".into(),
             recording_type: "Meeting".into(),
+            paused: None,
             input_devices: vec!["Headset Mic".into(), "Speakers (loopback)".into()],
             event: None,
             transcribe: false,
         }
+    }
+
+    #[test]
+    fn note_records_paused_duration_when_present() {
+        let mut m = meta();
+        m.paused = Some(format_duration(65));
+        let note = render_note(&m, "x.mp3");
+        assert!(note.contains(r#"paused: "1:05""#), "{note}");
+        let plain = render_note(&meta(), "x.mp3");
+        assert!(!plain.contains("paused:"), "no paused line when None");
     }
 
     #[test]
@@ -285,5 +322,36 @@ mod tests {
     fn note_has_no_transcript_section_when_disabled() {
         let note = render_note(&meta(), "b.mp3");
         assert!(!note.contains("## Transcript"));
+    }
+
+    #[test]
+    fn retarget_rewrites_only_the_embed_line() {
+        let note = "---\nvault: \"W\"\n---\n\nSee old.mp3 in prose.\n![[old.mp3]]\n";
+        let out = retarget_embed(note, "old.mp3", "new.mp3");
+        assert!(out.contains("![[new.mp3]]"));
+        assert!(!out.contains("![[old.mp3]]"));
+        assert!(
+            out.contains("See old.mp3 in prose."),
+            "prose mention untouched: {out}"
+        );
+    }
+
+    #[test]
+    fn retarget_preserves_crlf_line_endings() {
+        let note = "a\r\n![[old.mp3]]\r\nb\r\n";
+        let out = retarget_embed(note, "old.mp3", "new.mp3");
+        assert_eq!(out, "a\r\n![[new.mp3]]\r\nb\r\n");
+    }
+
+    #[test]
+    fn retarget_without_a_match_returns_the_note_unchanged() {
+        let note = "no embed here\n![[other.mp3]]\n";
+        assert_eq!(retarget_embed(note, "old.mp3", "new.mp3"), note);
+    }
+
+    #[test]
+    fn retarget_handles_a_note_without_trailing_newline() {
+        let out = retarget_embed("![[old.mp3]]", "old.mp3", "new.mp3");
+        assert_eq!(out, "![[new.mp3]]");
     }
 }

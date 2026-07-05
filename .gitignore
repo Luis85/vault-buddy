@@ -10,3 +10,5 @@ app-icon.png
 
 # SDD controller scratch (ledger + task briefs/reports)
 .superpowers/
+/Meetings
+/Voice Notes

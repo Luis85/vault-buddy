@@ -177,4 +177,13 @@ describe("CompanionCharacter", () => {
     const wrapper = mount(CompanionCharacter, { props: { working: false } });
     expect(wrapper.find(".rec-dot").exists()).toBe(false);
   });
+
+  it("shows a steady amber dot while paused", () => {
+    const wrapper = mount(CompanionCharacter, {
+      props: { working: false, recording: true, paused: true },
+    });
+    const dot = wrapper.get(".rec-dot");
+    expect(dot.classes()).toContain("bg-amber-400");
+    expect(dot.classes()).not.toContain("bg-red-500");
+  });
 });

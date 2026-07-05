@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { panelTransitionsSettled } from "../composables/useCompanionWindow";
+import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 
 export type UpdatePhase =
@@ -47,6 +48,7 @@ export const useUpdatesStore = defineStore("updates", {
       } catch (e) {
         this.error = String(e);
         this.phase = "error";
+        logWarning(`update check failed: ${String(e)}`);
       }
     },
     async installUpdate() {
@@ -62,6 +64,7 @@ export const useUpdatesStore = defineStore("updates", {
         // keep `available` so the user can retry the install
         this.error = String(e);
         this.phase = "error";
+        logWarning(`update download failed: ${String(e)}`);
         return;
       }
       const vaults = useVaultsStore();
@@ -90,10 +93,18 @@ export const useUpdatesStore = defineStore("updates", {
       } catch (e) {
         // reopen the panel on the settings view so the error is visible;
         // keep `available` so the user can retry the install
-        vaults.showSettings = true;
+        vaults.openSettings();
         vaults.panelOpen = true;
         this.error = String(e);
         this.phase = "error";
+        logWarning(`update install failed: ${String(e)}`);
+        // prepare_update_install already stamped the run marker "clean" and
+        // latched crash detection off, expecting the process to exit
+        // moments later. It didn't — install() threw — so the session
+        // keeps running with detection permanently disabled unless we tell
+        // Rust to re-arm it. Fire-and-forget: this must never block or
+        // fail the retry path.
+        void invoke("rearm_crash_detection").catch(() => {});
       }
     },
   },

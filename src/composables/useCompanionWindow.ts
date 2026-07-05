@@ -6,9 +6,16 @@ import {
   LogicalSize,
 } from "@tauri-apps/api/window";
 import { planPanelPlacement, type Rect } from "./companionPlacement";
+import { logBreadcrumb, logWarning } from "../logging";
 
 export const COLLAPSED = { width: 88, height: 88 };
 export const EXPANDED = { width: 440, height: 340 };
+// A transient window just big enough for the buddy plus a greeting speech
+// bubble beside it. Kept small so the invisible click area it creates at
+// startup is minimal and short-lived (the bubble auto-dismisses).
+export const BUBBLE = { width: 260, height: 150 };
+
+type WindowState = "collapsed" | "bubble" | "expanded";
 
 interface MonitorLike {
   position: { x: number; y: number };
@@ -45,27 +52,31 @@ export async function panelTransitionsSettled(): Promise<void> {
 }
 
 /**
- * Grows the transparent window when the panel opens and shrinks it back when
- * it closes, so the invisible window never blocks clicks on the desktop
- * beneath it. The growth direction respects the monitor edges: near the
- * right or bottom edge the window is shifted so the panel unfolds toward
- * free space, and the returned `side`/`valign` let the layout mirror itself
- * to keep the buddy visually pinned.
+ * Grows the transparent window when the panel opens or a greeting bubble
+ * shows, and shrinks it back when neither wants space, so the invisible
+ * window never blocks clicks on the desktop beneath it. The growth
+ * direction respects the monitor edges: near the right or bottom edge the
+ * window is shifted so it unfolds toward free space, and the returned
+ * `side`/`valign` let the layout mirror itself to keep the buddy visually
+ * pinned. The panel always takes precedence over the bubble.
  */
-export function useCompanionWindow(panelOpen: Ref<boolean>): {
+export function useCompanionWindow(
+  panelOpen: Ref<boolean>,
+  bubbleOpen?: Ref<boolean>,
+): {
   side: Ref<"right" | "left">;
   valign: Ref<"down" | "up">;
 } {
   const side = ref<"right" | "left">("right");
   const valign = ref<"down" | "up">("down");
-  // Physical px subtracted from the window position while the panel is open.
-  // The close path adds it back relative to the *current* position, so the
+  // Physical px subtracted from the window position while it is grown. The
+  // collapse path adds it back relative to the *current* position, so the
   // buddy stays put even if the window was dragged while open.
   let offset = { x: 0, y: 0 };
 
   // Mirror the offset to the Rust side: quitting from the tray saves the
   // window position, and it must save the unshifted home position even if
-  // the panel is open at that moment.
+  // the window is grown at that moment.
   function reportOffset(): Promise<void> {
     return invoke("set_panel_offset", { x: offset.x, y: offset.y }).catch(
       () => {
@@ -74,17 +85,28 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
     ) as Promise<void>;
   }
 
-  // A transition was superseded when the panel state changed while its
-  // window calls were still in flight (e.g. a quick double-click).
-  const stale = (expected: boolean) => panelOpen.value !== expected;
+  // Panel beats bubble beats collapsed. When the panel is open its larger
+  // window already contains the buddy, so the greeting bubble never drives
+  // geometry.
+  function desiredState(): WindowState {
+    if (panelOpen.value) return "expanded";
+    if (bubbleOpen?.value) return "bubble";
+    return "collapsed";
+  }
+
+  const sizeFor = (target: WindowState) =>
+    target === "expanded" ? EXPANDED : BUBBLE;
 
   // Position and size must change in ONE native call: applying them as two
   // IPC round-trips painted an intermediate geometry — the buddy flashed to
-  // a corner whenever the panel opened shifted (left/up placements).
+  // a corner whenever the window grew shifted (left/up placements).
   function setGeometry(
     pos: { x: number; y: number },
     size: { width: number; height: number },
   ): Promise<void> {
+    logBreadcrumb(
+      `geometry → ${pos.x},${pos.y} ${size.width}×${size.height}`,
+    );
     return invoke("set_window_geometry", {
       x: pos.x,
       y: pos.y,
@@ -93,7 +115,11 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
     });
   }
 
-  async function applyOpen(): Promise<void> {
+  // `target` is the grown state this transition was queued for ("bubble" or
+  // "expanded"). If the desired state has since changed (a newer toggle),
+  // the transition is stale and must not paint an outdated geometry.
+  async function applyGrow(target: WindowState): Promise<void> {
+    const size = sizeFor(target);
     const win = getCurrentWindow();
     try {
       const [pos, scale, monitor] = await Promise.all([
@@ -101,22 +127,22 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         win.scaleFactor(),
         currentMonitor(),
       ]);
-      if (stale(true)) return;
-      // Plan from the unshifted "home" position. If a previous open already
-      // shifted the window (rapid open→close→open where the close was
+      if (desiredState() !== target) return;
+      // Plan from the unshifted "home" position. If a previous grow already
+      // shifted the window (rapid grow→collapse→grow where the collapse was
       // superseded), planning from the raw position would conclude there is
-      // room and reset the pending offset — the following close would then
-      // never move the buddy back to where the user left it.
+      // room and reset the pending offset — the following collapse would
+      // then never move the buddy back to where the user left it.
       const home = { x: pos.x + offset.x, y: pos.y + offset.y };
       const placement = planPanelPlacement(
         home,
         monitorRect(monitor),
         scale,
         COLLAPSED,
-        EXPANDED,
+        size,
       );
-      // Record before moving: if we're superseded right after the move,
-      // the close transition still knows what to undo.
+      // Record before moving: if we're superseded right after the move, the
+      // collapse transition still knows what to undo.
       offset = placement.offset;
       void reportOffset();
       side.value = placement.side;
@@ -126,21 +152,22 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
           x: home.x - placement.offset.x,
           y: home.y - placement.offset.y,
         },
-        EXPANDED,
+        size,
       );
-    } catch {
+    } catch (e) {
       // No window/monitor info — grow right/down in place. Leave any
       // recorded offset untouched so a pending shift is still undone on
-      // close.
+      // collapse.
+      logWarning(`applyGrow fell back: ${String(e)}`);
       side.value = "right";
       valign.value = "down";
       await win
-        .setSize(new LogicalSize(EXPANDED.width, EXPANDED.height))
+        .setSize(new LogicalSize(size.width, size.height))
         .catch(() => {});
     }
   }
 
-  async function applyClose(): Promise<void> {
+  async function applyCollapse(): Promise<void> {
     const win = getCurrentWindow();
     try {
       const pos = await win.outerPosition();
@@ -148,8 +175,9 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
         { x: pos.x + offset.x, y: pos.y + offset.y },
         COLLAPSED,
       );
-    } catch {
+    } catch (e) {
       // window may be gone during shutdown — best-effort collapse
+      logWarning(`applyCollapse fell back: ${String(e)}`);
       await win
         .setSize(new LogicalSize(COLLAPSED.width, COLLAPSED.height))
         .catch(() => {});
@@ -164,21 +192,32 @@ export function useCompanionWindow(panelOpen: Ref<boolean>): {
     valign.value = "down";
   }
 
-  // Serialize transitions: a close never interleaves with an in-flight open
-  // (which could re-expand the window after it was collapsed, leaving an
-  // invisible click-blocking area). Superseded transitions are skipped.
+  function applyState(target: WindowState): Promise<void> {
+    return target === "collapsed" ? applyCollapse() : applyGrow(target);
+  }
+
+  // Serialize transitions: a collapse never interleaves with an in-flight
+  // grow (which could re-expand the window after it was collapsed, leaving
+  // an invisible click-blocking area). Superseded transitions are skipped.
   let queue: Promise<void> = Promise.resolve();
-  watch(panelOpen, (open) => {
+  function schedule() {
+    const target = desiredState();
     queue = queue
       .then(() => {
-        if (stale(open)) return; // a newer toggle already won
-        return open ? applyOpen() : applyClose();
+        if (desiredState() !== target) return; // a newer toggle already won
+        return applyState(target);
       })
-      .catch(() => {
+      .catch((e) => {
         // a failed transition must not wedge the queue
+        logWarning(`window transition failed: ${String(e)}`);
       });
+    // the updater awaits panelTransitionsSettled() → transitionsTail, so it
+    // must always track the latest queued transition (bubble or panel)
     transitionsTail = queue;
-  });
+  }
+
+  watch(panelOpen, schedule);
+  if (bubbleOpen) watch(bubbleOpen, schedule);
 
   return { side, valign };
 }

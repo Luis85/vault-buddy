@@ -18,6 +18,15 @@ pub enum SourceMsg {
     Lost,
 }
 
+/// Session control messages. One channel carries all three so the shell's
+/// device thread (which owns the !Send cpal streams) stays the single
+/// forwarding point and no second signalling path can race the stop.
+pub enum Control {
+    Stop,
+    Pause,
+    Resume,
+}
+
 pub struct SourceInput {
     pub name: String,
     pub rate: u32,
@@ -39,18 +48,29 @@ pub struct SessionParams {
     pub fsync_every: Duration,
     /// Live source-loss warnings, delivered while the recording continues.
     pub warn_tx: Option<Sender<String>>,
+    /// Advisory live level meter: post-mix per-tick peak (0–1), sent every
+    /// other tick (~5 Hz). Lossy by design — a gone receiver must never
+    /// slow or fail the encode path.
+    pub level_tx: Option<Sender<f32>>,
+    /// Warning that predates the session (e.g. a configured device missing
+    /// at start): seeds the worker's warning so it reaches the note's
+    /// event metadata and the final Outcome exactly like a live warning.
+    pub start_warning: Option<String>,
 }
 
 pub struct Outcome {
     pub mp3: PathBuf,
     pub note: Option<PathBuf>,
     pub duration_secs: u64,
+    /// Total time spent paused (excluded from duration_secs and from the
+    /// encoded timeline).
+    pub paused_secs: u64,
     pub warning: Option<String>,
     pub ended_early: bool,
 }
 
 pub struct CaptureSession {
-    stop_tx: Sender<()>,
+    control_tx: Sender<Control>,
     handle: JoinHandle<Result<Outcome, String>>,
 }
 
@@ -81,18 +101,33 @@ impl CaptureSession {
             .write(true)
             .create_new(true)
             .open(&params.part)?;
-        let (stop_tx, stop_rx) = mpsc::channel();
-        let handle =
-            std::thread::spawn(move || run_worker(file, encoder, params, sources, stop_rx));
-        Ok(CaptureSession { stop_tx, handle })
+        let (control_tx, control_rx) = mpsc::channel();
+        // Named so a crash record on this thread is attributable; spawn
+        // failure is a real `?` path here (unlike the shell's `.expect`
+        // sites) because `start` already returns `std::io::Result`.
+        let handle = std::thread::Builder::new()
+            .name("capture-worker".into())
+            .spawn(move || run_worker(file, encoder, params, sources, control_rx))?;
+        Ok(CaptureSession { control_tx, handle })
     }
 
     pub fn is_running(&self) -> bool {
         !self.handle.is_finished()
     }
 
+    /// Fire-and-forget: a dead worker (already finalizing) makes these
+    /// no-ops, which is exactly right — pause must never block or fail
+    /// shutdown.
+    pub fn pause(&self) {
+        let _ = self.control_tx.send(Control::Pause);
+    }
+
+    pub fn resume(&self) {
+        let _ = self.control_tx.send(Control::Resume);
+    }
+
     pub fn stop(self) -> Result<Outcome, String> {
-        let _ = self.stop_tx.send(());
+        let _ = self.control_tx.send(Control::Stop);
         self.handle
             .join()
             .map_err(|_| "capture worker panicked".to_string())?
@@ -104,7 +139,7 @@ fn run_worker(
     mut encoder: Mp3Encoder,
     params: SessionParams,
     sources: Vec<SourceInput>,
-    stop_rx: Receiver<()>,
+    control_rx: Receiver<Control>,
 ) -> Result<Outcome, String> {
     let mut states: Vec<SourceState> = sources
         .into_iter()
@@ -118,7 +153,7 @@ fn run_worker(
     let mut last_flush = Instant::now();
     let mut last_fsync = Instant::now();
     let mut frames_written: u64 = 0;
-    let mut warning: Option<String> = None;
+    let mut warning: Option<String> = params.start_warning.clone();
     let mut ended_early = false;
     // Set when an encode/write/flush call fails mid-recording. Rather than
     // returning immediately (which would abandon the .part file), we break
@@ -142,12 +177,31 @@ fn run_worker(
     // average consumption matches real time; the buffer-occupancy drop then
     // only handles true device clock drift.
     let mut next_tick = Instant::now() + TICK;
+    let mut paused = false;
+    let mut paused_total = Duration::ZERO;
+    let mut pause_started: Option<Instant> = None;
+    let mut level_tick: u32 = 0;
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());
-        let stopped = matches!(
-            stop_rx.recv_timeout(wait),
-            Ok(()) | Err(RecvTimeoutError::Disconnected)
-        );
+        let mut stopped = false;
+        match control_rx.recv_timeout(wait) {
+            Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => stopped = true,
+            Ok(Control::Pause) => {
+                if !paused {
+                    paused = true;
+                    pause_started = Some(Instant::now());
+                }
+            }
+            Ok(Control::Resume) => {
+                if paused {
+                    paused = false;
+                    if let Some(started) = pause_started.take() {
+                        paused_total += started.elapsed();
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
         next_tick += TICK;
 
         // Drain every source's channel into its (converted) buffer.
@@ -155,6 +209,12 @@ fn run_worker(
             loop {
                 match s.input.rx.try_recv() {
                     Ok(SourceMsg::Samples(raw)) => {
+                        // Paused: keep draining (device loss stays
+                        // detectable, channels never back up) but discard —
+                        // the encoded timeline skips the gap entirely.
+                        if paused {
+                            continue;
+                        }
                         let mono = mixer::downmix_to_mono(&raw, s.input.channels);
                         let mono = mixer::resample_linear(&mono, s.input.rate, TARGET_RATE);
                         s.buffer.extend(mono);
@@ -206,6 +266,8 @@ fn run_worker(
         let tick_frames = (TARGET_RATE / 10) as usize;
         let take = if finish {
             states.iter().map(|s| s.buffer.len()).max().unwrap_or(0)
+        } else if paused {
+            0
         } else {
             tick_frames
         };
@@ -231,6 +293,16 @@ fn run_worker(
                 .map(|v| v.as_slice())
                 .unwrap_or(&silence[..take]);
             let stereo = mixer::mix_to_stereo_i16(a, b);
+            if let Some(level_tx) = &params.level_tx {
+                level_tick = level_tick.wrapping_add(1);
+                if level_tick.is_multiple_of(2) {
+                    let peak = stereo
+                        .iter()
+                        .map(|s| (*s as f32 / i16::MAX as f32).abs())
+                        .fold(0.0f32, f32::max);
+                    let _ = level_tx.send(peak);
+                }
+            }
             frames_written += (stereo.len() / 2) as u64;
             let bytes = match encoder.encode(&stereo) {
                 Ok(b) => b,
@@ -263,6 +335,12 @@ fn run_worker(
         if finish {
             break;
         }
+    }
+
+    // Stop while paused: close the open span so the note records it and
+    // pause can never block or distort shutdown.
+    if let Some(started) = pause_started.take() {
+        paused_total += started.elapsed();
     }
 
     // Finalize: flush encoder, fsync, stop-time reservation + rename retry.
@@ -303,7 +381,11 @@ fn run_worker(
     if let Ok(dir_handle) = std::fs::File::open(&params.dir) {
         let _ = dir_handle.sync_all();
     }
-    log::info!("capture: saved {}", mp3.display());
+    log::info!(
+        "capture: saved {} ({duration_secs}s audio, {}s paused)",
+        mp3.display(),
+        paused_total.as_secs()
+    );
 
     if let Some(err) = write_error {
         ended_early = true;
@@ -319,6 +401,8 @@ fn run_worker(
             duration_secs,
             vault_name: params.vault_name.clone(),
             recording_type: params.recording_type.clone(),
+            paused: (paused_total.as_secs() > 0)
+                .then(|| vault_buddy_core::capture_note::format_duration(paused_total.as_secs())),
             input_devices: device_names,
             event: warning.clone(),
             transcribe: params.transcribe,
@@ -341,6 +425,7 @@ fn run_worker(
         mp3,
         note,
         duration_secs,
+        paused_secs: paused_total.as_secs(),
         warning,
         ended_early,
     })
@@ -377,6 +462,8 @@ mod tests {
             flush_every: Duration::from_millis(100),
             fsync_every: Duration::from_secs(30),
             warn_tx: None,
+            level_tx: None,
+            start_warning: None,
         }
     }
 
@@ -483,6 +570,141 @@ mod tests {
     }
 
     #[test]
+    fn pause_excludes_the_gap_and_the_note_records_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let session = CaptureSession::start(
+            params(dir.path()),
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        // ~0.4 s of real audio while recording
+        for chunk in sine_chunks(44_100, 0.4) {
+            tx.send(SourceMsg::Samples(chunk)).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(400));
+        session.pause();
+        // 2.2 s of wall time that must NOT appear in the duration; samples
+        // arriving while paused are discarded (the gap is skipped, not
+        // recorded as silence)
+        std::thread::sleep(Duration::from_millis(200));
+        for chunk in sine_chunks(44_100, 0.5) {
+            tx.send(SourceMsg::Samples(chunk)).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(2_000));
+        session.resume();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        assert!(
+            outcome.paused_secs >= 2,
+            "paused span accumulated: {}",
+            outcome.paused_secs
+        );
+        // active wall time is ~0.7 s + scheduling slack; if the paused span
+        // leaked into the timeline this would be >= 2
+        assert!(
+            outcome.duration_secs < 2,
+            "paused wall time excluded: {}",
+            outcome.duration_secs
+        );
+        assert!(outcome.mp3.exists());
+        let note = std::fs::read_to_string(outcome.note.expect("note written")).unwrap();
+        assert!(note.contains("paused: \"0:0"), "paused metadata: {note}");
+    }
+
+    #[test]
+    fn stop_while_paused_finalizes_and_closes_the_open_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let session = CaptureSession::start(
+            params(dir.path()),
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        session.pause();
+        std::thread::sleep(Duration::from_millis(1_100));
+        // pause never blocks shutdown: stop while paused saves normally
+        let outcome = session.stop().unwrap();
+        assert!(outcome.mp3.exists());
+        assert!(
+            outcome.paused_secs >= 1,
+            "open pause span closed at stop: {}",
+            outcome.paused_secs
+        );
+    }
+
+    #[test]
+    fn resume_without_pause_and_double_pause_are_harmless() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let session = CaptureSession::start(
+            params(dir.path()),
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        session.resume(); // no-op
+        session.pause();
+        session.pause(); // second pause must not restart the span
+        std::thread::sleep(Duration::from_millis(200));
+        session.resume();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        assert!(outcome.mp3.exists());
+    }
+
+    #[test]
+    fn level_tap_reports_normalized_peaks_for_a_known_sine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (level_tx, level_rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.level_tx = Some(level_tx);
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        for chunk in sine_chunks(44_100, 1.0) {
+            tx.send(SourceMsg::Samples(chunk)).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(600));
+        let outcome = session.stop().unwrap();
+        assert!(outcome.mp3.exists());
+        let levels: Vec<f32> = level_rx.try_iter().collect();
+        assert!(!levels.is_empty(), "levels were emitted");
+        assert!(
+            levels.iter().all(|l| (0.0..=1.0).contains(l)),
+            "normalized 0-1: {levels:?}"
+        );
+        // 0.4-amplitude sine through soft_clip peaks near tanh(0.4) ≈ 0.38
+        let max = levels.iter().cloned().fold(0.0f32, f32::max);
+        assert!(max > 0.2, "peak tracks the signal: {max}");
+    }
+
+    #[test]
     fn part_creation_is_exclusive() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".b.mp3.part"), "orphan").unwrap();
@@ -528,5 +750,38 @@ mod tests {
         let note = std::fs::read_to_string(outcome.note.unwrap()).unwrap();
         assert!(note.contains("## Transcript"));
         assert!(note.contains(".transcript]]"));
+    }
+
+    #[test]
+    fn start_warning_reaches_outcome_and_note_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.start_warning = Some("Configured microphone \"X\" not found".into());
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        assert!(
+            outcome
+                .warning
+                .as_deref()
+                .unwrap_or("")
+                .contains("not found"),
+            "warning surfaced: {:?}",
+            outcome.warning
+        );
+        assert!(!outcome.ended_early, "a fallback is not an early end");
+        let note = std::fs::read_to_string(outcome.note.expect("note")).unwrap();
+        assert!(note.contains("event:"), "note metadata event: {note}");
     }
 }

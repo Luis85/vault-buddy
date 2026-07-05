@@ -5,20 +5,23 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
-use vault_buddy_capture::session::{CaptureSession, Outcome, SessionParams};
+use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
 use vault_buddy_transcribe::{transcribe_recording, TranscribeOptions};
 
-pub enum StopReason {
-    User,
-}
-
 pub struct ActiveCapture {
-    pub stop_tx: Sender<StopReason>,
+    pub control_tx: Sender<Control>,
     pub vault_id: String,
     pub started_at_ms: u64,
+    /// Pause bookkeeping mirrors the session (which owns the truth for the
+    /// encoded timeline) so capture_status can resync a reloaded webview's
+    /// frozen-elapsed display exactly.
+    pub paused: bool,
+    pub paused_total_ms: u64,
+    pub paused_since_ms: Option<u64>,
     /// The .part file the live session owns, once the worker has reserved
     /// it — None while devices are still being set up (and for a timed-out
     /// start whose worker never reported back).
@@ -70,6 +73,17 @@ pub struct StatusPayload {
     pub recording: bool,
     pub vault_id: Option<String>,
     pub started_at_ms: Option<u64>,
+    pub paused: bool,
+    pub paused_total_ms: u64,
+    pub paused_since_ms: Option<u64>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedPayload {
+    pub mp3: String,
+    pub note: Option<String>,
+    pub warning: Option<String>,
 }
 
 fn now_ms() -> u64 {
@@ -87,6 +101,7 @@ fn toast(app: &AppHandle, title: &str, body: &str) {
 /// so no path can silently log-and-vanish (the UI must never look healthy
 /// after a failed start or finalize).
 fn emit_failed(app: &AppHandle, message: &str) {
+    log::error!("capture: failed: {message}");
     let _ = app.emit("capture:failed", serde_json::json!({ "message": message }));
     toast(app, "Recording failed", message);
 }
@@ -96,7 +111,7 @@ fn emit_failed(app: &AppHandle, message: &str) {
 /// go through here, or stop-waiters sleep until their next timeout.
 fn clear_active(app: &AppHandle) {
     let state = app.state::<CaptureState>();
-    *state.0.lock().unwrap() = None;
+    *lock_ignoring_poison(&state.0) = None;
     state.1.notify_all();
 }
 
@@ -126,18 +141,151 @@ fn emit_saved(app: &AppHandle, outcome: &Outcome) {
 
 #[tauri::command]
 pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
-    let guard = state.0.lock().unwrap();
+    let guard = lock_ignoring_poison(&state.0);
     match guard.as_ref() {
         Some(active) => StatusPayload {
             recording: true,
             vault_id: Some(active.vault_id.clone()),
             started_at_ms: Some(active.started_at_ms),
+            paused: active.paused,
+            paused_total_ms: active.paused_total_ms,
+            paused_since_ms: active.paused_since_ms,
         },
         None => StatusPayload {
             recording: false,
             vault_id: None,
             started_at_ms: None,
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
         },
+    }
+}
+
+/// Serializes set_capture_config's read-modify-write of config.json —
+/// concurrent saves for different vaults must not lose each other's
+/// fields (the write path itself is lock-free by design).
+#[derive(Default)]
+pub struct ConfigWriteLock(pub Mutex<()>);
+
+pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureConfigDto {
+    pub mode: String,
+    pub recording_folder: Option<String>,
+    pub bitrate_kbps: u32,
+    pub create_note: bool,
+    pub input_device: Option<String>,
+    pub output_device: Option<String>,
+}
+
+impl CaptureConfigDto {
+    fn from_config(v: &capture_config::VaultCaptureConfig) -> Self {
+        Self {
+            mode: v.mode.as_key().to_string(),
+            recording_folder: v.recording_folder.clone(),
+            bitrate_kbps: v.bitrate_kbps,
+            create_note: v.create_note,
+            input_device: v.input_device.clone(),
+            output_device: v.output_device.clone(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_capture_config(id: String) -> CaptureConfigDto {
+    // Unknown vaults return the defaults — exactly what a fresh form shows.
+    CaptureConfigDto::from_config(&capture_config::vault_config(
+        &capture_config::load_config(),
+        &id,
+    ))
+}
+
+#[tauri::command]
+pub fn set_capture_config(
+    lock: tauri::State<ConfigWriteLock>,
+    id: String,
+    cfg: CaptureConfigDto,
+) -> Result<(), String> {
+    let mode = capture_config::RecordingMode::from_key(&cfg.mode)
+        .ok_or_else(|| format!("Unknown recording mode: {}", cfg.mode))?;
+    if !BITRATES_KBPS.contains(&cfg.bitrate_kbps) {
+        return Err(format!("Bitrate must be one of {BITRATES_KBPS:?} kbps"));
+    }
+    // Validate the folder against the real vault path BEFORE writing —
+    // an invalid folder is an inline field error, nothing gets written.
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let folder = cfg
+        .recording_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
+    if let Some(folder) = &folder {
+        capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
+    }
+    let _guard = lock_ignoring_poison(&lock.0);
+    // The settings form owns only the fields above; transcription is
+    // config-file-only (no UI). Carry the existing transcription fields
+    // forward so a device/mode save never wipes a hand-enabled transcript
+    // config. Read under the write lock so it can't race a sibling save.
+    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
+    let value = capture_config::VaultCaptureConfig {
+        mode,
+        recording_folder: folder,
+        bitrate_kbps: cfg.bitrate_kbps,
+        create_note: cfg.create_note,
+        input_device: cfg.input_device.clone().filter(|d| !d.is_empty()),
+        output_device: cfg.output_device.clone().filter(|d| !d.is_empty()),
+        transcribe: existing.transcribe,
+        transcription_model: existing.transcription_model,
+        transcription_language: existing.transcription_language,
+        transcript_timestamps: existing.transcript_timestamps,
+    };
+    let result = capture_config::update_vault_config(&id, value.clone());
+    if result.is_ok() {
+        log::info!(
+            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}",
+            value.mode.as_key(),
+            value.recording_folder,
+            value.bitrate_kbps,
+            value.create_note,
+            value.input_device,
+            value.output_device
+        );
+    }
+    result
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceInfoDto {
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceListDto {
+    pub inputs: Vec<DeviceInfoDto>,
+    pub outputs: Vec<DeviceInfoDto>,
+}
+
+#[tauri::command]
+pub fn list_audio_devices() -> DeviceListDto {
+    let list = vault_buddy_capture::devices::list_devices();
+    let map = |d: vault_buddy_capture::devices::DeviceInfo| DeviceInfoDto {
+        name: d.name,
+        is_default: d.is_default,
+    };
+    DeviceListDto {
+        inputs: list.inputs.into_iter().map(map).collect(),
+        outputs: list.outputs.into_iter().map(map).collect(),
     }
 }
 
@@ -146,6 +294,7 @@ pub fn start_capture(
     app: AppHandle,
     state: tauri::State<CaptureState>,
     id: String,
+    mode: Option<String>,
 ) -> Result<StatusPayload, String> {
     // Everything fallible-but-cheap (discovery, config, path validation)
     // runs BEFORE the state lock is touched — the mutex must never be held
@@ -159,7 +308,19 @@ pub fn start_capture(
         return Err(format!("Vault folder not found: {}", vault.path));
     }
 
-    let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    let mut cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    // Per-recording override from the mode chooser: the config only
+    // supplies the DEFAULT. Overriding cfg.mode up front keeps every
+    // downstream decision (loopback, label, folder default, note type)
+    // consistent with the user's pick.
+    if let Some(key) = &mode {
+        cfg.mode = capture_config::RecordingMode::from_key(key)
+            .ok_or_else(|| format!("Unknown recording mode: {key}"))?;
+        log::info!(
+            "capture: mode override for this recording: {}",
+            cfg.mode.label()
+        );
+    }
     let uses_loopback = cfg.mode.uses_loopback();
     let label = cfg.mode.label();
     // Hand-editable config must never escape the vault (PRD guarantee).
@@ -167,7 +328,7 @@ pub fn start_capture(
 
     // Device validation happens on the worker thread BEFORE any file is
     // created (spec: start failures stay file-free).
-    let (stop_tx, stop_rx) = mpsc::channel::<StopReason>();
+    let (control_tx, control_rx) = mpsc::channel::<Control>();
     let (done_tx, done_rx) = mpsc::channel::<Result<Outcome, String>>();
     // Ok carries the reserved .part path so the reservation below learns
     // which file the live session owns.
@@ -177,14 +338,17 @@ pub fn start_capture(
     // check plus the insert, which closes the double-start window without
     // serializing device setup (or any I/O) under the mutex.
     {
-        let mut guard = state.0.lock().unwrap();
+        let mut guard = lock_ignoring_poison(&state.0);
         if guard.is_some() {
             return Err("A recording is already running.".to_string());
         }
         *guard = Some(ActiveCapture {
-            stop_tx: stop_tx.clone(),
+            control_tx: control_tx.clone(),
             vault_id: id.clone(),
             started_at_ms: now_ms(),
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
             part: None,
         });
     }
@@ -195,83 +359,115 @@ pub fn start_capture(
     // Live source-loss warnings: forwarded to the panel while recording.
     let (warn_tx, warn_rx) = mpsc::channel::<String>();
     let app_warn = app.clone();
-    std::thread::spawn(move || {
-        while let Ok(message) = warn_rx.recv() {
-            let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
-        }
-    });
+    std::thread::Builder::new()
+        .name("capture-warn".into())
+        .spawn(move || {
+            while let Ok(message) = warn_rx.recv() {
+                let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
+            }
+        })
+        .expect("failed to spawn capture-warn thread");
 
-    std::thread::spawn(move || {
-        let open = match vault_buddy_capture::devices::open_sources(uses_loopback) {
-            Ok(o) => o,
-            Err(e) => {
+    // Advisory level meter: forward the worker's ~5 Hz peaks to the panel.
+    let (level_tx, level_rx) = mpsc::channel::<f32>();
+    let app_level = app.clone();
+    std::thread::Builder::new()
+        .name("capture-level".into())
+        .spawn(move || {
+            while let Ok(peak) = level_rx.recv() {
+                let _ = app_level.emit("capture:level", serde_json::json!({ "peak": peak }));
+            }
+        })
+        .expect("failed to spawn capture-level thread");
+
+    std::thread::Builder::new()
+        .name("capture-device".into())
+        .spawn(move || {
+            let open = match vault_buddy_capture::devices::open_sources(
+                uses_loopback,
+                cfg.input_device.as_deref(),
+                cfg.output_device.as_deref(),
+            ) {
+                Ok(o) => o,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
+            // Stale-device fallbacks: surface live (capture:warning via the
+            // forwarder) AND seed the session so the note metadata records it.
+            for w in &open.warnings {
+                let _ = warn_tx.send(w.clone());
+            }
+            let start_warning = (!open.warnings.is_empty()).then(|| open.warnings.join("; "));
+            let now = chrono::Local::now();
+            use chrono::Timelike;
+            let date = now.date_naive();
+            let dir = capture_paths::dated_folder(&root, date);
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                let _ = ready_tx.send(Err(format!("Cannot create recording folder: {e}")));
+                return;
+            }
+            // A pre-existing symlink/junction at the recording folder must
+            // not carry writes outside the vault (lexical check can't see it).
+            if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path2, &dir) {
                 let _ = ready_tx.send(Err(e));
                 return;
             }
-        };
-        let now = chrono::Local::now();
-        use chrono::Timelike;
-        let date = now.date_naive();
-        let dir = capture_paths::dated_folder(&root, date);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            let _ = ready_tx.send(Err(format!("Cannot create recording folder: {e}")));
-            return;
-        }
-        // A pre-existing symlink/junction at the recording folder must
-        // not carry writes outside the vault (lexical check can't see it).
-        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path2, &dir) {
-            let _ = ready_tx.send(Err(e));
-            return;
-        }
-        let base = capture_paths::base_name(date, now.hour(), now.minute(), label);
-        let names = capture_paths::reserve_names(&dir, &base);
-        let params = SessionParams {
-            dir: dir.clone(),
-            base: names.base.clone(),
-            part: names.part.clone(),
-            bitrate_kbps: cfg.bitrate_kbps,
-            vault_name: vault_name.clone(),
-            recording_type: label.to_string(),
-            create_note: cfg.create_note,
-            transcribe: cfg.transcribe,
-            recorded_at: now.to_rfc3339(),
-            flush_every: Duration::from_secs(1),
-            fsync_every: Duration::from_secs(30),
-            warn_tx: Some(warn_tx),
-        };
-        let session = match CaptureSession::start(params, open.inputs) {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = ready_tx.send(Err(format!("Could not start recording: {e}")));
-                return;
-            }
-        };
-        log::info!(
-            "capture: started in vault '{vault_name}' → {}",
-            names.part.display()
-        );
-        let _ = ready_tx.send(Ok(names.part.clone()));
+            let base = capture_paths::base_name(date, now.hour(), now.minute(), label);
+            let names = capture_paths::reserve_names(&dir, &base);
+            let params = SessionParams {
+                dir: dir.clone(),
+                base: names.base.clone(),
+                part: names.part.clone(),
+                bitrate_kbps: cfg.bitrate_kbps,
+                vault_name: vault_name.clone(),
+                recording_type: label.to_string(),
+                create_note: cfg.create_note,
+                transcribe: cfg.transcribe,
+                recorded_at: now.to_rfc3339(),
+                flush_every: Duration::from_secs(1),
+                fsync_every: Duration::from_secs(30),
+                warn_tx: Some(warn_tx),
+                level_tx: Some(level_tx),
+                start_warning,
+            };
+            let session = match CaptureSession::start(params, open.inputs) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(format!("Could not start recording: {e}")));
+                    return;
+                }
+            };
+            log::info!(
+                "capture: started in vault '{vault_name}' → {}",
+                names.part.display()
+            );
+            let _ = ready_tx.send(Ok(names.part.clone()));
 
-        // Own the streams here; poll for user stop or self-finalization.
-        let streams = open.streams;
-        loop {
-            match stop_rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(StopReason::User) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {
-                    if !session.is_running() {
-                        break; // sources died; worker self-finalized
+            // Own the streams here; poll for control or self-finalization.
+            let streams = open.streams;
+            loop {
+                match control_rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => break,
+                    Ok(Control::Pause) => session.pause(),
+                    Ok(Control::Resume) => session.resume(),
+                    Err(RecvTimeoutError::Timeout) => {
+                        if !session.is_running() {
+                            break; // sources died; worker self-finalized
+                        }
                     }
                 }
             }
-        }
-        // Stop the session while the streams are still alive: dropping
-        // them first disconnects every source channel, and the worker
-        // could mistake an ordinary stop for all-sources-lost (bogus
-        // ended_early + source-loss warnings in the toast and note).
-        let outcome = session.stop();
-        drop(streams);
-        let _ = done_tx.send(outcome);
-    });
+            // Stop the session while the streams are still alive: dropping
+            // them first disconnects every source channel, and the worker
+            // could mistake an ordinary stop for all-sources-lost (bogus
+            // ended_early + source-loss warnings in the toast and note).
+            let outcome = session.stop();
+            drop(streams);
+            let _ = done_tx.send(outcome);
+        })
+        .expect("failed to spawn capture-device thread");
 
     // Wait for device readiness WITHOUT the lock — concurrent starts are
     // already rejected by the reservation above.
@@ -282,7 +478,7 @@ pub fn start_capture(
             // now that device setup is done — that is what the UI timer
             // should count from.
             let started_at_ms = now_ms();
-            if let Some(active) = state.0.lock().unwrap().as_mut() {
+            if let Some(active) = lock_ignoring_poison(&state.0).as_mut() {
                 active.part = Some(part);
                 active.started_at_ms = started_at_ms;
             }
@@ -308,34 +504,37 @@ pub fn start_capture(
             // worker is truly wedged, the state stays reserved until its
             // recv() finally returns or the app restarts.
             let msg = "Recording did not start in time.".to_string();
-            let _ = stop_tx.send(StopReason::User);
+            let _ = control_tx.send(Control::Stop);
             let app4 = app.clone();
-            std::thread::spawn(move || {
-                if let Ok(Ok(part)) = ready_rx.recv() {
-                    log::warn!(
-                        "capture: late start after timeout — stopping and draining {}",
-                        part.display()
-                    );
-                    match done_rx.recv() {
-                        Ok(Ok(outcome)) => emit_saved(&app4, &outcome),
-                        Ok(Err(e)) => {
-                            // A late-start finalize failure must reach the
-                            // UI, not just the log file.
-                            log::warn!("capture: late-start cleanup failed: {e}");
-                            emit_failed(&app4, &e);
-                        }
-                        Err(_) => {
-                            log::warn!("capture: late-start cleanup: worker vanished");
-                            emit_failed(&app4, "capture thread vanished");
+            std::thread::Builder::new()
+                .name("capture-janitor".into())
+                .spawn(move || {
+                    if let Ok(Ok(part)) = ready_rx.recv() {
+                        log::warn!(
+                            "capture: late start after timeout — stopping and draining {}",
+                            part.display()
+                        );
+                        match done_rx.recv() {
+                            Ok(Ok(outcome)) => emit_saved(&app4, &outcome),
+                            Ok(Err(e)) => {
+                                // A late-start finalize failure must reach the
+                                // UI, not just the log file.
+                                log::warn!("capture: late-start cleanup failed: {e}");
+                                emit_failed(&app4, &e);
+                            }
+                            Err(_) => {
+                                log::warn!("capture: late-start cleanup: worker vanished");
+                                emit_failed(&app4, "capture thread vanished");
+                            }
                         }
                     }
-                }
-                // worker replied Err (or vanished): nothing was created,
-                // but the reservation installed above still needs clearing
-                // either way, or a real recording could never start again.
-                clear_active(&app4);
-                crate::tray::set_recording(&app4, false);
-            });
+                    // worker replied Err (or vanished): nothing was created,
+                    // but the reservation installed above still needs clearing
+                    // either way, or a real recording could never start again.
+                    clear_active(&app4);
+                    crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
+                })
+                .expect("failed to spawn capture-janitor thread");
             emit_failed(&app, &msg);
             return Err(msg);
         }
@@ -346,35 +545,41 @@ pub fn start_capture(
         recording: true,
         vault_id: Some(id),
         started_at_ms: Some(started_at_ms),
+        paused: false,
+        paused_total_ms: 0,
+        paused_since_ms: None,
     };
 
     // Monitor thread: the ONLY consumer of the session outcome. Covers
     // user/menu/shutdown stops AND self-finalization (all sources lost) —
     // the state clears and the outcome surfaces no matter who ended it.
     let app3 = app.clone();
-    std::thread::spawn(move || {
-        let result = done_rx
-            .recv()
-            .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
-        clear_active(&app3);
-        match result {
-            Ok(outcome) => {
-                emit_saved(&app3, &outcome);
-                maybe_enqueue_transcription(&app3, &monitor_vault_id, &outcome.mp3);
+    std::thread::Builder::new()
+        .name("capture-monitor".into())
+        .spawn(move || {
+            let result = done_rx
+                .recv()
+                .unwrap_or_else(|_| Err("capture thread vanished".to_string()));
+            clear_active(&app3);
+            match result {
+                Ok(outcome) => {
+                    emit_saved(&app3, &outcome);
+                    maybe_enqueue_transcription(&app3, &monitor_vault_id, &outcome.mp3);
+                }
+                Err(e) => {
+                    log::error!("capture: finalize failed: {e}");
+                    emit_failed(&app3, &e);
+                }
             }
-            Err(e) => {
-                log::error!("capture: finalize failed: {e}");
-                emit_failed(&app3, &e);
-            }
-        }
-        crate::tray::set_recording(&app3, false);
-    });
+            crate::tray::set_capture_state(&app3, crate::tray::TrayCaptureState::Idle);
+        })
+        .expect("failed to spawn capture-monitor thread");
 
     // Indicator hardening: recording buddy must be visible.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
     }
-    crate::tray::set_recording(&app, true);
+    crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
     let _ = app.emit("capture:started", payload.clone());
     Ok(payload)
 }
@@ -409,9 +614,9 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
     // `app.state::<CaptureState>()` is otherwise a temporary that would be
     // dropped at the end of the `let guard = …;` statement.
     let capture_state = app.state::<CaptureState>();
-    let mut guard = capture_state.0.lock().unwrap();
+    let mut guard = lock_ignoring_poison(&capture_state.0);
     let Some(active) = guard.as_ref() else { return };
-    let _ = active.stop_tx.send(StopReason::User);
+    let _ = active.control_tx.send(Control::Stop);
     let deadline = wait.map(|limit| std::time::Instant::now() + limit);
     while guard.is_some() {
         match deadline {
@@ -421,10 +626,13 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
                     log::warn!("capture: stop wait timed out");
                     return;
                 }
+                // A poisoned condvar wait must recover the same way the
+                // mutex does: recovering the pair keeps shutdown waiting
+                // instead of panicking mid-finalize.
                 guard = capture_state
                     .1
                     .wait_timeout(guard, deadline - now)
-                    .unwrap()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .0;
             }
             None => {
@@ -433,7 +641,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
                 let (g, timeout) = capture_state
                     .1
                     .wait_timeout(guard, Duration::from_secs(15))
-                    .unwrap();
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard = g;
                 if timeout.timed_out() && guard.is_some() {
                     log::warn!("capture: still finalizing…");
@@ -445,7 +653,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
 
 #[tauri::command]
 pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result<(), String> {
-    if state.0.lock().unwrap().is_none() {
+    if lock_ignoring_poison(&state.0).is_none() {
         return Err("No recording is running.".to_string());
     }
     request_stop_and_wait(&app, Some(Duration::from_secs(15)));
@@ -458,7 +666,124 @@ pub fn stop_from_menu(app: &AppHandle) {
 }
 
 pub fn is_recording(app: &AppHandle) -> bool {
-    app.state::<CaptureState>().0.lock().unwrap().is_some()
+    lock_ignoring_poison(&app.state::<CaptureState>().0).is_some()
+}
+
+/// Shared by the IPC commands and the tray menu items. Errors are typed
+/// for the UI (which disables the buttons in starting/saving states) —
+/// but the tray can always race, so every precondition re-checks here.
+fn set_paused(app: &AppHandle, pause: bool) -> Result<(), String> {
+    let state = app.state::<CaptureState>();
+    let mut guard = lock_ignoring_poison(&state.0);
+    let Some(active) = guard.as_mut() else {
+        return Err("No recording is running.".to_string());
+    };
+    if active.part.is_none() {
+        return Err("Recording is still starting.".to_string());
+    }
+    if pause == active.paused {
+        return Err(if pause {
+            "Recording is already paused."
+        } else {
+            "Recording is not paused."
+        }
+        .to_string());
+    }
+    let now = now_ms();
+    if pause {
+        active.paused = true;
+        active.paused_since_ms = Some(now);
+        let _ = active.control_tx.send(Control::Pause);
+    } else {
+        active.paused = false;
+        active.paused_total_ms += now.saturating_sub(active.paused_since_ms.take().unwrap_or(now));
+        let _ = active.control_tx.send(Control::Resume);
+    }
+    let paused_total_ms = active.paused_total_ms;
+    // Captured under the lock so the audit log line below (after the guard
+    // drops and the event emits) doesn't need to reacquire the mutex.
+    let vault_id = active.vault_id.clone();
+    drop(guard);
+    if pause {
+        let _ = app.emit("capture:paused", serde_json::json!({ "atMs": now }));
+        crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Paused);
+        log::info!("capture: paused (vault {vault_id})");
+    } else {
+        let _ = app.emit(
+            "capture:resumed",
+            serde_json::json!({ "pausedTotalMs": paused_total_ms }),
+        );
+        crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Recording);
+        log::info!("capture: resumed after {paused_total_ms}ms total paused (vault {vault_id})");
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn pause_capture(app: AppHandle) -> Result<(), String> {
+    set_paused(&app, true)
+}
+
+#[tauri::command]
+pub fn resume_capture(app: AppHandle) -> Result<(), String> {
+    set_paused(&app, false)
+}
+
+#[tauri::command]
+pub fn rename_capture(
+    state: tauri::State<CaptureState>,
+    mp3: String,
+    title: String,
+) -> Result<RenamedPayload, String> {
+    // The prompt dismisses on a new recording (UI rule); this is the
+    // backend guard for the same thing — never shuffle files next to a
+    // directory a live session is writing into.
+    if lock_ignoring_poison(&state.0).is_some() {
+        return Err("Cannot rename while a recording is running.".to_string());
+    }
+    // rename_plan re-validates ownership (capture-pattern stems only), so
+    // an arbitrary user mp3 can never be renamed through this command.
+    let plan = capture_paths::rename_plan(Path::new(&mp3), &title)?;
+    if !plan.mp3_from.is_file() {
+        return Err("Recording file not found — was it moved?".to_string());
+    }
+    let stem = plan
+        .mp3_from
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if plan.new_base == stem {
+        // Confirming the unedited prefill: nothing to do, and running the
+        // reservation anyway would mint a pointless " (2)" suffix (the
+        // source itself occupies the target name).
+        return Ok(RenamedPayload {
+            note: plan
+                .note_from
+                .is_file()
+                .then(|| plan.note_from.to_string_lossy().into_owned()),
+            mp3,
+            warning: None,
+        });
+    }
+    let outcome = vault_buddy_capture::rename::execute(&plan)?;
+    Ok(RenamedPayload {
+        mp3: outcome.mp3.to_string_lossy().into_owned(),
+        note: outcome.note.map(|p| p.to_string_lossy().into_owned()),
+        warning: outcome.warning,
+    })
+}
+
+/// Tray menu variants: failures only log — there is no panel to show them.
+pub fn pause_from_menu(app: &AppHandle) {
+    if let Err(e) = set_paused(app, true) {
+        log::warn!("pause from tray: {e}");
+    }
+}
+
+pub fn resume_from_menu(app: &AppHandle) {
+    if let Err(e) = set_paused(app, false) {
+        log::warn!("resume from tray: {e}");
+    }
 }
 
 /// Every shutdown path funnels through here so quitting mid-meeting saves
@@ -480,108 +805,116 @@ pub fn finalize_if_recording(app: &AppHandle) {
 /// recording) retries every 90s, bounded at ~24h of attempts.
 pub fn run_recovery(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        let pass = |stale: Duration| -> bool {
-            // A live recording's .part should never be caught by a recovery
-            // pass in practice: a clock jump could give the live .part a
-            // future mtime that makes it look stale, and it would be
-            // "recovered" out from under the encoder. recover_root has no
-            // notion of the active session, so postpone the whole pass
-            // while a recording is active — returning true keeps the pass
-            // retrying every 90s while work is pending, rather than only
-            // running again at next launch. Coarse, but safe in practice
-            // (this is-recording check runs once per pass, not once per
-            // file recover_root scans).
-            {
-                let state = app.state::<CaptureState>();
-                let guard = state.0.lock().unwrap();
-                if let Some(active) = guard.as_ref() {
-                    log::info!(
-                        "recovery: postponed while a recording is active (live part: {})",
-                        active
+    std::thread::Builder::new()
+        .name("capture-recovery".into())
+        .spawn(move || {
+            let pass = |stale: Duration| -> bool {
+                // A live recording's .part should never be caught by a recovery
+                // pass in practice: a clock jump could give the live .part a
+                // future mtime that makes it look stale, and it would be
+                // "recovered" out from under the encoder. recover_root has no
+                // notion of the active session, so postpone the whole pass
+                // while a recording is active — returning true keeps the pass
+                // retrying every 90s while work is pending, rather than only
+                // running again at next launch. Coarse, but safe in practice
+                // (this is-recording check runs once per pass, not once per
+                // file recover_root scans).
+                {
+                    let state = app.state::<CaptureState>();
+                    let guard = lock_ignoring_poison(&state.0);
+                    if let Some(active) = guard.as_ref() {
+                        // Build the message while still holding the guard,
+                        // then drop it before the synchronous file-log write
+                        // — the state mutex must never be held across I/O.
+                        let live_part = active
                             .part
                             .as_deref()
                             .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| "not yet reserved".to_string())
-                    );
-                    return true;
+                            .unwrap_or_else(|| "not yet reserved".to_string());
+                        drop(guard);
+                        log::info!(
+                            "recovery: postponed while a recording is active (live part: {live_part})"
+                        );
+                        return true;
+                    }
                 }
-            }
-            let cfg = capture_config::load_config();
-            let mut fresh_found = false;
-            for vault in discovery::discover_vaults() {
-                let v = capture_config::vault_config(&cfg, &vault.id);
-                // Configured folder, or BOTH mode defaults when no config
-                // entry exists — a first-ever crash may have used either.
-                let roots: Vec<String> = match &v.recording_folder {
-                    Some(folder) => vec![folder.clone()],
-                    None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
-                };
-                for folder in roots {
-                    let Ok(root) =
-                        capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
-                    else {
-                        log::warn!("recovery: skipping unsafe configured folder {folder:?}");
-                        continue;
+                let cfg = capture_config::load_config();
+                let mut fresh_found = false;
+                for vault in discovery::discover_vaults() {
+                    let v = capture_config::vault_config(&cfg, &vault.id);
+                    // Configured folder, or BOTH mode defaults when no config
+                    // entry exists — a first-ever crash may have used either.
+                    let roots: Vec<String> = match &v.recording_folder {
+                        Some(folder) => vec![folder.clone()],
+                        None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
                     };
-                    if !root.is_dir() {
-                        continue;
-                    }
-                    if let Err(e) =
-                        capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root)
-                    {
-                        log::warn!("recovery: skipping root: {e}");
-                        continue;
-                    }
-                    for action in vault_buddy_capture::recovery::recover_root(
-                        &root,
-                        &vault.name,
-                        stale,
-                        v.create_note,
-                        v.transcribe,
-                    ) {
-                        use vault_buddy_capture::recovery::RecoveryAction;
-                        match action {
-                            RecoveryAction::Recovered { mp3 } => {
-                                let name = mp3
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                toast(&app, "Recording recovered", &name);
-                                if v.transcribe {
-                                    let _ = vault_buddy_core::transcript::write_placeholder(&mp3);
-                                    enqueue_transcription(
-                                        &app,
-                                        TranscriptionJob {
-                                            mp3,
-                                            vault_id: vault.id.clone(),
-                                        },
-                                    );
+                    for folder in roots {
+                        let Ok(root) =
+                            capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
+                        else {
+                            log::warn!("recovery: skipping unsafe configured folder {folder:?}");
+                            continue;
+                        };
+                        if !root.is_dir() {
+                            continue;
+                        }
+                        if let Err(e) =
+                            capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root)
+                        {
+                            log::warn!("recovery: skipping root: {e}");
+                            continue;
+                        }
+                        for action in vault_buddy_capture::recovery::recover_root(
+                            &root,
+                            &vault.name,
+                            stale,
+                            v.create_note,
+                            v.transcribe,
+                        ) {
+                            use vault_buddy_capture::recovery::RecoveryAction;
+                            match action {
+                                RecoveryAction::Recovered { mp3 } => {
+                                    let name = mp3
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    toast(&app, "Recording recovered", &name);
+                                    if v.transcribe {
+                                        let _ =
+                                            vault_buddy_core::transcript::write_placeholder(&mp3);
+                                        enqueue_transcription(
+                                            &app,
+                                            TranscriptionJob {
+                                                mp3,
+                                                vault_id: vault.id.clone(),
+                                            },
+                                        );
+                                    }
                                 }
+                                RecoveryAction::Fresh(_) => fresh_found = true,
+                                RecoveryAction::DeletedEmpty(_) => {}
                             }
-                            RecoveryAction::Fresh(_) => fresh_found = true,
-                            RecoveryAction::DeletedEmpty(_) => {}
                         }
                     }
                 }
+                fresh_found
+            };
+            // Retry while work is pending (fresh orphans aging, or passes
+            // postponed by an active recording). Bounded so a pathological
+            // state cannot spin forever: 960 × 90s ≈ 24h of retries, far
+            // beyond any realistic recording session; recovery also reruns
+            // on every app launch.
+            let mut retries = 0u32;
+            while pass(Duration::from_secs(60)) {
+                retries += 1;
+                if retries >= 960 {
+                    log::warn!("recovery: giving up rescans after {retries} attempts");
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(90));
             }
-            fresh_found
-        };
-        // Retry while work is pending (fresh orphans aging, or passes
-        // postponed by an active recording). Bounded so a pathological
-        // state cannot spin forever: 960 × 90s ≈ 24h of retries, far
-        // beyond any realistic recording session; recovery also reruns
-        // on every app launch.
-        let mut retries = 0u32;
-        while pass(Duration::from_secs(60)) {
-            retries += 1;
-            if retries >= 960 {
-                log::warn!("recovery: giving up rescans after {retries} attempts");
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(90));
-        }
-    });
+        })
+        .expect("failed to spawn capture-recovery thread");
 }
 
 /// Startup + on-demand worker: drains the transcription queue, postponing

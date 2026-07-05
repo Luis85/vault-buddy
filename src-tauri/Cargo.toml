@@ -1,6 +1,6 @@
 [package]
 name = "vault-buddy"
-version = "0.2.0"
+version = "0.2.3"
 description = "AI-native desktop companion for Obsidian"
 edition = "2021"
 
@@ -27,6 +27,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 vault_buddy_core = { path = "core" }
 vault_buddy_capture = { path = "capture" }
 vault_buddy_transcribe = { path = "transcribe", features = ["whisper"] }
+crash-handler = "0.7.0"
 
 [workspace]
 resolver = "2"
