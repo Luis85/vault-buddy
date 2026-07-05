@@ -85,59 +85,60 @@ describe("updates store", () => {
   });
 
   it("keeps the panel open while downloading, closes it before installing", async () => {
-    // the download can be slow or fail — its spinner/error live in the
-    // panel, so the panel must not vanish until the process is about to exit
-    const vaults = useVaultsStore();
-    const panelOpenDuring = { download: false, install: true };
+    // the download can be slow or fail — its spinner/error live in the panel
+    // window, so the panel must not close until the process is about to exit
+    const closedYet = () =>
+      mocks.invoke.mock.calls.some((c) => c[0] === "close_panel");
+    const closedDuring = { download: true, install: false };
     const download = vi.fn().mockImplementation(async () => {
-      panelOpenDuring.download = vaults.panelOpen;
+      closedDuring.download = closedYet();
     });
     const install = vi.fn().mockImplementation(async () => {
-      panelOpenDuring.install = vaults.panelOpen;
+      closedDuring.install = closedYet();
     });
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    vaults.panelOpen = true;
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
 
-    expect(panelOpenDuring.download).toBe(true);
-    expect(panelOpenDuring.install).toBe(false);
+    expect(closedDuring.download).toBe(false); // still open while downloading
+    expect(closedDuring.install).toBe(true); // closed before installing
   });
 
-  it("restores the home position before installing", async () => {
-    // the install path exits the process without close/quit hooks — the
-    // shifted window position must be restored before that happens
+  it("closes the panel before installing", async () => {
+    // the install path exits the process; the panel window closes first.
+    // The buddy window never shifts, so there is no home position to restore.
     const download = vi.fn().mockResolvedValue(undefined);
     const install = vi.fn().mockResolvedValue(undefined);
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    const vaults = useVaultsStore();
-    vaults.panelOpen = true;
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
 
-    expect(vaults.panelOpen).toBe(false);
+    expect(mocks.invoke).toHaveBeenCalledWith("close_panel");
     expect(mocks.invoke).toHaveBeenCalledWith("prepare_update_install");
-    // the restore must land before the install starts
-    const restoreOrder = mocks.invoke.mock.invocationCallOrder[0];
+    // close_panel must land before the install starts
+    const closeIdx = mocks.invoke.mock.calls.findIndex(
+      (c) => c[0] === "close_panel",
+    );
+    const closeOrder = mocks.invoke.mock.invocationCallOrder[closeIdx];
     const installOrder = install.mock.invocationCallOrder[0];
-    expect(restoreOrder).toBeLessThan(installOrder);
+    expect(closeOrder).toBeLessThan(installOrder);
   });
 
-  it("keeps the update retryable and the panel open when the download fails", async () => {
+  it("keeps the update retryable when the download fails", async () => {
     const download = vi.fn().mockRejectedValue("download broke");
     const install = vi.fn();
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    const vaults = useVaultsStore();
-    vaults.panelOpen = true;
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
     expect(store.phase).toBe("error");
     expect(store.error).toContain("download broke");
     expect(store.available).not.toBeNull(); // retry stays possible
-    expect(vaults.panelOpen).toBe(true); // the error stays visible
+    // the download failed before the panel-close step — it was never closed,
+    // so the error stays visible in the still-open panel
+    expect(mocks.invoke).not.toHaveBeenCalledWith("close_panel");
     expect(install).not.toHaveBeenCalled();
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
@@ -152,7 +153,6 @@ describe("updates store", () => {
       throw "install broke";
     });
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    vaults.panelOpen = true;
     vaults.view = "settings"; // installs start from the settings view
     const store = useUpdatesStore();
     await store.checkForUpdates();
@@ -160,19 +160,17 @@ describe("updates store", () => {
     expect(store.phase).toBe("error");
     expect(store.error).toContain("install broke");
     expect(store.available).not.toBeNull(); // retry stays possible
-    // the panel remounts on reopen — it must land on settings, where the
-    // update error and retry button live, not on the vault list
-    expect(vaults.panelOpen).toBe(true);
+    // close_panel hid the panel window before the install threw — toggle_panel
+    // re-shows it, on the settings view where the error/retry button live
+    expect(mocks.invoke).toHaveBeenCalledWith("toggle_panel");
     expect(vaults.view).toBe("settings");
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
   it("a failing install logs a warning through the log bridge", async () => {
-    const vaults = useVaultsStore();
     const download = vi.fn().mockResolvedValue(undefined);
     const install = vi.fn().mockRejectedValue("install broke");
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    vaults.panelOpen = true;
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
@@ -186,11 +184,9 @@ describe("updates store", () => {
     // latched crash detection off before install() ran — if install()
     // then throws, the app keeps running with detection permanently
     // disabled unless the frontend explicitly asks Rust to re-arm it.
-    const vaults = useVaultsStore();
     const download = vi.fn().mockResolvedValue(undefined);
     const install = vi.fn().mockRejectedValue("install broke");
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    vaults.panelOpen = true;
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
