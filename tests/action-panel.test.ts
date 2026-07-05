@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import ActionPanel from "../src/components/ActionPanel.vue";
@@ -339,5 +339,49 @@ describe("ActionPanel", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     expect(calls.map((c) => c.cmd)).not.toContain("start_capture");
+  });
+
+  it("navigates to the recordings view from the record dialog", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config")
+        return {
+          mode: "meeting",
+          recordingFolder: null,
+          bitrateKbps: 128,
+          createNote: true,
+          inputDevice: null,
+          outputDevice: null,
+          transcribe: false,
+          transcriptionModel: "small",
+          transcriptionLanguage: null,
+          transcriptTimestamps: true,
+        };
+      if (cmd === "list_recordings") return [];
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper
+      .get('[aria-label="Capture knowledge in Personal"]')
+      .trigger("click");
+    await flushPromises(); // openRecordDialog awaits get_capture_config
+    await wrapper.get('[data-testid="mode-browse"]').trigger("click");
+    expect(store.view).toBe("recordings");
+    expect(store.recordingsVaultId).toBe("d4e5f6");
+  });
+
+  it("renders the Recordings view with its title", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_recordings") return [];
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openRecordings("d4e5f6");
+    const wrapper = mount(ActionPanel);
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Recordings");
+    expect(wrapper.text()).toContain("No recordings yet.");
   });
 });

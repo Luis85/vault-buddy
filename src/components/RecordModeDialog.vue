@@ -7,6 +7,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   (e: "start", mode: "meeting" | "voice-note"): void;
+  (e: "browse"): void;
   (e: "cancel"): void;
 }>();
 
@@ -99,6 +100,16 @@ onMounted(() => defaultButton.value?.focus());
           <span class="block text-xs text-slate-400">{{ option.hint }}</span>
         </button>
       </div>
+      <button
+        type="button"
+        data-testid="mode-browse"
+        aria-label="Browse past recordings"
+        class="mt-2 w-full cursor-pointer border-t border-white/10 pt-2 text-left text-xs text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        @click="emit('browse')"
+      >
+        Browse recordings…
+        <span class="block text-slate-500">See past recordings in this vault</span>
+      </button>
     </div>
   </div>
 </template>

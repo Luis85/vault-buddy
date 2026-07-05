@@ -11,6 +11,7 @@ import RecordingBar from "./RecordingBar.vue";
 import TranscriptionStatus from "./TranscriptionStatus.vue";
 import RenamePrompt from "./RenamePrompt.vue";
 import RecordModeDialog from "./RecordModeDialog.vue";
+import Recordings from "./Recordings.vue";
 import type { CaptureConfig } from "../types";
 
 const store = useVaultsStore();
@@ -76,6 +77,12 @@ function startWithMode(mode: "meeting" | "voice-note") {
   recordRequest.value = null;
   if (request) void capture.start(request.vaultId, mode);
 }
+
+function browseRecordings() {
+  const request = recordRequest.value;
+  recordRequest.value = null;
+  if (request) store.openRecordings(request.vaultId);
+}
 </script>
 
 <template>
@@ -89,7 +96,9 @@ function startWithMode(mode: "meeting" | "voice-note") {
             ? "Buddy settings"
             : view === "captureSettings"
               ? "Capture settings"
-              : "Vaults"
+              : view === "recordings"
+                ? "Recordings"
+                : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -193,6 +202,15 @@ function startWithMode(mode: "meeting" | "voice-note") {
         :vault-id="store.captureSettingsVaultId"
       />
     </div>
+    <div
+      v-else-if="view === 'recordings' && store.recordingsVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Recordings
+        :key="store.recordingsVaultId"
+        :vault-id="store.recordingsVaultId"
+      />
+    </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
         v-if="filtered.length > 0"
@@ -220,6 +238,7 @@ function startWithMode(mode: "meeting" | "voice-note") {
       :vault-name="recordRequest.vaultName"
       :default-mode="recordRequest.defaultMode"
       @start="startWithMode($event)"
+      @browse="browseRecordings"
       @cancel="recordRequest = null"
     />
   </div>

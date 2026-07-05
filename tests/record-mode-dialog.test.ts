@@ -44,6 +44,16 @@ describe("RecordModeDialog", () => {
     expect(wrapper.emitted("start")).toEqual([["meeting"]]);
   });
 
+  it("emits browse when the Browse recordings option is clicked", async () => {
+    const wrapper = mount(RecordModeDialog, {
+      props: { vaultName: "Personal", defaultMode: "meeting" },
+    });
+    await wrapper.get('[data-testid="mode-browse"]').trigger("click");
+    expect(wrapper.emitted("browse")).toHaveLength(1);
+    // browsing is not starting a recording
+    expect(wrapper.emitted("start")).toBeUndefined();
+  });
+
   it("cancels on backdrop click but not on a click inside the card", async () => {
     const wrapper = mount(RecordModeDialog, {
       props: { vaultName: "Personal", defaultMode: "meeting" },
