@@ -151,11 +151,12 @@ pub fn close_bubble(app: tauri::AppHandle) {
 }
 
 /// Pull the greeting bubble toward the buddy by this fraction of the buddy
-/// window's width, overlapping the window's transparent padding so the bubble
-/// sits snug against the character instead of floating a full buddy-width away.
-/// A fraction rather than a fixed px so it scales with display DPI. Cosmetic —
-/// a manual Windows check is the place to tune it. The panel uses 0.0.
-const BUBBLE_TUCK_FRAC: f64 = 0.20;
+/// window's width, overlapping the window's transparent padding (the 88px
+/// window holds a ~64px character centered, so ~0.14 each side is dead space)
+/// so the bubble sits snug against the character instead of floating away. A
+/// fraction rather than a fixed px so it scales with display DPI. Cosmetic —
+/// tuned against a manual Windows check. The panel uses 0.0.
+const BUBBLE_TUCK_FRAC: f64 = 0.30;
 
 /// Top-left AND the resolved anchor for a companion window (panel or bubble)
 /// placed beside the buddy on the `prefer` side with vertical mode `vmode`.
