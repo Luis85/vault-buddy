@@ -47,6 +47,14 @@ function onDragStart() {
   logBreadcrumb("buddy drag start");
 }
 
+// The drag was dropped before the OS move loop began (a stale flick the
+// Rust guard rejected). No focus loss will follow, so retract the blur
+// suppression armed by onDragStart — otherwise the next real desktop-click
+// blur is swallowed as "the drag's own" and the panel stays open.
+function onDragCancelled() {
+  dragBlurPending = false;
+}
+
 function dragJustStarted() {
   return Date.now() - dragStartedAt < DRAG_CLOSE_SUPPRESS_MS;
 }
@@ -156,6 +164,7 @@ onUnmounted(() => {
         :paused="capture.paused"
         @toggle="store.togglePanel()"
         @drag-start="onDragStart"
+        @drag-cancelled="onDragCancelled"
       />
     </div>
     <Transition name="bubble-fade">
