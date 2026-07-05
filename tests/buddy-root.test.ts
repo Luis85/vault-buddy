@@ -3,6 +3,7 @@ import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import BuddyRoot from "../src/roots/BuddyRoot.vue";
+import { useSettingsStore } from "../src/stores/settings";
 
 vi.mock("@tauri-apps/plugin-log", () => ({
   info: vi.fn(),
@@ -41,5 +42,13 @@ describe("BuddyRoot", () => {
     await Promise.resolve();
     expect(calls).toContain("start_buddy_drag");
     expect(calls).toContain("close_panel");
+  });
+
+  it("re-syncs settings from localStorage on a cross-window storage event", async () => {
+    mount(BuddyRoot);
+    await Promise.resolve();
+    localStorage.setItem("vault-buddy.animations", "off");
+    window.dispatchEvent(new Event("storage"));
+    expect(useSettingsStore().animationsEnabled).toBe(false);
   });
 });

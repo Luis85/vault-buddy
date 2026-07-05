@@ -26,8 +26,14 @@ function onDragStart() {
 let unlistenAnimation: (() => void) | undefined;
 let unlistenDragging: (() => void) | undefined;
 
+// the buddy and panel are separate webviews sharing localStorage; a
+// character/animation change made in the panel's settings view only
+// reaches this window via the storage event, not Vue reactivity.
+const onStorage = () => settings.syncFromStorage();
+
 onMounted(async () => {
   void capture.init();
+  window.addEventListener("storage", onStorage);
   try {
     unlistenAnimation = await listen("buddy-toggle-animation", () =>
       settings.toggleAnimations(),
@@ -40,6 +46,7 @@ onMounted(async () => {
   }
 });
 onUnmounted(() => {
+  window.removeEventListener("storage", onStorage);
   unlistenAnimation?.();
   unlistenDragging?.();
 });

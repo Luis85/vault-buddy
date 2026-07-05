@@ -40,5 +40,18 @@ export const useSettingsStore = defineStore("settings", {
       this.character = getCharacter(id).id;
       localStorage.setItem(CHARACTER_KEY, this.character);
     },
+    // re-reads the same keys the state initializer uses, so the buddy
+    // window picks up settings changed in the panel window's settings view
+    // (separate webviews sharing localStorage — see the `storage` listener
+    // installed in BuddyRoot.vue).
+    syncFromStorage() {
+      this.animationsEnabled = localStorage.getItem(ANIMATIONS_KEY) !== "off";
+      this.draggingEnabled = localStorage.getItem(DRAGGING_KEY) !== "off";
+      this.facing =
+        localStorage.getItem(FACING_KEY) === "left" ? "left" : "right";
+      this.character = getCharacter(
+        localStorage.getItem(CHARACTER_KEY) ?? "",
+      ).id;
+    },
   },
 });

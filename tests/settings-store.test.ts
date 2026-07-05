@@ -73,4 +73,12 @@ describe("settings store", () => {
     expect(store.character).toBe("classic");
     expect(localStorage.getItem("vault-buddy.character")).toBe("classic");
   });
+
+  it("re-reads settings when localStorage changes in another window", () => {
+    const store = useSettingsStore();
+    expect(store.animationsEnabled).toBe(true);
+    localStorage.setItem("vault-buddy.animations", "off");
+    store.syncFromStorage();
+    expect(store.animationsEnabled).toBe(false);
+  });
 });
