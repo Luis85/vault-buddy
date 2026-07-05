@@ -6,7 +6,7 @@
 
 use crate::capture_note::note_field;
 use crate::capture_paths::is_capture_base;
-use crate::transcript::{dir_entries, is_digit_dir};
+use crate::transcript::{dir_entries, is_digit_dir, transcript_status, TranscriptStatus};
 use std::path::{Path, PathBuf};
 
 /// One recording surfaced in the list. `title`/`recorded_at` come from the
@@ -20,6 +20,9 @@ pub struct RecordingEntry {
     pub recorded_at: String,
     pub duration: Option<String>,
     pub recording_type: Option<String>,
+    /// State of the `<base>.transcript.md` sidecar (drives the row indicator
+    /// and the re-transcribe confirm).
+    pub transcript_status: TranscriptStatus,
 }
 
 /// Chars of the `YYYY-MM-DD HHmm ` prefix (10 date + space + 4 time + space).
@@ -81,6 +84,7 @@ fn entry_for(mp3_path: &Path, base: &str) -> RecordingEntry {
         recorded_at,
         duration,
         recording_type,
+        transcript_status: transcript_status(mp3_path),
     }
 }
 
@@ -224,5 +228,40 @@ mod tests {
     fn a_missing_root_yields_no_entries() {
         let list = list_recordings(&[PathBuf::from("/no/such/place")]);
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn reports_transcript_status_per_recording() {
+        use crate::transcript::{transcript_path, TranscriptStatus};
+        let root = tempfile::tempdir().unwrap();
+        write_recording(
+            root.path(),
+            "2026",
+            "07",
+            "2026-07-04 1405 Done",
+            Some("Meeting"),
+        );
+        write_recording(
+            root.path(),
+            "2026",
+            "07",
+            "2026-07-04 1400 Raw",
+            Some("Meeting"),
+        );
+        // Give the newer one a finished sidecar.
+        let done_mp3 = root
+            .path()
+            .join("2026")
+            .join("07")
+            .join("2026-07-04 1405 Done.mp3");
+        std::fs::write(
+            transcript_path(&done_mp3),
+            "---\nvault-buddy-transcript: complete\n---\nhi",
+        )
+        .unwrap();
+        let list = list_recordings(&[root.path().to_path_buf()]);
+        // Newest-first: "1405 Done" then "1400 Raw".
+        assert_eq!(list[0].transcript_status, TranscriptStatus::Complete);
+        assert_eq!(list[1].transcript_status, TranscriptStatus::Missing);
     }
 }
