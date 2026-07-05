@@ -170,6 +170,7 @@ fn set_window_geometry_atomic(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    use tauri::Manager; // brings `app_handle()` into scope
     use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
     // SetWindowPos takes physical pixels; the frontend passes a physical
     // position but a logical size, so scale the size the way `set_size` would.
