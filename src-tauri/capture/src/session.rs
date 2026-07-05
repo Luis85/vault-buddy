@@ -33,6 +33,7 @@ pub struct SessionParams {
     pub vault_name: String,
     pub recording_type: String,
     pub create_note: bool,
+    pub transcribe: bool,
     pub recorded_at: String,
     pub flush_every: Duration,
     pub fsync_every: Duration,
@@ -320,6 +321,7 @@ fn run_worker(
             recording_type: params.recording_type.clone(),
             input_devices: device_names,
             event: warning.clone(),
+            transcribe: params.transcribe,
         };
         let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
         // Collision-safe: a user or sync client grabbing the reserved
@@ -370,6 +372,7 @@ mod tests {
             vault_name: "Work".into(),
             recording_type: "Meeting".into(),
             create_note: true,
+            transcribe: false,
             recorded_at: "2026-07-04T14:05:00+02:00".into(),
             flush_every: Duration::from_millis(100),
             fsync_every: Duration::from_secs(30),
@@ -501,5 +504,29 @@ mod tests {
             std::fs::read_to_string(dir.path().join(".b.mp3.part")).unwrap(),
             "orphan"
         );
+    }
+
+    #[test]
+    fn note_embeds_transcript_when_transcribe_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut p = params(dir.path());
+        p.transcribe = true;
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        let note = std::fs::read_to_string(outcome.note.unwrap()).unwrap();
+        assert!(note.contains("## Transcript"));
+        assert!(note.contains(".transcript]]"));
     }
 }
