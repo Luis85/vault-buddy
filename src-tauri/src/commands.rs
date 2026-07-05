@@ -243,6 +243,17 @@ pub fn close_panel(app: tauri::AppHandle) {
     }
 }
 
+/// Hide the greeting bubble window. Idempotent; called by the bubble's own
+/// auto-dismiss timer (Task 10) — `toggle_panel` also hides it when the panel
+/// opens.
+#[tauri::command]
+pub fn close_bubble(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(bubble) = app.get_webview_window("bubble") {
+        let _ = bubble.hide();
+    }
+}
+
 /// Move the (hidden) panel window beside the buddy, respecting screen edges.
 /// Best-effort: any missing window/monitor info leaves the panel where it was.
 pub(crate) fn position_panel(app: &tauri::AppHandle) {
@@ -284,6 +295,44 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
     if let Err(e) = panel.set_position(tauri::PhysicalPosition::new(point.x, point.y)) {
         log::warn!("position_panel: set_position failed: {e}");
     }
+}
+
+/// Position + show the greeting bubble beside the buddy on launch. Best-effort.
+pub(crate) fn show_bubble(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    use vault_buddy_core::companion_placement::{panel_position, Rect};
+    let (Some(buddy), Some(bubble)) = (
+        app.get_webview_window("main"),
+        app.get_webview_window("bubble"),
+    ) else {
+        return;
+    };
+    let (Ok(bpos), Ok(bsize), Ok(size)) = (
+        buddy.outer_position(),
+        buddy.outer_size(),
+        bubble.outer_size(),
+    ) else {
+        return;
+    };
+    let buddy_rect = Rect {
+        x: bpos.x,
+        y: bpos.y,
+        w: bsize.width as i32,
+        h: bsize.height as i32,
+    };
+    let work = buddy.current_monitor().ok().flatten().map(|m| {
+        let p = m.position();
+        let s = m.size();
+        Rect {
+            x: p.x,
+            y: p.y,
+            w: s.width as i32,
+            h: s.height as i32,
+        }
+    });
+    let point = panel_position(buddy_rect, work, size.width as i32, size.height as i32);
+    let _ = bubble.set_position(tauri::PhysicalPosition::new(point.x, point.y));
+    let _ = bubble.show();
 }
 
 /// Native context menu for the buddy. The collapsed window is far too small

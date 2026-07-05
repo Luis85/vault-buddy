@@ -197,6 +197,7 @@ pub fn run() {
             commands::set_window_geometry,
             commands::toggle_panel,
             commands::close_panel,
+            commands::close_bubble,
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
@@ -281,6 +282,7 @@ pub fn run() {
                 }
             }
             tray::create_tray(app.handle())?;
+            commands::show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
