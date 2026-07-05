@@ -91,18 +91,31 @@ fn schedule_focus_out_check(app: &tauri::AppHandle) {
 /// Show the greeting bubble beside the buddy, deferred until the window-state
 /// plugin has restored the buddy's parked position. Shown synchronously in
 /// `setup`, the bubble reads the buddy's pre-restore (default-corner) position
-/// and is left orphaned across the screen once the buddy jumps home. A short
-/// worker-thread settle (like `schedule_focus_out_check`), then the
-/// main-thread-only `show_bubble`, avoids that. Best-effort: a spawn failure
-/// just skips the greeting.
+/// and is left orphaned across the screen once the buddy jumps home.
+///
+/// A single fixed settle is not enough: the restore can land after the show on
+/// a slow disk, and it does not reliably surface as a `Moved` event the
+/// follow-handler (`reposition_bubble_if_visible`) can catch — so the bubble
+/// stays stranded at the default corner (the "bubble too high on startup" bug).
+/// Instead, show after a settle and then re-pin the visible bubble to the buddy
+/// a few times over the next second: each is a cheap `set_position` + anchor
+/// emit, harmless once the buddy has settled, and finished long before the 5s
+/// greeting ends. Best-effort: a spawn failure just skips the greeting.
 fn schedule_show_bubble(app: &tauri::AppHandle) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("show-bubble".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            let app2 = app.clone();
-            let _ = app.run_on_main_thread(move || commands::show_bubble(&app2));
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let a = app.clone();
+            let _ = app.run_on_main_thread(move || commands::show_bubble(&a));
+            for _ in 0..4 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let a = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    commands::reposition_bubble_if_visible(&a);
+                });
+            }
         });
     if let Err(e) = spawned {
         log::warn!("could not spawn show-bubble thread: {e}");

@@ -263,6 +263,21 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     else {
         return;
     };
+    // Diagnostic: if the buddy is read pre-restore, the bubble lands at the
+    // default corner (the "bubble too high on startup" bug) — the follow-up
+    // re-pins in schedule_show_bubble then correct it.
+    if let Some(bp) = app
+        .get_webview_window("main")
+        .and_then(|b| b.outer_position().ok())
+    {
+        log::info!(
+            "greeting: buddy at ({},{}), bubble at ({},{})",
+            bp.x,
+            bp.y,
+            pos.x,
+            pos.y
+        );
+    }
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
     let _ = bubble.show();
