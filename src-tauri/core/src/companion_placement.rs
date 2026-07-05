@@ -131,6 +131,19 @@ pub fn place_beside(
     (Point { x, y }, Anchor { side, valign })
 }
 
+/// The side the buddy should face / the bubble should open on: toward the
+/// center of the work area, where there is more room. `Right` when the buddy's
+/// horizontal center sits at or left of the work-area center (or the monitor is
+/// unknown); `Left` when it sits right of center. Derived from position so the
+/// buddy always looks toward the screen center and the bubble opens into the
+/// open space, rather than depending on a manual facing setting.
+pub fn toward_center_side(buddy: Rect, work_area: Option<Rect>) -> Side {
+    match work_area {
+        Some(area) if buddy.x + buddy.w / 2 > area.x + area.w / 2 => Side::Left,
+        _ => Side::Right,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +339,35 @@ mod tests {
         // clamped up to fit: max_y = 1080 - 150 = 930
         assert_eq!(p.y, 930);
         assert_eq!(a.valign, VAlign::Bottom);
+    }
+
+    #[test]
+    fn toward_center_opens_right_from_the_left_half() {
+        // buddy on the left half → faces/open right, toward the center
+        assert_eq!(
+            toward_center_side(buddy_at(200, 500), Some(AREA)),
+            Side::Right
+        );
+    }
+
+    #[test]
+    fn toward_center_opens_left_from_the_right_half() {
+        // buddy on the right half → faces/open left, toward the center
+        assert_eq!(
+            toward_center_side(buddy_at(1600, 500), Some(AREA)),
+            Side::Left
+        );
+    }
+
+    #[test]
+    fn toward_center_defaults_right_at_center_and_without_a_monitor() {
+        // exactly centered counts as left-half (<=) → right
+        let centered = (AREA.w - BUDDY) / 2;
+        assert_eq!(
+            toward_center_side(buddy_at(centered, 500), Some(AREA)),
+            Side::Right
+        );
+        assert_eq!(toward_center_side(buddy_at(1600, 500), None), Side::Right);
     }
 
     #[test]
