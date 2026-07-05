@@ -6,6 +6,7 @@ import { useCaptureStore } from "../stores/capture";
 import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
 import RecordingBar from "./RecordingBar.vue";
+import TranscriptionStatus from "./TranscriptionStatus.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -114,6 +115,7 @@ function onFilterEscape(event: KeyboardEvent) {
     >
       {{ capture.error }}
     </p>
+    <TranscriptionStatus v-if="!showSettings" class="mb-2" />
     <div
       v-if="showSettings"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
