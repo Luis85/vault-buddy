@@ -36,6 +36,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(commands::PanelOffset::default())
         .manage(capture_commands::CaptureState::default())
+        .manage(capture_commands::TranscriptionState::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction — restore the unshifted home position first so a
@@ -77,11 +78,13 @@ pub fn run() {
             commands::show_buddy_menu,
             capture_commands::start_capture,
             capture_commands::stop_capture,
-            capture_commands::capture_status
+            capture_commands::capture_status,
+            capture_commands::transcribe_recording_now
         ])
         .setup(|app| {
             tray::create_tray(app.handle())?;
             capture_commands::run_recovery(app.handle());
+            capture_commands::run_transcription(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {

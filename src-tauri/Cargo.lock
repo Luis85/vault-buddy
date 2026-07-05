@@ -5193,6 +5193,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "vault_buddy_capture",
  "vault_buddy_core",
+ "vault_buddy_transcribe",
 ]
 
 [[package]]

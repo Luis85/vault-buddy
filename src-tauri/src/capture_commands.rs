@@ -1,3 +1,4 @@
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Condvar, Mutex};
@@ -6,6 +7,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_capture::session::{CaptureSession, Outcome, SessionParams};
 use vault_buddy_core::{capture_config, capture_paths, discovery};
+use vault_buddy_transcribe::engine::WhisperTranscriber;
+use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
+use vault_buddy_transcribe::{transcribe_recording, TranscribeOptions};
 
 pub enum StopReason {
     User,
@@ -26,6 +30,39 @@ pub struct ActiveCapture {
 /// of polling (see `request_stop_and_wait` / `clear_active`).
 #[derive(Default)]
 pub struct CaptureState(pub Mutex<Option<ActiveCapture>>, pub Condvar);
+
+#[derive(Clone)]
+struct TranscriptionJob {
+    mp3: PathBuf,
+    vault_id: String,
+}
+
+#[derive(Default)]
+struct TranscriptionQueue {
+    pending: VecDeque<TranscriptionJob>,
+    /// Paths currently queued or in flight — dedupes the save-time enqueue
+    /// against the startup/late-recovery scans.
+    known: HashSet<PathBuf>,
+}
+
+/// Background transcription queue. One worker (see `run_transcription`)
+/// drains it, yielding to any active recording so inference never steals
+/// CPU from live capture.
+#[derive(Default)]
+pub struct TranscriptionState {
+    inner: Mutex<TranscriptionQueue>,
+    cv: Condvar,
+}
+
+fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
+    let state = app.state::<TranscriptionState>();
+    let mut guard = state.inner.lock().unwrap();
+    if guard.known.insert(job.mp3.clone()) {
+        log::info!("transcribe: queued {}", job.mp3.display());
+        guard.pending.push_back(job);
+        state.cv.notify_all();
+    }
+}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -510,4 +547,192 @@ pub fn run_recovery(app: &AppHandle) {
             std::thread::sleep(Duration::from_secs(90));
         }
     });
+}
+
+/// Startup + on-demand worker: drains the transcription queue, postponing
+/// while a recording is active. The loaded whisper model is cached across
+/// jobs of the same tier. Mirrors `run_recovery`'s shape (own thread, coarse
+/// is-recording gate).
+pub fn run_transcription(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Backfill: transcribe anything already on disk missing a transcript
+        // (previous-session saves, crash-recovered captures, freshly enabled
+        // vaults).
+        scan_and_enqueue(&app);
+        let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
+        loop {
+            // Block until a job is available; peek without claiming it.
+            let job = {
+                let state = app.state::<TranscriptionState>();
+                let mut guard = state.inner.lock().unwrap();
+                while guard.pending.is_empty() {
+                    guard = state.cv.wait(guard).unwrap();
+                }
+                guard.pending.front().cloned().unwrap()
+            };
+            // Never contend with a live recording for CPU — re-check soon.
+            if is_recording(&app) {
+                std::thread::sleep(Duration::from_secs(30));
+                continue;
+            }
+            {
+                let state = app.state::<TranscriptionState>();
+                state.inner.lock().unwrap().pending.pop_front();
+            }
+            process_transcription(&app, &job, &mut loaded);
+            // Drop from the dedupe set: success leaves a `complete` sidecar
+            // (won't rescan); failure leaves a `failed` one (a later launch's
+            // scan or a manual retry re-queues it).
+            {
+                let state = app.state::<TranscriptionState>();
+                state.inner.lock().unwrap().known.remove(&job.mp3);
+            }
+        }
+    });
+}
+
+/// Enqueue every capture recording still needing a transcript, across all
+/// vaults that opted in. Same root discipline as `run_recovery`.
+fn scan_and_enqueue(app: &AppHandle) {
+    let cfg = capture_config::load_config();
+    for vault in discovery::discover_vaults() {
+        let v = capture_config::vault_config(&cfg, &vault.id);
+        if !v.transcribe {
+            continue;
+        }
+        let roots: Vec<String> = match &v.recording_folder {
+            Some(folder) => vec![folder.clone()],
+            None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
+        };
+        for folder in roots {
+            let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
+            else {
+                continue;
+            };
+            if !root.is_dir() {
+                continue;
+            }
+            if capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root).is_err() {
+                continue;
+            }
+            for mp3 in vault_buddy_core::transcript::pending_transcriptions(&root) {
+                enqueue_transcription(
+                    app,
+                    TranscriptionJob {
+                        mp3,
+                        vault_id: vault.id.clone(),
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn process_transcription(
+    app: &AppHandle,
+    job: &TranscriptionJob,
+    loaded: &mut Option<(ModelTier, WhisperTranscriber)>,
+) {
+    let cfg = capture_config::vault_config(&capture_config::load_config(), &job.vault_id);
+    if !cfg.transcribe {
+        return; // disabled since it was queued
+    }
+    let tier = ModelTier::from_str(&cfg.transcription_model);
+    let _ = app.emit(
+        "capture:transcribing",
+        serde_json::json!({ "mp3": job.mp3.to_string_lossy() }),
+    );
+    let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
+
+    let model = match ensure_model(app, tier) {
+        Ok(p) => p,
+        Err(e) => return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}")),
+    };
+    if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
+        match WhisperTranscriber::load(&model) {
+            Ok(w) => *loaded = Some((tier, w)),
+            Err(e) => return fail_transcription(app, &job.mp3, &e),
+        }
+    }
+    let transcriber = &loaded.as_ref().unwrap().1;
+    let opts = TranscribeOptions {
+        language: cfg.transcription_language.clone(),
+        timestamps: cfg.transcript_timestamps,
+        model_label: tier.label(),
+    };
+    let generated_at = chrono::Local::now().to_rfc3339();
+    match transcribe_recording(&job.mp3, transcriber, &opts, &generated_at) {
+        Ok(path) => {
+            log::info!("transcribe: wrote {}", path.display());
+            let _ = app.emit(
+                "capture:transcribed",
+                serde_json::json!({
+                    "mp3": job.mp3.to_string_lossy(),
+                    "transcript": path.to_string_lossy(),
+                }),
+            );
+        }
+        Err(e) => fail_transcription(app, &job.mp3, &e),
+    }
+}
+
+/// Ensure the tier's model is on disk, downloading with progress if not.
+fn ensure_model(app: &AppHandle, tier: ModelTier) -> Result<PathBuf, String> {
+    if let Some(p) = model_path(tier) {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    log::info!("transcribe: downloading model {}", tier.as_str());
+    let app = app.clone();
+    let mut last_emit: u64 = 0;
+    download_model(tier, &mut |received, total| {
+        // Throttle: an event every ~4 MB (and the final byte).
+        if received.saturating_sub(last_emit) >= 4_000_000 || Some(received) == total {
+            last_emit = received;
+            let _ = app.emit(
+                "capture:modelDownload",
+                serde_json::json!({ "model": tier.as_str(), "received": received, "total": total }),
+            );
+        }
+    })
+}
+
+/// Best-effort failure: leave the audio + note untouched, replace the
+/// sidecar with a retryable `failed` note, and surface it.
+fn fail_transcription(app: &AppHandle, mp3: &Path, message: &str) {
+    log::warn!("transcribe: {} failed: {message}", mp3.display());
+    let name = mp3
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let path = vault_buddy_core::transcript::transcript_path(mp3);
+    let content = vault_buddy_core::transcript::render_error(&name, message);
+    let _ = vault_buddy_core::transcript::replace_if_ours(&path, &content);
+    let _ = app.emit(
+        "capture:transcribeFailed",
+        serde_json::json!({ "mp3": mp3.to_string_lossy(), "message": message }),
+    );
+    toast(app, "Transcription failed", message);
+}
+
+/// The vault whose folder contains `mp3` (for the retry command).
+fn owning_vault_id(mp3: &Path) -> Option<String> {
+    discovery::discover_vaults()
+        .into_iter()
+        .find(|v| mp3.starts_with(&v.path))
+        .map(|v| v.id)
+}
+
+/// Retry / on-demand transcription of a specific recording.
+#[tauri::command]
+pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    if !mp3.is_file() {
+        return Err("Recording not found.".to_string());
+    }
+    let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
+    enqueue_transcription(&app, TranscriptionJob { mp3, vault_id });
+    Ok(())
 }
