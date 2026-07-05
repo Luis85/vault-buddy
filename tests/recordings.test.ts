@@ -65,14 +65,11 @@ describe("Recordings", () => {
     await wrapper.findAll('[data-testid="recording-row"]')[0].trigger("click");
     await flushPromises();
     const open = calls.find((c) => c.cmd === "open_recording");
-    expect(open?.args).toEqual({ mp3: sample[0].mp3 }); // first row = Meeting/Standup
+    expect(open?.args).toEqual({ path: sample[0].mp3 }); // first row = Meeting/Standup
     expect(store.panelOpen).toBe(false);
   });
 
   it("surfaces a load error", async () => {
-    // Unused destructure would trip noUnusedLocals under vue-tsc; this first
-    // mount only primes the "override with a throwing mock" below.
-    await mountView({ list: undefined });
     // override with a throwing mock
     clearMocks();
     mockIPC((cmd) => {
@@ -81,5 +78,21 @@ describe("Recordings", () => {
     const w = mount(Recordings, { props: { vaultId: "v1" } });
     await flushPromises();
     expect(w.text()).toContain("scan boom");
+  });
+
+  it("keeps the list visible and shows an error when opening fails", async () => {
+    const { wrapper } = await mountView({
+      onOpen: () => {
+        throw new Error("launch boom");
+      },
+    });
+    const store = useVaultsStore();
+    store.panelOpen = true;
+    await wrapper.findAll('[data-testid="recording-row"]')[0].trigger("click");
+    await flushPromises();
+    // list stays visible, panel NOT closed, error surfaced
+    expect(wrapper.findAll('[data-testid="recording-row"]').length).toBeGreaterThan(0);
+    expect(store.panelOpen).toBe(true);
+    expect(wrapper.text()).toContain("launch boom");
   });
 });

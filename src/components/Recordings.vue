@@ -10,6 +10,7 @@ const store = useVaultsStore();
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
+const openError = ref<string | null>(null);
 const recordings = ref<Recording[]>([]);
 // Per-view, not persisted: resets to grouped every time the view opens.
 const grouped = ref(true);
@@ -46,13 +47,14 @@ onMounted(async () => {
 });
 
 async function open(mp3: string) {
+  openError.value = null;
   try {
-    await invoke("open_recording", { mp3 });
+    await invoke("open_recording", { path: mp3 });
     store.panelOpen = false; // Obsidian takes over — get out of the way
   } catch (e) {
     // A failed open (recording moved, launch error) is non-fatal — surface it
     // and keep the list so the user can pick another.
-    loadError.value = String(e);
+    openError.value = String(e);
     logWarning(`open recording rejected: ${String(e)}`);
   }
 }
@@ -70,6 +72,12 @@ async function open(mp3: string) {
     No recordings yet.
   </p>
   <div v-else class="flex flex-col gap-2">
+    <p
+      v-if="openError"
+      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+    >
+      {{ openError }}
+    </p>
     <div class="flex items-center justify-between">
       <span class="text-xs text-slate-400">
         {{ recordings.length }} recording{{ recordings.length === 1 ? "" : "s" }}
@@ -104,7 +112,10 @@ async function open(mp3: string) {
           class="flex w-full items-baseline justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
           @click="open(r.mp3)"
         >
-          <span class="min-w-0 flex-1 truncate text-sm text-slate-100">
+          <span
+            class="min-w-0 flex-1 truncate text-sm text-slate-100"
+            :title="r.title"
+          >
             {{ r.title }}
           </span>
           <span class="shrink-0 text-xs text-slate-400">{{ r.recordedAt }}</span>
