@@ -107,10 +107,11 @@ pub fn render_stats(meta: &TranscriptMeta, segments: &[Segment]) -> String {
         segment_count += 1;
         words += t.split_whitespace().count();
     }
-    let speaking_rate = if meta.duration_secs > 0 {
-        format!("{} wpm", (words as u64 * 60) / meta.duration_secs)
-    } else {
-        "—".to_string()
+    // checked_div returns None on zero duration — the divide-by-zero guard,
+    // in the form clippy's manual_checked_ops lint wants.
+    let speaking_rate = match (words as u64 * 60).checked_div(meta.duration_secs) {
+        Some(wpm) => format!("{wpm} wpm"),
+        None => "—".to_string(),
     };
     let language = meta.language.as_deref().unwrap_or("auto");
     format!(
