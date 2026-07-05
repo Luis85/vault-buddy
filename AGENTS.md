@@ -87,7 +87,13 @@ the monitor work area so a bottom-/edge-anchored buddy unfolds toward free
 space. One shell helper, `place_beside_buddy` (in `commands.rs`), feeds it the
 live buddy/monitor geometry for both windows; `position_panel` / `show_bubble`
 call it. Any missing window or monitor info leaves the window where it was
-(best-effort, never an error). The greeting is shown via `schedule_show_bubble`
+(best-effort, never an error). While the greeting is up, the buddy's `Moved`
+handler re-runs `place_beside_buddy` for the bubble
+(`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
+bubble being visible) so it *follows* a drag instead of stranding at its launch
+spot — a main-thread, lock-free `set_position` that touches no window-state
+cache lock, so it cannot recreate the off-main save-vs-`Moved` deadlock. The
+greeting is shown via `schedule_show_bubble`
 (a ~250 ms worker-thread settle, then a main-thread `show_bubble`), not
 synchronously in `setup`: the window-state plugin restores the buddy's parked
 position slightly after setup, and a synchronous placement would anchor the

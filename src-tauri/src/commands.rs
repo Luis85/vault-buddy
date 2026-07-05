@@ -186,6 +186,31 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let _ = bubble.show();
 }
 
+/// Keep the greeting bubble beside the buddy as the buddy moves — called from
+/// the buddy window's `Moved` handler so the bubble follows a drag instead of
+/// stranding at its launch spot. A no-op unless the bubble is currently
+/// visible, so a normal drag (no greeting up) does essentially no work.
+///
+/// Runs on the MAIN thread (window events dispatch there) and only reads
+/// window geometry + calls `set_position` — it never takes the window-state
+/// plugin's cache lock. That is the crucial difference from the off-main
+/// `save_window_state` that caused the original drag deadlock: this reposition
+/// cannot wedge against the plugin's main-thread `Moved` listener, because it
+/// touches no shared lock at all. The bubble's own resulting `Moved` does not
+/// recurse — the caller gates on the buddy's window label.
+pub(crate) fn reposition_bubble_if_visible(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(bubble) = app.get_webview_window("bubble") else {
+        return;
+    };
+    if !bubble.is_visible().unwrap_or(false) {
+        return;
+    }
+    if let Some(pos) = place_beside_buddy(app, &bubble) {
+        let _ = bubble.set_position(pos);
+    }
+}
+
 /// Native context menu for the buddy. The collapsed window is far too small
 /// to host an HTML menu; the OS popup renders outside the window bounds and
 /// matches the tray menu. Item events are handled in `lib.rs`. `animated`

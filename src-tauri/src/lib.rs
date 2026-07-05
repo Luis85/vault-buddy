@@ -177,7 +177,19 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             // Every move re-arms the upkeep tick's quiescence gate — window
             // work must never collide with a window in motion.
-            tauri::WindowEvent::Moved(_) => stamp_window_moved(),
+            tauri::WindowEvent::Moved(_) => {
+                stamp_window_moved();
+                // The greeting bubble tracks the buddy: while it is visible, a
+                // buddy move (i.e. a drag) repositions it so it stays beside
+                // the buddy instead of stranding at the launch spot. Keyed on
+                // the buddy window so the bubble's own resulting Moved can't
+                // recurse; the reposition runs here on the main thread and
+                // touches no shared lock, so it cannot recreate the off-main
+                // save-vs-Moved deadlock (see reposition_bubble_if_visible).
+                if window.label() == "main" {
+                    commands::reposition_bubble_if_visible(window.app_handle());
+                }
+            }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
                 if capture_commands::is_recording(app) {
