@@ -41,6 +41,42 @@ pub(crate) fn yaml_quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Read one top-level `key:` scalar from a note's leading `---` frontmatter
+/// block, undoing `yaml_quote`'s escaping. Returns None if the note has no
+/// frontmatter block or the key is absent. Deliberately minimal — it only
+/// reads back the handful of top-level fields `render_note` itself writes, so
+/// it needs no general YAML parser (indented list items are skipped, and the
+/// search stops at the closing `---` so the note body is never scanned).
+pub fn note_field(content: &str, key: &str) -> Option<String> {
+    let mut lines = content.lines();
+    // Frontmatter must be the very first line.
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let prefix = format!("{key}:");
+    for line in lines {
+        if line.trim_end() == "---" {
+            break; // end of frontmatter — never scan the body
+        }
+        // `strip_prefix` on the raw line matches top-level keys only: an
+        // indented `  - device` list item has a leading space and can't match.
+        if let Some(rest) = line.strip_prefix(&prefix) {
+            return Some(unquote_yaml(rest.trim()));
+        }
+    }
+    None
+}
+
+/// Inverse of `yaml_quote` for the double-quoted form: strip the surrounding
+/// quotes and unescape `\"` then `\\` (reverse order of the escaping). An
+/// unquoted scalar (older/hand-edited note) is returned as-is.
+fn unquote_yaml(value: &str) -> String {
+    match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
+        None => value.to_string(),
+    }
+}
+
 pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     let mut out = String::from("---\n");
     out.push_str(&format!("recorded: {}\n", yaml_quote(&meta.recorded_at)));
@@ -353,5 +389,41 @@ mod tests {
     fn retarget_handles_a_note_without_trailing_newline() {
         let out = retarget_embed("![[old.mp3]]", "old.mp3", "new.mp3");
         assert_eq!(out, "![[new.mp3]]");
+    }
+
+    #[test]
+    fn note_field_reads_top_level_scalars() {
+        // meta(): type "Meeting", duration 3723s → "1:02:03", vault "Work".
+        let note = render_note(&meta(), "x.mp3");
+        assert_eq!(note_field(&note, "type").as_deref(), Some("Meeting"));
+        assert_eq!(note_field(&note, "duration").as_deref(), Some("1:02:03"));
+        assert_eq!(note_field(&note, "vault").as_deref(), Some("Work"));
+    }
+
+    #[test]
+    fn note_field_is_none_when_absent_or_no_frontmatter() {
+        let note = render_note(&meta(), "x.mp3");
+        assert_eq!(note_field(&note, "nope"), None);
+        // an indented list item (inputs:) is not a top-level scalar
+        assert_eq!(note_field(&note, "Headset Mic"), None);
+        assert_eq!(note_field("no frontmatter here\ntype: X\n", "type"), None);
+        assert_eq!(note_field("", "type"), None);
+    }
+
+    #[test]
+    fn note_field_unescapes_quotes_and_ignores_the_body() {
+        // A quoted value with an embedded quote round-trips; a `type:` mention
+        // in the note body must never be picked up (search stops at the
+        // closing `---`).
+        let mut m = meta();
+        m.recording_type = r#"A "quoted" type"#.into();
+        let note = format!(
+            "{}\nprose mentioning type: fake\n",
+            render_note(&m, "x.mp3")
+        );
+        assert_eq!(
+            note_field(&note, "type").as_deref(),
+            Some(r#"A "quoted" type"#)
+        );
     }
 }
