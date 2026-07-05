@@ -8,12 +8,14 @@ never gains a second bubble window — this reuses the whole existing stack
 
 ## Goals / non-goals
 
-- **Goal:** acknowledge exactly seven moments (below) with a brief bubble.
+- **Goal:** acknowledge the recording/transcription lifecycle and the open
+  actions (below) with a brief bubble.
 - **Goal:** a dedicated, user-facing on/off setting (chatter can be silenced).
-- **Non-goal:** narrating every micro-action. Pause/resume are *not* announced
-  (not a start/end; keeps the buddy from getting chatty). Vault-open *failures*
-  are not announced — the panel already shows an inline error banner there; a
-  bubble would duplicate it.
+- **Non-goal:** narrating every micro-action. Vault-open *failures* are not
+  announced — the panel already shows an inline error banner there; a bubble
+  would duplicate it. (Recording pause/resume ARE announced, added after the
+  initial cut on request; the resume announcement is guarded so stopping a
+  paused recording never reads as a resume.)
 
 ## Architecture — Rust owns the window, the frontend owns the words
 
@@ -63,6 +65,8 @@ Copy lives in a pure, unit-tested `src/buddyMessages.ts` module (no Vue, no IPC)
 | Vault opened | vaults store `runAction("open_vault")` success | `Opening <name> ✨` |
 | Daily note opened | vaults store `runAction("open_daily_note")` success | `Here's today's note 📅` |
 | Recording started | capture `status` → `recording` | `Listening… 🎙️` |
+| Recording paused | capture `paused` → true | `Taking a breather ⏸️` |
+| Recording resumed | capture `paused` → false, still recording | `Back to it! ▶️` |
 | Recording saved | `capture:saved` (`lastSavedFile` set) | `Got it — saved! 🎧` |
 | Transcription started | `capture:transcribing` (`transcribing` → true) | `Writing it down… ✍️` |
 | Transcription done | `capture:transcribed` (`lastTranscribed` set) | `Transcript ready! ✨` |

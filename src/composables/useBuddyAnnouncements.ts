@@ -3,6 +3,8 @@ import { useCaptureStore } from "../stores/capture";
 import { announce } from "../announce";
 import {
   recordingStartedMessage,
+  recordingPausedMessage,
+  recordingResumedMessage,
   recordingSavedMessage,
   transcribingMessage,
   transcribedMessage,
@@ -35,6 +37,20 @@ export function useBuddyAnnouncements(): void {
     () => capture.lastSavedFile,
     (file, prev) => {
       if (file && file !== prev) announce(recordingSavedMessage());
+    },
+  );
+  // Pause/resume both flip `capture.paused`, but stopping a paused recording
+  // also clears it (resetRecordingState) — announce "resumed" only while the
+  // recording is genuinely still going, or a stop-while-paused would speak a
+  // spurious resume right before "saved".
+  watch(
+    () => capture.paused,
+    (paused, prev) => {
+      if (paused && !prev) {
+        announce(recordingPausedMessage());
+      } else if (!paused && prev && capture.status === "recording") {
+        announce(recordingResumedMessage());
+      }
     },
   );
   watch(

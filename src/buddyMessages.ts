@@ -19,6 +19,16 @@ export function recordingStartedMessage(): string {
   return "Listening… 🎙️";
 }
 
+/** The recording was paused. */
+export function recordingPausedMessage(): string {
+  return "Taking a breather ⏸️";
+}
+
+/** The recording resumed after a pause. */
+export function recordingResumedMessage(): string {
+  return "Back to it! ▶️";
+}
+
 /** A recording finished and was saved to the vault. */
 export function recordingSavedMessage(): string {
   return "Got it — saved! 🎧";

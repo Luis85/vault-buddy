@@ -34,6 +34,35 @@ describe("useBuddyAnnouncements", () => {
     expect(spoken.some((t) => t.includes("Listening"))).toBe(true);
   });
 
+  it("announces pause and resume while recording", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.status = "recording";
+    await wrapper.vm.$nextTick();
+    capture.paused = true;
+    await wrapper.vm.$nextTick();
+    capture.paused = false;
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("Taking a breather"))).toBe(true);
+    expect(spoken.some((t) => t.includes("Back to it"))).toBe(true);
+  });
+
+  it("does not announce a resume when a paused recording is stopped", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.status = "recording";
+    capture.paused = true;
+    await wrapper.vm.$nextTick();
+    spoken.length = 0; // drop the pause line; we only care about what stop says
+    // stopping clears status + paused (resetRecordingState), then saves — the
+    // paused→false flip must NOT read as a resume
+    capture.resetRecordingState();
+    capture.lastSavedFile = "/v/2026/07/a.mp3";
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("Back to it"))).toBe(false);
+    expect(spoken.some((t) => t.includes("saved"))).toBe(true);
+  });
+
   it("announces recording-saved, transcription start and done", async () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();
