@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_paths, discovery, transcript, uri};
+use vault_buddy_core::{capture_config, capture_paths, discovery, recordings, transcript, uri};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
 use vault_buddy_transcribe::{transcribe_recording, TranscribeOptions};
@@ -298,6 +298,51 @@ pub fn list_audio_devices() -> DeviceListDto {
         inputs: list.inputs.into_iter().map(map).collect(),
         outputs: list.outputs.into_iter().map(map).collect(),
     }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingDto {
+    pub mp3: String,
+    pub title: String,
+    pub recorded_at: String,
+    pub duration: Option<String>,
+    // `type` is a Rust keyword — expose the camelCase `type` the frontend wants.
+    #[serde(rename = "type")]
+    pub recording_type: Option<String>,
+}
+
+/// Read-only list of a vault's past recordings for the Recordings view.
+/// Scans the vault's recording roots (custom folder, or both mode defaults)
+/// and reads each recording's companion note for type/duration. An unknown
+/// vault or unreadable roots yield an empty list — never an error (mirrors
+/// discovery's degrade-to-empty rule). Never writes into the vault.
+#[tauri::command]
+pub fn list_recordings(id: String) -> Vec<RecordingDto> {
+    let Some(vault) = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+    else {
+        return Vec::new();
+    };
+    let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    let roots: Vec<PathBuf> = cfg
+        .recording_roots()
+        .into_iter()
+        .filter_map(|folder| {
+            capture_paths::safe_recording_root(Path::new(&vault.path), folder).ok()
+        })
+        .collect();
+    recordings::list_recordings(&roots)
+        .into_iter()
+        .map(|e| RecordingDto {
+            mp3: e.mp3_path.to_string_lossy().into_owned(),
+            title: e.title,
+            recorded_at: e.recorded_at,
+            duration: e.duration,
+            recording_type: e.recording_type,
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -855,13 +900,9 @@ pub fn run_recovery(app: &AppHandle) {
                     let v = capture_config::vault_config(&cfg, &vault.id);
                     // Configured folder, or BOTH mode defaults when no config
                     // entry exists — a first-ever crash may have used either.
-                    let roots: Vec<String> = match &v.recording_folder {
-                        Some(folder) => vec![folder.clone()],
-                        None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
-                    };
-                    for folder in roots {
+                    for folder in v.recording_roots() {
                         let Ok(root) =
-                            capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
+                            capture_paths::safe_recording_root(Path::new(&vault.path), folder)
                         else {
                             log::warn!("recovery: skipping unsafe configured folder {folder:?}");
                             continue;
@@ -980,12 +1021,8 @@ fn scan_and_enqueue(app: &AppHandle) {
         if !v.transcribe {
             continue;
         }
-        let roots: Vec<String> = match &v.recording_folder {
-            Some(folder) => vec![folder.clone()],
-            None => vec!["Meetings".to_string(), "Voice Notes".to_string()],
-        };
-        for folder in roots {
-            let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), &folder)
+        for folder in v.recording_roots() {
+            let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), folder)
             else {
                 continue;
             };
@@ -1116,16 +1153,14 @@ pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), Stri
     Ok(())
 }
 
-/// Open a finished recording's note (or its transcript sidecar) in Obsidian.
-/// Given the recording's `.mp3` path, resolve the owning vault and launch an
-/// `obsidian://open` URI for the companion note `<base>.md` when it exists (it
-/// embeds the transcript and the audio player — the richest view), otherwise
-/// the `<base>.transcript.md` sidecar. Read-only: never writes into the vault;
-/// the launch is logged by `uri::launch`, the same audit trail as every other
-/// vault open.
-#[tauri::command]
-pub fn open_transcript(path: String) -> Result<(), String> {
-    let mp3 = PathBuf::from(&path);
+/// Shared by `open_transcript` and `open_recording`: launch an
+/// `obsidian://open` for a recording's companion note `<base>.md` when it
+/// exists (the richest view — it embeds the transcript and the audio player),
+/// otherwise the `<base>.transcript.md` sidecar. Read-only: never writes into
+/// the vault; the launch is logged by `uri::launch`, the same audit trail as
+/// every other vault open.
+fn open_recording_note(path: &str) -> Result<(), String> {
+    let mp3 = PathBuf::from(path);
     let vault = discovery::discover_vaults()
         .into_iter()
         .find(|v| mp3.starts_with(&v.path))
@@ -1139,4 +1174,17 @@ pub fn open_transcript(path: String) -> Result<(), String> {
     let rel = uri::vault_relative_no_ext(&target, Path::new(&vault.path))
         .ok_or_else(|| format!("recording is outside its vault: {}", target.display()))?;
     uri::launch(&uri::open_file_uri(&vault.id, &rel))
+}
+
+/// Open a finished recording's note (or transcript sidecar) — the
+/// TranscriptionStatus "Open in Obsidian" row.
+#[tauri::command]
+pub fn open_transcript(path: String) -> Result<(), String> {
+    open_recording_note(&path)
+}
+
+/// Open a recording's note from the Recordings list row.
+#[tauri::command]
+pub fn open_recording(path: String) -> Result<(), String> {
+    open_recording_note(&path)
 }
