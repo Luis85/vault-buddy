@@ -34,6 +34,7 @@ const folderError = ref<string | null>(null);
 const mode = ref<"meeting" | "voice-note">("meeting");
 const recordingFolder = ref("");
 const createNote = ref(true);
+const followUpTemplate = ref(true);
 const bitrateKbps = ref(128);
 const inputDevice = ref(""); // "" = system default
 const outputDevice = ref("");
@@ -89,6 +90,7 @@ watch(
     mode,
     recordingFolder,
     createNote,
+    followUpTemplate,
     bitrateKbps,
     inputDevice,
     outputDevice,
@@ -111,6 +113,7 @@ onMounted(async () => {
     mode.value = cfg.mode;
     recordingFolder.value = cfg.recordingFolder ?? "";
     createNote.value = cfg.createNote;
+    followUpTemplate.value = cfg.followUpTemplate;
     bitrateKbps.value = cfg.bitrateKbps;
     inputDevice.value = cfg.inputDevice ?? "";
     outputDevice.value = cfg.outputDevice ?? "";
@@ -139,6 +142,7 @@ async function save() {
         recordingFolder: folder ? folder : null,
         bitrateKbps: bitrateKbps.value,
         createNote: createNote.value,
+        followUpTemplate: followUpTemplate.value,
         inputDevice: inputDevice.value || null,
         outputDevice: outputDevice.value || null,
         transcribe: transcribe.value,
@@ -227,6 +231,22 @@ async function save() {
         class="h-4 w-4 accent-violet-500"
       />
     </section>
+    <div
+      v-if="createNote"
+      class="flex items-center justify-between border-l border-white/10 pl-3"
+    >
+      <label for="capture-follow-up-toggle" class="text-sm text-slate-200">
+        Follow-up template
+        <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
+      </label>
+      <input
+        id="capture-follow-up-toggle"
+        v-model="followUpTemplate"
+        data-testid="follow-up-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+      />
+    </div>
     <section class="flex items-center justify-between">
       <label for="capture-transcribe-toggle" class="text-sm text-slate-200">
         Transcribe recordings

@@ -54,6 +54,7 @@ export interface CaptureConfig {
   transcriptionModel: string;
   transcriptionLanguage: string | null;
   transcriptTimestamps: boolean;
+  followUpTemplate: boolean;
 }
 
 export interface AudioDevice {

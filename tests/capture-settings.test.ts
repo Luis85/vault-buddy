@@ -21,6 +21,7 @@ const config = {
   transcriptionModel: "small",
   transcriptionLanguage: null as string | null,
   transcriptTimestamps: true,
+  followUpTemplate: true,
 };
 
 const devices = {
@@ -129,6 +130,7 @@ describe("CaptureSettings", () => {
         recordingFolder: "Inbox/Audio",
         bitrateKbps: 192,
         createNote: true,
+        followUpTemplate: true,
         inputDevice: null,
         outputDevice: null,
         transcribe: false,
@@ -244,6 +246,7 @@ describe("CaptureSettings", () => {
         recordingFolder: "Meetings",
         bitrateKbps: 160,
         createNote: true,
+        followUpTemplate: true,
         inputDevice: "USB Mic",
         outputDevice: null,
         transcribe: true,
@@ -252,5 +255,18 @@ describe("CaptureSettings", () => {
         transcriptTimestamps: true,
       },
     });
+  });
+
+  it("saves the follow-up template toggle", async () => {
+    let saved: { cfg: { followUpTemplate: boolean } } | undefined;
+    const { wrapper } = await mountLoaded({
+      onSet: (args) => {
+        saved = args as typeof saved;
+      },
+    });
+    await wrapper.get('[data-testid="follow-up-toggle"]').setValue(false);
+    await wrapper.get('[data-testid="save-button"]').trigger("click");
+    await flushPromises();
+    expect(saved?.cfg.followUpTemplate).toBe(false);
   });
 });
