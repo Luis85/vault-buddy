@@ -1,11 +1,20 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import App from "./App.vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { rootFor } from "./roots";
 import { initLogging, logError } from "./logging";
 import "./style.css";
 
 initLogging();
-const app = createApp(App);
+
+let label = "main";
+try {
+  label = getCurrentWindow().label;
+} catch {
+  // not under Tauri (dev/tests) — default to the buddy root
+}
+
+const app = createApp(rootFor(label));
 // Vue swallows component errors before window.onerror can see them —
 // route them into the persistent log with the component context Vue gives us.
 app.config.errorHandler = (err, _instance, info) => {
