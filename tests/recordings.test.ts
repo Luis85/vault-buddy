@@ -5,6 +5,23 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import Recordings from "../src/components/Recordings.vue";
 import { useVaultsStore } from "../src/stores/vaults";
 
+const state = vi.hoisted(() => ({
+  eventHandlers: {} as Record<string, (event: { payload: unknown }) => void>,
+}));
+
+// Mirrors tests/capture-store.test.ts: listen() under mockIPC only records
+// the plugin:event|listen invoke — nothing delivers a Rust-side emit back
+// into the handler, so firing capture:* events requires replacing the
+// module and invoking the registered handler directly.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+    state.eventHandlers[name] = handler;
+    return Promise.resolve(() => {
+      delete state.eventHandlers[name];
+    });
+  },
+}));
+
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 const sample = [
@@ -29,7 +46,10 @@ const mountView = async (
 };
 
 describe("Recordings", () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    state.eventHandlers = {};
+  });
   afterEach(() => clearMocks());
 
   it("fetches list_recordings for the vault", async () => {
@@ -105,7 +125,6 @@ describe("Recordings", () => {
   it("re-transcribes immediately for a non-complete transcript", async () => {
     const { wrapper, calls } = await mountView();
     // sample[1] "Idea" has transcriptStatus "none" — its row's retranscribe button
-    const rows = wrapper.findAll('[data-testid="recording-row"]');
     // find the row for sample[1] by its retranscribe button and click it
     await wrapper.findAll('[data-testid="retranscribe"]')[1].trigger("click");
     await flushPromises();
@@ -113,7 +132,6 @@ describe("Recordings", () => {
     expect(rt).toBeTruthy();
     // no confirm shown for a non-complete transcript
     expect(wrapper.find('[data-testid="retranscribe-confirm"]').exists()).toBe(false);
-    void rows;
   });
 
   it("confirms before re-transcribing a complete transcript", async () => {
@@ -125,5 +143,24 @@ describe("Recordings", () => {
     await wrapper.get('[data-testid="retranscribe-confirm"]').trigger("click");
     await flushPromises();
     expect(calls.some((c) => c.cmd === "retranscribe")).toBe(true);
+  });
+
+  it("settles a row's status to complete when capture:transcribed fires", async () => {
+    // mockIPC returns the mock's value as-is (no clone — see mocks.js), so
+    // recordings.value would alias the shared `sample` array; a fresh copy
+    // keeps this test's row mutation from leaking into later tests.
+    const rows = sample.map((r) => ({ ...r }));
+    const { wrapper } = await mountView({ list: rows });
+    // grouped order is Meeting, Voice Note, Ungrouped — index 1 is "Idea"
+    // (transcriptStatus "none"), same row targeted by the retranscribe test above.
+    const row = () =>
+      wrapper.findAll('[data-testid="recording-row"]')[1].element.parentElement;
+    expect(row()?.textContent).not.toContain("✓");
+
+    state.eventHandlers["capture:transcribed"]!({ payload: { mp3: rows[1].mp3 } });
+    await flushPromises();
+
+    expect(row()?.textContent).toContain("✓");
+    expect(wrapper.find('[title="Transcribed ✓"]').exists()).toBe(true);
   });
 });

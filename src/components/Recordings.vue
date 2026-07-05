@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useVaultsStore } from "../stores/vaults";
@@ -51,7 +51,7 @@ async function runRetranscribe(mp3: string) {
   try {
     await invoke("retranscribe", { path: mp3 });
   } catch (e) {
-    transcribingMp3.value = new Set([...transcribingMp3.value].filter((m) => m !== mp3));
+    clearTranscribing(mp3);
     openError.value = String(e);
     logWarning(`retranscribe rejected: ${String(e)}`);
   }
@@ -67,20 +67,32 @@ function clearTranscribing(mp3: string) {
   transcribingMp3.value = new Set([...transcribingMp3.value].filter((m) => m !== mp3));
 }
 
+// Recordings.vue is destroyed and recreated on every panel close and every
+// view navigation (a v-else-if in ActionPanel.vue keyed by
+// recordingsVaultId), so each remount's listeners must be torn down or they
+// leak — collected here and released in onUnmounted below.
+const unlisteners: Array<() => void> = [];
+
 onMounted(async () => {
-  await listen<{ mp3: string }>("capture:transcribing", (e) => {
-    transcribingMp3.value = new Set(transcribingMp3.value).add(e.payload.mp3);
-  });
-  await listen<{ mp3: string }>("capture:transcribed", (e) => {
-    clearTranscribing(e.payload.mp3);
-    const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
-    if (row) row.transcriptStatus = "complete";
-  });
-  await listen<{ mp3: string }>("capture:transcribeFailed", (e) => {
-    clearTranscribing(e.payload.mp3);
-    const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
-    if (row) row.transcriptStatus = "failed";
-  });
+  unlisteners.push(
+    await listen<{ mp3: string }>("capture:transcribing", (e) => {
+      transcribingMp3.value = new Set(transcribingMp3.value).add(e.payload.mp3);
+    }),
+  );
+  unlisteners.push(
+    await listen<{ mp3: string }>("capture:transcribed", (e) => {
+      clearTranscribing(e.payload.mp3);
+      const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
+      if (row) row.transcriptStatus = "complete";
+    }),
+  );
+  unlisteners.push(
+    await listen<{ mp3: string }>("capture:transcribeFailed", (e) => {
+      clearTranscribing(e.payload.mp3);
+      const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
+      if (row) row.transcriptStatus = "failed";
+    }),
+  );
   try {
     recordings.value = await invoke<Recording[]>("list_recordings", {
       id: props.vaultId,
@@ -90,6 +102,10 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
+});
+
+onUnmounted(() => {
+  for (const u of unlisteners) u();
 });
 
 async function open(mp3: string) {
@@ -196,7 +212,7 @@ async function open(mp3: string) {
           <button
             type="button"
             data-testid="retranscribe"
-            :disabled="transcribingMp3.has(r.mp3)"
+            :disabled="transcribingMp3.has(r.mp3) || r.transcriptStatus === 'pending'"
             :aria-label="`Re-transcribe ${r.title}`"
             title="Re-transcribe"
             class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
