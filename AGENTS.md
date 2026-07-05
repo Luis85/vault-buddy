@@ -52,8 +52,9 @@ launched the app on the CI runner and never exited.
 ### IPC surface (Rust commands, registered in `src-tauri/src/lib.rs`)
 
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
-`toggle_panel`, `close_panel`, `close_bubble`, `start_buddy_drag`,
-`show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, plus the
+`toggle_panel`, `close_panel`, `close_bubble`, `set_buddy_facing`,
+`start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`,
+`rearm_crash_detection`, plus the
 capture surface: `capture_status`, `start_capture`, `stop_capture`,
 `pause_capture`, `resume_capture`, `get_capture_config`,
 `set_capture_config`, `list_audio_devices`, `rename_capture` — commands
@@ -81,18 +82,28 @@ resize entirely:
 
 `panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
 window has no stale-frame flash. Placement is one pure function,
-`core::companion_placement::panel_position(buddy, work_area, w, h)`
-(unit-tested on Linux): it sits the window beside the buddy and clamps it into
-the monitor work area so a bottom-/edge-anchored buddy unfolds toward free
-space. One shell helper, `place_beside_buddy` (in `commands.rs`), feeds it the
-live buddy/monitor geometry for both windows; `position_panel` / `show_bubble`
-call it. Any missing window or monitor info leaves the window where it was
-(best-effort, never an error). While the greeting is up, the buddy's `Moved`
-handler re-runs `place_beside_buddy` for the bubble
+`core::companion_placement::place_beside(buddy, work_area, w, h, prefer) ->
+(Point, Anchor)` (unit-tested on Linux): it sits the window on the `prefer`
+side of the buddy, flips to the other side when that overflows the screen
+edge, and clamps into the monitor work area so a bottom-/edge-anchored buddy
+unfolds toward free space. `panel_position` is a thin wrapper (prefer =
+`Right`, anchor discarded); the panel always opens right. One shell helper,
+`place_beside_buddy` (in `commands.rs`), feeds it the live buddy/monitor
+geometry for both windows; `position_panel` / `show_bubble` call it. Any
+missing window or monitor info leaves the window where it was (best-effort,
+never an error). The **bubble** opens on the side the buddy *faces*: the buddy
+window mirrors `settings.facing` to Rust via `set_buddy_facing` (a lock-free
+atomic), `place_beside` prefers that side, and Rust emits a `bubble-anchor`
+`{side, valign}` event so `BubbleRoot` binds `SpeechBubble`'s tail to point
+back at the buddy (defaulting from facing before the first event). A small
+`BUBBLE_TUCK_PX` overlap pulls the bubble into the buddy window's transparent
+padding so it sits snug against the character. While the greeting is up, the
+buddy's `Moved` handler re-runs `place_beside_buddy` for the bubble
 (`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
-bubble being visible) so it *follows* a drag instead of stranding at its launch
-spot — a main-thread, lock-free `set_position` that touches no window-state
-cache lock, so it cannot recreate the off-main save-vs-`Moved` deadlock. The
+bubble being visible) and re-emits the anchor, so the bubble *follows* a drag
+and its tail flips live when the buddy crosses the midline or an edge — a
+main-thread, lock-free `set_position` that touches no window-state cache lock,
+so it cannot recreate the off-main save-vs-`Moved` deadlock. The
 greeting is shown via `schedule_show_bubble`
 (a ~250 ms worker-thread settle, then a main-thread `show_bubble`), not
 synchronously in `setup`: the window-state plugin restores the buddy's parked
