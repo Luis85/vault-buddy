@@ -1,25 +1,57 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { logWarning } from "../logging";
-import type { Recording } from "../types";
+import { useCaptureStore } from "../stores/capture";
+import type { Phase, Recording } from "../types";
 
 const props = defineProps<{ vaultId: string }>();
+
+const capture = useCaptureStore();
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const openError = ref<string | null>(null);
 const recordings = ref<Recording[]>([]);
-// mp3 currently being (re)transcribed → row shows a spinner. Seeded on click
-// and by capture:transcribing; cleared by transcribed/transcribeFailed.
-const transcribingMp3 = ref<Set<string>>(new Set());
 // mp3 awaiting a "replace the current transcript?" confirm (complete only).
 const confirmMp3 = ref<string | null>(null);
 // Per-view, not persisted: resets to grouped every time the view opens.
 const grouped = ref(true);
 
 const UNGROUPED = "Ungrouped";
+
+// Phases that occupy the single-worker transcription queue (mirrors the
+// store's own ACTIVE_PHASES). A row is "busy" only while ITS mp3 has a live
+// entry in `capture.transcriptions` — backend-seeded on store init and kept
+// live by capture:* events the store owns — never a component-local ref.
+// The old local `transcribingMp3` Set started empty on every remount (this
+// view is destroyed/recreated on each view navigation), so it forgot an
+// in-flight job and wrongly showed the row as idle: the stale re-transcribe
+// bug this task fixes.
+const ACTIVE_PHASES: Phase[] = ["queued", "downloading", "preparing", "transcribing"];
+
+function jobPhase(mp3: string): Phase | undefined {
+  return capture.transcriptions[mp3]?.phase;
+}
+
+function isActive(mp3: string): boolean {
+  const phase = jobPhase(mp3);
+  return phase !== undefined && ACTIVE_PHASES.includes(phase);
+}
+
+/**
+ * Display status for a row: the persisted `transcriptStatus` from the last
+ * `list_recordings` fetch, overridden by a job that has already reached a
+ * terminal phase THIS session (done/failed/cancelled) — so a completion
+ * doesn't sit there mislabeled "Transcribing…" (with an enabled button) until
+ * the view happens to remount and refetch.
+ */
+function effectiveStatus(r: Recording): Recording["transcriptStatus"] {
+  const phase = jobPhase(r.mp3);
+  if (phase === "done") return "complete";
+  if (phase === "failed" || phase === "cancelled") return "failed";
+  return r.transcriptStatus;
+}
 
 // One shape drives both modes: flat mode is a single header-less section;
 // grouped mode is one section per type with Ungrouped forced last. Recordings
@@ -39,17 +71,15 @@ const sections = computed<Array<{ type: string | null; items: Recording[] }>>(()
 });
 
 function statusLabel(r: Recording): string {
-  if (transcribingMp3.value.has(r.mp3)) return "Transcribing…";
-  return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓" }[r.transcriptStatus];
+  if (isActive(r.mp3)) return "Transcribing…";
+  return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓" }[effectiveStatus(r)];
 }
 
 async function runRetranscribe(mp3: string) {
   confirmMp3.value = null;
-  transcribingMp3.value = new Set(transcribingMp3.value).add(mp3);
   try {
-    await invoke("retranscribe", { path: mp3 });
+    await capture.retranscribe(mp3);
   } catch (e) {
-    clearTranscribing(mp3);
     openError.value = String(e);
     logWarning(`retranscribe rejected: ${String(e)}`);
   }
@@ -57,40 +87,11 @@ async function runRetranscribe(mp3: string) {
 
 function onRetranscribeClick(r: Recording) {
   // A finished (or hand-edited) transcript needs a confirm before we clobber it.
-  if (r.transcriptStatus === "complete") confirmMp3.value = r.mp3;
+  if (effectiveStatus(r) === "complete") confirmMp3.value = r.mp3;
   else void runRetranscribe(r.mp3);
 }
 
-function clearTranscribing(mp3: string) {
-  transcribingMp3.value = new Set([...transcribingMp3.value].filter((m) => m !== mp3));
-}
-
-// Recordings.vue is destroyed and recreated on every panel close and every
-// view navigation (a v-else-if in ActionPanel.vue keyed by
-// recordingsVaultId), so each remount's listeners must be torn down or they
-// leak — collected here and released in onUnmounted below.
-const unlisteners: Array<() => void> = [];
-
 onMounted(async () => {
-  unlisteners.push(
-    await listen<{ mp3: string }>("capture:transcribing", (e) => {
-      transcribingMp3.value = new Set(transcribingMp3.value).add(e.payload.mp3);
-    }),
-  );
-  unlisteners.push(
-    await listen<{ mp3: string }>("capture:transcribed", (e) => {
-      clearTranscribing(e.payload.mp3);
-      const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
-      if (row) row.transcriptStatus = "complete";
-    }),
-  );
-  unlisteners.push(
-    await listen<{ mp3: string }>("capture:transcribeFailed", (e) => {
-      clearTranscribing(e.payload.mp3);
-      const row = recordings.value.find((r) => r.mp3 === e.payload.mp3);
-      if (row) row.transcriptStatus = "failed";
-    }),
-  );
   try {
     recordings.value = await invoke<Recording[]>("list_recordings", {
       id: props.vaultId,
@@ -100,10 +101,6 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
-});
-
-onUnmounted(() => {
-  for (const u of unlisteners) u();
 });
 
 async function open(mp3: string) {
@@ -209,11 +206,33 @@ async function open(mp3: string) {
             v-if="statusLabel(r)"
             class="shrink-0 text-[10px] text-slate-500"
             :title="statusLabel(r)"
-          >{{ transcribingMp3.has(r.mp3) || r.transcriptStatus === "pending" ? "…" : r.transcriptStatus === "failed" ? "⚠" : "✓" }}</span>
+          >
+            <span
+              v-if="isActive(r.mp3)"
+              data-testid="recording-spinner"
+              role="status"
+              aria-label="Transcribing…"
+              class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500/40 border-t-slate-300 align-middle"
+            ></span>
+            <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : "…" }}</span>
+          </span>
+          <button
+            v-if="isActive(r.mp3)"
+            type="button"
+            data-testid="recording-cancel"
+            :aria-label="`Cancel transcribing ${r.title}`"
+            title="Cancel"
+            class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            @click="capture.cancelTranscription(r.mp3)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
           <button
             type="button"
             data-testid="retranscribe"
-            :disabled="transcribingMp3.has(r.mp3)"
+            :disabled="isActive(r.mp3)"
             :aria-label="`Re-transcribe ${r.title}`"
             title="Re-transcribe"
             class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
