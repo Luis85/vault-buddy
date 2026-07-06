@@ -1,0 +1,68 @@
+name: Bump version
+
+# Manually dispatched: bumps the app version across package.json,
+# package-lock.json, tauri.conf.json, Cargo.toml, and Cargo.lock (see
+# scripts/bump-version.mjs) and opens a PR with the result. Tagging and
+# publishing stay separate, manual steps (see AGENTS.md "Releases") — this
+# only automates the file-edit step that precedes them.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version (X.Y.Z) or a bump keyword: patch | minor | major"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    name: Bump version and open a PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dispatch from main
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::Dispatch this workflow from main (was: ${{ github.ref_name }})"
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Bump version
+        run: node scripts/bump-version.mjs "${{ inputs.version }}"
+
+      - name: Resolve new version
+        id: version
+        run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "chore/bump-version-v${VERSION}"
+          git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore(release): v${VERSION}"
+          git push -u origin "chore/bump-version-v${VERSION}"
+
+      - name: Open pull request
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          cat > /tmp/pr-body.md <<EOF
+          Bumps the app version to v${VERSION} across package.json, package-lock.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock.
+
+          Next: merge this PR, then either push a \`v${VERSION}\` tag or dispatch the Release workflow with \`tag=v${VERSION}\`.
+          EOF
+          gh pr create \
+            --base main \
+            --head "chore/bump-version-v${VERSION}" \
+            --title "chore(release): v${VERSION}" \
+            --body-file /tmp/pr-body.md
