@@ -7,7 +7,6 @@ import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
-import TranscriptionStatus from "./TranscriptionStatus.vue";
 import RenamePrompt from "./RenamePrompt.vue";
 import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
@@ -172,7 +171,6 @@ watch(
     >
       {{ capture.error }}
     </p>
-    <TranscriptionStatus v-if="view === 'list'" class="mb-2" />
     <p
       v-if="view === 'list' && capture.status === 'idle' && capture.warning"
       class="mb-2 rounded-lg bg-amber-500/15 px-2 py-1 text-xs text-amber-200"

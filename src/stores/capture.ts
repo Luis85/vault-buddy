@@ -9,10 +9,52 @@ import type {
   CaptureTranscribed,
   CaptureTranscribeFailed,
   ModelDownload,
+  ModelReady,
+  Phase,
+  TranscribeCancelled,
+  TranscribeProgress,
+  TranscriptionJob,
+  TranscriptionQueueStatus,
 } from "../types";
 
 /** How long the post-save "Name this recording" window stays open. */
 export const RENAME_PROMPT_MS = 30_000;
+
+/** Phases in which a job occupies the single-worker transcription queue. */
+const ACTIVE_PHASES: Phase[] = ["downloading", "preparing", "transcribing"];
+/** Terminal phases surfaced in the finished list. */
+const FINISHED_PHASES: Phase[] = ["done", "failed", "cancelled"];
+/** `finishedTranscriptions` cap — an unbounded session-long history is never useful in the UI. */
+const MAX_FINISHED = 20;
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
+/**
+ * Vault-relative display name: basename without the `.mp3` extension. Split
+ * on both separators — capture output can carry Windows paths (`\`) even
+ * though tests run on Unix (mirrors `acceptRename`'s basename logic below).
+ */
+function nameOf(mp3: string): string {
+  const base = mp3.split(/[\\/]/).pop() ?? mp3;
+  return base.replace(/\.mp3$/i, "");
+}
+
+/**
+ * Seed-time progress for the active job from `transcription_queue_status`.
+ * "preparing" always means null (a spinner, not a percent — matches the
+ * modelReady/transcribing event mappings below); "downloading" prefers the
+ * received/total byte ratio (same formula as the modelDownload event) and
+ * falls back to the percent field only if that ratio isn't available.
+ */
+function activeSeedProgress(active: NonNullable<TranscriptionQueueStatus["active"]>): number | null {
+  if (active.phase === "preparing") return null;
+  if (active.phase === "downloading" && active.total) {
+    return clamp01((active.received ?? 0) / active.total);
+  }
+  return active.progress != null ? clamp01(active.progress / 100) : null;
+}
 
 export const useCaptureStore = defineStore("capture", {
   state: () => ({
@@ -30,20 +72,78 @@ export const useCaptureStore = defineStore("capture", {
     error: null as string | null,
     warning: null as string | null,
     lastSavedFile: null as string | null,
-    transcribing: false as boolean,
-    transcriptError: null as string | null,
-    transcriptFailedMp3: null as string | null,
-    modelDownload: null as { model: string; received: number; total: number | null } | null,
-    /** Most recent finished transcription; drives the "Open in Obsidian" row. */
-    lastTranscribed: null as { mp3: string } | null,
-    /** Which vault is currently transcribing — drives the vault-row dot. */
-    transcribingVaultId: null as string | null,
+    /**
+     * Every transcription job this window knows about, keyed by mp3 path —
+     * backend-seeded on init (`transcription_queue_status`) and kept live by
+     * the capture:* events. Replaces the old scattered singular fields
+     * (transcribing/modelDownload/transcriptError/transcriptFailedMp3/
+     * transcribingVaultId/lastTranscribed): those lived only in this store's
+     * transient memory, so a panel remount (Recordings.vue is re-created
+     * every time its view is left and reopened) lost track of an in-flight
+     * or just-finished job. A backend-seeded keyed map survives that remount.
+     */
+    transcriptions: {} as Record<string, TranscriptionJob>,
+    /** True when the worker has queued/regenerable work but no recording is
+     * active yet to transcribe (mirrors the backend's own wait state). */
+    waitingForRecording: false,
     /** Post-save rename window; null once renamed/dismissed/expired. */
     lastSaved: null as { mp3: string; note: string | null } | null,
     renameError: null as string | null,
     renameTimer: null as ReturnType<typeof setTimeout> | null,
   }),
+  getters: {
+    /** The one job (if any) occupying the worker right now — the queue runs
+     * one job at a time, so at most one entry is ever in an active phase. */
+    activeTranscription(state): TranscriptionJob | null {
+      for (const job of Object.values(state.transcriptions)) {
+        if (ACTIVE_PHASES.includes(job.phase)) return job;
+      }
+      return null;
+    },
+    queuedTranscriptions(state): TranscriptionJob[] {
+      return Object.values(state.transcriptions).filter(
+        (job) => job.phase === "queued",
+      );
+    },
+    /**
+     * Done/failed/cancelled jobs seen this session, newest-first and capped.
+     * `startedAtMs` is the best available ordering proxy (there's no separate
+     * finishedAt field) — the single-worker queue processes jobs serially, so
+     * start order and finish order agree in practice.
+     */
+    finishedTranscriptions(state): TranscriptionJob[] {
+      return Object.values(state.transcriptions)
+        .filter((job) => FINISHED_PHASES.includes(job.phase))
+        .sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0))
+        .slice(0, MAX_FINISHED);
+    },
+    /** Which vault is currently transcribing — drives the vault-row dot.
+     * Derived from the map, not stored: it follows whichever job is active. */
+    transcribingVaultId(): string | null {
+      return this.activeTranscription?.vaultId ?? null;
+    },
+  },
   actions: {
+    /**
+     * Internal: merge `patch` into the job at `mp3` (creating a default shape
+     * for a not-yet-seen job), replacing the map entry with a NEW object so
+     * Vue's reactivity tracks the change — mutating a job object returned to
+     * a component would not notify anything holding the old reference.
+     */
+    upsert(mp3: string, patch: Partial<TranscriptionJob>) {
+      const prev = this.transcriptions[mp3];
+      const base: TranscriptionJob = prev ?? {
+        mp3,
+        vaultId: "",
+        name: nameOf(mp3),
+        phase: "queued",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: null,
+      };
+      this.transcriptions[mp3] = { ...base, ...patch };
+    },
     resetRecordingState() {
       this.status = "idle";
       this.startedAtMs = null;
@@ -89,25 +189,48 @@ export const useCaptureStore = defineStore("capture", {
         this.warning = event.payload.message;
       });
       await listen<{ mp3: string; vaultId: string }>("capture:transcribing", (event) => {
-        this.transcribing = true;
-        this.transcriptError = null;
-        this.transcribingVaultId = event.payload.vaultId;
+        const { mp3, vaultId } = event.payload;
+        // Neutral "getting ready" state, not yet "transcribing" — we don't
+        // know here whether a model download is needed first. Landing this
+        // as "transcribing" (the old behavior) is what produced a progress
+        // bar stuck at 100% through the download; a real transcribeProgress
+        // event is what earns that phase now.
+        this.upsert(mp3, {
+          phase: "preparing",
+          vaultId,
+          name: nameOf(mp3),
+          progress: null,
+          error: null,
+          startedAtMs: Date.now(),
+        });
       });
       await listen<CaptureTranscribed>("capture:transcribed", (event) => {
-        this.transcribing = false;
-        this.modelDownload = null;
-        this.lastTranscribed = { mp3: event.payload.mp3 };
-        this.transcribingVaultId = null;
+        this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
       });
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
-        this.transcribing = false;
-        this.modelDownload = null;
-        this.transcriptError = event.payload.message;
-        this.transcriptFailedMp3 = event.payload.mp3;
-        this.transcribingVaultId = null;
+        const { mp3, message } = event.payload;
+        this.upsert(mp3, { phase: "failed", error: message, progress: null });
       });
       await listen<ModelDownload>("capture:modelDownload", (event) => {
-        this.modelDownload = event.payload;
+        const { mp3, model, received, total } = event.payload;
+        this.upsert(mp3, {
+          phase: "downloading",
+          model,
+          progress: total ? clamp01(received / total) : null,
+        });
+      });
+      // The model finished downloading but inference hasn't reported
+      // progress yet — back to "preparing" (not a stale 100% download bar)
+      // until the first transcribeProgress event lands.
+      await listen<ModelReady>("capture:modelReady", (event) => {
+        this.upsert(event.payload.mp3, { phase: "preparing", progress: null });
+      });
+      await listen<TranscribeProgress>("capture:transcribeProgress", (event) => {
+        const { mp3, progress } = event.payload;
+        this.upsert(mp3, { phase: "transcribing", progress: clamp01(progress / 100) });
+      });
+      await listen<TranscribeCancelled>("capture:transcribeCancelled", (event) => {
+        this.upsert(event.payload.mp3, { phase: "cancelled", progress: null });
       });
       await listen<{ atMs: number }>("capture:paused", (event) => {
         this.paused = true;
@@ -138,6 +261,38 @@ export const useCaptureStore = defineStore("capture", {
       } catch {
         // not running under Tauri (unit tests without a status mock)
       }
+      // Resync: the transcription worker survives a webview reload too (and
+      // a fresh panel/buddy mount otherwise starts with an empty map even
+      // though a job is active/queued in Rust).
+      try {
+        const q = await invoke<TranscriptionQueueStatus>("transcription_queue_status");
+        // Defensive like the capture_status resync above: an unmocked command
+        // in tests resolves `undefined` rather than rejecting, and a
+        // malformed/absent response must never crash init — just seed nothing.
+        if (q) {
+          this.waitingForRecording = q.waitingForRecording ?? false;
+          if (q.active) {
+            const a = q.active;
+            this.upsert(a.mp3, {
+              vaultId: a.vaultId,
+              name: nameOf(a.mp3),
+              phase: a.phase,
+              progress: activeSeedProgress(a),
+              startedAtMs: a.startedAtMs,
+            });
+          }
+          for (const job of q.queued ?? []) {
+            this.upsert(job.mp3, {
+              vaultId: job.vaultId,
+              name: nameOf(job.mp3),
+              phase: "queued",
+              progress: null,
+            });
+          }
+        }
+      } catch {
+        // not running under Tauri (unit tests without a queue-status mock)
+      }
     },
     async start(
       vaultId: string,
@@ -153,7 +308,6 @@ export const useCaptureStore = defineStore("capture", {
       this.warning = null;
       // New recording: the previous save's rename window is over.
       this.dismissRename();
-      this.lastTranscribed = null;
       try {
         logBreadcrumb(`capture: start requested (vault ${vaultId})`);
         const s = await invoke<CaptureStatus>("start_capture", {
@@ -188,31 +342,27 @@ export const useCaptureStore = defineStore("capture", {
         logWarning(`capture stop rejected: ${String(e)}`);
       }
     },
-    async retryTranscription() {
-      if (!this.transcriptFailedMp3) return;
-      const path = this.transcriptFailedMp3;
-      this.transcriptError = null;
+    async cancelTranscription(mp3: string) {
       try {
-        await invoke("transcribe_recording_now", { path });
-        this.transcribing = true;
+        await invoke("cancel_transcription", { path: mp3 });
+        // capture:transcribeCancelled completes the transition — Rust owns
+        // the truth on whether/when the job actually stopped.
       } catch (e) {
-        this.transcriptError = String(e);
+        logWarning(`cancel transcription rejected: ${String(e)}`);
       }
     },
-    async openTranscript() {
-      if (!this.lastTranscribed) return;
+    async retranscribe(mp3: string) {
+      await invoke("retranscribe", { path: mp3 });
+    },
+    async openTranscript(mp3: string) {
       try {
-        await invoke("open_transcript", { path: this.lastTranscribed.mp3 });
-        this.lastTranscribed = null;
+        await invoke("open_transcript", { path: mp3 });
       } catch (e) {
         // A failed open (recording moved, launch error) is non-fatal — warn
-        // and keep the row so the user can retry.
+        // and leave the finished job in place so the user can retry.
         this.warning = String(e);
         logWarning(`open transcript rejected: ${String(e)}`);
       }
-    },
-    dismissTranscribed() {
-      this.lastTranscribed = null;
     },
     async pause() {
       if (this.status !== "recording" || this.paused) return;

@@ -68,9 +68,26 @@ describe("useBuddyAnnouncements", () => {
     const capture = useCaptureStore();
     capture.lastSavedFile = "/v/2026/07/a.mp3";
     await wrapper.vm.$nextTick();
-    capture.transcribing = true;
+    capture.transcriptions = {
+      "/v/2026/07/a.mp3": {
+        mp3: "/v/2026/07/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
     await wrapper.vm.$nextTick();
-    capture.lastTranscribed = { mp3: "/v/2026/07/a.mp3" };
+    capture.transcriptions = {
+      "/v/2026/07/a.mp3": {
+        ...capture.transcriptions["/v/2026/07/a.mp3"],
+        phase: "done",
+        progress: 1,
+      },
+    };
     await wrapper.vm.$nextTick();
     expect(spoken.some((t) => t.includes("saved"))).toBe(true);
     expect(spoken.some((t) => t.includes("Writing it down"))).toBe(true);
@@ -80,7 +97,18 @@ describe("useBuddyAnnouncements", () => {
   it("announces a transcription failure once", async () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();
-    capture.transcriptError = "model missing";
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "failed",
+        progress: null,
+        model: null,
+        error: "model missing",
+        startedAtMs: Date.now(),
+      },
+    };
     await wrapper.vm.$nextTick();
     expect(spoken.filter((t) => t.includes("didn't work"))).toHaveLength(1);
   });
@@ -90,8 +118,22 @@ describe("useBuddyAnnouncements", () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();
     capture.status = "recording";
-    capture.transcribing = true;
-    capture.transcriptError = "boom";
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
+    await wrapper.vm.$nextTick();
+    capture.transcriptions = {
+      "/v/a.mp3": { ...capture.transcriptions["/v/a.mp3"], phase: "failed", error: "boom" },
+    };
     await wrapper.vm.$nextTick();
     expect(spoken).toEqual([]);
   });
