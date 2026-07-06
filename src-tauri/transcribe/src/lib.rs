@@ -73,6 +73,31 @@ pub enum TranscribeOutcome {
     SkippedForeign(PathBuf),
 }
 
+/// Turn a raw whisper.cpp inference failure into guidance a user can act on.
+/// `code` is whisper's own `whisper_full` return code (carried by
+/// `whisper_rs::WhisperError::GenericError`); `raw` is whisper-rs's Display
+/// text, kept for the codes we have no specific advice for.
+///
+/// whisper.cpp returns -6..-9 ("failed to encode/decode") when it aborts in
+/// the encode/decode loop. That is almost never a bug the user can see — in
+/// practice it's a too-short, near-silent, or non-speech clip, or the machine
+/// running low on memory — so those get plain-language, actionable guidance
+/// instead of the opaque "Generic whisper error. ... Error code: -9". The
+/// numeric code is still appended so the logs and any support request keep the
+/// exact failure. Lives outside the `whisper` feature gate so it's unit-tested
+/// on Linux; `engine.rs` (Windows-only) extracts the code and calls it.
+pub fn inference_failure_message(code: Option<i32>, raw: &str) -> String {
+    match code {
+        Some(c) if (-9..=-6).contains(&c) => format!(
+            "Whisper stopped while processing this recording. This usually means the \
+             audio was too short, silent, or wasn't speech — or the machine ran low on \
+             memory. Try recording again, or switch to a smaller model in Transcription \
+             settings. (whisper error {c})"
+        ),
+        _ => format!("Transcription failed during inference. ({raw})"),
+    }
+}
+
 /// Decode → transcribe → atomically replace the sidecar with the finished
 /// transcript. `generated_at` (RFC3339) is passed in so this stays
 /// clock-free and testable. `cancel`/`on_progress` are threaded into the
@@ -166,6 +191,46 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use vault_buddy_core::transcript::{transcript_path, Segment};
+
+    #[test]
+    fn decode_codes_get_actionable_guidance_not_raw_jargon() {
+        // whisper.cpp's whisper_full returns -6..-9 ("failed to encode/decode")
+        // when it aborts mid-inference — in practice a too-short/near-silent/
+        // non-speech clip or low memory, not something the raw "Generic whisper
+        // error. ... Error code: -9" string conveys to a user.
+        for c in [-6, -7, -8, -9] {
+            let raw =
+                format!("Generic whisper error. Varies depending on the function. Error code: {c}");
+            let msg = inference_failure_message(Some(c), &raw);
+            assert!(
+                msg.to_lowercase().contains("too short") && msg.to_lowercase().contains("memory"),
+                "code {c} should get actionable guidance, got: {msg}"
+            );
+            // The raw whisper-rs jargon must be replaced (not shown verbatim)…
+            assert!(
+                !msg.contains("Generic whisper error"),
+                "code {c} still leaks raw jargon: {msg}"
+            );
+            // …but the numeric code stays for the log/support trail.
+            assert!(
+                msg.contains(&c.to_string()),
+                "code {c} should still surface the number for support: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_or_missing_codes_fall_back_to_the_raw_error() {
+        // A code we don't have specific guidance for (or none at all) must not
+        // be swallowed — the raw text is the only diagnostic left.
+        assert!(
+            inference_failure_message(Some(-2), "some raw whisper error")
+                .contains("some raw whisper error")
+        );
+        assert!(
+            inference_failure_message(None, "context load failed").contains("context load failed")
+        );
+    }
 
     struct FakeOk;
     impl Transcriber for FakeOk {

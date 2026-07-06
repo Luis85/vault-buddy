@@ -61,9 +61,19 @@ impl Transcriber for WhisperTranscriber {
         params.set_abort_callback_safe(move || cancel.is_cancelled());
         // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by value.
         params.set_progress_callback_safe(on_progress);
-        state
-            .full(params, samples)
-            .map_err(|e| format!("whisper inference: {e}"))?;
+        state.full(params, samples).map_err(|e| {
+            // whisper.cpp's whisper_full failures arrive as GenericError(rc)
+            // carrying the raw return code (e.g. -9 = "failed to decode" in the
+            // sampling loop). Hand the code to the shared, unit-tested mapper so
+            // the user sees actionable guidance instead of "Generic whisper
+            // error. ... Error code: -9"; the raw text is kept for other codes.
+            let raw = e.to_string();
+            let code = match e {
+                whisper_rs::WhisperError::GenericError(c) => Some(c),
+                _ => None,
+            };
+            crate::inference_failure_message(code, &raw)
+        })?;
 
         // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
         // timestamps are in centiseconds, converted to ms below (×10).
