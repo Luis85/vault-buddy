@@ -18,7 +18,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "settings"
       | "captureSettings"
       | "recordings"
-      | "recordMode",
+      | "recordMode"
+      | "transcriptions",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -130,10 +131,15 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = "recordMode";
       this.recordModeVaultId = vaultId;
     },
+    openTranscriptions() {
+      this.view = "transcriptions";
+    },
     /** Back to the current view's fixed parent (no history stack). */
     back() {
       if (this.view === "recordings" && this.recordingsVaultId) {
         this.openRecordMode(this.recordingsVaultId);
+      } else if (this.view === "transcriptions") {
+        return this.showList();
       } else {
         this.showList();
       }
