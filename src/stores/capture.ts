@@ -182,13 +182,17 @@ export const useCaptureStore = defineStore("capture", {
         this.lastSaved = { mp3: event.payload.mp3, note: event.payload.note };
         this.renameError = null;
         this.armRenameExpiry();
-        // Task 12's backend (not yet shipped) carries the early-stop reason
-        // on this same event — both fields are optional so today's plain
-        // { mp3, note } emitter stays valid and silent.
-        if (event.payload.endedEarly || event.payload.warning) {
-          useNotificationsStore().warning(
-            `Recording ended early: ${event.payload.warning ?? "saved what we had"}`,
-          );
+        // capture:saved may carry a warning worth surfacing — an early-stop
+        // reason (endedEarly, already emitted since increment 3) or a
+        // post-save issue such as a failed companion note (the backend adds
+        // that text). The backend forms the complete, user-ready sentence,
+        // so show it verbatim rather than prefixing it here (a note-write
+        // failure must NOT read "Recording ended early"). An early stop
+        // with no specific reason still gets a generic note.
+        if (event.payload.warning) {
+          useNotificationsStore().warning(event.payload.warning);
+        } else if (event.payload.endedEarly) {
+          useNotificationsStore().warning("Recording ended early — saved what we had.");
         }
       });
       await listen<{ message: string }>("capture:failed", (event) => {

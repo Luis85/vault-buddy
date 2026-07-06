@@ -24,9 +24,13 @@ export interface CaptureRenamed {
 export interface CaptureSaved {
   mp3: string;
   note: string | null;
-  /** Optional: Task 12's backend adds these for an early-stopped save; an
-   * older/plain emitter sending neither must stay valid and quiet. */
+  /** Already emitted (since increment 3): true when the recording was
+   * stopped early (e.g. disk full) rather than a normal user-initiated stop. */
   endedEarly?: boolean;
+  /** Dual-purpose, backend-formed text meant to be shown verbatim: an
+   * early-stop reason (endedEarly: true) or — pending a backend change — a
+   * post-save issue such as a failed companion note (endedEarly: false).
+   * Optional so an older/plain emitter sending neither stays valid and quiet. */
   warning?: string | null;
 }
 

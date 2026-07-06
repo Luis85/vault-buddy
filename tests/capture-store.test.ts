@@ -472,9 +472,9 @@ describe("capture store", () => {
   });
 
   it("a normal save raises no warning notification", async () => {
-    // Regression: endedEarly/warning are optional fields Task 12's backend
-    // will add — today's emitter still sends plain { mp3, note, endedEarly:
-    // false } and must not spuriously warn.
+    // Regression: endedEarly/warning are both optional — a plain
+    // { mp3, note, endedEarly: false } save with no warning text must stay
+    // silent (endedEarly alone, false, is never a reason to warn).
     mockIPC(() => undefined);
     const capture = useCaptureStore();
     const notes = useNotificationsStore();
@@ -485,7 +485,10 @@ describe("capture store", () => {
     expect(notes.items.some((i) => i.kind === "warning")).toBe(false);
   });
 
-  it("an early-stopped save raises a warning with the reason", async () => {
+  it("an early-stopped save shows the backend's warning text verbatim", async () => {
+    // The backend forms the complete, user-ready sentence; the store must
+    // show it as-is. Regression: the old handler always prefixed
+    // "Recording ended early: ", so this pins the exact (unprefixed) text.
     mockIPC(() => undefined);
     const capture = useCaptureStore();
     const notes = useNotificationsStore();
@@ -498,11 +501,44 @@ describe("capture store", () => {
         warning: "recording ended early: disk full",
       },
     });
-    expect(
-      notes.items.some(
-        (i) => i.kind === "warning" && i.message.includes("disk full"),
-      ),
-    ).toBe(true);
+    const warn = notes.items.find((i) => i.kind === "warning");
+    expect(warn?.message).toBe("recording ended early: disk full");
+  });
+
+  it("a companion-note-write failure warns verbatim, never claiming 'ended early'", async () => {
+    // capture:saved.warning is dual-purpose: besides the early-stop reason
+    // above, a post-save issue (e.g. the companion note failed to write)
+    // is routed through the same field with endedEarly: false. Showing the
+    // backend's text verbatim — instead of unconditionally prefixing
+    // "Recording ended early:" — is the whole point of this fix.
+    mockIPC(() => undefined);
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.init();
+    state.eventHandlers["capture:saved"]!({
+      payload: {
+        mp3: "/v/a.mp3",
+        note: "x",
+        endedEarly: false,
+        warning:
+          "Saved the recording, but the companion note couldn't be written: perms",
+      },
+    });
+    const warn = notes.items.find((i) => i.kind === "warning");
+    expect(warn?.message).toContain("companion note couldn't be written");
+    expect(warn?.message).not.toContain("ended early");
+  });
+
+  it("an early stop with no specific reason still gets a generic warning", async () => {
+    mockIPC(() => undefined);
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.init();
+    state.eventHandlers["capture:saved"]!({
+      payload: { mp3: "/v/a.mp3", note: null, endedEarly: true, warning: null },
+    });
+    const warn = notes.items.find((i) => i.kind === "warning");
+    expect(warn?.message).toContain("ended early");
   });
 
   it("transcribeSkipped keeps the transcript complete and warns", async () => {
