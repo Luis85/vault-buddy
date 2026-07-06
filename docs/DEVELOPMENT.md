@@ -112,9 +112,15 @@ tags: it builds the Windows installers and publishes them as a GitHub
 Release for end users.
 
 ```bash
-# after bumping the version in tauri.conf.json / package.json / Cargo.toml
+npm run bump-version -- 0.1.0    # or: patch | minor | major
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+Prefer not to check out the repo locally? Dispatch the **Bump version**
+workflow from the [Actions](https://github.com/Luis85/vault-buddy/actions)
+tab (`version` input takes an explicit `X.Y.Z` or `patch`/`minor`/`major`) —
+it runs `scripts/bump-version.mjs` on `main` and opens a PR with the version
+bump for you to review and merge before tagging.
 
 ### In-app updates (updater signing)
 

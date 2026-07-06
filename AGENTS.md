@@ -449,7 +449,13 @@ round-trip.
 ## Releases
 
 Release = version bump in `package.json`, `src-tauri/tauri.conf.json`, and
-`src-tauri/Cargo.toml` (+ both lockfiles) on `main`, then either push a
+`src-tauri/Cargo.toml` (+ both lockfiles) on `main` — run
+`npm run bump-version -- <version|patch|minor|major>`
+(`scripts/bump-version.mjs`) rather than editing the five files by hand; it
+refuses to run if they've already drifted apart. The `Bump version` GitHub
+Actions workflow (`workflow_dispatch`) runs the same script from `main` and
+opens a PR with the result, for bumping without a local checkout. Once the
+bump lands on `main`, either push a
 `v*` tag **or** dispatch the Release workflow with the tag as input
 (`gh workflow run release.yml -f tag=vX.Y.Z` / the Actions UI). The
 dispatch path exists because remote agent sessions can push branches but
