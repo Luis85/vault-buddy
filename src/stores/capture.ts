@@ -32,7 +32,7 @@ const FINISHED_PHASES: Phase[] = ["done", "failed", "cancelled"];
  * session-long history is never useful in the UI, and left unbounded the
  * map would otherwise grow one entry per mp3 for the whole session.
  */
-const MAX_FINISHED = 20;
+export const MAX_FINISHED = 20;
 
 function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
@@ -324,7 +324,7 @@ export const useCaptureStore = defineStore("capture", {
       });
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
         const { mp3, message } = event.payload;
-        this.upsert(mp3, { phase: "failed", error: message, progress: null });
+        this.upsert(mp3, { phase: "failed", error: message, progress: null, skipped: false });
         useNotificationsStore().error(`Transcription failed: ${message}`);
         this.refreshWaitingForRecording();
       });
@@ -363,7 +363,7 @@ export const useCaptureStore = defineStore("capture", {
         this.waitingForRecording = false;
       });
       await listen<TranscribeCancelled>("capture:transcribeCancelled", (event) => {
-        this.upsert(event.payload.mp3, { phase: "cancelled", progress: null });
+        this.upsert(event.payload.mp3, { phase: "cancelled", progress: null, skipped: false });
         this.refreshWaitingForRecording();
       });
       await listen<{ atMs: number }>("capture:paused", (event) => {

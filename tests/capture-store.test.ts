@@ -22,7 +22,7 @@ vi.mock("../src/logging", () => ({
 }));
 
 import { logWarning } from "../src/logging";
-import { useCaptureStore } from "../src/stores/capture";
+import { MAX_FINISHED, useCaptureStore } from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
 
 describe("capture store", () => {
@@ -404,7 +404,6 @@ describe("capture store", () => {
     // the exposed list stays capped even as far more jobs than the cap
     // finish, so the visible "Finished this session" list never grows
     // without limit.
-    const MAX_FINISHED = 20; // mirrors the store's private cap
     mockIPC((cmd) =>
       cmd === "capture_status"
         ? { recording: false, vaultId: null, startedAtMs: null }
@@ -428,7 +427,6 @@ describe("capture store", () => {
     // failed/cancelled) jobs, oldest first by startedAtMs — an active/
     // queued job must survive no matter how much unrelated terminal churn
     // happens around it.
-    const MAX_FINISHED = 20; // mirrors the store's private cap
     mockIPC((cmd) =>
       cmd === "capture_status"
         ? { recording: false, vaultId: null, startedAtMs: null }
