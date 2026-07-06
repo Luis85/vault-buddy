@@ -1,8 +1,9 @@
 # Knowledge Intake — Product Requirements Document (PRD)
 
 - **Capability for:** Vault Buddy
-- **Status:** Draft
-- **Version:** 1.0
+- **Status:** Version 1 shipped in Vault Buddy v0.3.0 (audio recording +
+  on-device transcription); later versions planned — see the roadmap
+- **Version:** 1.1
 - **Parent Product:** [Vault Buddy](./PRD.md)
 
 ---
@@ -78,7 +79,7 @@ This process interrupts the user's flow and often results in knowledge never bei
 
 - Automatic metadata generation.
 - Automatic note creation.
-- AI transcription.
+- Local transcription (shipped in v0.3.0).
 - AI summarization.
 - Workflow automation.
 
@@ -99,7 +100,8 @@ The MVP will not include:
 
 Knowledge Intake consists of multiple **Capture Providers**.
 
-Initially only **Audio Recording** will be implemented.
+**Audio Recording** is the first Capture Provider, shipped in v0.3.0 (with
+on-device transcription as a post-capture step).
 
 Future providers include:
 
@@ -196,13 +198,19 @@ Every configured Vault receives its own Capture configuration.
 - Normalize Audio
 - Automatic Gain Control
 
-### AI
+### Transcription (shipped)
 
-- Automatically Transcribe
+- Automatically Transcribe — per-vault opt-in
+- Transcription Model — base / small / medium, downloaded on demand
+- Language — or auto-detect per recording
+- Segment Timestamps
+- Follow-up Template — append a `## Follow-up` scaffold to the companion note
+
+### AI (planned)
+
 - Generate Summary
 - Extract Tasks
-- Generate Meeting Note
-- Language
+- Generate Meeting Note (AI-enriched)
 - Preferred LLM
 
 ---
@@ -286,25 +294,45 @@ Every recording should generate metadata.
 
 ## Optional Meeting Note
 
-When enabled, Vault Buddy automatically creates a Markdown document.
+When enabled (the default, per-vault `createNote`), Vault Buddy writes a
+Markdown companion note alongside the recording.
 
 The document contains:
 
-- Metadata
-- Embedded recording
-- Transcript
-- Summary
-- Decisions
-- Action Items
-- Open Questions
+- Metadata (date, duration, type, devices, language)
+- The embedded recording
+- The embedded transcript, once transcription completes
+- A `## Follow-up` scaffold (action items, decisions, notes) when the per-vault
+  Follow-up Template is on (the default)
 
-Metadata and the embedded recording are always present. The remaining
-sections (transcript, summary, decisions, action items, open questions)
-appear only once the optional AI pipeline (Version 2 of the roadmap) has
-produced them — a note created without AI processing contains just
-metadata and the embed, not empty placeholder sections.
+Metadata and the audio embed are always present. **Transcription** (shipped in
+v0.3.0) runs on-device after the recording and writes a `<name>.transcript.md`
+sidecar the note embeds — no cloud, no API. The Follow-up scaffold is a static,
+ready-to-fill section, not AI output. AI-produced summaries, decisions, and
+action-item extraction remain a future pipeline (see the roadmap); the note
+never contains empty AI placeholder sections.
 
 This transforms an audio file into immediately usable knowledge.
+
+---
+
+## Recordings List
+
+Past recordings are browsable in the panel: from the record chooser, **Browse
+recordings** opens a read-only list of the vault's captures, grouped by type,
+each row showing title, date, duration, and transcript status. Selecting a row
+opens its companion note in Obsidian. The list never writes into the vault.
+
+---
+
+## Re-transcription
+
+Every recording row offers a **re-transcribe** action that regenerates its
+transcript on demand — useful after switching to a larger, more accurate model,
+or to recover a failed transcript. It confirms before replacing a finished
+transcript, bypasses the vault's automatic-transcription toggle (an explicit
+per-recording opt-in), and overwrites only the transcript sidecar — never the
+audio or the note.
 
 ---
 
@@ -390,16 +418,18 @@ Obsidian is only responsible for consuming the resulting files.
 
 ## Future Roadmap
 
-### Version 1
+### Version 1 — shipped (v0.3.0)
 
-- Audio Recording
+- Audio Recording (Meeting / Voice Note)
+- Local on-device Transcription (model download, language, timestamps)
+- Companion Meeting Notes + Follow-up template
+- Recordings browser + Re-transcribe
 
-### Version 2
+### Version 2 — planned
 
-- AI Transcription
-- Meeting Notes
-- Task Extraction
 - Summaries
+- Task Extraction
+- AI-enriched Meeting Notes (decisions, action items, open questions)
 
 ### Version 3
 

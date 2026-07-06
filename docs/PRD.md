@@ -1,7 +1,7 @@
 # Vault Buddy — Product Requirements Document (PRD)
 
 - **Version:** 1.0 (Vision Draft)
-- **Status:** Product Discovery
+- **Status:** Shipping — v0.3.0 released (Windows MVP: vault access, meeting/voice recording, local transcription)
 - **Product:** Vault Buddy
 - **Platform:** Windows (MVP)
 - **Technology Stack:** Tauri 2 · Vue 3 · TypeScript · Rust
@@ -592,12 +592,14 @@ Obsidian      Local Tools      MCP Servers
 
 ### Phase 1 — Foundation
 
-- Desktop Companion
-- Transparent Window
-- Animated Character
-- Obsidian CLI
-- Vault Detection
-- Daily Notes
+*Shipped in v0.3.0, except Search and Tasks.*
+
+- Desktop Companion ✓
+- Transparent Window ✓
+- Animated Character ✓
+- Obsidian CLI ✓ *(via `obsidian://` URIs)*
+- Vault Detection ✓
+- Daily Notes ✓
 - Search
 - Tasks
 
@@ -612,10 +614,12 @@ Obsidian      Local Tools      MCP Servers
 
 ### Phase 3 — Intelligence
 
-- Local AI
+*Landed early: Local AI and the Meeting Assistant shipped in v0.3.0, ahead of Phase 2.*
+
+- Local AI ✓ *(on-device speech-to-text)*
 - Knowledge Graph
 - Recommendations
-- Meeting Assistant
+- Meeting Assistant ✓ *(recording + transcription + companion notes)*
 - Writing Assistant
 - Research Assistant
 

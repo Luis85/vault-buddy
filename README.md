@@ -47,12 +47,19 @@ The buddy appears as a small, always-on-top character on your desktop.
   button** on a vault row, choose Meeting (desktop audio + mic) or Voice
   Note (mic only), and the buddy shows a red dot while it records. Pause,
   resume, or stop from the recording bar or the tray. Each vault has its own
-  capture settings — folder, audio quality, companion note, and
-  transcription — in the panel.
+  capture settings — folder, audio quality, companion note, follow-up
+  template, and transcription — in the panel. When the **follow-up template**
+  is on (the default), each recording's companion note gets a ready-made
+  `## Follow-up` section (action items, decisions, notes) to fill in after.
 - **Transcribe** locally, opt-in per vault: after a recording finishes,
   Vault Buddy runs speech-to-text on-device with whisper.cpp and writes a
   transcript that the note embeds. It downloads a small speech model on
   first use; transcription itself is fully offline — no cloud, no API.
+- **Browse past recordings**: from the record chooser, hit **Browse
+  recordings** to see everything captured in that vault, grouped by type.
+  Click a recording to open its note in Obsidian, or **re-transcribe** any
+  one on the spot — useful after switching to a larger, more accurate speech
+  model.
 
 Vault Buddy is careful with your vault. Browsing vaults and opening notes
 never writes anything — that stays delegated to Obsidian via `obsidian://`
