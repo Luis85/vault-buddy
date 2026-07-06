@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import Transcriptions from "../src/components/Transcriptions.vue";
 import { useCaptureStore } from "../src/stores/capture";
+import { useVaultsStore } from "../src/stores/vaults";
 import type { TranscriptionJob } from "../src/types";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
@@ -70,6 +71,49 @@ describe("Transcriptions", () => {
     };
     const wrapper = mount(Transcriptions);
     expect(wrapper.get('[data-testid="transcription-active"]').text()).toContain("30%");
+  });
+
+  it("shows an honest indeterminate download state — no percent — when the model's progress is unknown", () => {
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "downloading", progress: null, model: null }),
+    };
+    const wrapper = mount(Transcriptions);
+    const active = wrapper.get('[data-testid="transcription-active"]');
+    expect(active.text()).toContain("Downloading model…");
+    expect(active.text()).not.toMatch(/\d+%/);
+    expect(wrapper.get('[data-testid="transcription-progress"]').classes()).toContain(
+      "animate-spin",
+    );
+  });
+
+  it("renders the vault name for active and queued jobs, falling back to the id when the vault isn't known", () => {
+    const vaults = useVaultsStore();
+    vaults.vaults = [
+      { id: "v1", name: "Work Vault", path: "/vaults/work", open: true },
+    ];
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ vaultId: "v1" }),
+      "b.mp3": job({
+        mp3: "b.mp3",
+        name: "Idea",
+        vaultId: "v9",
+        phase: "queued",
+        progress: null,
+      }),
+    };
+    const wrapper = mount(Transcriptions);
+
+    const active = wrapper.get('[data-testid="transcription-active"]');
+    expect(active.text()).toContain("Work Vault");
+    expect(active.text()).not.toContain("v1");
+
+    // v9 isn't in the seeded vault list — this is a cross-vault view, so a
+    // queued job may belong to a vault this window hasn't discovered. Falls
+    // back to the raw id rather than showing nothing.
+    const queued = wrapper.get('[data-testid="transcription-queued"]');
+    expect(queued.text()).toContain("v9");
   });
 
   it("renders an indeterminate spinner (no percent) while preparing", () => {
@@ -220,5 +264,27 @@ describe("Transcriptions", () => {
     vi.advanceTimersByTime(110_000); // only 110s since the real advance
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(false);
+  });
+
+  it("keeps the stuck hint across a component remount — the clock lives in the store, not a local ref", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "transcribing", progress: 0.5, startedAtMs: 0 }),
+    };
+    let wrapper = mount(Transcriptions);
+
+    vi.advanceTimersByTime(130_000); // past the 2-minute threshold
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(true);
+
+    wrapper.unmount();
+    wrapper = mount(Transcriptions); // a component-local clock would restart here
+    await wrapper.vm.$nextTick();
+
+    // No time has advanced since the remount — this only stays true if the
+    // "since" timestamp survived in the store instead of resetting to now.
+    expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(true);
   });
 });

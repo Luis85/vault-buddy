@@ -705,6 +705,40 @@ describe("capture store", () => {
     expect(store.lastSaved).toBeNull();
   });
 
+  it("noteActiveProgress starts a clock on first observation and holds it through an unchanged re-observation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const store = useCaptureStore();
+    const job = { mp3: "a.mp3", vaultId: "v1", name: "Standup", phase: "transcribing" as const, progress: 0.5, model: null, error: null, startedAtMs: 0 };
+    store.noteActiveProgress(job);
+    expect(store.activeStuckSinceMs).toBe(0);
+
+    vi.setSystemTime(new Date(90_000));
+    // Same job, same progress (whisper re-reporting the same %) — must NOT
+    // reset the clock, or a slow-but-alive job would never trip the hint.
+    store.noteActiveProgress({ ...job });
+    expect(store.activeStuckSinceMs).toBe(0);
+    expect(store.activeStuckMp3).toBe("a.mp3");
+    vi.useRealTimers();
+  });
+
+  it("noteActiveProgress resets the clock on a real progress delta and clears when nothing is transcribing", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const store = useCaptureStore();
+    const job = { mp3: "a.mp3", vaultId: "v1", name: "Standup", phase: "transcribing" as const, progress: 0.5, model: null, error: null, startedAtMs: 0 };
+    store.noteActiveProgress(job);
+
+    vi.setSystemTime(new Date(110_000));
+    store.noteActiveProgress({ ...job, progress: 0.6 }); // genuine advance
+    expect(store.activeStuckSinceMs).toBe(110_000);
+
+    store.noteActiveProgress(null); // job finished/vanished
+    expect(store.activeStuckSinceMs).toBeNull();
+    expect(store.activeStuckMp3).toBeNull();
+    vi.useRealTimers();
+  });
+
   it("acceptRename with edited title calls rename_capture and updates lastSavedFile", async () => {
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockIPC((cmd, args) => {

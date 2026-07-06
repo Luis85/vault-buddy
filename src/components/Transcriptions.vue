@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useCaptureStore } from "../stores/capture";
+import { useVaultsStore } from "../stores/vaults";
 import type { TranscriptionJob } from "../types";
 
 const capture = useCaptureStore();
+const vaults = useVaultsStore();
 
 const active = computed(() => capture.activeTranscription);
 const queued = computed(() => capture.queuedTranscriptions);
@@ -31,14 +33,29 @@ function percent(job: TranscriptionJob): number {
   return Math.round(Math.min(1, Math.max(0, job.progress ?? 0)) * 100);
 }
 
+/**
+ * This is a cross-vault view — a job's vault may not be in this window's
+ * vault list (not yet discovered, or discovered by a different window), so
+ * fall back to the raw id rather than showing nothing.
+ */
+function vaultName(id: string): string {
+  return vaults.vaults.find((v) => v.id === id)?.name ?? id;
+}
+
 function phaseLabel(job: TranscriptionJob): string {
   switch (job.phase) {
     case "downloading":
-      return `Downloading ${job.model ?? "model"}… ${percent(job)}%`;
+      // An unknown total (no percent yet) must read as "still working", not
+      // a misleading "0%" — omit the number entirely rather than guess.
+      return job.progress != null
+        ? `Downloading ${job.model ?? "model"}… ${percent(job)}%`
+        : `Downloading ${job.model ?? "model"}…`;
     case "preparing":
       return "Preparing…";
     case "transcribing":
-      return `Transcribing… ${percent(job)}%`;
+      return job.progress != null
+        ? `Transcribing… ${percent(job)}%`
+        : "Transcribing…";
     default:
       return job.phase;
   }
@@ -67,40 +84,29 @@ function statusGlyph(job: TranscriptionJob): string {
 // --- "taking longer than expected" hint -------------------------------
 // A transcribing job's own inference progress can legitimately sit at the
 // same percent for a while (whisper reports coarse steps), so this only
-// flags a stall once the CURRENT job's percent hasn't moved for STUCK_MS —
-// tracked locally (not in the store) since it's purely a display concern
-// keyed off wall-clock time, not something Rust needs to know about.
+// flags a stall once the CURRENT job's percent hasn't moved for STUCK_MS.
+// The "since" clock lives in the capture store (`noteActiveProgress`), not
+// a local ref: this view is destroyed and recreated every time the panel
+// navigates away and back, and a component-local ref would restart the
+// clock on every remount. The store only resets it on a REAL change
+// (different job, or an actual progress delta) — a re-upsert with the
+// identical percent must not, or a slow-but-alive job would never trip the
+// hint, and a fresh mount re-observing the same job/progress is a no-op.
 const STUCK_MS = 2 * 60 * 1000;
-const stuckMp3 = ref<string | null>(null);
-const stuckProgress = ref<number | null>(null);
-const stuckSinceMs = ref<number | null>(null);
 
 watch(
   () => capture.activeTranscription,
-  (job) => {
-    if (!job || job.phase !== "transcribing") {
-      stuckMp3.value = null;
-      stuckProgress.value = null;
-      stuckSinceMs.value = null;
-      return;
-    }
-    // Only a REAL change (different job, or an actual progress delta) resets
-    // the clock — a re-upsert with the identical percent must not, or a
-    // slow-but-alive job would never trip the hint.
-    if (job.mp3 !== stuckMp3.value || job.progress !== stuckProgress.value) {
-      stuckMp3.value = job.mp3;
-      stuckProgress.value = job.progress;
-      stuckSinceMs.value = Date.now();
-    }
-  },
+  (job) => capture.noteActiveProgress(job),
   { immediate: true },
 );
 
 const isStuck = computed(() => {
   const job = active.value;
   if (!job || job.phase !== "transcribing") return false;
-  if (job.mp3 !== stuckMp3.value || stuckSinceMs.value === null) return false;
-  return now.value - stuckSinceMs.value >= STUCK_MS;
+  if (job.mp3 !== capture.activeStuckMp3 || capture.activeStuckSinceMs === null) {
+    return false;
+  }
+  return now.value - capture.activeStuckSinceMs >= STUCK_MS;
 });
 </script>
 
@@ -121,7 +127,7 @@ const isStuck = computed(() => {
             class="min-w-0 flex-1 truncate text-sm text-slate-100"
             :title="active.name"
           >{{ active.name }}</span>
-          <span class="shrink-0 text-xs text-slate-500">{{ active.vaultId }}</span>
+          <span class="shrink-0 text-xs text-slate-500">{{ vaultName(active.vaultId) }}</span>
         </div>
         <div class="flex items-center justify-between gap-2 text-xs text-slate-300">
           <span role="status">{{ phaseLabel(active) }}</span>
@@ -183,7 +189,7 @@ const isStuck = computed(() => {
           <span class="min-w-0 flex-1 truncate text-sm text-slate-100" :title="j.name">
             {{ j.name }}
           </span>
-          <span class="shrink-0 text-xs text-slate-500">Waiting</span>
+          <span class="shrink-0 text-xs text-slate-500">{{ vaultName(j.vaultId) }} · Waiting</span>
           <button
             type="button"
             data-testid="transcription-cancel"

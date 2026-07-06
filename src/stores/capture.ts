@@ -85,6 +85,17 @@ export const useCaptureStore = defineStore("capture", {
      * or just-finished job. A backend-seeded keyed map survives that remount.
      */
     transcriptions: {} as Record<string, TranscriptionJob>,
+    /**
+     * "Taking longer than expected" tracking for the active transcribing
+     * job: the mp3/progress it was last observed at, and the wall-clock
+     * time that observation was made. Lives here (not a Transcriptions.vue
+     * local ref) so leaving and reopening that view — which destroys and
+     * recreates the component — doesn't restart the clock; see
+     * `noteActiveProgress`, which only updates it on a genuine change.
+     */
+    activeStuckMp3: null as string | null,
+    activeStuckProgress: null as number | null,
+    activeStuckSinceMs: null as number | null,
     /** True when the worker has queued/regenerable work but no recording is
      * active yet to transcribe (mirrors the backend's own wait state). */
     waitingForRecording: false,
@@ -145,6 +156,34 @@ export const useCaptureStore = defineStore("capture", {
         startedAtMs: null,
       };
       this.transcriptions[mp3] = { ...base, ...patch };
+    },
+    /**
+     * Record an observation of the currently-active job for the "taking
+     * longer than expected" hint. Called from Transcriptions.vue's
+     * `watch(() => activeTranscription, ..., { immediate: true })`, so
+     * every mount (including a remount after navigating away) re-evaluates
+     * the CURRENT job against whatever is already stored here — an
+     * unchanged re-observation is a no-op, so a clock started before a
+     * remount keeps ticking instead of restarting. Only a REAL change
+     * (different job, or an actual progress delta) resets it — a
+     * re-upsert with the identical percent must not, or a slow-but-alive
+     * job would never trip the hint.
+     */
+    noteActiveProgress(job: TranscriptionJob | null) {
+      if (job && job.phase === "transcribing") {
+        if (
+          job.mp3 !== this.activeStuckMp3 ||
+          job.progress !== this.activeStuckProgress
+        ) {
+          this.activeStuckMp3 = job.mp3;
+          this.activeStuckProgress = job.progress;
+          this.activeStuckSinceMs = Date.now();
+        }
+        return;
+      }
+      this.activeStuckMp3 = null;
+      this.activeStuckProgress = null;
+      this.activeStuckSinceMs = null;
     },
     resetRecordingState() {
       this.status = "idle";
