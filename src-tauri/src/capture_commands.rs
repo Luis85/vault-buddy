@@ -1382,6 +1382,127 @@ pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveJobDto {
+    mp3: String,
+    vault_id: String,
+    phase: String,
+    progress: u8,
+    received: Option<u64>,
+    total: Option<u64>,
+    started_at_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueuedDto {
+    mp3: String,
+    vault_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionQueueDto {
+    active: Option<ActiveJobDto>,
+    queued: Vec<QueuedDto>,
+    waiting_for_recording: bool,
+}
+
+/// Live snapshot of the transcription queue for the Recordings panel: the
+/// job currently running (phase/progress, plus download byte counts while
+/// `Phase::Downloading`), everything still waiting, and whether the queue is
+/// stalled behind a live recording (`is_recording` — the same coarse gate
+/// `run_transcription`'s worker loop yields to). Read-only: the queue mutex
+/// is held only long enough to clone/copy fields out of it.
+#[tauri::command]
+pub fn transcription_queue_status(app: AppHandle) -> TranscriptionQueueDto {
+    let state = app.state::<TranscriptionState>();
+    let guard = state.inner.lock().unwrap();
+    let active = guard.active.as_ref().map(|a| {
+        let (received, total) = match a.phase {
+            Phase::Downloading { received, total } => (Some(received), total),
+            _ => (None, None),
+        };
+        ActiveJobDto {
+            mp3: a.mp3.to_string_lossy().into_owned(),
+            vault_id: a.vault_id.clone(),
+            phase: a.phase.as_str().to_string(),
+            progress: a.progress.load(Ordering::Relaxed),
+            received,
+            total,
+            started_at_ms: a.started_at_ms,
+        }
+    });
+    let queued = guard
+        .pending
+        .iter()
+        .map(|j| QueuedDto {
+            mp3: j.mp3.to_string_lossy().into_owned(),
+            vault_id: j.vault_id.clone(),
+        })
+        .collect();
+    // "waiting" = there is work but nothing active because a recording is live.
+    let waiting_for_recording = active.is_none() && !guard.pending.is_empty() && is_recording(&app);
+    TranscriptionQueueDto {
+        active,
+        queued,
+        waiting_for_recording,
+    }
+}
+
+/// Cancel a queued or in-flight transcription. The queue mutex is held only
+/// for bookkeeping (flip the active job's `CancelToken`, or drop a pending
+/// job) — NEVER across the sidecar write below, which does a temp+fsync+
+/// rename (`force_write_sidecar`) and would otherwise stall every other
+/// command that needs the same mutex (enqueue, status, a concurrent cancel)
+/// for the duration of a disk flush.
+///
+/// The active job's sidecar is deliberately NOT written here: cancelling it
+/// only flips the token, and the worker's `TranscribeError::Cancelled` arm
+/// (in `process_transcription`) owns that write via `replace_if_ours`, which
+/// already refuses to clobber a finished/hand-edited transcript. A pending
+/// job's sidecar, by contrast, is only ever our own `pending` placeholder or
+/// absent (it never reached the worker), so the unguarded
+/// `force_write_sidecar` is correct there and duplicating the active-job
+/// write here would race the worker's own.
+#[tauri::command]
+pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    // Phase 1: fast bookkeeping under the mutex; decide what to write after.
+    let write_cancelled = {
+        let state = app.state::<TranscriptionState>();
+        let mut guard = state.inner.lock().unwrap();
+        if guard.active.as_ref().map(|a| a.mp3 == mp3).unwrap_or(false) {
+            guard.active.as_ref().unwrap().cancel.cancel(); // aborts inference; the worker writes the cancelled sidecar
+            return Ok(()); // worker owns the terminal bookkeeping for the active job
+        }
+        // Pending job: drop it now; write its sidecar AFTER releasing the lock.
+        let before = guard.pending.len();
+        guard.pending.retain(|j| j.mp3 != mp3);
+        if guard.pending.len() == before {
+            return Err("No such transcription in the queue.".into());
+        }
+        guard.known.remove(&mp3);
+        true
+    }; // <-- mutex released here
+    if write_cancelled {
+        let name = mp3
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _ = vault_buddy_core::transcript::force_write_sidecar(
+            &vault_buddy_core::transcript::transcript_path(&mp3),
+            &vault_buddy_core::transcript::render_cancelled(&name),
+        );
+        let _ = app.emit(
+            "capture:transcribeCancelled",
+            serde_json::json!({ "mp3": mp3.to_string_lossy() }),
+        );
+    }
+    Ok(())
+}
+
 /// Shared by `open_transcript` and `open_recording`: launch an
 /// `obsidian://open` for a recording's companion note `<base>.md` when it
 /// exists (the richest view — it embeds the transcript and the audio player),
