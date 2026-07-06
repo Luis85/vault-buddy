@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
@@ -453,6 +454,42 @@ describe("capture store", () => {
     });
     expect(store.waitingForRecording).toBe(false);
   });
+
+  it.each([
+    ["capture:transcribed", (mp3: string) => ({ mp3, transcript: `${mp3}.transcript.md` })],
+    ["capture:transcribeFailed", (mp3: string) => ({ mp3, message: "boom" })],
+    ["capture:transcribeSkipped", (mp3: string) => ({ mp3, message: "kept your existing transcript" })],
+    ["capture:transcribeCancelled", (mp3: string) => ({ mp3 })],
+  ])(
+    "re-queries transcription_queue_status and re-arms waitingForRecording after %s",
+    async (eventName, payloadFor) => {
+      // Regression: waitingForRecording was only ever CLEARED after the
+      // init-time seed — never re-armed — so it went stale-false once a job
+      // finished while OTHER queued work still had no recording to
+      // transcribe (e.g. mid a live recording). transcription_queue_status
+      // is backend truth, recomputed fresh per query, so every terminal
+      // event must re-query it rather than assume the wait is over.
+      let waiting = false;
+      mockIPC((cmd) =>
+        cmd === "capture_status"
+          ? { recording: false, vaultId: null, startedAtMs: null }
+          : { active: null, queued: [], waitingForRecording: waiting },
+      );
+      const store = useCaptureStore();
+      await store.init();
+      store.waitingForRecording = false; // simulate an earlier immediate clear
+
+      waiting = true;
+      state.eventHandlers[eventName]!({ payload: payloadFor("z1.mp3") });
+      await flushPromises();
+      expect(store.waitingForRecording).toBe(true);
+
+      waiting = false;
+      state.eventHandlers[eventName]!({ payload: payloadFor("z2.mp3") });
+      await flushPromises();
+      expect(store.waitingForRecording).toBe(false);
+    },
+  );
 
   it("modelReady clears download progress and moves to preparing", async () => {
     mockIPC((cmd) => { if (cmd === "capture_status" || cmd === "transcription_queue_status") return cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false }; });

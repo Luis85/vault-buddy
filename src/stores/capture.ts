@@ -194,6 +194,26 @@ export const useCaptureStore = defineStore("capture", {
       this.pausedSinceMs = null;
       this.level = 0;
     },
+    /**
+     * Internal: re-query transcription_queue_status and refresh
+     * waitingForRecording from backend truth. Backend truth is `active
+     * .is_none() && !pending.is_empty() && is_recording(&app)`, recomputed
+     * fresh only when queried — the immediate clears on transcribing/
+     * progress/saved below cover "a job just started" and "the awaited
+     * recording just ended", but a TERMINAL event (done/failed/skipped/
+     * cancelled) can leave OTHER queued work still waiting on a recording
+     * that's still going, which only a fresh query can tell. Defensive
+     * exactly like the init resync below: an unmocked/failing/absent
+     * response must never throw out of an event handler.
+     */
+    async refreshWaitingForRecording() {
+      try {
+        const q = await invoke<TranscriptionQueueStatus>("transcription_queue_status");
+        if (q) this.waitingForRecording = q.waitingForRecording ?? false;
+      } catch {
+        // best-effort re-sync only, same as the init resync below
+      }
+    },
     async init() {
       // capture:started broadcasts to EVERY window; a non-initiating window
       // (the buddy, the bubble) never calls start(), so this broadcast is the
@@ -275,11 +295,13 @@ export const useCaptureStore = defineStore("capture", {
       });
       await listen<CaptureTranscribed>("capture:transcribed", (event) => {
         this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
+        this.refreshWaitingForRecording();
       });
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
         const { mp3, message } = event.payload;
         this.upsert(mp3, { phase: "failed", error: message, progress: null });
         useNotificationsStore().error(`Transcription failed: ${message}`);
+        this.refreshWaitingForRecording();
       });
       // A Complete/hand-edited transcript we refused to overwrite: a
       // complete transcript DOES exist (phase "done", like a real write),
@@ -288,6 +310,7 @@ export const useCaptureStore = defineStore("capture", {
       await listen<CaptureTranscribeSkipped>("capture:transcribeSkipped", (event) => {
         this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
         useNotificationsStore().warning(event.payload.message);
+        this.refreshWaitingForRecording();
       });
       await listen<ModelDownload>("capture:modelDownload", (event) => {
         const { mp3, model, received, total } = event.payload;
@@ -313,6 +336,7 @@ export const useCaptureStore = defineStore("capture", {
       });
       await listen<TranscribeCancelled>("capture:transcribeCancelled", (event) => {
         this.upsert(event.payload.mp3, { phase: "cancelled", progress: null });
+        this.refreshWaitingForRecording();
       });
       await listen<{ atMs: number }>("capture:paused", (event) => {
         this.paused = true;
