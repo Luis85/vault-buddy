@@ -1,0 +1,129 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import TranscriptionSettings from "../src/components/TranscriptionSettings.vue";
+
+const baseValue = {
+  transcribe: false,
+  transcriptionModel: "small",
+  transcriptionLanguage: "",
+  transcriptTimestamps: true,
+};
+
+// TranscriptionSettings is a controlled component (no persistence of its
+// own) — every assertion below is either "renders what the prop says" or
+// "emits update:modelValue with a spread-merged object", never internal state.
+let active: ReturnType<typeof mount> | null = null;
+afterEach(() => {
+  active?.unmount();
+  active = null;
+  // SelectMenu Teleports its popup to <body>; clear it between tests.
+  document.body.innerHTML = "";
+});
+
+function mountWith(modelValue: typeof baseValue = baseValue) {
+  active = mount(TranscriptionSettings, {
+    props: { modelValue },
+    attachTo: document.body,
+  });
+  return active;
+}
+
+// Open a SelectMenu dropdown and click one of its (Teleported) options.
+async function pickOption(
+  wrapper: ReturnType<typeof mount>,
+  testid: string,
+  value: string,
+) {
+  await wrapper.get(`[data-testid="${testid}"]`).trigger("click");
+  (
+    document.body.querySelector(`[data-testid="${testid}-option-${value}"]`) as HTMLElement
+  ).click();
+  await flushPromises();
+}
+
+describe("TranscriptionSettings", () => {
+  it("reflects the transcribe toggle from modelValue", () => {
+    const off = mountWith({ ...baseValue, transcribe: false });
+    expect(
+      off.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(false);
+    off.unmount();
+
+    const on = mountWith({ ...baseValue, transcribe: true });
+    expect(
+      on.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(true);
+  });
+
+  it("hides the model/language/timestamps controls while transcribe is off", () => {
+    const wrapper = mountWith({ ...baseValue, transcribe: false });
+    expect(wrapper.find('[data-testid="transcription-model-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcription-language-select"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcript-timestamps-toggle"]').exists()).toBe(false);
+  });
+
+  it("shows the model/language/timestamps controls, reflecting modelValue, once transcribe is on", () => {
+    const wrapper = mountWith({
+      transcribe: true,
+      transcriptionModel: "medium",
+      transcriptionLanguage: "es",
+      transcriptTimestamps: false,
+    });
+    expect(wrapper.get('[data-testid="transcription-model-select"]').text()).toContain("Medium");
+    expect(wrapper.get('[data-testid="transcription-language-select"]').text()).toContain(
+      "Spanish",
+    );
+    expect(
+      wrapper.get<HTMLInputElement>('[data-testid="transcript-timestamps-toggle"]').element
+        .checked,
+    ).toBe(false);
+  });
+
+  it("toggling transcribe emits update:modelValue with the merged object and transcribe flipped", async () => {
+    const wrapper = mountWith({ ...baseValue, transcribe: false });
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...baseValue, transcribe: true }],
+    ]);
+  });
+
+  it("picking a model emits update:modelValue with only transcriptionModel changed", async () => {
+    const modelValue = { ...baseValue, transcribe: true };
+    const wrapper = mountWith(modelValue);
+    await pickOption(wrapper, "transcription-model-select", "medium");
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...modelValue, transcriptionModel: "medium" }],
+    ]);
+  });
+
+  it("picking a language emits update:modelValue with only transcriptionLanguage changed", async () => {
+    const modelValue = { ...baseValue, transcribe: true };
+    const wrapper = mountWith(modelValue);
+    await pickOption(wrapper, "transcription-language-select", "es");
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...modelValue, transcriptionLanguage: "es" }],
+    ]);
+  });
+
+  it("toggling timestamps emits update:modelValue with only transcriptTimestamps changed", async () => {
+    const modelValue = { ...baseValue, transcribe: true, transcriptTimestamps: true };
+    const wrapper = mountWith(modelValue);
+    await wrapper.get('[data-testid="transcript-timestamps-toggle"]').setValue(false);
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...modelValue, transcriptTimestamps: false }],
+    ]);
+  });
+
+  it("never mutates the modelValue prop object", async () => {
+    const modelValue = { ...baseValue, transcribe: true };
+    const frozen = Object.freeze({ ...modelValue });
+    const wrapper = mountWith(frozen as typeof modelValue);
+    // Would throw under freeze if the component mutated the prop in place.
+    await expect(
+      wrapper.get('[data-testid="transcript-timestamps-toggle"]').setValue(false),
+    ).resolves.not.toThrow();
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...frozen, transcriptTimestamps: false }],
+    ]);
+  });
+});
