@@ -10,6 +10,7 @@ import RecordingBar from "./RecordingBar.vue";
 import RenamePrompt from "./RenamePrompt.vue";
 import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
+import Transcriptions from "./Transcriptions.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -74,7 +75,9 @@ watch(
                 ? "Recordings"
                 : view === "recordMode"
                   ? "Record"
-                  : "Vaults"
+                  : view === "transcriptions"
+                    ? "Transcriptions"
+                    : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -216,6 +219,12 @@ watch(
         :key="store.recordModeVaultId"
         :vault-id="store.recordModeVaultId"
       />
+    </div>
+    <div
+      v-else-if="view === 'transcriptions'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Transcriptions />
     </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList

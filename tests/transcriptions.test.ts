@@ -1,0 +1,224 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import Transcriptions from "../src/components/Transcriptions.vue";
+import { useCaptureStore } from "../src/stores/capture";
+import type { TranscriptionJob } from "../src/types";
+
+vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
+
+function job(overrides: Partial<TranscriptionJob> = {}): TranscriptionJob {
+  return {
+    mp3: "a.mp3",
+    vaultId: "v1",
+    name: "Standup",
+    phase: "transcribing",
+    progress: 0.42,
+    model: null,
+    error: null,
+    startedAtMs: Date.now(),
+    ...overrides,
+  };
+}
+
+describe("Transcriptions", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  afterEach(() => {
+    clearMocks();
+    vi.useRealTimers();
+  });
+
+  it("shows an empty state when nothing is active, queued, or finished", () => {
+    const wrapper = mount(Transcriptions);
+    expect(wrapper.text()).toContain("No transcriptions yet.");
+  });
+
+  it("renders the active transcribing job with a progress bar and cancels it", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ progress: 0.42, startedAtMs: Date.now() - 5000 }),
+    };
+    const wrapper = mount(Transcriptions);
+
+    const active = wrapper.get('[data-testid="transcription-active"]');
+    expect(active.text()).toContain("Standup");
+    expect(active.text()).toContain("v1");
+    expect(active.text()).toContain("42%");
+    const bar = wrapper.get('[data-testid="transcription-progress"]');
+    expect(bar.attributes("aria-valuenow")).toBe("42");
+
+    await wrapper.get('[data-testid="transcription-cancel"]').trigger("click");
+    await flushPromises();
+    expect(calls).toContainEqual({
+      cmd: "cancel_transcription",
+      args: { path: "a.mp3" },
+    });
+  });
+
+  it("renders the download percentage for an active downloading job", () => {
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "downloading", progress: 0.3 }),
+    };
+    const wrapper = mount(Transcriptions);
+    expect(wrapper.get('[data-testid="transcription-active"]').text()).toContain("30%");
+  });
+
+  it("renders an indeterminate spinner (no percent) while preparing", () => {
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "preparing", progress: null }),
+    };
+    const wrapper = mount(Transcriptions);
+    const active = wrapper.get('[data-testid="transcription-active"]');
+    expect(active.text()).not.toMatch(/\d+%/);
+    expect(wrapper.get('[data-testid="transcription-progress"]').classes()).toContain(
+      "animate-spin",
+    );
+  });
+
+  it("shows the waiting-for-recording label when nothing is active yet", () => {
+    const store = useCaptureStore();
+    store.waitingForRecording = true;
+    const wrapper = mount(Transcriptions);
+    expect(wrapper.text()).toContain("Waiting for the recording to finish…");
+    expect(wrapper.find('[data-testid="transcription-progress"]').exists()).toBe(false);
+  });
+
+  it("renders a queued job with a cancel button", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "b.mp3": job({ mp3: "b.mp3", name: "Idea", phase: "queued", progress: null }),
+    };
+    const wrapper = mount(Transcriptions);
+
+    const queuedSection = wrapper.get('[data-testid="transcription-queued"]');
+    expect(queuedSection.text()).toContain("Idea");
+    expect(queuedSection.text()).toContain("Waiting");
+
+    await queuedSection.get('[data-testid="transcription-cancel"]').trigger("click");
+    await flushPromises();
+    expect(calls).toContainEqual({
+      cmd: "cancel_transcription",
+      args: { path: "b.mp3" },
+    });
+  });
+
+  it("renders finished jobs: done -> Open, failed -> error + Re-transcribe, cancelled -> Re-transcribe", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+    });
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "done.mp3": job({
+        mp3: "done.mp3",
+        name: "Standup",
+        phase: "done",
+        progress: 1,
+        startedAtMs: 3000,
+      }),
+      "failed.mp3": job({
+        mp3: "failed.mp3",
+        name: "Oops",
+        phase: "failed",
+        progress: null,
+        error: "boom",
+        startedAtMs: 2000,
+      }),
+      "cancelled.mp3": job({
+        mp3: "cancelled.mp3",
+        name: "Skipped",
+        phase: "cancelled",
+        progress: null,
+        startedAtMs: 1000,
+      }),
+    };
+    const wrapper = mount(Transcriptions);
+    const finished = wrapper.get('[data-testid="transcription-finished"]');
+    expect(finished.text()).toContain("Standup");
+    expect(finished.text()).toContain("Oops");
+    expect(finished.text()).toContain("boom");
+    expect(finished.text()).toContain("Skipped");
+
+    const openButtons = finished.findAll('[data-testid="transcription-open"]');
+    const retryButtons = finished.findAll('[data-testid="transcription-retranscribe"]');
+    expect(openButtons).toHaveLength(1);
+    expect(retryButtons).toHaveLength(2);
+
+    await openButtons[0]!.trigger("click");
+    await flushPromises();
+    expect(calls).toContainEqual({
+      cmd: "open_transcript",
+      args: { path: "done.mp3" },
+    });
+
+    await retryButtons[0]!.trigger("click");
+    await flushPromises();
+    expect(calls).toContainEqual({
+      cmd: "retranscribe",
+      args: { path: "failed.mp3" },
+    });
+
+    await retryButtons[1]!.trigger("click");
+    await flushPromises();
+    expect(calls).toContainEqual({
+      cmd: "retranscribe",
+      args: { path: "cancelled.mp3" },
+    });
+  });
+
+  it("shows a stuck hint only once a transcribing job's progress has stalled past the threshold", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "transcribing", progress: 0.5, startedAtMs: 0 }),
+    };
+    const wrapper = mount(Transcriptions);
+    expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(false);
+
+    vi.advanceTimersByTime(90_000);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(false);
+
+    // A repeated, unchanged progress event (whisper re-reporting the same %)
+    // must NOT reset the stuck clock.
+    store.upsert("a.mp3", { phase: "transcribing", progress: 0.5 });
+    await wrapper.vm.$nextTick();
+
+    vi.advanceTimersByTime(40_000); // 130s since the first observation
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(true);
+  });
+
+  it("clears the stuck hint once real progress arrives, restarting the clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "transcribing", progress: 0.5, startedAtMs: 0 }),
+    };
+    const wrapper = mount(Transcriptions);
+
+    vi.advanceTimersByTime(110_000);
+    store.upsert("a.mp3", { phase: "transcribing", progress: 0.6 }); // genuine advance
+    await wrapper.vm.$nextTick();
+
+    vi.advanceTimersByTime(110_000); // only 110s since the real advance
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="transcription-stuck-hint"]').exists()).toBe(false);
+  });
+});

@@ -334,4 +334,28 @@ describe("ActionPanel", () => {
     expect(wrapper.get("h1").text()).toBe("Recordings");
     expect(wrapper.text()).toContain("No recordings yet.");
   });
+
+  it("renders the Transcriptions view with its title", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openTranscriptions();
+    const wrapper = mount(ActionPanel);
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Transcriptions");
+    expect(wrapper.text()).toContain("No transcriptions yet.");
+  });
+
+  it("shows a back button (not the settings gear) on the Transcriptions view, returning to the list", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openTranscriptions();
+    const wrapper = mount(ActionPanel);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("list");
+    expect(wrapper.text()).toContain("Personal");
+  });
 });
