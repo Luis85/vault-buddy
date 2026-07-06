@@ -24,7 +24,10 @@ export interface CaptureRenamed {
 export interface CaptureSaved {
   mp3: string;
   note: string | null;
-  endedEarly: boolean;
+  /** Optional: Task 12's backend adds these for an early-stopped save; an
+   * older/plain emitter sending neither must stay valid and quiet. */
+  endedEarly?: boolean;
+  warning?: string | null;
 }
 
 export interface CaptureTranscribed {
@@ -33,6 +36,13 @@ export interface CaptureTranscribed {
 }
 
 export interface CaptureTranscribeFailed {
+  mp3: string;
+  message: string;
+}
+
+/** A Complete/hand-edited transcript we refused to overwrite — a warning,
+ * not a failure (the sidecar the user already has is preserved). */
+export interface CaptureTranscribeSkipped {
   mp3: string;
   message: string;
 }

@@ -9,6 +9,7 @@ import type {
   CaptureStatus,
   CaptureTranscribed,
   CaptureTranscribeFailed,
+  CaptureTranscribeSkipped,
   ModelDownload,
   ModelReady,
   Phase,
@@ -181,6 +182,14 @@ export const useCaptureStore = defineStore("capture", {
         this.lastSaved = { mp3: event.payload.mp3, note: event.payload.note };
         this.renameError = null;
         this.armRenameExpiry();
+        // Task 12's backend (not yet shipped) carries the early-stop reason
+        // on this same event — both fields are optional so today's plain
+        // { mp3, note } emitter stays valid and silent.
+        if (event.payload.endedEarly || event.payload.warning) {
+          useNotificationsStore().warning(
+            `Recording ended early: ${event.payload.warning ?? "saved what we had"}`,
+          );
+        }
       });
       await listen<{ message: string }>("capture:failed", (event) => {
         this.resetRecordingState();
@@ -216,6 +225,14 @@ export const useCaptureStore = defineStore("capture", {
         const { mp3, message } = event.payload;
         this.upsert(mp3, { phase: "failed", error: message, progress: null });
         useNotificationsStore().error(`Transcription failed: ${message}`);
+      });
+      // A Complete/hand-edited transcript we refused to overwrite: a
+      // complete transcript DOES exist (phase "done", like a real write),
+      // but it's the user's own file, not a fresh transcription — warn
+      // rather than staying silent so they know it was preserved.
+      await listen<CaptureTranscribeSkipped>("capture:transcribeSkipped", (event) => {
+        this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
+        useNotificationsStore().warning(event.payload.message);
       });
       await listen<ModelDownload>("capture:modelDownload", (event) => {
         const { mp3, model, received, total } = event.payload;

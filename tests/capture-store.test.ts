@@ -471,6 +471,65 @@ describe("capture store", () => {
     });
   });
 
+  it("a normal save raises no warning notification", async () => {
+    // Regression: endedEarly/warning are optional fields Task 12's backend
+    // will add — today's emitter still sends plain { mp3, note, endedEarly:
+    // false } and must not spuriously warn.
+    mockIPC(() => undefined);
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.init();
+    state.eventHandlers["capture:saved"]!({
+      payload: { mp3: "/v/a.mp3", note: null, endedEarly: false },
+    });
+    expect(notes.items.some((i) => i.kind === "warning")).toBe(false);
+  });
+
+  it("an early-stopped save raises a warning with the reason", async () => {
+    mockIPC(() => undefined);
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.init();
+    state.eventHandlers["capture:saved"]!({
+      payload: {
+        mp3: "/v/a.mp3",
+        note: null,
+        endedEarly: true,
+        warning: "recording ended early: disk full",
+      },
+    });
+    expect(
+      notes.items.some(
+        (i) => i.kind === "warning" && i.message.includes("disk full"),
+      ),
+    ).toBe(true);
+  });
+
+  it("transcribeSkipped keeps the transcript complete and warns", async () => {
+    mockIPC((cmd) =>
+      cmd === "capture_status"
+        ? { recording: false, vaultId: null, startedAtMs: null }
+        : { active: null, queued: [], waitingForRecording: false },
+    );
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.init();
+    state.eventHandlers["capture:transcribeSkipped"]!({
+      payload: {
+        mp3: "/v/a.mp3",
+        message: "kept your existing transcript — not overwritten",
+      },
+    });
+    expect(capture.transcriptions["/v/a.mp3"].phase).toBe("done");
+    expect(
+      notes.items.some(
+        (i) =>
+          i.kind === "warning" &&
+          i.message.includes("kept your existing transcript"),
+      ),
+    ).toBe(true);
+  });
+
   it("rename window expires after 30s", async () => {
     vi.useFakeTimers();
     mockIPC(() => undefined);
