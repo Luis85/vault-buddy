@@ -59,7 +59,18 @@ describe("BuddyRoot", () => {
     const capture = useCaptureStore();
     // transcription is the buddy's "working" state — it should run/pulse, not
     // just show the dot. Driven from the capture store, like recording/paused.
-    capture.transcribing = true;
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
     await wrapper.vm.$nextTick();
     expect(wrapper.find("button.buddy").classes()).toContain("working");
   });

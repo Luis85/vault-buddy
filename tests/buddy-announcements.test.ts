@@ -68,21 +68,127 @@ describe("useBuddyAnnouncements", () => {
     const capture = useCaptureStore();
     capture.lastSavedFile = "/v/2026/07/a.mp3";
     await wrapper.vm.$nextTick();
-    capture.transcribing = true;
+    capture.transcriptions = {
+      "/v/2026/07/a.mp3": {
+        mp3: "/v/2026/07/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
     await wrapper.vm.$nextTick();
-    capture.lastTranscribed = { mp3: "/v/2026/07/a.mp3" };
+    capture.transcriptions = {
+      "/v/2026/07/a.mp3": {
+        ...capture.transcriptions["/v/2026/07/a.mp3"],
+        phase: "done",
+        progress: 1,
+      },
+    };
     await wrapper.vm.$nextTick();
     expect(spoken.some((t) => t.includes("saved"))).toBe(true);
     expect(spoken.some((t) => t.includes("Writing it down"))).toBe(true);
     expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(true);
   });
 
-  it("announces a transcription failure once", async () => {
+  it("stays quiet for a skipped (kept-existing) transcript, but still announces a genuine finish", async () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();
-    capture.transcriptError = "model missing";
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
     await wrapper.vm.$nextTick();
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        ...capture.transcriptions["/v/a.mp3"],
+        phase: "done",
+        progress: 1,
+        skipped: true,
+      },
+    };
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(false);
+
+    // A genuine (non-skipped) finish for a different job still announces —
+    // the suppression must be specific to skipped jobs, not all "done"s.
+    capture.transcriptions = {
+      ...capture.transcriptions,
+      "/v/b.mp3": {
+        mp3: "/v/b.mp3",
+        vaultId: "v1",
+        name: "b",
+        phase: "done",
+        progress: 1,
+        model: null,
+        error: null,
+        startedAtMs: Date.now() + 1,
+      },
+    };
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(true);
+  });
+
+  it("announces a transcription failure once, speaking its reason", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "failed",
+        progress: null,
+        model: null,
+        error: "model missing",
+        startedAtMs: Date.now(),
+      },
+    };
+    await wrapper.vm.$nextTick();
+    // The job's specific reason replaces the generic line, spoken exactly once.
+    expect(spoken.filter((t) => t.includes("model missing"))).toHaveLength(1);
+    expect(spoken.some((t) => t.includes("didn't work"))).toBe(false);
+  });
+
+  it("falls back to the generic failure line when a failed job has no reason", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "/v/b.mp3": {
+        mp3: "/v/b.mp3",
+        vaultId: "v1",
+        name: "b",
+        phase: "failed",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("didn't work"))).toBe(true);
     expect(spoken.filter((t) => t.includes("didn't work"))).toHaveLength(1);
+  });
+
+  it("announces the capture error's reason, not the generic line", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.error = "disk is full";
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("disk is full"))).toBe(true);
+    expect(spoken.some((t) => t.includes("didn't work"))).toBe(false);
+    expect(spoken.filter((t) => t.includes("disk is full"))).toHaveLength(1);
   });
 
   it("stays silent when Buddy messages is off", async () => {
@@ -90,8 +196,22 @@ describe("useBuddyAnnouncements", () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();
     capture.status = "recording";
-    capture.transcribing = true;
-    capture.transcriptError = "boom";
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
+    await wrapper.vm.$nextTick();
+    capture.transcriptions = {
+      "/v/a.mp3": { ...capture.transcriptions["/v/a.mp3"], phase: "failed", error: "boom" },
+    };
     await wrapper.vm.$nextTick();
     expect(spoken).toEqual([]);
   });

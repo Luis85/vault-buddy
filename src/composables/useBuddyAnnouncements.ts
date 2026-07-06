@@ -53,31 +53,42 @@ export function useBuddyAnnouncements(): void {
       }
     },
   );
+  // `activeTranscription` is non-null while a job occupies the worker (the
+  // old singular `transcribing` flag, now derived from the per-job map).
   watch(
-    () => capture.transcribing,
-    (transcribing) => {
-      if (transcribing) announce(transcribingMessage());
+    () => capture.activeTranscription !== null,
+    (active) => {
+      if (active) announce(transcribingMessage());
     },
   );
+  // A recording failure sets `error`. A transcription's outcome is now a
+  // phase on its job rather than a separate singular field — watch the
+  // newest finished job's (mp3, phase) as one primitive so an unrelated
+  // re-render can't retrigger it, and branch on phase so success/failure
+  // still announce exactly once each (never both for the same job).
   watch(
-    () => capture.lastTranscribed,
-    (done, prev) => {
-      if (done && done !== prev) announce(transcribedMessage());
+    () => {
+      const job = capture.finishedTranscriptions[0];
+      return job ? `${job.mp3}:${job.phase}` : null;
+    },
+    (curr, prev) => {
+      if (!curr || curr === prev) return;
+      const job = capture.finishedTranscriptions[0];
+      if (job?.phase === "done") {
+        // A skipped job (capture:transcribeSkipped) is "done" in the sense
+        // that a complete transcript exists, but nothing was regenerated —
+        // the skip already raised its own "kept your existing transcript…"
+        // notification, so the cheery "ready" line would be redundant.
+        if (!job.skipped) announce(transcribedMessage());
+      } else if (job?.phase === "failed") {
+        announce(failureMessage(job.error ?? undefined));
+      }
     },
   );
-  // A recording failure sets `error`; a transcription failure sets
-  // `transcriptError`. They are distinct fields, so a single failure announces
-  // once (never both).
   watch(
     () => capture.error,
     (err, prev) => {
-      if (err && err !== prev) announce(failureMessage());
-    },
-  );
-  watch(
-    () => capture.transcriptError,
-    (err, prev) => {
-      if (err && err !== prev) announce(failureMessage());
+      if (err && err !== prev) announce(failureMessage(err));
     },
   );
 }

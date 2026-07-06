@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 const MARKER_PENDING: &str = "vault-buddy-transcript: pending";
 const MARKER_FAILED: &str = "vault-buddy-transcript: failed";
 const MARKER_COMPLETE: &str = "vault-buddy-transcript: complete";
+const MARKER_CANCELLED: &str = "vault-buddy-transcript: cancelled";
 
 pub struct Segment {
     pub start_ms: u64,
@@ -57,6 +58,17 @@ pub fn render_error(mp3_file_name: &str, message: &str) -> String {
     format!(
         "---\n{MARKER_FAILED}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n\
          > [!warning] Transcription failed\n> {flat}\n>\n> This will be retried automatically.\n",
+        yaml_quote(mp3_file_name)
+    )
+}
+
+/// A deliberately-cancelled sidecar. Non-regenerable (like `complete`, unlike
+/// `pending`/`failed`), so the startup scan never re-queues it — but a forced
+/// re-transcribe overwrites it. Same frontmatter/`yaml_quote` discipline.
+pub fn render_cancelled(mp3_file_name: &str) -> String {
+    format!(
+        "---\n{MARKER_CANCELLED}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n\
+         > [!note] Transcription cancelled\n> Re-transcribe from the Recordings list to run it again.\n",
         yaml_quote(mp3_file_name)
     )
 }
@@ -186,6 +198,7 @@ pub enum TranscriptStatus {
     Pending,
     Failed,
     Complete,
+    Cancelled,
 }
 
 impl TranscriptStatus {
@@ -196,6 +209,7 @@ impl TranscriptStatus {
             TranscriptStatus::Pending => "pending",
             TranscriptStatus::Failed => "failed",
             TranscriptStatus::Complete => "complete",
+            TranscriptStatus::Cancelled => "cancelled",
         }
     }
 }
@@ -207,6 +221,7 @@ pub fn transcript_status(mp3: &Path) -> TranscriptStatus {
     match std::fs::read_to_string(transcript_path(mp3)) {
         Ok(c) if c.contains(MARKER_PENDING) => TranscriptStatus::Pending,
         Ok(c) if c.contains(MARKER_FAILED) => TranscriptStatus::Failed,
+        Ok(c) if c.contains(MARKER_CANCELLED) => TranscriptStatus::Cancelled,
         Ok(_) => TranscriptStatus::Complete,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => TranscriptStatus::Missing,
         Err(_) => TranscriptStatus::Missing,
@@ -455,6 +470,20 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_frontmatter_injection_is_escaped() {
+        // Mirrors frontmatter_injection_is_escaped above, for render_cancelled:
+        // a name needing YAML-quoting must produce a safely-quoted sidecar,
+        // not one that breaks out of the frontmatter block.
+        let c = render_cancelled("evil\"\ninjected: true.mp3");
+        assert!(
+            !c.contains("\ninjected:"),
+            "newline must not inject a field"
+        );
+        assert!(c.contains("vault-buddy-transcript: cancelled"));
+        assert!(c.contains(r#"transcript-of: "evil\" injected: true.mp3""#));
+    }
+
+    #[test]
     fn user_edited_sidecar_is_not_regenerable() {
         assert!(!is_regenerable("just some notes the user typed"));
     }
@@ -636,5 +665,42 @@ mod tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(temps.is_empty(), "temp not cleaned: {temps:?}");
+    }
+
+    #[test]
+    fn cancelled_marker_is_not_regenerable_and_classifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-06 0930 Meeting.mp3");
+        let c = render_cancelled("2026-07-06 0930 Meeting.mp3");
+        assert!(c.contains("vault-buddy-transcript: cancelled"));
+        assert!(c.contains(r#"transcript-of: "2026-07-06 0930 Meeting.mp3""#));
+        assert!(
+            !is_regenerable(&c),
+            "cancelled must never be auto-re-queued"
+        );
+        std::fs::write(transcript_path(&mp3), &c).unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Cancelled);
+        assert_eq!(TranscriptStatus::Cancelled.as_dto_str(), "cancelled");
+        assert!(
+            !needs_transcription(&mp3),
+            "cancelled sidecar is not work to do"
+        );
+    }
+
+    #[test]
+    fn scan_skips_a_cancelled_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        let mp3 = month.join("2026-07-06 0930 Meeting.mp3");
+        std::fs::write(&mp3, b"audio").unwrap();
+        std::fs::write(
+            transcript_path(&mp3),
+            render_cancelled("2026-07-06 0930 Meeting.mp3"),
+        )
+        .unwrap();
+        assert!(
+            pending_transcriptions(dir.path()).is_empty(),
+            "a cancelled recording must not backfill"
+        );
     }
 }

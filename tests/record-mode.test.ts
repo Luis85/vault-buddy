@@ -4,8 +4,11 @@ import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import RecordMode from "../src/components/RecordMode.vue";
 import { useVaultsStore } from "../src/stores/vaults";
+import { useNotificationsStore } from "../src/stores/notifications";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
+
+import { logWarning } from "../src/logging";
 
 const mountView = async (mode: "meeting" | "voice-note" = "meeting") => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
@@ -55,5 +58,146 @@ describe("RecordMode", () => {
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
     await flushPromises();
     expect(wrapper.get('[data-testid="mode-meeting"]').classes()).toContain("border-violet-400");
+  });
+
+  it("saves a changed transcription setting to the vault config, preserving the rest", async () => {
+    const cfg = {
+      mode: "meeting",
+      recordingFolder: "Meetings",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: false,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+    };
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") return cfg;
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+
+    const saveCall = calls.find((c) => c.cmd === "set_capture_config");
+    expect(saveCall?.args).toEqual({
+      id: "v1",
+      cfg: { ...cfg, transcribe: true },
+    });
+  });
+
+  it("notifies when saving transcription settings fails", async () => {
+    // Regression: persist()'s catch used to only logWarning — a failed save
+    // had no user-visible signal at all in this view (RecordMode has no
+    // save button/banner of its own, unlike CaptureSettings).
+    const cfg = {
+      mode: "meeting",
+      recordingFolder: "Meetings",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: false,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+    };
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config") return cfg;
+      if (cmd === "set_capture_config") throw new Error("disk full");
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    const notes = useNotificationsStore();
+
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+
+    expect(
+      notes.items.some(
+        (i) =>
+          i.kind === "error" &&
+          i.message.includes("Couldn't save transcription settings") &&
+          i.message.includes("disk full"),
+      ),
+    ).toBe(true);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("transcription settings save failed"),
+    );
+  });
+
+  it("does not persist a transcription toggle made before the config read resolves", async () => {
+    // Regression guard: RecordMode seeds `config` with hardcoded defaults and
+    // renders TranscriptionSettings immediately (recording must never block
+    // on the config read), but the vault's REAL config only lands once
+    // get_capture_config resolves in onMounted. Toggling a transcription
+    // field before that read resolves used to persist() the default-seeded
+    // config to disk — silently clobbering the vault's real
+    // recordingFolder/bitrateKbps/devices/createNote/followUpTemplate — and
+    // the in-flight read would then overwrite config.value with the
+    // pre-persist config anyway, discarding the toggle too. persist() must
+    // stay gated until the real config has loaded (or the load has failed).
+    const cfg = {
+      mode: "voice-note",
+      recordingFolder: "Meetings",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: false,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+    };
+    let resolveConfig!: (v: unknown) => void;
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") {
+        return new Promise((resolve) => {
+          resolveConfig = resolve;
+        });
+      }
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    // Toggle while the config read is still in flight (unresolved).
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+
+    // Now let the real config land.
+    resolveConfig(cfg);
+    await flushPromises();
+
+    // The resolved read must never itself trigger a save either.
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+    // The real config replaced the default-seeded state — the pre-resolve
+    // toggle is superseded by the resolved cfg (transcribe: false), and the
+    // vault's real default mode (voice-note) is now reflected.
+    expect(wrapper.get('[data-testid="mode-voice-note"]').classes()).toContain(
+      "border-violet-400",
+    );
+    expect(
+      wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(false);
+
+    // Once loaded, a toggle persists normally against the real config.
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+    const saveCall = calls.find((c) => c.cmd === "set_capture_config");
+    expect(saveCall?.args).toEqual({
+      id: "v1",
+      cfg: { ...cfg, transcribe: true },
+    });
   });
 });

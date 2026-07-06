@@ -57,6 +57,15 @@ pub struct SessionParams {
     /// at start): seeds the worker's warning so it reaches the note's
     /// event metadata and the final Outcome exactly like a live warning.
     pub start_warning: Option<String>,
+    /// Test-only fault injector: forces the companion-note write below to
+    /// fail instead of touching the filesystem. A real note-write fault
+    /// (permission denied, disk full, …) can't be forced from a test
+    /// without also breaking the mp3 finalize rename just above it, since
+    /// both live in `dir` — cfg(test) so the field never exists in the
+    /// shipped build (`capture_commands.rs`, the real caller, links the
+    /// normal — not test — rlib and so never has to set it).
+    #[cfg(test)]
+    pub force_note_write_failure: bool,
 }
 
 pub struct Outcome {
@@ -410,12 +419,39 @@ fn run_worker(
             follow_up: params.follow_up,
         };
         let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
+        let note_content = render_note(&meta, &mp3_name);
         // Collision-safe: a user or sync client grabbing the reserved
         // note name after the rename must cost us a suffix, not the note.
-        match write_note_collision_safe(&note_path, &render_note(&meta, &mp3_name)) {
+        #[cfg(test)]
+        let write_result: std::io::Result<PathBuf> = if params.force_note_write_failure {
+            // Test-only fault injector (see the SessionParams doc comment):
+            // a real fault can't be forced here without also breaking the
+            // mp3 finalize rename above, since both live in `params.dir`.
+            Err(std::io::Error::other("simulated note write failure (test)"))
+        } else {
+            write_note_collision_safe(&note_path, &note_content)
+        };
+        #[cfg(not(test))]
+        let write_result = write_note_collision_safe(&note_path, &note_content);
+        match write_result {
             Ok(written) => Some(written),
             Err(e) => {
                 log::warn!("capture: note write failed: {e}");
+                // Saved the recording, but the companion note couldn't be
+                // written — surface it through the same Outcome.warning
+                // channel the frontend already turns into a notification.
+                // create_note isn't gated on ended_early/write_error, so a
+                // start-of-session or source-loss warning can already be
+                // sitting in `warning` here; append (matching the
+                // write_error append above) rather than clobbering it, even
+                // though in practice a note-write failure follows the
+                // NORMAL finalize path and rarely coincides with those.
+                let note_warning =
+                    format!("Saved the recording, but the companion note couldn't be written: {e}");
+                warning = Some(match warning {
+                    Some(prior) => format!("{prior}; {note_warning}"),
+                    None => note_warning,
+                });
                 None
             }
         }
@@ -467,6 +503,7 @@ mod tests {
             warn_tx: None,
             level_tx: None,
             start_warning: None,
+            force_note_write_failure: false,
         }
     }
 
@@ -786,5 +823,76 @@ mod tests {
         assert!(!outcome.ended_early, "a fallback is not an early end");
         let note = std::fs::read_to_string(outcome.note.expect("note")).unwrap();
         assert!(note.contains("event:"), "note metadata event: {note}");
+    }
+
+    #[test]
+    fn note_write_failure_surfaces_as_an_outcome_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.force_note_write_failure = true;
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        // The audio path still finalizes even though the note didn't.
+        assert!(outcome.mp3.exists());
+        assert!(outcome.note.is_none(), "note write failed: no note path");
+        let warning = outcome
+            .warning
+            .expect("a failed note write surfaces as an Outcome warning");
+        assert!(
+            warning.contains("Saved the recording, but the companion note couldn't be written"),
+            "warning is the complete, user-ready sentence: {warning}"
+        );
+        assert!(
+            warning.contains("simulated note write failure (test)"),
+            "warning includes the interpolated {{e}} reason, not just the static prefix: {warning}"
+        );
+        assert!(!outcome.ended_early, "a note failure is not an early stop");
+    }
+
+    #[test]
+    fn note_write_failure_appends_to_an_existing_warning_instead_of_clobbering_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut p = params(dir.path());
+        p.start_warning = Some("Configured microphone \"X\" not found".into());
+        p.force_note_write_failure = true;
+        let session = CaptureSession::start(
+            p,
+            vec![SourceInput {
+                name: "mic".into(),
+                rate: 44_100,
+                channels: 1,
+                rx,
+            }],
+        )
+        .unwrap();
+        tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let outcome = session.stop().unwrap();
+        let warning = outcome.warning.expect("warning present");
+        assert!(
+            warning.contains("not found"),
+            "prior warning kept, not clobbered: {warning}"
+        );
+        assert!(
+            warning.contains("Saved the recording, but the companion note couldn't be written"),
+            "note-write warning also present: {warning}"
+        );
+        assert!(
+            warning.contains("simulated note write failure (test)"),
+            "note-write warning includes the interpolated {{e}} reason, not just the static prefix: {warning}"
+        );
     }
 }

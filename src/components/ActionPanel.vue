@@ -7,10 +7,12 @@ import VaultList from "./VaultList.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import RecordingBar from "./RecordingBar.vue";
-import TranscriptionStatus from "./TranscriptionStatus.vue";
+import TranscriptionSummary from "./TranscriptionSummary.vue";
 import RenamePrompt from "./RenamePrompt.vue";
 import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
+import Transcriptions from "./Transcriptions.vue";
+import NotificationHost from "./NotificationHost.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -75,7 +77,9 @@ watch(
                 ? "Recordings"
                 : view === "recordMode"
                   ? "Record"
-                  : "Vaults"
+                  : view === "transcriptions"
+                    ? "Transcriptions"
+                    : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -166,19 +170,7 @@ watch(
       @pause="capture.pause()"
       @resume="capture.resume()"
     />
-    <p
-      v-if="view === 'list' && capture.error"
-      class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
-    >
-      {{ capture.error }}
-    </p>
-    <TranscriptionStatus v-if="view === 'list'" class="mb-2" />
-    <p
-      v-if="view === 'list' && capture.status === 'idle' && capture.warning"
-      class="mb-2 rounded-lg bg-amber-500/15 px-2 py-1 text-xs text-amber-200"
-    >
-      {{ capture.warning }}
-    </p>
+    <TranscriptionSummary v-if="view === 'list'" class="mb-2" />
     <RenamePrompt
       v-if="view === 'list' && capture.lastSaved"
       class="mb-2"
@@ -219,6 +211,12 @@ watch(
         :vault-id="store.recordModeVaultId"
       />
     </div>
+    <div
+      v-else-if="view === 'transcriptions'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Transcriptions />
+    </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
         v-if="filtered.length > 0"
@@ -241,5 +239,6 @@ watch(
         has it been opened at least once?
       </p>
     </div>
+    <NotificationHost />
   </div>
 </template>

@@ -44,7 +44,16 @@ export function transcribedMessage(): string {
   return "Transcript ready! ✨";
 }
 
-/** A recording or transcription failed. */
-export function failureMessage(): string {
-  return "Hmm, that didn't work 😕";
+/** Cuts `s` to at most `n` characters, appending an ellipsis when it does. */
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+/**
+ * A recording or transcription failed. With a `reason` (the backend's error
+ * message), the buddy speaks it — truncated so a long/unbounded backend
+ * message can't blow out the speech bubble — instead of the generic line.
+ */
+export function failureMessage(reason?: string): string {
+  return reason ? `Hmm — ${truncate(reason, 60)} 😕` : "Hmm, that didn't work 😕";
 }

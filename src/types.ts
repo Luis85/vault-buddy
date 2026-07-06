@@ -24,7 +24,14 @@ export interface CaptureRenamed {
 export interface CaptureSaved {
   mp3: string;
   note: string | null;
-  endedEarly: boolean;
+  /** Already emitted (since increment 3): true when the recording was
+   * stopped early (e.g. disk full) rather than a normal user-initiated stop. */
+  endedEarly?: boolean;
+  /** Dual-purpose, backend-formed text meant to be shown verbatim: an
+   * early-stop reason (endedEarly: true) or — pending a backend change — a
+   * post-save issue such as a failed companion note (endedEarly: false).
+   * Optional so an older/plain emitter sending neither stays valid and quiet. */
+  warning?: string | null;
 }
 
 export interface CaptureTranscribed {
@@ -37,10 +44,56 @@ export interface CaptureTranscribeFailed {
   message: string;
 }
 
+/** A Complete/hand-edited transcript we refused to overwrite — a warning,
+ * not a failure (the sidecar the user already has is preserved). */
+export interface CaptureTranscribeSkipped {
+  mp3: string;
+  message: string;
+}
+
 export interface ModelDownload {
+  mp3: string;
   model: string;
   received: number;
   total: number | null;
+}
+
+export type Phase = "queued" | "downloading" | "preparing" | "transcribing" | "done" | "failed" | "cancelled";
+
+export interface TranscriptionJob {
+  mp3: string;
+  vaultId: string;
+  name: string;
+  phase: Phase;
+  progress: number | null;
+  model: string | null;
+  error: string | null;
+  startedAtMs: number | null;
+  /** True when a "done" job is a preserved existing transcript we chose not
+   * to overwrite (capture:transcribeSkipped) rather than a freshly
+   * regenerated one. Lets the buddy skip its "ready" announcement (the skip
+   * already raised its own notification) without changing how a "done" job
+   * renders in the Recordings/Transcriptions lists. */
+  skipped?: boolean;
+}
+
+export interface TranscriptionQueueStatus {
+  active: { mp3: string; vaultId: string; phase: "downloading" | "preparing" | "transcribing"; progress: number; received: number | null; total: number | null; startedAtMs: number } | null;
+  queued: { mp3: string; vaultId: string }[];
+  waitingForRecording: boolean;
+}
+
+export interface TranscribeProgress {
+  mp3: string;
+  progress: number;
+}
+
+export interface ModelReady {
+  mp3: string;
+}
+
+export interface TranscribeCancelled {
+  mp3: string;
 }
 
 export interface CaptureConfig {
@@ -76,5 +129,5 @@ export interface Recording {
   /** Recording type from the companion note; null → "Ungrouped". */
   type: string | null;
   /** Sidecar state — drives the row indicator + re-transcribe confirm. */
-  transcriptStatus: "none" | "pending" | "failed" | "complete";
+  transcriptStatus: "none" | "pending" | "failed" | "complete" | "cancelled";
 }

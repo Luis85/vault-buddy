@@ -9,10 +9,47 @@ pub mod model;
 
 use vault_buddy_core::transcript::Segment;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// A shared abort flag polled by whisper's abort callback and checked between
+/// stages. Cloning shares the flag (Arc), so the shell holds one and the
+/// engine another.
+#[derive(Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// Cancel and failure are different outcomes: cancel writes a `cancelled`
+/// sidecar (no scary toast, no auto-retry); failure writes a retryable `failed`.
+#[derive(Debug)]
+pub enum TranscribeError {
+    Cancelled,
+    Failed(String),
+}
+
 /// A speech-to-text backend. `samples` are 16 kHz mono f32 in [-1, 1];
-/// `language` is an ISO code (e.g. "es") or None to auto-detect.
+/// `language` is an ISO code (e.g. "es") or None to auto-detect. `cancel` is
+/// polled by the engine's abort callback (an aborted run returns `Err`, which
+/// `transcribe_recording` disambiguates via the token); `on_progress` is the
+/// engine's 0-100 percent callback, forwarded as-is.
 pub trait Transcriber {
-    fn transcribe(&self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>, String>;
+    fn transcribe(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        cancel: &CancelToken,
+        on_progress: Box<dyn FnMut(i32) + Send>,
+    ) -> Result<Vec<Segment>, String>;
 }
 
 pub struct TranscribeOptions {
@@ -24,25 +61,68 @@ pub struct TranscribeOptions {
 use std::path::{Path, PathBuf};
 use vault_buddy_core::transcript::{self, TranscriptMeta};
 
+/// The non-error result of a transcription attempt. Decoding and inference
+/// both succeeding is not the same as the sidecar actually changing: a
+/// finished (`complete`) or hand-edited transcript is deliberately left
+/// alone (see `transcript::replace_if_ours`). `SkippedForeign` lets the
+/// caller tell that apart from a real write instead of reporting a lying
+/// blanket "success" for both.
+#[derive(Debug)]
+pub enum TranscribeOutcome {
+    Written(PathBuf),
+    SkippedForeign(PathBuf),
+}
+
 /// Decode → transcribe → atomically replace the sidecar with the finished
 /// transcript. `generated_at` (RFC3339) is passed in so this stays
-/// clock-free and testable. On any error the sidecar is left as-is (the
-/// caller writes a retryable `failed` note); a `complete` transcript is only
-/// ever written on success. `force` (the explicit re-transcribe path)
-/// overwrites even a finished `complete` sidecar via `force_write_sidecar`;
-/// otherwise the write goes through `replace_if_ours`, which never clobbers a
-/// non-regenerable transcript.
+/// clock-free and testable. `cancel`/`on_progress` are threaded into the
+/// engine: cancellation is checked cheaply after decode (before paying for
+/// inference) and, since an aborted `full()` also returns `Err`, the error
+/// branch consults the token to tell a real engine failure apart from an
+/// abort. Either way the sidecar is left as-is (the caller writes a
+/// `cancelled`/retryable `failed` note); a `complete` transcript is only ever
+/// written on success. `force` (the explicit re-transcribe path) overwrites
+/// even a finished `complete` sidecar via `force_write_sidecar`; otherwise
+/// the write goes through `replace_if_ours`, which never clobbers a
+/// non-regenerable transcript — reported back as `TranscribeOutcome::SkippedForeign`
+/// rather than silently folded into `Written`.
 pub fn transcribe_recording(
     mp3: &Path,
     transcriber: &dyn Transcriber,
     opts: &TranscribeOptions,
     generated_at: &str,
     force: bool,
-) -> Result<PathBuf, String> {
+    cancel: &CancelToken,
+    on_progress: Box<dyn FnMut(i32) + Send>,
+) -> Result<TranscribeOutcome, TranscribeError> {
     let started = std::time::Instant::now();
-    let samples = decode::decode_to_16k_mono(mp3)?;
+    let samples = decode::decode_to_16k_mono(mp3).map_err(TranscribeError::Failed)?;
+    if cancel.is_cancelled() {
+        return Err(TranscribeError::Cancelled); // cheap to bail before inference
+    }
     let duration_secs = samples.len() as u64 / decode::WHISPER_RATE as u64;
-    let segments = transcriber.transcribe(&samples, opts.language.as_deref())?;
+    // Honest logging: the log never goes dark on inference start again.
+    log::info!(
+        "transcribe: inference start {} ({duration_secs}s audio)",
+        mp3.display()
+    );
+    let segments =
+        match transcriber.transcribe(&samples, opts.language.as_deref(), cancel, on_progress) {
+            Ok(s) => s,
+            // An aborted full() returns Err; the token says whether it was us.
+            Err(e) => {
+                return Err(if cancel.is_cancelled() {
+                    TranscribeError::Cancelled
+                } else {
+                    TranscribeError::Failed(e)
+                })
+            }
+        };
+    log::info!(
+        "transcribe: inference done {} in {}s",
+        mp3.display(),
+        started.elapsed().as_secs()
+    );
     // Wall-clock of the actual work (decode + inference). Measured here, not in
     // core, so render_transcript stays clock-free and deterministic.
     let processing_secs = started.elapsed().as_secs();
@@ -64,31 +144,39 @@ pub fn transcribe_recording(
     if force {
         // Explicit re-transcribe: overwrite even a finished sidecar.
         transcript::force_write_sidecar(&path, &content)
-            .map_err(|e| format!("write transcript: {e}"))?;
-    } else {
-        match transcript::replace_if_ours(&path, &content)
-            .map_err(|e| format!("write transcript: {e}"))?
-        {
-            transcript::ReplaceOutcome::Written => {}
-            transcript::ReplaceOutcome::SkippedForeign => {
-                log::warn!(
-                    "transcribe: left an existing non-regenerable sidecar untouched (not overwritten): {}",
-                    path.display()
-                );
-            }
+            .map_err(|e| TranscribeError::Failed(format!("write transcript: {e}")))?;
+        return Ok(TranscribeOutcome::Written(path));
+    }
+    match transcript::replace_if_ours(&path, &content)
+        .map_err(|e| TranscribeError::Failed(format!("write transcript: {e}")))?
+    {
+        transcript::ReplaceOutcome::Written => Ok(TranscribeOutcome::Written(path)),
+        transcript::ReplaceOutcome::SkippedForeign => {
+            log::warn!(
+                "transcribe: left an existing non-regenerable sidecar untouched (not overwritten): {}",
+                path.display()
+            );
+            Ok(TranscribeOutcome::SkippedForeign(path))
         }
     }
-    Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
     use vault_buddy_core::transcript::{transcript_path, Segment};
 
     struct FakeOk;
     impl Transcriber for FakeOk {
-        fn transcribe(&self, _s: &[f32], _l: Option<&str>) -> Result<Vec<Segment>, String> {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _l: Option<&str>,
+            _c: &CancelToken,
+            mut on_progress: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<Vec<Segment>, String> {
+            on_progress(100); // exercises the forwarder
             Ok(vec![Segment {
                 start_ms: 0,
                 end_ms: 1000,
@@ -98,13 +186,31 @@ mod tests {
     }
     struct FakeErr;
     impl Transcriber for FakeErr {
-        fn transcribe(&self, _s: &[f32], _l: Option<&str>) -> Result<Vec<Segment>, String> {
-            Err("engine exploded".into())
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _l: Option<&str>,
+            cancel: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<Vec<Segment>, String> {
+            // Mirrors whisper: an aborted full() returns Err; the token disambiguates.
+            if cancel.is_cancelled() {
+                return Err("aborted".into());
+            }
+            Err("boom".into())
         }
     }
 
-    fn write_mp3(path: &std::path::Path) {
+    fn noop_progress() -> Box<dyn FnMut(i32) + Send> {
+        Box::new(|_| {})
+    }
+
+    /// Builds a tiny real MP3 inside `dir` and returns its path. Shared by
+    /// every test below (DRY) — encoding is the same fixture regardless of
+    /// which Transcriber fake or cancel state is under test.
+    fn write_tiny_mp3(dir: &std::path::Path) -> PathBuf {
         use mp3lame_encoder::{Bitrate, Builder, FlushNoGap, InterleavedPcm};
+        let mp3 = dir.join("2026-07-04 1405 Meeting.mp3");
         let rate = 44_100u32;
         let frames = rate as usize / 2;
         let mut pcm = Vec::with_capacity(frames * 2);
@@ -131,7 +237,8 @@ mod tests {
             .unwrap();
         out.reserve(7200);
         enc.flush_to_vec::<FlushNoGap>(&mut out).unwrap();
-        std::fs::write(path, out).unwrap();
+        std::fs::write(&mp3, out).unwrap();
+        mp3
     }
 
     fn opts() -> TranscribeOptions {
@@ -145,11 +252,19 @@ mod tests {
     #[test]
     fn transcribe_writes_the_sidecar() {
         let dir = tempfile::tempdir().unwrap();
-        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
-        write_mp3(&mp3);
-        let path = transcribe_recording(&mp3, &FakeOk, &opts(), "2026-07-04T15:00:00+00:00", false)
-            .unwrap();
-        assert_eq!(path, transcript_path(&mp3));
+        let mp3 = write_tiny_mp3(dir.path());
+        let outcome = transcribe_recording(
+            &mp3,
+            &FakeOk,
+            &opts(),
+            "2026-07-04T15:00:00+00:00",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, TranscribeOutcome::Written(p) if p == transcript_path(&mp3)));
+        let path = transcript_path(&mp3);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("vault-buddy-transcript: complete"));
         assert!(text.contains("[00:00:00] hello world"));
@@ -160,10 +275,18 @@ mod tests {
     #[test]
     fn engine_error_leaves_no_complete_transcript() {
         let dir = tempfile::tempdir().unwrap();
-        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
-        write_mp3(&mp3);
-        let err = transcribe_recording(&mp3, &FakeErr, &opts(), "t", false).unwrap_err();
-        assert!(err.contains("engine exploded"));
+        let mp3 = write_tiny_mp3(dir.path());
+        let err = transcribe_recording(
+            &mp3,
+            &FakeErr,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap_err();
+        assert!(matches!(&err, TranscribeError::Failed(msg) if msg.contains("boom")));
         assert!(!transcript_path(&mp3).exists());
     }
 
@@ -172,7 +295,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
         std::fs::write(&mp3, b"this is not a valid mp3 stream at all").unwrap();
-        assert!(transcribe_recording(&mp3, &FakeOk, &opts(), "t", false).is_err());
+        let err = transcribe_recording(
+            &mp3,
+            &FakeOk,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, TranscribeError::Failed(_)));
         assert!(
             !transcript_path(&mp3).exists(),
             "no sidecar when decode fails"
@@ -182,17 +315,157 @@ mod tests {
     #[test]
     fn force_regenerates_a_complete_transcript() {
         let dir = tempfile::tempdir().unwrap();
-        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
-        write_mp3(&mp3);
+        let mp3 = write_tiny_mp3(dir.path());
         let path = transcript_path(&mp3);
         std::fs::write(&path, "---\nvault-buddy-transcript: complete\n---\nOLD").unwrap();
         // Without force, a complete transcript is left untouched...
-        transcribe_recording(&mp3, &FakeOk, &opts(), "t", false).unwrap();
+        let outcome = transcribe_recording(
+            &mp3,
+            &FakeOk,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, TranscribeOutcome::SkippedForeign(p) if p == path));
         assert!(std::fs::read_to_string(&path).unwrap().contains("OLD"));
         // ...with force, it is regenerated.
-        transcribe_recording(&mp3, &FakeOk, &opts(), "t", true).unwrap();
+        let outcome = transcribe_recording(
+            &mp3,
+            &FakeOk,
+            &opts(),
+            "t",
+            true,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, TranscribeOutcome::Written(p) if p == path));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("OLD"));
         assert!(text.contains("hello world"));
+    }
+
+    #[test]
+    fn skips_a_complete_sidecar_and_reports_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let path = transcript_path(&mp3);
+        let original = "---\nvault-buddy-transcript: complete\n---\nOLD";
+        std::fs::write(&path, original).unwrap();
+        let outcome = transcribe_recording(
+            &mp3,
+            &FakeOk,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, TranscribeOutcome::SkippedForeign(p) if p == path),
+            "a non-regenerable sidecar must be reported as skipped, not silently treated as success"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "the existing (foreign) transcript body must remain untouched"
+        );
+    }
+
+    #[test]
+    fn cancel_token_flips() {
+        let t = CancelToken::new();
+        assert!(!t.is_cancelled());
+        t.cancel();
+        assert!(t.is_cancelled());
+        assert!(t.clone().is_cancelled(), "clones share the flag");
+    }
+
+    #[test]
+    fn precancelled_writes_no_complete_sidecar_and_returns_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let r = transcribe_recording(
+            &mp3,
+            &FakeErr,
+            &opts(),
+            "2026-07-06T09:30:00Z",
+            false,
+            &cancel,
+            noop_progress(),
+        );
+        assert!(matches!(r, Err(TranscribeError::Cancelled)));
+        assert!(
+            !transcript_path(&mp3).exists()
+                || !std::fs::read_to_string(transcript_path(&mp3))
+                    .unwrap()
+                    .contains("complete")
+        );
+    }
+
+    #[test]
+    fn failure_is_distinguished_from_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let r = transcribe_recording(
+            &mp3,
+            &FakeErr,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        );
+        assert!(matches!(r, Err(TranscribeError::Failed(_))));
+    }
+
+    #[test]
+    fn precancelled_bails_even_with_a_transcriber_that_would_succeed() {
+        // FakeOk never looks at the cancel token and always returns Ok, so
+        // the only way this can come back Cancelled is the after-decode,
+        // before-inference bail inside transcribe_recording itself — this
+        // isolates that check from the error-branch disambiguation that
+        // `precancelled_writes_no_complete_sidecar_and_returns_cancelled`
+        // (which uses FakeErr) also happens to exercise.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let r = transcribe_recording(&mp3, &FakeOk, &opts(), "t", false, &cancel, noop_progress());
+        assert!(
+            matches!(r, Err(TranscribeError::Cancelled)),
+            "FakeOk ignores the token and would return Ok if the after-decode bail hadn't fired"
+        );
+    }
+
+    #[test]
+    fn on_progress_is_forwarded_to_the_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+        let progress: Box<dyn FnMut(i32) + Send> = Box::new(move |_pct| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+        });
+        transcribe_recording(
+            &mp3,
+            &FakeOk,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            progress,
+        )
+        .unwrap();
+        assert!(
+            calls.load(Ordering::SeqCst) > 0,
+            "on_progress must actually be invoked by the transcriber, not dropped"
+        );
     }
 }

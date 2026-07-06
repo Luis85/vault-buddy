@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { formatDuration } from "../utils/formatDuration";
 
 const props = defineProps<{
   startedAtMs: number | null;
@@ -30,18 +31,9 @@ const elapsed = computed(() => {
     props.paused && props.pausedSinceMs !== null
       ? now.value - props.pausedSinceMs
       : 0;
-  const total = Math.max(
-    0,
-    Math.floor(
-      (now.value - props.startedAtMs - props.pausedTotalMs - openPause) / 1000,
-    ),
+  return formatDuration(
+    now.value - props.startedAtMs - props.pausedTotalMs - openPause,
   );
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return h > 0
-    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-    : `${m}:${String(s).padStart(2, "0")}`;
 });
 
 const label = computed(() => {

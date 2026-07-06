@@ -288,4 +288,12 @@ describe("vaults store", () => {
     await store.refresh();
     expect(store.shownNonce).toBe(before + 1);
   });
+
+  it("opens and backs out of the transcriptions view", () => {
+    const s = useVaultsStore();
+    s.openTranscriptions();
+    expect(s.view).toBe("transcriptions");
+    s.back();
+    expect(s.view).toBe("list");
+  });
 });

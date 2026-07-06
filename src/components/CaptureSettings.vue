@@ -4,26 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
 import SelectMenu from "./SelectMenu.vue";
+import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
 
 const BITRATES = [128, 160, 192];
-const MODELS = ["base", "small", "medium"] as const;
-const LANGUAGES = [
-  { code: "", name: "Auto-detect" },
-  { code: "en", name: "English" },
-  { code: "de", name: "German" },
-  { code: "es", name: "Spanish" },
-  { code: "fr", name: "French" },
-  { code: "it", name: "Italian" },
-  { code: "pt", name: "Portuguese" },
-  { code: "nl", name: "Dutch" },
-  { code: "pl", name: "Polish" },
-  { code: "zh", name: "Chinese" },
-  { code: "ja", name: "Japanese" },
-  { code: "ru", name: "Russian" },
-  { code: "ar", name: "Arabic" },
-] as const;
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -65,13 +50,7 @@ const folderPlaceholder = computed(() =>
   mode.value === "meeting" ? "Meetings" : "Voice Notes",
 );
 
-function capitalize(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// Option lists for the SelectMenu dropdowns ({ value, label }).
-const modelOptions = MODELS.map((m) => ({ value: m, label: capitalize(m) }));
-const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }));
+// Option list for the bitrate SelectMenu dropdown ({ value, label }).
 const bitrateOptions = BITRATES.map((b) => ({ value: b, label: `${b} kbps` }));
 const inputMenuOptions = computed(() => [
   { value: "", label: "System default" },
@@ -81,6 +60,30 @@ const outputMenuOptions = computed(() => [
   { value: "", label: "System default" },
   ...outputOptions.value,
 ]);
+
+// Bundles the four transcription fields for TranscriptionSettings' v-model.
+// The setter fans a merged update back out to the individual refs so
+// save()/onMounted()/watch (below) keep working on them unchanged — this
+// computed is purely an adapter for the extracted controlled component.
+const transcriptionSettings = computed({
+  get: () => ({
+    transcribe: transcribe.value,
+    transcriptionModel: transcriptionModel.value,
+    transcriptionLanguage: transcriptionLanguage.value,
+    transcriptTimestamps: transcriptTimestamps.value,
+  }),
+  set: (v: {
+    transcribe: boolean;
+    transcriptionModel: string;
+    transcriptionLanguage: string;
+    transcriptTimestamps: boolean;
+  }) => {
+    transcribe.value = v.transcribe;
+    transcriptionModel.value = v.transcriptionModel;
+    transcriptionLanguage.value = v.transcriptionLanguage;
+    transcriptTimestamps.value = v.transcriptTimestamps;
+  },
+});
 
 // Any edit invalidates the "Saved ✓" confirmation. During the initial load
 // saveState is already "idle", so the load-time assignments are idle→idle
@@ -247,52 +250,7 @@ async function save() {
         class="h-4 w-4 accent-violet-500"
       />
     </div>
-    <section class="flex items-center justify-between">
-      <label for="capture-transcribe-toggle" class="text-sm text-slate-200">
-        Transcribe recordings
-        <span class="block text-xs text-slate-500">Local speech-to-text · no cloud</span>
-      </label>
-      <input
-        id="capture-transcribe-toggle"
-        v-model="transcribe"
-        data-testid="transcribe-toggle"
-        type="checkbox"
-        class="h-4 w-4 accent-violet-500"
-      />
-    </section>
-    <div v-if="transcribe" class="flex flex-col gap-3 border-l border-white/10 pl-3">
-      <section class="flex items-center justify-between gap-2">
-        <label for="capture-transcription-model" class="text-sm text-slate-200">Model</label>
-        <SelectMenu
-          id="capture-transcription-model"
-          v-model="transcriptionModel"
-          :options="modelOptions"
-          data-testid="transcription-model-select"
-        />
-      </section>
-      <section class="flex items-center justify-between gap-2">
-        <label for="capture-transcription-language" class="text-sm text-slate-200">Language</label>
-        <SelectMenu
-          id="capture-transcription-language"
-          v-model="transcriptionLanguage"
-          :options="languageOptions"
-          data-testid="transcription-language-select"
-        />
-      </section>
-      <section class="flex items-center justify-between">
-        <label for="capture-transcript-timestamps-toggle" class="text-sm text-slate-200">
-          Timestamps
-          <span class="block text-xs text-slate-500">Insert time markers in the transcript</span>
-        </label>
-        <input
-          id="capture-transcript-timestamps-toggle"
-          v-model="transcriptTimestamps"
-          data-testid="transcript-timestamps-toggle"
-          type="checkbox"
-          class="h-4 w-4 accent-violet-500"
-        />
-      </section>
-    </div>
+    <TranscriptionSettings v-model="transcriptionSettings" />
     <section class="flex items-center justify-between gap-2">
       <label for="capture-bitrate" class="text-sm text-slate-200">Bitrate</label>
       <SelectMenu

@@ -1,7 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -10,7 +11,9 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery, recordings, transcript, uri};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
-use vault_buddy_transcribe::{transcribe_recording, TranscribeOptions};
+use vault_buddy_transcribe::{
+    transcribe_recording, CancelToken, TranscribeError, TranscribeOptions, TranscribeOutcome,
+};
 
 pub struct ActiveCapture {
     pub control_tx: Sender<Control>,
@@ -41,12 +44,48 @@ struct TranscriptionJob {
     force: bool,
 }
 
+/// A coarse stage for the job currently being processed, surfaced to the UI
+/// (Task 4) via `as_str()`. `Downloading` carries live byte counts — it's the
+/// only stage with a percentage of its own before inference's 0-100 progress
+/// starts.
+#[derive(Clone)]
+enum Phase {
+    Downloading { received: u64, total: Option<u64> },
+    Preparing,
+    Transcribing,
+}
+impl Phase {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Phase::Downloading { .. } => "downloading",
+            Phase::Preparing => "preparing",
+            Phase::Transcribing => "transcribing",
+        }
+    }
+}
+
+/// The job currently being processed, published under the queue mutex so a
+/// future cancel command (Task 4) always has a `CancelToken` to flip.
+/// `progress` is written lock-free (`Ordering::Relaxed`) from the whisper
+/// progress callback in `process_transcription` — that callback must never
+/// take the queue mutex, only this atomic plus `app.emit`.
+struct ActiveJob {
+    mp3: PathBuf,
+    vault_id: String,
+    cancel: CancelToken,
+    started_at_ms: u64,
+    phase: Phase,
+    progress: Arc<AtomicU8>, // 0..100 inference %, written lock-free from the callback
+}
+
 #[derive(Default)]
 struct TranscriptionQueue {
     pending: VecDeque<TranscriptionJob>,
     /// Paths currently queued or in flight — dedupes the save-time enqueue
     /// against the startup/late-recovery scans.
     known: HashSet<PathBuf>,
+    /// The job the worker is presently on; None between jobs and at idle.
+    active: Option<ActiveJob>,
 }
 
 /// Background transcription queue. One worker (see `run_transcription`)
@@ -60,7 +99,7 @@ pub struct TranscriptionState {
 
 fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
     let state = app.state::<TranscriptionState>();
-    let mut guard = state.inner.lock().unwrap();
+    let mut guard = lock_ignoring_poison(&state.inner);
     if guard.known.insert(job.mp3.clone()) {
         log::info!("transcribe: queued {}", job.mp3.display());
         guard.pending.push_back(job);
@@ -128,10 +167,13 @@ fn emit_saved(app: &AppHandle, outcome: &Outcome) {
             "mp3": outcome.mp3.to_string_lossy(),
             "note": outcome.note.as_ref().map(|p| p.to_string_lossy().into_owned()),
             "endedEarly": outcome.ended_early,
+            "warning": outcome.warning,
         }),
     );
     // Source-loss warnings were already emitted live via warn_tx; here the
-    // outcome only feeds the note metadata and the ended-early toast copy.
+    // outcome also feeds the note metadata, the ended-early toast copy, and
+    // (serialized string-or-null) the `warning` field — e.g. a failed
+    // companion-note write — which the panel shows as its own notification.
     let body = if outcome.ended_early {
         format!("Recording ended early — saved {file_name}")
     } else {
@@ -987,41 +1029,50 @@ pub fn run_recovery(app: &AppHandle) {
 /// is-recording gate).
 pub fn run_transcription(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        // Backfill: transcribe anything already on disk missing a transcript
-        // (previous-session saves, crash-recovered captures, freshly enabled
-        // vaults).
-        scan_and_enqueue(&app);
-        let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
-        loop {
-            // Block until a job is available; peek without claiming it.
-            let job = {
-                let state = app.state::<TranscriptionState>();
-                let mut guard = state.inner.lock().unwrap();
-                while guard.pending.is_empty() {
-                    guard = state.cv.wait(guard).unwrap();
+    std::thread::Builder::new()
+        .name("transcribe-worker".into())
+        .spawn(move || {
+            // Backfill: transcribe anything already on disk missing a transcript
+            // (previous-session saves, crash-recovered captures, freshly enabled
+            // vaults).
+            scan_and_enqueue(&app);
+            let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
+            loop {
+                // Block until a job is available; peek without claiming it.
+                let job = {
+                    let state = app.state::<TranscriptionState>();
+                    let mut guard = state.inner.lock().unwrap();
+                    while guard.pending.is_empty() {
+                        guard = state.cv.wait(guard).unwrap();
+                    }
+                    guard.pending.front().cloned().unwrap()
+                };
+                // Never contend with a live recording for CPU — re-check soon.
+                if is_recording(&app) {
+                    std::thread::sleep(Duration::from_secs(30));
+                    continue;
                 }
-                guard.pending.front().cloned().unwrap()
-            };
-            // Never contend with a live recording for CPU — re-check soon.
-            if is_recording(&app) {
-                std::thread::sleep(Duration::from_secs(30));
-                continue;
+                {
+                    let state = app.state::<TranscriptionState>();
+                    state.inner.lock().unwrap().pending.pop_front();
+                }
+                process_transcription(&app, &job, &mut loaded);
+                // Drop from the dedupe set: success leaves a `complete` sidecar
+                // (won't rescan); failure leaves a `failed` one (a later
+                // launch's scan or a manual retry re-queues it). Clear the
+                // active-job slot the same way, under the same lock — this
+                // runs after every `process_transcription` return path
+                // (success, failure, or an early-return on a bad model/load),
+                // so it's the one place that needs to clear `active`.
+                {
+                    let state = app.state::<TranscriptionState>();
+                    let mut guard = state.inner.lock().unwrap();
+                    guard.known.remove(&job.mp3);
+                    guard.active = None;
+                }
             }
-            {
-                let state = app.state::<TranscriptionState>();
-                state.inner.lock().unwrap().pending.pop_front();
-            }
-            process_transcription(&app, &job, &mut loaded);
-            // Drop from the dedupe set: success leaves a `complete` sidecar
-            // (won't rescan); failure leaves a `failed` one (a later launch's
-            // scan or a manual retry re-queues it).
-            {
-                let state = app.state::<TranscriptionState>();
-                state.inner.lock().unwrap().known.remove(&job.mp3);
-            }
-        }
-    });
+        })
+        .expect("failed to spawn transcribe-worker thread");
 }
 
 /// Enqueue every capture recording still needing a transcript, across all
@@ -1058,6 +1109,19 @@ fn scan_and_enqueue(app: &AppHandle) {
     }
 }
 
+/// Lock `TranscriptionState` just long enough to set the active job's phase
+/// (a no-op if the queue is idle, e.g. a cancel raced this) — the ~3×
+/// repeated lock/set/unlock block behind `Phase::Downloading`/`Preparing`/
+/// `Transcribing`. Dedupe only: the phase-change event itself is still
+/// emitted by each caller, right after this returns, never under the lock.
+fn set_phase(app: &AppHandle, phase: Phase) {
+    let state = app.state::<TranscriptionState>();
+    let mut guard = state.inner.lock().unwrap();
+    if let Some(active) = guard.active.as_mut() {
+        active.phase = phase;
+    }
+}
+
 fn process_transcription(
     app: &AppHandle,
     job: &TranscriptionJob,
@@ -1070,6 +1134,28 @@ fn process_transcription(
         return;
     }
     let tier = ModelTier::from_str(&cfg.transcription_model);
+
+    // Publish the active job BEFORE any observable work starts, so a future
+    // cancel command (Task 4) always has a token to flip. The mutex hold is
+    // brief — just the insert — never across the download/model-load/
+    // inference that follows. `cancel`/`progress` are kept as locals too
+    // (not re-read from `active` later) — they share state with the clones
+    // stored below via CancelToken's/Arc's Clone, so either handle works.
+    let started_at_ms = now_ms();
+    let cancel = CancelToken::new();
+    let progress = Arc::new(AtomicU8::new(0));
+    {
+        let state = app.state::<TranscriptionState>();
+        let mut guard = state.inner.lock().unwrap();
+        guard.active = Some(ActiveJob {
+            mp3: job.mp3.clone(),
+            vault_id: job.vault_id.clone(),
+            cancel: cancel.clone(),
+            started_at_ms,
+            phase: Phase::Preparing,
+            progress: progress.clone(),
+        });
+    }
     let _ = app.emit(
         "capture:transcribing",
         serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "vaultId": job.vault_id }),
@@ -1100,10 +1186,19 @@ fn process_transcription(
         let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
     }
 
-    let model = match ensure_model(app, tier) {
+    let model = match ensure_model(app, tier, &job.mp3) {
         Ok(p) => p,
         Err(e) => return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}")),
     };
+    // Handover: the model is on disk now (just downloaded, or already
+    // present) — replace the download row with "preparing" BEFORE the
+    // model-load gap below, so a download UI can never stick at 100%.
+    set_phase(app, Phase::Preparing);
+    let _ = app.emit(
+        "capture:modelReady",
+        serde_json::json!({ "mp3": job.mp3.to_string_lossy() }),
+    );
+
     if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
         match WhisperTranscriber::load(&model) {
             Ok(w) => *loaded = Some((tier, w)),
@@ -1117,8 +1212,45 @@ fn process_transcription(
         model_label: tier.label(),
     };
     let generated_at = chrono::Local::now().to_rfc3339();
-    match transcribe_recording(&job.mp3, transcriber, &opts, &generated_at, job.force) {
-        Ok(path) => {
+
+    set_phase(app, Phase::Transcribing);
+    let _ = app.emit(
+        "capture:transcribeProgress",
+        serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "progress": 0 }),
+    );
+    let app_cb = app.clone();
+    let mp3_cb = job.mp3.clone();
+    let mut last_sent: i32 = -1;
+    let mut last_logged: i32 = -1;
+    let on_progress: Box<dyn FnMut(i32) + Send> = Box::new(move |p| {
+        progress.store(p.clamp(0, 100) as u8, Ordering::Relaxed); // lock-free, no queue mutex
+        if p - last_sent >= 5 || p >= 100 {
+            // throttled UI event
+            last_sent = p;
+            let _ = app_cb.emit(
+                "capture:transcribeProgress",
+                serde_json::json!({ "mp3": mp3_cb.to_string_lossy(), "progress": p }),
+            );
+        }
+        if p - last_logged >= 25 || p >= 100 {
+            // honest log: coarse periodic progress
+            last_logged = p;
+            log::info!("transcribe: {} inference {}%", mp3_cb.display(), p);
+        }
+    });
+    // (inference start/elapsed with audio length is logged inside
+    // transcribe_recording — Task 2 — which owns the samples.)
+    let result = transcribe_recording(
+        &job.mp3,
+        transcriber,
+        &opts,
+        &generated_at,
+        job.force,
+        &cancel,
+        on_progress,
+    );
+    match result {
+        Ok(TranscribeOutcome::Written(path)) => {
             log::info!("transcribe: wrote {}", path.display());
             let _ = app.emit(
                 "capture:transcribed",
@@ -1128,12 +1260,47 @@ fn process_transcription(
                 }),
             );
         }
-        Err(e) => fail_transcription(app, &job.mp3, &e),
+        Ok(TranscribeOutcome::SkippedForeign(_)) => {
+            // Decode + inference succeeded, but transcribe_recording's
+            // replace_if_ours refused to clobber a complete/hand-edited
+            // sidecar — a distinct honest signal, not the same "success" as
+            // capture:transcribed, so the UI can tell the two apart.
+            // (transcribe_recording already logs this fact via log::warn! —
+            // no need to log it again here.)
+            let _ = app.emit(
+                "capture:transcribeSkipped",
+                serde_json::json!({
+                    "mp3": job.mp3.to_string_lossy(),
+                    "message": "kept your existing transcript — not overwritten",
+                }),
+            );
+        }
+        Err(TranscribeError::Failed(e)) => fail_transcription(app, &job.mp3, &e),
+        Err(TranscribeError::Cancelled) => {
+            // Our own placeholder → cancelled; never a complete/user file.
+            let name = job
+                .mp3
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let _ = vault_buddy_core::transcript::replace_if_ours(
+                &vault_buddy_core::transcript::transcript_path(&job.mp3),
+                &vault_buddy_core::transcript::render_cancelled(&name),
+            );
+            let _ = app.emit(
+                "capture:transcribeCancelled",
+                serde_json::json!({ "mp3": job.mp3.to_string_lossy() }),
+            );
+            log::info!("transcribe: cancelled {}", job.mp3.display());
+        }
     }
 }
 
 /// Ensure the tier's model is on disk, downloading with progress if not.
-fn ensure_model(app: &AppHandle, tier: ModelTier) -> Result<PathBuf, String> {
+/// `mp3` identifies the job in the download-progress event and in the
+/// `active` phase this sets while a download is running (Task 4 reads
+/// both) — it names nothing else here.
+fn ensure_model(app: &AppHandle, tier: ModelTier, mp3: &Path) -> Result<PathBuf, String> {
     if let Some(p) = model_path(tier) {
         if p.exists() {
             return Ok(p);
@@ -1141,14 +1308,23 @@ fn ensure_model(app: &AppHandle, tier: ModelTier) -> Result<PathBuf, String> {
     }
     log::info!("transcribe: downloading model {}", tier.as_str());
     let app = app.clone();
+    let mp3 = mp3.to_path_buf();
     let mut last_emit: u64 = 0;
     download_model(tier, &mut |received, total| {
         // Throttle: an event every ~4 MB (and the final byte).
         if received.saturating_sub(last_emit) >= 4_000_000 || Some(received) == total {
             last_emit = received;
+            // Phase update is brief (one field write, via set_phase); the
+            // emit itself happens after its guard drops internally.
+            set_phase(&app, Phase::Downloading { received, total });
             let _ = app.emit(
                 "capture:modelDownload",
-                serde_json::json!({ "model": tier.as_str(), "received": received, "total": total }),
+                serde_json::json!({
+                    "mp3": mp3.to_string_lossy(),
+                    "model": tier.as_str(),
+                    "received": received,
+                    "total": total,
+                }),
             );
         }
     })
@@ -1219,6 +1395,138 @@ pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveJobDto {
+    mp3: String,
+    vault_id: String,
+    phase: String,
+    progress: u8,
+    received: Option<u64>,
+    total: Option<u64>,
+    started_at_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueuedDto {
+    mp3: String,
+    vault_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionQueueDto {
+    active: Option<ActiveJobDto>,
+    queued: Vec<QueuedDto>,
+    waiting_for_recording: bool,
+}
+
+/// Live snapshot of the transcription queue for the Recordings panel: the
+/// job currently running (phase/progress, plus download byte counts while
+/// `Phase::Downloading`), everything still waiting, and whether the queue is
+/// stalled behind a live recording (`is_recording` — the same coarse gate
+/// `run_transcription`'s worker loop yields to). Read-only: the queue mutex
+/// is held only long enough to clone/copy fields out of it.
+#[tauri::command]
+pub fn transcription_queue_status(app: AppHandle) -> TranscriptionQueueDto {
+    let state = app.state::<TranscriptionState>();
+    let guard = lock_ignoring_poison(&state.inner);
+    let active = guard.active.as_ref().map(|a| {
+        let (received, total) = match a.phase {
+            Phase::Downloading { received, total } => (Some(received), total),
+            _ => (None, None),
+        };
+        ActiveJobDto {
+            mp3: a.mp3.to_string_lossy().into_owned(),
+            vault_id: a.vault_id.clone(),
+            phase: a.phase.as_str().to_string(),
+            progress: a.progress.load(Ordering::Relaxed),
+            received,
+            total,
+            started_at_ms: a.started_at_ms,
+        }
+    });
+    let queued = guard
+        .pending
+        .iter()
+        .map(|j| QueuedDto {
+            mp3: j.mp3.to_string_lossy().into_owned(),
+            vault_id: j.vault_id.clone(),
+        })
+        .collect();
+    // "waiting" = there is work but nothing active because a recording is
+    // live. Snapshot that before dropping the guard: is_recording() locks
+    // CaptureState, and TranscriptionState must never be held across another
+    // domain's lock (mirrors run_recovery's discipline for CaptureState vs
+    // the log write below it).
+    let stalled = active.is_none() && !guard.pending.is_empty();
+    drop(guard);
+    let waiting_for_recording = stalled && is_recording(&app);
+    TranscriptionQueueDto {
+        active,
+        queued,
+        waiting_for_recording,
+    }
+}
+
+/// Cancel a queued or in-flight transcription. The queue mutex is held only
+/// for bookkeeping (flip the active job's `CancelToken`, or drop a pending
+/// job) — NEVER across the sidecar write below, which does a temp+fsync+
+/// rename (`replace_if_ours`) and would otherwise stall every other
+/// command that needs the same mutex (enqueue, status, a concurrent cancel)
+/// for the duration of a disk flush.
+///
+/// The active job's sidecar is deliberately NOT written here: cancelling it
+/// only flips the token, and the worker's `TranscribeError::Cancelled` arm
+/// (in `process_transcription`) owns that write via `replace_if_ours`, which
+/// already refuses to clobber a finished/hand-edited transcript. A pending
+/// job's sidecar is NOT guaranteed to be our own `pending` placeholder or
+/// absent: `retranscribe` pushes straight into the queue via
+/// `enqueue_transcription` with no up-front placeholder write, so a queued
+/// forced re-transcribe of an already-`Complete` (or hand-edited) recording
+/// still has that original on disk while pending. The write below therefore
+/// uses the same never-clobber `replace_if_ours` as the worker's arm above,
+/// not the unguarded `force_write_sidecar` — and duplicating the active
+/// job's write here (instead of leaving it to the worker) would still be
+/// wrong, since it would race the worker's own write to the same path.
+#[tauri::command]
+pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> {
+    let mp3 = PathBuf::from(&path);
+    // Phase 1: fast bookkeeping under the mutex; decide what to write after.
+    let write_cancelled = {
+        let state = app.state::<TranscriptionState>();
+        let mut guard = lock_ignoring_poison(&state.inner);
+        if guard.active.as_ref().map(|a| a.mp3 == mp3).unwrap_or(false) {
+            guard.active.as_ref().unwrap().cancel.cancel(); // aborts inference; the worker writes the cancelled sidecar
+            return Ok(()); // worker owns the terminal bookkeeping for the active job
+        }
+        // Pending job: drop it now; write its sidecar AFTER releasing the lock.
+        let before = guard.pending.len();
+        guard.pending.retain(|j| j.mp3 != mp3);
+        if guard.pending.len() == before {
+            return Err("No such transcription in the queue.".into());
+        }
+        guard.known.remove(&mp3);
+        true
+    }; // <-- mutex released here
+    if write_cancelled {
+        let name = mp3
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _ = vault_buddy_core::transcript::replace_if_ours(
+            &vault_buddy_core::transcript::transcript_path(&mp3),
+            &vault_buddy_core::transcript::render_cancelled(&name),
+        );
+        let _ = app.emit(
+            "capture:transcribeCancelled",
+            serde_json::json!({ "mp3": mp3.to_string_lossy() }),
+        );
+    }
+    Ok(())
+}
+
 /// Shared by `open_transcript` and `open_recording`: launch an
 /// `obsidian://open` for a recording's companion note `<base>.md` when it
 /// exists (the richest view — it embeds the transcript and the audio player),
@@ -1243,7 +1551,7 @@ fn open_recording_note(path: &str) -> Result<(), String> {
 }
 
 /// Open a finished recording's note (or transcript sidecar) — the
-/// TranscriptionStatus "Open in Obsidian" row.
+/// Transcriptions.vue "Open in Obsidian" row for a finished job.
 #[tauri::command]
 pub fn open_transcript(path: String) -> Result<(), String> {
     open_recording_note(&path)

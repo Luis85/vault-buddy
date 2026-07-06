@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import CompanionCharacter from "../components/CompanionCharacter.vue";
@@ -38,6 +38,9 @@ function onDragStart() {
 // let the `buddy-facing` event flip it when a drag carries the buddy across the
 // screen midline.
 const facing = ref<Facing>("right");
+// The buddy's "working" pulse while a job occupies the transcription queue —
+// derived from the per-job map (there's no more singular `transcribing` flag).
+const transcribing = computed(() => capture.activeTranscription !== null);
 
 let unlistenAnimation: (() => void) | undefined;
 let unlistenDragging: (() => void) | undefined;
@@ -80,14 +83,14 @@ onUnmounted(() => {
        centered in the window. Centering makes those assumptions hold. -->
   <div class="flex h-screen w-screen items-center justify-center">
     <CompanionCharacter
-      :working="capture.transcribing"
+      :working="transcribing"
       :animated="settings.animationsEnabled"
       :character="settings.character"
       :draggable="settings.draggingEnabled"
       :facing="facing"
       :recording="capture.status === 'recording' || capture.status === 'saving'"
       :paused="capture.paused"
-      :transcribing="capture.transcribing"
+      :transcribing="transcribing"
       @toggle="onToggle"
       @drag-start="onDragStart"
     />
