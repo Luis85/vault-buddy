@@ -22,6 +22,7 @@ vi.mock("../src/logging", () => ({
 
 import { logWarning } from "../src/logging";
 import { useCaptureStore } from "../src/stores/capture";
+import { useNotificationsStore } from "../src/stores/notifications";
 
 describe("capture store", () => {
   beforeEach(() => {
@@ -216,6 +217,26 @@ describe("capture store", () => {
     expect(active()).toBeNull();
   });
 
+  it("surfaces a transcription failure reason as a notification", async () => {
+    mockIPC((cmd) =>
+      cmd === "capture_status"
+        ? { recording: false, vaultId: null, startedAtMs: null }
+        : { active: null, queued: [], waitingForRecording: false },
+    );
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.init();
+    state.eventHandlers["capture:transcribeFailed"]!({
+      payload: { mp3: "/v/a.mp3", message: "whisper inference: bad model" },
+    });
+    expect(
+      notes.items.some(
+        (i) => i.kind === "error" && i.message.includes("whisper inference: bad model"),
+      ),
+    ).toBe(true);
+    expect(capture.transcriptions["/v/a.mp3"].error).toBe("whisper inference: bad model"); // inline reason still set
+  });
+
   it("transcribed event moves the job to done and surfaces in finishedTranscriptions", async () => {
     mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
     const store = useCaptureStore();
@@ -242,6 +263,16 @@ describe("capture store", () => {
     );
   });
 
+  it("notifies when cancel is rejected", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "cancel_transcription") throw new Error("No such transcription in the queue");
+    });
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.cancelTranscription("/v/x.mp3");
+    expect(notes.items.some((i) => i.message.includes("No such transcription"))).toBe(true);
+  });
+
   it("retranscribe invokes retranscribe with the path", async () => {
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockIPC((cmd, args) => {
@@ -250,6 +281,18 @@ describe("capture store", () => {
     const store = useCaptureStore();
     await store.retranscribe("a.mp3");
     expect(calls).toContainEqual({ cmd: "retranscribe", args: { path: "a.mp3" } });
+  });
+
+  it("notifies (not throws) when retranscribe is rejected", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "retranscribe") throw new Error("Recording not found");
+    });
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.retranscribe("/v/gone.mp3"); // must NOT reject
+    expect(
+      notes.items.some((i) => i.kind === "error" && i.message.includes("Recording not found")),
+    ).toBe(true);
   });
 
   it("openTranscript invokes open_transcript with the path", async () => {
@@ -272,6 +315,16 @@ describe("capture store", () => {
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("open transcript rejected"),
     );
+  });
+
+  it("notifies when open transcript is rejected", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "open_transcript") throw new Error("launch failed");
+    });
+    const capture = useCaptureStore();
+    const notes = useNotificationsStore();
+    await capture.openTranscript("/v/x.mp3");
+    expect(notes.items.some((i) => i.message.includes("launch failed"))).toBe(true);
   });
 
   it("tracks which vault is transcribing, then clears it", async () => {

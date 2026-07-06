@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { logBreadcrumb, logWarning } from "../logging";
+import { useNotificationsStore } from "./notifications";
 import type {
   CaptureRenamed,
   CaptureSaved,
@@ -184,9 +185,13 @@ export const useCaptureStore = defineStore("capture", {
       await listen<{ message: string }>("capture:failed", (event) => {
         this.resetRecordingState();
         this.error = event.payload.message;
+        useNotificationsStore().error(event.payload.message);
       });
       await listen<{ message: string }>("capture:warning", (event) => {
         this.warning = event.payload.message;
+        // Live warnings stay in the RecordingBar only — a notification would
+        // pile atop a UI that already surfaces this during an active recording.
+        if (this.status !== "recording") useNotificationsStore().warning(event.payload.message);
       });
       await listen<{ mp3: string; vaultId: string }>("capture:transcribing", (event) => {
         const { mp3, vaultId } = event.payload;
@@ -210,6 +215,7 @@ export const useCaptureStore = defineStore("capture", {
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
         const { mp3, message } = event.payload;
         this.upsert(mp3, { phase: "failed", error: message, progress: null });
+        useNotificationsStore().error(`Transcription failed: ${message}`);
       });
       await listen<ModelDownload>("capture:modelDownload", (event) => {
         const { mp3, model, received, total } = event.payload;
@@ -326,6 +332,7 @@ export const useCaptureStore = defineStore("capture", {
         // may have moved it on in the meantime.
         if (this.status === "starting") this.status = "idle";
         this.error = String(e);
+        useNotificationsStore().error(String(e));
         logWarning(`capture start rejected: ${String(e)}`);
       }
     },
@@ -339,6 +346,7 @@ export const useCaptureStore = defineStore("capture", {
       } catch (e) {
         this.status = "idle";
         this.error = String(e);
+        useNotificationsStore().error(String(e));
         logWarning(`capture stop rejected: ${String(e)}`);
       }
     },
@@ -348,11 +356,17 @@ export const useCaptureStore = defineStore("capture", {
         // capture:transcribeCancelled completes the transition — Rust owns
         // the truth on whether/when the job actually stopped.
       } catch (e) {
+        useNotificationsStore().error(`Couldn't cancel transcription: ${String(e)}`);
         logWarning(`cancel transcription rejected: ${String(e)}`);
       }
     },
     async retranscribe(mp3: string) {
-      await invoke("retranscribe", { path: mp3 });
+      try {
+        await invoke("retranscribe", { path: mp3 });
+      } catch (e) {
+        useNotificationsStore().error(`Couldn't re-transcribe: ${String(e)}`);
+        logWarning(`retranscribe rejected: ${String(e)}`);
+      }
     },
     async openTranscript(mp3: string) {
       try {
@@ -361,6 +375,7 @@ export const useCaptureStore = defineStore("capture", {
         // A failed open (recording moved, launch error) is non-fatal — warn
         // and leave the finished job in place so the user can retry.
         this.warning = String(e);
+        useNotificationsStore().error(`Couldn't open transcript: ${String(e)}`);
         logWarning(`open transcript rejected: ${String(e)}`);
       }
     },
@@ -371,6 +386,7 @@ export const useCaptureStore = defineStore("capture", {
         // capture:paused flips the state — Rust owns the truth.
       } catch (e) {
         this.error = String(e);
+        useNotificationsStore().error(String(e));
         logWarning(`capture pause rejected: ${String(e)}`);
       }
     },
@@ -380,6 +396,7 @@ export const useCaptureStore = defineStore("capture", {
         await invoke("resume_capture");
       } catch (e) {
         this.error = String(e);
+        useNotificationsStore().error(String(e));
         logWarning(`capture resume rejected: ${String(e)}`);
       }
     },
