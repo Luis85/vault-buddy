@@ -82,9 +82,13 @@ describe("Transcriptions", () => {
     const active = wrapper.get('[data-testid="transcription-active"]');
     expect(active.text()).toContain("Downloading model…");
     expect(active.text()).not.toMatch(/\d+%/);
-    expect(wrapper.get('[data-testid="transcription-progress"]').classes()).toContain(
-      "animate-spin",
-    );
+    const spinner = wrapper.get('[data-testid="transcription-progress"]');
+    expect(spinner.classes()).toContain("animate-spin");
+    // Regression: the spinner's aria-label was hardcoded to "Preparing…"
+    // regardless of phase, so a screen reader announced "Preparing…" while
+    // the visible label correctly said "Downloading model…". The aria-label
+    // must track the same phase text the visible label shows.
+    expect(spinner.attributes("aria-label")).toBe("Downloading model…");
   });
 
   it("renders the vault name for active and queued jobs, falling back to the id when the vault isn't known", () => {

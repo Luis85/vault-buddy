@@ -147,7 +147,7 @@ const isStuck = computed(() => {
           data-testid="transcription-progress"
           class="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white"
           role="status"
-          aria-label="Preparing…"
+          :aria-label="phaseLabel(active)"
         ></div>
         <p
           v-if="isStuck"
