@@ -221,6 +221,14 @@ export const useCaptureStore = defineStore("capture", {
         this.lastSaved = { mp3: event.payload.mp3, note: event.payload.note };
         this.renameError = null;
         this.armRenameExpiry();
+        // waitingForRecording is backend truth computed as `active.is_none()
+        // && pending non-empty && is_recording` (capture_commands.rs) — only
+        // ever seeded here from a one-shot transcription_queue_status read at
+        // init, so a stale `true` would otherwise linger forever. The
+        // recording this was waiting on just finished, so `is_recording`
+        // just flipped false — the wait (if any) is over regardless of
+        // whether the worker has picked the job up yet.
+        this.waitingForRecording = false;
         // capture:saved may carry a warning worth surfacing — an early-stop
         // reason (endedEarly, already emitted since increment 3) or a
         // post-save issue such as a failed companion note (the backend adds
@@ -260,6 +268,10 @@ export const useCaptureStore = defineStore("capture", {
           error: null,
           startedAtMs: Date.now(),
         });
+        // A job just became active — see the capture:saved comment above for
+        // why this needs re-syncing at all; this is the "job actually
+        // started" trigger (the backend's `active.is_none()` just flipped).
+        this.waitingForRecording = false;
       });
       await listen<CaptureTranscribed>("capture:transcribed", (event) => {
         this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
@@ -294,6 +306,10 @@ export const useCaptureStore = defineStore("capture", {
       await listen<TranscribeProgress>("capture:transcribeProgress", (event) => {
         const { mp3, progress } = event.payload;
         this.upsert(mp3, { phase: "transcribing", progress: clamp01(progress / 100) });
+        // Defensive second trigger: a live progress tick proves a job is
+        // running even if this window missed its capture:transcribing event
+        // (e.g. mounted after the job was already active).
+        this.waitingForRecording = false;
       });
       await listen<TranscribeCancelled>("capture:transcribeCancelled", (event) => {
         this.upsert(event.payload.mp3, { phase: "cancelled", progress: null });
@@ -434,6 +450,8 @@ export const useCaptureStore = defineStore("capture", {
       } catch (e) {
         // A failed open (recording moved, launch error) is non-fatal — warn
         // and leave the finished job in place so the user can retry.
+        // Pattern (don't "simplify" away either call): the notification is
+        // the user-facing surface, logWarning is only the file breadcrumb.
         this.warning = String(e);
         useNotificationsStore().error(`Couldn't open transcript: ${String(e)}`);
         logWarning(`open transcript rejected: ${String(e)}`);
@@ -481,7 +499,14 @@ export const useCaptureStore = defineStore("capture", {
           title,
         });
         this.lastSavedFile = r.mp3;
-        if (r.warning) this.warning = r.warning;
+        if (r.warning) {
+          this.warning = r.warning;
+          // `warning` alone renders nowhere post-Task-3: RecordingBar (its
+          // only reader) shows while recording, and a rename happens once
+          // idle — so a rename warning needs the notification surface too,
+          // or it's silently dropped.
+          useNotificationsStore().warning(r.warning);
+        }
         this.dismissRename();
       } catch (e) {
         // Prompt stays up so the user can fix the title and retry.

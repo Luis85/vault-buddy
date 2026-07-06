@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
+import { useNotificationsStore } from "../stores/notifications";
 import { logWarning } from "../logging";
 import type { CaptureConfig } from "../types";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
@@ -10,6 +11,7 @@ import TranscriptionSettings from "./TranscriptionSettings.vue";
 const props = defineProps<{ vaultId: string }>();
 const store = useVaultsStore();
 const capture = useCaptureStore();
+const notifications = useNotificationsStore();
 
 const OPTIONS = [
   { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting" },
@@ -81,9 +83,12 @@ async function persist() {
     await invoke("set_capture_config", { id: props.vaultId, cfg: config.value });
   } catch (e) {
     // RecordMode has no settings-save UI of its own (unlike CaptureSettings'
-    // Save button + error banner) — a failed save just logs; the vault's
-    // full Capture Settings view is where the user can see the error and retry.
+    // Save button + error banner) — the vault's full Capture Settings view is
+    // where the user can see the error and retry, but a failed save must
+    // still surface something HERE too, or toggling from this view looks
+    // like it silently worked. logWarning stays as the file breadcrumb.
     logWarning(`transcription settings save failed (vault ${props.vaultId}): ${String(e)}`);
+    notifications.error(`Couldn't save transcription settings: ${String(e)}`);
   }
 }
 

@@ -368,6 +368,41 @@ describe("capture store", () => {
     expect(store.queuedTranscriptions.map((j) => j.mp3)).toEqual(["b.mp3"]);
   });
 
+  it("clears waitingForRecording once a job actually starts running, not just at init", async () => {
+    // Backend truth (capture_commands.rs): waiting_for_recording = active
+    // .is_none() && !pending.is_empty() && is_recording(&app) — recomputed
+    // fresh only when queried. The frontend seeds it once at init and must
+    // re-sync it itself whenever one of those three conditions could have
+    // flipped, or a stale `true` lingers forever after the recording ends
+    // or the job starts. Regression: previously only ever set from the
+    // one-shot transcription_queue_status seed.
+    mockIPC((cmd) =>
+      cmd === "capture_status"
+        ? { recording: true, vaultId: "v1", startedAtMs: 1 }
+        : { active: null, queued: [{ mp3: "a.mp3", vaultId: "v1" }], waitingForRecording: true },
+    );
+    const store = useCaptureStore();
+    await store.init();
+    expect(store.waitingForRecording).toBe(true);
+
+    // Trigger 1: the job actually starts running (active.is_none() flips).
+    state.eventHandlers["capture:transcribing"]!({ payload: { mp3: "a.mp3", vaultId: "v1" } });
+    expect(store.waitingForRecording).toBe(false);
+
+    // Trigger 2 (defensive net): a live progress tick also proves a job is
+    // running, in case a window missed the transcribing event itself.
+    store.waitingForRecording = true;
+    state.eventHandlers["capture:transcribeProgress"]!({ payload: { mp3: "a.mp3", progress: 10 } });
+    expect(store.waitingForRecording).toBe(false);
+
+    // Trigger 3: the awaited recording is saved (is_recording flips false).
+    store.waitingForRecording = true;
+    state.eventHandlers["capture:saved"]!({
+      payload: { mp3: "/v/a.mp3", note: null, endedEarly: false },
+    });
+    expect(store.waitingForRecording).toBe(false);
+  });
+
   it("modelReady clears download progress and moves to preparing", async () => {
     mockIPC((cmd) => { if (cmd === "capture_status" || cmd === "transcription_queue_status") return cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false }; });
     const store = useCaptureStore();
@@ -602,6 +637,34 @@ describe("capture store", () => {
     expect(store.lastSavedFile).toBe("/v/2026-07-04 1405 Standup.mp3");
     expect(store.lastSaved).toBeNull();
     expect(store.renameError).toBeNull();
+  });
+
+  it("rename raises a warning notification when the backend reports one", async () => {
+    // Carry-forward from the Task-2 review: `warning` used to only set
+    // store.warning, which (post Task 3) renders nowhere once idle — a
+    // rename happens after the recording already finished, so the
+    // RecordingBar (recording-only) is long gone by then.
+    mockIPC((cmd) => {
+      if (cmd === "rename_capture") {
+        return {
+          mp3: "/v/2026-07-04 1405 Standup.mp3",
+          note: null,
+          warning: "companion note rename failed: locked",
+        };
+      }
+    });
+    const store = useCaptureStore();
+    const notes = useNotificationsStore();
+    store.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    await store.rename("Standup");
+    expect(store.warning).toBe("companion note rename failed: locked");
+    expect(
+      notes.items.some(
+        (i) =>
+          i.kind === "warning" &&
+          i.message.includes("companion note rename failed"),
+      ),
+    ).toBe(true);
   });
 
   it("rename failure keeps the prompt up with the error", async () => {

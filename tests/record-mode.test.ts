@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import RecordMode from "../src/components/RecordMode.vue";
 import { useVaultsStore } from "../src/stores/vaults";
+import { useNotificationsStore } from "../src/stores/notifications";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
@@ -87,6 +88,44 @@ describe("RecordMode", () => {
       id: "v1",
       cfg: { ...cfg, transcribe: true },
     });
+  });
+
+  it("notifies when saving transcription settings fails", async () => {
+    // Regression: persist()'s catch used to only logWarning — a failed save
+    // had no user-visible signal at all in this view (RecordMode has no
+    // save button/banner of its own, unlike CaptureSettings).
+    const cfg = {
+      mode: "meeting",
+      recordingFolder: "Meetings",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: false,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+    };
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config") return cfg;
+      if (cmd === "set_capture_config") throw new Error("disk full");
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    const notes = useNotificationsStore();
+
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+
+    expect(
+      notes.items.some(
+        (i) =>
+          i.kind === "error" &&
+          i.message.includes("Couldn't save transcription settings") &&
+          i.message.includes("disk full"),
+      ),
+    ).toBe(true);
   });
 
   it("does not persist a transcription toggle made before the config read resolves", async () => {
