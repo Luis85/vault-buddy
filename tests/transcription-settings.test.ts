@@ -144,6 +144,25 @@ describe("TranscriptionSettings", () => {
     wrapper.get(`label[for="${timestamps.attributes("id")}"]`);
   });
 
+  it("scopes the SelectMenu-backed id/for pairs with idPrefix too (C3)", () => {
+    // The C3 test above only covers the two native <input> pairs; the model
+    // and language controls are SelectMenu.vue instances, which forward
+    // `:id` to their root button — that forwarding path needs its own
+    // coverage or a regression there would slip through silently.
+    active = mount(TranscriptionSettings, {
+      props: { modelValue: { ...baseValue, transcribe: true }, idPrefix: "record-" },
+      attachTo: document.body,
+    });
+    const wrapper = active;
+    const model = wrapper.get('[data-testid="transcription-model-select"]');
+    expect(model.attributes("id")).toBe("record-capture-transcription-model");
+    const language = wrapper.get('[data-testid="transcription-language-select"]');
+    expect(language.attributes("id")).toBe("record-capture-transcription-language");
+    // `.get()` itself throws (a clear failure) if the selector matches nothing.
+    wrapper.get(`label[for="${model.attributes("id")}"]`);
+    wrapper.get(`label[for="${language.attributes("id")}"]`);
+  });
+
   it("never mutates the modelValue prop object", async () => {
     const modelValue = { ...baseValue, transcribe: true };
     const frozen = Object.freeze({ ...modelValue });
