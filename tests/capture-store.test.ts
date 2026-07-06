@@ -218,6 +218,24 @@ describe("capture store", () => {
     expect(active()).toBeNull();
   });
 
+  it("dismissTranscription removes a terminal job but leaves in-flight work alone", () => {
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "failed.mp3": { mp3: "failed.mp3", vaultId: "v1", name: "Oops", phase: "failed", progress: null, model: null, error: "boom", startedAtMs: 2 },
+      "active.mp3": { mp3: "active.mp3", vaultId: "v1", name: "Live", phase: "transcribing", progress: 0.5, model: null, error: null, startedAtMs: 3 },
+      "queued.mp3": { mp3: "queued.mp3", vaultId: "v1", name: "Next", phase: "queued", progress: null, model: null, error: null, startedAtMs: 4 },
+    };
+    // A finished/failed row is history the user should be able to clear.
+    store.dismissTranscription("failed.mp3");
+    expect(store.transcriptions["failed.mp3"]).toBeUndefined();
+    // But a dismiss must never silently drop in-flight or queued work — that
+    // is what cancelTranscription is for. Guard against it.
+    store.dismissTranscription("active.mp3");
+    store.dismissTranscription("queued.mp3");
+    expect(store.transcriptions["active.mp3"]).toBeDefined();
+    expect(store.transcriptions["queued.mp3"]).toBeDefined();
+  });
+
   it("surfaces a transcription failure reason as a notification", async () => {
     mockIPC((cmd) =>
       cmd === "capture_status"

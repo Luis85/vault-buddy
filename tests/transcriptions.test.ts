@@ -242,6 +242,35 @@ describe("Transcriptions", () => {
     });
   });
 
+  it("dismisses a finished row, removing it (and its error) from the list", async () => {
+    // The failed row (with its error text) had no dismiss control — it just
+    // sat there. Every finished row now carries a dismiss button that clears
+    // it via the store's terminal-only dismissTranscription.
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "failed.mp3": job({
+        mp3: "failed.mp3",
+        name: "Oops",
+        phase: "failed",
+        progress: null,
+        error: "boom",
+        startedAtMs: 2000,
+      }),
+    };
+    const wrapper = mount(Transcriptions);
+    const finished = wrapper.get('[data-testid="transcription-finished"]');
+    expect(finished.text()).toContain("Oops");
+    expect(finished.text()).toContain("boom");
+
+    await wrapper.get('[data-testid="transcription-dismiss"]').trigger("click");
+    await flushPromises();
+
+    // The row — and the whole finished section, since it was the only one —
+    // is gone, and the underlying job is cleared from the store.
+    expect(wrapper.find('[data-testid="transcription-finished"]').exists()).toBe(false);
+    expect(store.transcriptions["failed.mp3"]).toBeUndefined();
+  });
+
   it("shows a stuck hint only once a transcribing job's progress has stalled past the threshold", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
