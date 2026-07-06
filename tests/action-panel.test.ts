@@ -5,6 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import ActionPanel from "../src/components/ActionPanel.vue";
 import { useVaultsStore } from "../src/stores/vaults";
 import { useCaptureStore } from "../src/stores/capture";
+import { useNotificationsStore } from "../src/stores/notifications";
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 
 const sampleVaults = [
@@ -199,15 +200,20 @@ describe("ActionPanel", () => {
     expect(store.captureSettingsVaultId).toBe("d4e5f6");
   });
 
-  it("shows the rename warning banner while idle in the list view", async () => {
+  it("shows the idle rename warning as a notification in the list view", async () => {
+    // The old list-view-only capture.warning banner was replaced by the
+    // NotificationHost overlay (Task 3) — the warning now reaches the panel
+    // via the notifications store rather than the capture store directly.
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
+    const notifications = useNotificationsStore();
     capture.status = "idle";
-    capture.warning = "Recording renamed, but its note needs attention";
+    notifications.warning("Recording renamed, but its note needs attention");
     await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="notification"]').exists()).toBe(true);
     expect(wrapper.text()).toContain(
       "Recording renamed, but its note needs attention"
     );
@@ -215,17 +221,20 @@ describe("ActionPanel", () => {
     expect(wrapper.findAll("[data-testid='level-meter']")).toHaveLength(0);
   });
 
-  it("hides the idle rename warning banner outside the list view", async () => {
+  it("shows a notification regardless of which panel view is open", async () => {
+    // NotificationHost overlays every view (that's the point of Task 3) — a
+    // warning raised while a non-list view (e.g. settings) is open must
+    // still surface, where the old list-view-only banner used to hide it.
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
     store.view = "settings";
     const wrapper = mount(ActionPanel);
-    const capture = useCaptureStore();
-    capture.status = "idle";
-    capture.warning = "Recording renamed, but its note needs attention";
+    const notifications = useNotificationsStore();
+    notifications.warning("Recording renamed, but its note needs attention");
     await wrapper.vm.$nextTick();
-    expect(wrapper.text()).not.toContain(
+    expect(wrapper.find('[data-testid="notification"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain(
       "Recording renamed, but its note needs attention"
     );
   });

@@ -12,6 +12,7 @@ import RenamePrompt from "./RenamePrompt.vue";
 import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
 import Transcriptions from "./Transcriptions.vue";
+import NotificationHost from "./NotificationHost.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -169,19 +170,7 @@ watch(
       @pause="capture.pause()"
       @resume="capture.resume()"
     />
-    <p
-      v-if="view === 'list' && capture.error"
-      class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
-    >
-      {{ capture.error }}
-    </p>
     <TranscriptionSummary v-if="view === 'list'" class="mb-2" />
-    <p
-      v-if="view === 'list' && capture.status === 'idle' && capture.warning"
-      class="mb-2 rounded-lg bg-amber-500/15 px-2 py-1 text-xs text-amber-200"
-    >
-      {{ capture.warning }}
-    </p>
     <RenamePrompt
       v-if="view === 'list' && capture.lastSaved"
       class="mb-2"
@@ -250,5 +239,6 @@ watch(
         has it been opened at least once?
       </p>
     </div>
+    <NotificationHost />
   </div>
 </template>
