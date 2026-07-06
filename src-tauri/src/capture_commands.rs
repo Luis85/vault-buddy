@@ -99,7 +99,7 @@ pub struct TranscriptionState {
 
 fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
     let state = app.state::<TranscriptionState>();
-    let mut guard = state.inner.lock().unwrap();
+    let mut guard = lock_ignoring_poison(&state.inner);
     if guard.known.insert(job.mp3.clone()) {
         log::info!("transcribe: queued {}", job.mp3.display());
         guard.pending.push_back(job);
