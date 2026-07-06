@@ -399,10 +399,11 @@ describe("capture store", () => {
   });
 
   it("keeps finishedTranscriptions bounded to MAX_FINISHED after many jobs finish in one session", async () => {
-    // finishedTranscriptions is a getter over the full (session-long, keyed)
-    // transcriptions map — this locks in that the exposed list stays capped
-    // even as far more jobs than the cap finish, so an unbounded session
-    // never grows the visible "Finished this session" list without limit.
+    // finishedTranscriptions is a getter over the (now also bounded — see
+    // the map-bounding test below) transcriptions map — this locks in that
+    // the exposed list stays capped even as far more jobs than the cap
+    // finish, so the visible "Finished this session" list never grows
+    // without limit.
     const MAX_FINISHED = 20; // mirrors the store's private cap
     mockIPC((cmd) =>
       cmd === "capture_status"
@@ -416,8 +417,38 @@ describe("capture store", () => {
       state.eventHandlers["capture:transcribing"]!({ payload: { mp3, vaultId: "v1" } });
       state.eventHandlers["capture:transcribed"]!({ payload: { mp3, transcript: `${mp3}.transcript.md` } });
     }
-    expect(Object.keys(store.transcriptions)).toHaveLength(MAX_FINISHED + 10);
+    expect(Object.keys(store.transcriptions)).toHaveLength(MAX_FINISHED);
     expect(store.finishedTranscriptions.length).toBe(MAX_FINISHED);
+  });
+
+  it("bounds the transcriptions map itself, never evicting an active or queued job", async () => {
+    // Regression: only the finishedTranscriptions GETTER capped the
+    // display — the underlying transcriptions map grew one entry per mp3
+    // for the whole session. Eviction must only ever touch TERMINAL (done/
+    // failed/cancelled) jobs, oldest first by startedAtMs — an active/
+    // queued job must survive no matter how much unrelated terminal churn
+    // happens around it.
+    const MAX_FINISHED = 20; // mirrors the store's private cap
+    mockIPC((cmd) =>
+      cmd === "capture_status"
+        ? { recording: false, vaultId: null, startedAtMs: null }
+        : { active: null, queued: [], waitingForRecording: false },
+    );
+    const store = useCaptureStore();
+    await store.init();
+    store.upsert("queued.mp3", { phase: "queued", vaultId: "v1" });
+
+    for (let i = 0; i < MAX_FINISHED + 10; i++) {
+      const mp3 = `job-${i}.mp3`;
+      state.eventHandlers["capture:transcribing"]!({ payload: { mp3, vaultId: "v1" } });
+      state.eventHandlers["capture:transcribed"]!({ payload: { mp3, transcript: `${mp3}.transcript.md` } });
+    }
+
+    const terminalCount = Object.values(store.transcriptions).filter((j) =>
+      ["done", "failed", "cancelled"].includes(j.phase),
+    ).length;
+    expect(terminalCount).toBe(MAX_FINISHED);
+    expect(store.transcriptions["queued.mp3"]?.phase).toBe("queued");
   });
 
   it("clears waitingForRecording once a job actually starts running, not just at init", async () => {

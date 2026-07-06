@@ -26,7 +26,12 @@ export const RENAME_PROMPT_MS = 30_000;
 const ACTIVE_PHASES: Phase[] = ["downloading", "preparing", "transcribing"];
 /** Terminal phases surfaced in the finished list. */
 const FINISHED_PHASES: Phase[] = ["done", "failed", "cancelled"];
-/** `finishedTranscriptions` cap — an unbounded session-long history is never useful in the UI. */
+/**
+ * Cap shared by the finishedTranscriptions display getter AND the
+ * transcriptions map itself (see evictOldTerminalJobs) — an unbounded
+ * session-long history is never useful in the UI, and left unbounded the
+ * map would otherwise grow one entry per mp3 for the whole session.
+ */
 const MAX_FINISHED = 20;
 
 function clamp01(n: number): number {
@@ -156,6 +161,26 @@ export const useCaptureStore = defineStore("capture", {
         startedAtMs: null,
       };
       this.transcriptions[mp3] = { ...base, ...patch };
+      this.evictOldTerminalJobs();
+    },
+    /**
+     * Internal: bound the transcriptions MAP itself, not just the
+     * finishedTranscriptions display getter — without this an unbounded
+     * session grows one entry per mp3 forever. Only TERMINAL (done/failed/
+     * cancelled) jobs are ever evicted, oldest first by startedAtMs (the
+     * same ordering proxy finishedTranscriptions sorts by) — active/queued
+     * jobs are never candidates, so a flood of finished work can never
+     * evict work still in flight.
+     */
+    evictOldTerminalJobs() {
+      const terminal = Object.values(this.transcriptions)
+        .filter((job) => FINISHED_PHASES.includes(job.phase))
+        .sort((a, b) => (a.startedAtMs ?? 0) - (b.startedAtMs ?? 0));
+      const excess = terminal.length - MAX_FINISHED;
+      if (excess <= 0) return;
+      for (const job of terminal.slice(0, excess)) {
+        delete this.transcriptions[job.mp3];
+      }
     },
     /**
      * Record an observation of the currently-active job for the "taking
