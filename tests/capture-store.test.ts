@@ -175,6 +175,35 @@ describe("capture store", () => {
     expect(store.startedAtMs).toBe(7);
   });
 
+  it("capture:started broadcast flips a non-initiating window to recording", async () => {
+    // Regression (shipped in v0.3.0): the buddy window never calls start() —
+    // it mounts, init()s (resync sees no recording), then learns a recording
+    // began in the panel window only via the capture:started broadcast.
+    // Without that listener the buddy stayed idle, so its red rec-dot and the
+    // blink animation (both gated on status==='recording') never appeared.
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") {
+        return { recording: false, vaultId: null, startedAtMs: null };
+      }
+    });
+    const store = useCaptureStore();
+    await store.init();
+    expect(store.status).toBe("idle");
+    state.eventHandlers["capture:started"]!({
+      payload: {
+        recording: true,
+        vaultId: "v1",
+        startedAtMs: 123,
+        paused: false,
+        pausedTotalMs: 0,
+        pausedSinceMs: null,
+      },
+    });
+    expect(store.status).toBe("recording");
+    expect(store.vaultId).toBe("v1");
+    expect(store.startedAtMs).toBe(123);
+  });
+
   it("transcribing event sets the transcribing flag", async () => {
     mockIPC((cmd) => {
       if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
