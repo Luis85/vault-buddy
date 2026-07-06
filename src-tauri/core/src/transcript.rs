@@ -470,6 +470,20 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_frontmatter_injection_is_escaped() {
+        // Mirrors frontmatter_injection_is_escaped above, for render_cancelled:
+        // a name needing YAML-quoting must produce a safely-quoted sidecar,
+        // not one that breaks out of the frontmatter block.
+        let c = render_cancelled("evil\"\ninjected: true.mp3");
+        assert!(
+            !c.contains("\ninjected:"),
+            "newline must not inject a field"
+        );
+        assert!(c.contains("vault-buddy-transcript: cancelled"));
+        assert!(c.contains(r#"transcript-of: "evil\" injected: true.mp3""#));
+    }
+
+    #[test]
     fn user_edited_sidecar_is_not_regenerable() {
         assert!(!is_regenerable("just some notes the user typed"));
     }
