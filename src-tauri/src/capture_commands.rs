@@ -1260,15 +1260,13 @@ fn process_transcription(
                 }),
             );
         }
-        Ok(TranscribeOutcome::SkippedForeign(path)) => {
+        Ok(TranscribeOutcome::SkippedForeign(_)) => {
             // Decode + inference succeeded, but transcribe_recording's
             // replace_if_ours refused to clobber a complete/hand-edited
             // sidecar — a distinct honest signal, not the same "success" as
             // capture:transcribed, so the UI can tell the two apart.
-            log::info!(
-                "transcribe: left existing sidecar untouched {}",
-                path.display()
-            );
+            // (transcribe_recording already logs this fact via log::warn! —
+            // no need to log it again here.)
             let _ = app.emit(
                 "capture:transcribeSkipped",
                 serde_json::json!({
