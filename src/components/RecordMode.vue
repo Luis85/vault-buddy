@@ -18,6 +18,17 @@ const OPTIONS = [
 
 const defaultMode = ref<"meeting" | "voice-note">("meeting");
 
+// Gates persist() (not rendering) until the vault's real config has landed
+// (set in onMounted's `finally`, so it also flips on a failed read — see
+// below). TranscriptionSettings renders immediately against the defaults
+// below so recording is never blocked on the read, but a toggle made before
+// the read resolves must only update the local control, not hit disk: the
+// default-seeded `config` would otherwise persist() over the vault's real
+// recordingFolder/bitrateKbps/devices/createNote/followUpTemplate, and the
+// in-flight read would then clobber the toggle right back out of
+// `config.value` anyway. Mirrors CaptureSettings.vue's loading/finally gate.
+const loaded = ref(false);
+
 // Full vault capture config, seeded with the same fallback values
 // CaptureSettings.vue's refs default to. A read failure below must never
 // block recording, so these settings stay editable — and savable — against
@@ -60,7 +71,8 @@ const transcription = computed({
       transcriptionLanguage: v.transcriptionLanguage.trim() || null,
       transcriptTimestamps: v.transcriptTimestamps,
     };
-    void persist();
+    // Never persist against the default-seeded config — see `loaded` above.
+    if (loaded.value) void persist();
   },
 });
 
@@ -85,6 +97,11 @@ onMounted(async () => {
     config.value = cfg;
   } catch {
     // stale config never blocks recording — mirror the backend's rule
+  } finally {
+    // Set on BOTH success and failure: a read failure must still let the
+    // user save against the defaults (documented above), so persistence
+    // unblocks here either way — only the source of `config` differs.
+    loaded.value = true;
   }
 });
 

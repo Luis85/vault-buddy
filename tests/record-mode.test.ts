@@ -88,4 +88,72 @@ describe("RecordMode", () => {
       cfg: { ...cfg, transcribe: true },
     });
   });
+
+  it("does not persist a transcription toggle made before the config read resolves", async () => {
+    // Regression guard: RecordMode seeds `config` with hardcoded defaults and
+    // renders TranscriptionSettings immediately (recording must never block
+    // on the config read), but the vault's REAL config only lands once
+    // get_capture_config resolves in onMounted. Toggling a transcription
+    // field before that read resolves used to persist() the default-seeded
+    // config to disk — silently clobbering the vault's real
+    // recordingFolder/bitrateKbps/devices/createNote/followUpTemplate — and
+    // the in-flight read would then overwrite config.value with the
+    // pre-persist config anyway, discarding the toggle too. persist() must
+    // stay gated until the real config has loaded (or the load has failed).
+    const cfg = {
+      mode: "voice-note",
+      recordingFolder: "Meetings",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: false,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+    };
+    let resolveConfig!: (v: unknown) => void;
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") {
+        return new Promise((resolve) => {
+          resolveConfig = resolve;
+        });
+      }
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    // Toggle while the config read is still in flight (unresolved).
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+
+    // Now let the real config land.
+    resolveConfig(cfg);
+    await flushPromises();
+
+    // The resolved read must never itself trigger a save either.
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+    // The real config replaced the default-seeded state — the pre-resolve
+    // toggle is superseded by the resolved cfg (transcribe: false), and the
+    // vault's real default mode (voice-note) is now reflected.
+    expect(wrapper.get('[data-testid="mode-voice-note"]').classes()).toContain(
+      "border-violet-400",
+    );
+    expect(
+      wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
+    ).toBe(false);
+
+    // Once loaded, a toggle persists normally against the real config.
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+    const saveCall = calls.find((c) => c.cmd === "set_capture_config");
+    expect(saveCall?.args).toEqual({
+      id: "v1",
+      cfg: { ...cfg, transcribe: true },
+    });
+  });
 });
