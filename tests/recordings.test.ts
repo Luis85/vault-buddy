@@ -288,4 +288,26 @@ describe("Recordings", () => {
     expect(row?.textContent).not.toContain("Transcript failed");
     expect(row?.querySelector('[title="Transcript failed"]')).toBeFalsy();
   });
+
+  it("exposes a live job's failure reason via the status indicator's title, falling back to the generic label with no live job", async () => {
+    // A GENERIC "Transcript failed" hides WHY — the store already holds the
+    // reason on job.error (surfaced via capture:transcribeFailed) for THIS
+    // session's jobs. A historical failure fetched from list_recordings never
+    // gets a live job entry, so it can't show a reason and keeps the label.
+    const store = useCaptureStore();
+    const rows = sample.map((r) => ({ ...r }));
+    store.transcriptions = {
+      [rows[1].mp3]: job({ phase: "failed", progress: null, error: "whisper inference: out of memory" }),
+    };
+    const { wrapper } = await mountView({ list: rows });
+
+    // sample[1] "Idea" — live failed job carrying a reason.
+    const liveRow = wrapper.findAll('[data-testid="recording-row"]')[1].element.parentElement;
+    expect(liveRow?.querySelector('[title="whisper inference: out of memory"]')).toBeTruthy();
+    expect(liveRow?.querySelector('[title="Transcript failed"]')).toBeFalsy();
+
+    // sample[2] "Orphan" — fetched transcriptStatus "failed", no live job.
+    const historicalRow = wrapper.findAll('[data-testid="recording-row"]')[2].element.parentElement;
+    expect(historicalRow?.querySelector('[title="Transcript failed"]')).toBeTruthy();
+  });
 });

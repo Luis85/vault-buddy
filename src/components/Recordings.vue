@@ -78,6 +78,17 @@ function statusLabel(r: Recording): string {
   return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓", cancelled: "Cancelled" }[effectiveStatus(r)];
 }
 
+/**
+ * Hover text for the status indicator: a live job's failure reason
+ * (`job.error`, set only on a same-session "failed" transition) when there
+ * is one, else the generic label. A historical failure fetched from
+ * `list_recordings` has no live job — the reason isn't persisted there — so
+ * it always falls back to the generic "Transcript failed".
+ */
+function statusTitle(r: Recording): string {
+  return capture.transcriptions[r.mp3]?.error || statusLabel(r);
+}
+
 async function runRetranscribe(mp3: string) {
   confirmMp3.value = null;
   try {
@@ -208,7 +219,7 @@ async function open(mp3: string) {
           <span
             v-if="statusLabel(r)"
             class="shrink-0 text-[10px] text-slate-500"
-            :title="statusLabel(r)"
+            :title="statusTitle(r)"
           >
             <span
               v-if="isActive(r.mp3)"

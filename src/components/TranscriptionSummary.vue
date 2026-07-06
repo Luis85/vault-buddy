@@ -21,6 +21,18 @@ const failedCount = computed(
       .length,
 );
 
+// The newest failed job's reason (finishedTranscriptions is newest-first) —
+// gated on `!active` so it can never override the active-job title (the
+// visible label already prioritizes the active job over a failure; the
+// tooltip must agree with it, not describe a different job).
+const newestFailedReason = computed(() => {
+  if (active.value) return null;
+  return (
+    capture.finishedTranscriptions.find((job) => job.phase === "failed")
+      ?.error ?? null
+  );
+});
+
 function percent(progress: number): number {
   return Math.round(Math.min(1, Math.max(0, progress)) * 100);
 }
@@ -53,7 +65,7 @@ const hasSomethingToShow = computed(() => summaryLabel.value !== null);
     data-testid="transcription-summary"
     role="button"
     tabindex="0"
-    :title="summaryLabel ?? undefined"
+    :title="newestFailedReason ?? summaryLabel ?? undefined"
     class="cursor-pointer truncate rounded-lg border px-2 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
     :class="
       active

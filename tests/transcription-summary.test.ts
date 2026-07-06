@@ -118,4 +118,32 @@ describe("TranscriptionSummary", () => {
     const wrapper = mount(TranscriptionSummary);
     expect(wrapper.find('[data-testid="transcription-summary"]').exists()).toBe(false);
   });
+
+  it("exposes the newest failed job's error via the chip's title", () => {
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "f1.mp3": job({
+        mp3: "f1.mp3",
+        name: "Older",
+        phase: "failed",
+        progress: null,
+        error: "older error",
+        startedAtMs: 100,
+      }),
+      "f2.mp3": job({
+        mp3: "f2.mp3",
+        name: "Newer",
+        phase: "failed",
+        progress: null,
+        error: "whisper inference: out of memory",
+        startedAtMs: 200,
+      }),
+    };
+    const wrapper = mount(TranscriptionSummary);
+    // finishedTranscriptions is newest-first (by startedAtMs) — the chip's
+    // title should reflect the newest failure's reason, not the oldest.
+    expect(wrapper.get('[data-testid="transcription-summary"]').attributes("title")).toBe(
+      "whisper inference: out of memory",
+    );
+  });
 });
