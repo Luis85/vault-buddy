@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { useNotificationsStore } from "../stores/notifications";
 const notifications = useNotificationsStore();
+// Solid, high-contrast backgrounds — NOT the old low-alpha tints
+// (bg-red-500/20 etc.). The panel window is transparent, so a ~15-20% tint
+// left the toast text barely legible ("not readable due to its transparency").
+// An opaque background makes each toast readable regardless of what shows
+// through the panel behind it.
 const cls: Record<string, string> = {
-  error: "bg-red-500/20 text-red-200",
-  warning: "bg-amber-500/15 text-amber-200",
-  success: "bg-emerald-500/15 text-emerald-200",
-  info: "bg-white/10 text-slate-200",
+  error: "bg-red-900 text-red-50 ring-1 ring-red-500/50",
+  warning: "bg-amber-900 text-amber-50 ring-1 ring-amber-500/50",
+  success: "bg-emerald-900 text-emerald-50 ring-1 ring-emerald-500/50",
+  info: "bg-slate-800 text-slate-100 ring-1 ring-white/15",
 };
 </script>
 <template>
@@ -20,7 +25,7 @@ const cls: Record<string, string> = {
       data-testid="notification"
       :role="item.kind === 'error' ? 'alert' : 'status'"
       :aria-live="item.kind === 'error' ? 'assertive' : 'polite'"
-      :class="['pointer-events-auto flex items-start justify-between gap-2 rounded-lg px-2 py-1 text-xs', cls[item.kind]]"
+      :class="['pointer-events-auto flex items-start justify-between gap-2 rounded-lg px-2 py-1 text-xs shadow-lg', cls[item.kind]]"
     >
       <span class="min-w-0 break-words">{{ item.message }}</span>
       <button

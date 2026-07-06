@@ -34,8 +34,35 @@ describe("NotificationHost", () => {
     n.success("done");
     const w = mount(NotificationHost);
     const items = w.findAll('[data-testid="notification"]');
-    expect(items[0]!.classes()).toContain("text-amber-200");
-    expect(items[1]!.classes()).toContain("text-emerald-200");
+    expect(items[0]!.classes()).toContain("text-amber-50");
+    expect(items[1]!.classes()).toContain("text-emerald-50");
+  });
+
+  it("gives each toast an opaque background so it stays readable over the translucent panel", () => {
+    // Regression: toasts used bg-red-500/20 (and /15 for others) — a ~15-20%
+    // tint over the semi-transparent panel window left the text barely
+    // legible ("not readable due to its transparency"). Each kind must now use
+    // a solid, high-contrast background, never the low-alpha variants.
+    const n = useNotificationsStore();
+    n.error("boom");
+    n.warning("careful");
+    n.success("done");
+    n.info("fyi");
+    const w = mount(NotificationHost);
+    const items = w.findAll('[data-testid="notification"]');
+    const bgOf = (i: number) =>
+      items[i]!.classes().filter((c) => c.startsWith("bg-"));
+    // No toast may keep a translucent (alpha-suffixed, e.g. /20, /15, /10)
+    // background — that is exactly the transparency that made them unreadable.
+    for (const item of items) {
+      for (const cls of item.classes().filter((c) => c.startsWith("bg-"))) {
+        expect(cls).not.toContain("/");
+      }
+    }
+    expect(bgOf(0)).toContain("bg-red-900"); // error
+    expect(bgOf(1)).toContain("bg-amber-900"); // warning
+    expect(bgOf(2)).toContain("bg-emerald-900"); // success
+    expect(bgOf(3)).toContain("bg-slate-800"); // info
   });
 
   it("keeps the container pointer-events-none while each toast is pointer-events-auto", () => {
