@@ -39,4 +39,25 @@ describe("buddyMessages", () => {
     // two different events
     expect(new Set(lines).size).toBe(lines.length);
   });
+
+  describe("failureMessage", () => {
+    it("falls back to the generic line when no reason is given", () => {
+      expect(failureMessage()).toBe("Hmm, that didn't work 😕");
+    });
+
+    it("speaks the reason instead of the generic line when one is given", () => {
+      const msg = failureMessage("model missing");
+      expect(msg).toContain("model missing");
+      expect(msg).not.toContain("didn't work");
+    });
+
+    it("truncates a long reason", () => {
+      const reason = "a".repeat(80);
+      const msg = failureMessage(reason);
+      expect(msg).toContain("…");
+      expect(msg).not.toContain("a".repeat(80));
+      // truncated to 60 chars of reason, plus the surrounding copy/emoji
+      expect(msg.length).toBeLessThan(reason.length);
+    });
+  });
 });

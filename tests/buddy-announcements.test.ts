@@ -94,7 +94,7 @@ describe("useBuddyAnnouncements", () => {
     expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(true);
   });
 
-  it("announces a transcription failure once", async () => {
+  it("announces a transcription failure once, speaking its reason", async () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();
     capture.transcriptions = {
@@ -110,7 +110,37 @@ describe("useBuddyAnnouncements", () => {
       },
     };
     await wrapper.vm.$nextTick();
-    expect(spoken.filter((t) => t.includes("didn't work"))).toHaveLength(1);
+    // The job's specific reason replaces the generic line, spoken exactly once.
+    expect(spoken.filter((t) => t.includes("model missing"))).toHaveLength(1);
+    expect(spoken.some((t) => t.includes("didn't work"))).toBe(false);
+  });
+
+  it("falls back to the generic failure line when a failed job has no reason", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "/v/b.mp3": {
+        mp3: "/v/b.mp3",
+        vaultId: "v1",
+        name: "b",
+        phase: "failed",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("didn't work"))).toBe(true);
+  });
+
+  it("announces the capture error's reason, not the generic line", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.error = "disk is full";
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("disk is full"))).toBe(true);
+    expect(spoken.some((t) => t.includes("didn't work"))).toBe(false);
   });
 
   it("stays silent when Buddy messages is off", async () => {

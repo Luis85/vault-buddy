@@ -75,13 +75,13 @@ export function useBuddyAnnouncements(): void {
       if (!curr || curr === prev) return;
       const job = capture.finishedTranscriptions[0];
       if (job?.phase === "done") announce(transcribedMessage());
-      else if (job?.phase === "failed") announce(failureMessage());
+      else if (job?.phase === "failed") announce(failureMessage(job.error ?? undefined));
     },
   );
   watch(
     () => capture.error,
     (err, prev) => {
-      if (err && err !== prev) announce(failureMessage());
+      if (err && err !== prev) announce(failureMessage(err));
     },
   );
 }
