@@ -178,6 +178,7 @@ describe("useBuddyAnnouncements", () => {
     };
     await wrapper.vm.$nextTick();
     expect(spoken.some((t) => t.includes("didn't work"))).toBe(true);
+    expect(spoken.filter((t) => t.includes("didn't work"))).toHaveLength(1);
   });
 
   it("announces the capture error's reason, not the generic line", async () => {
@@ -187,6 +188,7 @@ describe("useBuddyAnnouncements", () => {
     await wrapper.vm.$nextTick();
     expect(spoken.some((t) => t.includes("disk is full"))).toBe(true);
     expect(spoken.some((t) => t.includes("didn't work"))).toBe(false);
+    expect(spoken.filter((t) => t.includes("disk is full"))).toHaveLength(1);
   });
 
   it("stays silent when Buddy messages is off", async () => {
