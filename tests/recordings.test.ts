@@ -56,8 +56,10 @@ describe("Recordings", () => {
 
   it("fetches list_recordings for the vault", async () => {
     const { calls } = await mountView();
-    // onMounted registers the capture event listeners before fetching, so
-    // list_recordings is no longer necessarily calls[0] — find it instead.
+    // Recordings.vue no longer registers capture:* listeners itself (the
+    // store does), so list_recordings is calls[0] in practice today — using
+    // find() instead keeps this robust if onMounted ever grows another
+    // invoke ahead of the fetch.
     expect(calls.find((c) => c.cmd === "list_recordings")).toEqual({
       cmd: "list_recordings",
       args: { id: "v1" },
@@ -241,5 +243,49 @@ describe("Recordings", () => {
     expect(wrapper.findAll('[data-testid="retranscribe"]')[1].attributes("disabled")).toBeUndefined();
     expect(row()?.textContent).toContain("✓");
     expect(wrapper.find('[title="Transcribed ✓"]').exists()).toBe(true);
+  });
+
+  it("shows a Cancelled status label and glyph for a fetched cancelled transcript, and re-transcribes without a confirm", async () => {
+    // Regression: the old `statusLabel` lookup had no "cancelled" key, so
+    // `v-if="statusLabel(r)"` hid the row's status indicator entirely.
+    const cancelledRow = {
+      mp3: "C:/v/Meetings/2026/07/x.mp3",
+      title: "Called off",
+      recordedAt: "2026-07-04 12:00",
+      duration: "0:10",
+      type: "Meeting",
+      transcriptStatus: "cancelled",
+    };
+    const { wrapper, calls } = await mountView({ list: [cancelledRow] });
+
+    const indicator = wrapper.find('[title="Cancelled"]');
+    expect(indicator.exists()).toBe(true);
+    expect(indicator.text().trim()).not.toBe("");
+
+    // Nothing to preserve for a cancelled transcript — re-transcribe should
+    // run immediately (no "replace the current transcript?" confirm), same
+    // as any other non-complete status.
+    await wrapper.get('[data-testid="retranscribe"]').trigger("click");
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "retranscribe")).toBe(true);
+    expect(wrapper.find('[data-testid="retranscribe-confirm"]').exists()).toBe(false);
+  });
+
+  it("shows a Cancelled status (not Transcript failed) when a live job's phase moves to cancelled", async () => {
+    // Regression: `effectiveStatus` used to fold a live "cancelled" job
+    // phase into the "failed" bucket, mislabeling a same-session cancel as
+    // "Transcript failed".
+    const store = useCaptureStore();
+    const rows = sample.map((r) => ({ ...r }));
+    store.transcriptions = { [rows[1].mp3]: job({ phase: "transcribing" }) };
+    const { wrapper } = await mountView({ list: rows });
+
+    store.upsert(rows[1].mp3, { phase: "cancelled", progress: null });
+    await flushPromises();
+
+    const row = wrapper.findAll('[data-testid="recording-row"]')[1].element.parentElement;
+    expect(row?.querySelector('[title="Cancelled"]')).toBeTruthy();
+    expect(row?.textContent).not.toContain("Transcript failed");
+    expect(row?.querySelector('[title="Transcript failed"]')).toBeFalsy();
   });
 });

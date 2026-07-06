@@ -20,8 +20,10 @@ const grouped = ref(true);
 
 const UNGROUPED = "Ungrouped";
 
-// Phases that occupy the single-worker transcription queue (mirrors the
-// store's own ACTIVE_PHASES). A row is "busy" only while ITS mp3 has a live
+// Phases that occupy the single-worker transcription queue: the store's own
+// ACTIVE_PHASES plus "queued" (a queued job hasn't started running, but its
+// row is still busy/cancellable, so this component's notion of "active" is
+// intentionally broader). A row is "busy" only while ITS mp3 has a live
 // entry in `capture.transcriptions` — backend-seeded on store init and kept
 // live by capture:* events the store owns — never a component-local ref.
 // The old local `transcribingMp3` Set started empty on every remount (this
@@ -49,7 +51,8 @@ function isActive(mp3: string): boolean {
 function effectiveStatus(r: Recording): Recording["transcriptStatus"] {
   const phase = jobPhase(r.mp3);
   if (phase === "done") return "complete";
-  if (phase === "failed" || phase === "cancelled") return "failed";
+  if (phase === "cancelled") return "cancelled";
+  if (phase === "failed") return "failed";
   return r.transcriptStatus;
 }
 
@@ -72,7 +75,7 @@ const sections = computed<Array<{ type: string | null; items: Recording[] }>>(()
 
 function statusLabel(r: Recording): string {
   if (isActive(r.mp3)) return "Transcribing…";
-  return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓" }[effectiveStatus(r)];
+  return { none: "", pending: "Transcribing…", failed: "Transcript failed", complete: "Transcribed ✓", cancelled: "Cancelled" }[effectiveStatus(r)];
 }
 
 async function runRetranscribe(mp3: string) {
@@ -214,7 +217,7 @@ async function open(mp3: string) {
               aria-label="Transcribing…"
               class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500/40 border-t-slate-300 align-middle"
             ></span>
-            <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : "…" }}</span>
+            <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : effectiveStatus(r) === "cancelled" ? "⦸" : "…" }}</span>
           </span>
           <button
             v-if="isActive(r.mp3)"
