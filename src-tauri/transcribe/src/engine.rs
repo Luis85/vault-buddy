@@ -2,7 +2,7 @@
 //! feature. Static-linked — no runtime DLL. Not Linux-tested; the
 //! windows-app CI job is the compile gate.
 
-use crate::Transcriber;
+use crate::{CancelToken, Transcriber};
 use std::path::Path;
 use vault_buddy_core::transcript::Segment;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -24,7 +24,13 @@ impl WhisperTranscriber {
 }
 
 impl Transcriber for WhisperTranscriber {
-    fn transcribe(&self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>, String> {
+    fn transcribe(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        cancel: &CancelToken,
+        on_progress: Box<dyn FnMut(i32) + Send>,
+    ) -> Result<Vec<Segment>, String> {
         let mut state = self
             .ctx
             .create_state()
@@ -50,6 +56,11 @@ impl Transcriber for WhisperTranscriber {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_special(false);
+        // Owned clone → 'static abort closure; returning true aborts full().
+        let cancel = cancel.clone();
+        params.set_abort_callback_safe(move || cancel.is_cancelled());
+        // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by value.
+        params.set_progress_callback_safe(on_progress);
         state
             .full(params, samples)
             .map_err(|e| format!("whisper inference: {e}"))?;
