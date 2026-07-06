@@ -54,6 +54,22 @@ export const useCaptureStore = defineStore("capture", {
       this.level = 0;
     },
     async init() {
+      // capture:started broadcasts to EVERY window; a non-initiating window
+      // (the buddy, the bubble) never calls start(), so this broadcast is the
+      // only way it learns a recording began. Without this listener the buddy
+      // stayed idle and its red rec-dot + blink animation (both gated on
+      // status==='recording') never appeared, even though Rust emitted the
+      // event and force-showed the buddy — the broadcast was dropped.
+      await listen<CaptureStatus>("capture:started", (event) => {
+        const s = event.payload;
+        this.status = "recording";
+        this.startedAtMs = s.startedAtMs;
+        this.vaultId = s.vaultId;
+        this.paused = s.paused;
+        this.pausedTotalMs = s.pausedTotalMs ?? 0;
+        this.pausedSinceMs = s.pausedSinceMs ?? null;
+        this.level = 0;
+      });
       await listen<CaptureSaved>("capture:saved", (event) => {
         this.resetRecordingState();
         this.lastSavedFile = event.payload.mp3;
