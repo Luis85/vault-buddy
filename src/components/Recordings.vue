@@ -91,12 +91,7 @@ function statusTitle(r: Recording): string {
 
 async function runRetranscribe(mp3: string) {
   confirmMp3.value = null;
-  try {
-    await capture.retranscribe(mp3);
-  } catch (e) {
-    openError.value = String(e);
-    logWarning(`retranscribe rejected: ${String(e)}`);
-  }
+  await capture.retranscribe(mp3);
 }
 
 function onRetranscribeClick(r: Recording) {
