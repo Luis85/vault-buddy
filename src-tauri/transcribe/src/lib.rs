@@ -164,6 +164,7 @@ pub fn transcribe_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
     use vault_buddy_core::transcript::{transcript_path, Segment};
 
     struct FakeOk;
@@ -445,7 +446,6 @@ mod tests {
 
     #[test]
     fn on_progress_is_forwarded_to_the_engine() {
-        use std::sync::atomic::AtomicUsize;
         let dir = tempfile::tempdir().unwrap();
         let mp3 = write_tiny_mp3(dir.path());
         let calls = Arc::new(AtomicUsize::new(0));
