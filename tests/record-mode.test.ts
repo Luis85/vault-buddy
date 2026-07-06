@@ -56,4 +56,36 @@ describe("RecordMode", () => {
     await flushPromises();
     expect(wrapper.get('[data-testid="mode-meeting"]').classes()).toContain("border-violet-400");
   });
+
+  it("saves a changed transcription setting to the vault config, preserving the rest", async () => {
+    const cfg = {
+      mode: "meeting",
+      recordingFolder: "Meetings",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: false,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+    };
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_capture_config") return cfg;
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+
+    const saveCall = calls.find((c) => c.cmd === "set_capture_config");
+    expect(saveCall?.args).toEqual({
+      id: "v1",
+      cfg: { ...cfg, transcribe: true },
+    });
+  });
 });
