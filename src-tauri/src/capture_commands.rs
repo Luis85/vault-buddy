@@ -1264,7 +1264,7 @@ fn process_transcription(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let _ = vault_buddy_core::transcript::force_write_sidecar(
+            let _ = vault_buddy_core::transcript::replace_if_ours(
                 &vault_buddy_core::transcript::transcript_path(&job.mp3),
                 &vault_buddy_core::transcript::render_cancelled(&name),
             );
