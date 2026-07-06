@@ -8,6 +8,8 @@ import { useNotificationsStore } from "../src/stores/notifications";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
+import { logWarning } from "../src/logging";
+
 const mountView = async (mode: "meeting" | "voice-note" = "meeting") => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
   mockIPC((cmd, args) => {
@@ -126,6 +128,9 @@ describe("RecordMode", () => {
           i.message.includes("disk full"),
       ),
     ).toBe(true);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("transcription settings save failed"),
+    );
   });
 
   it("does not persist a transcription toggle made before the config read resolves", async () => {

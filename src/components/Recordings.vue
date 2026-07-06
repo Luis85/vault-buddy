@@ -86,7 +86,7 @@ function statusLabel(r: Recording): string {
  * it always falls back to the generic "Transcript failed".
  */
 function statusTitle(r: Recording): string {
-  return capture.transcriptions[r.mp3]?.error || statusLabel(r);
+  return capture.transcriptions[r.mp3]?.error ?? statusLabel(r);
 }
 
 async function runRetranscribe(mp3: string) {

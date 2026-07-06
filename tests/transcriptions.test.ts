@@ -129,6 +129,20 @@ describe("Transcriptions", () => {
     );
   });
 
+  it("shows an honest indeterminate transcribing label — no percent — when a transcribing job's progress is unknown", () => {
+    // Distinct from the "preparing" spinner test above: this pins
+    // phaseLabel's OWN "transcribing" branch (job.progress != null ? ...%
+    // : "Transcribing…"), which a phase-only test can't exercise.
+    const store = useCaptureStore();
+    store.transcriptions = {
+      "a.mp3": job({ phase: "transcribing", progress: null }),
+    };
+    const wrapper = mount(Transcriptions);
+    const active = wrapper.get('[data-testid="transcription-active"]');
+    expect(active.text()).toContain("Transcribing…");
+    expect(active.text()).not.toMatch(/\d+%/);
+  });
+
   it("shows the waiting-for-recording label when nothing is active yet", () => {
     const store = useCaptureStore();
     store.waitingForRecording = true;

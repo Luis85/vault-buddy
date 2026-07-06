@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
+import { formatDuration } from "../utils/formatDuration";
 import type { TranscriptionJob } from "../types";
 
 const capture = useCaptureStore();
@@ -63,13 +64,7 @@ function phaseLabel(job: TranscriptionJob): string {
 
 function elapsed(startedAtMs: number | null): string {
   if (startedAtMs === null) return "0:00";
-  const total = Math.max(0, Math.floor((now.value - startedAtMs) / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return h > 0
-    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-    : `${m}:${String(s).padStart(2, "0")}`;
+  return formatDuration(now.value - startedAtMs);
 }
 
 const STATUS_META: Record<string, { glyph: string; label: string }> = {

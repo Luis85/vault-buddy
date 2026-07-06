@@ -114,6 +114,36 @@ describe("TranscriptionSettings", () => {
     ]);
   });
 
+  it("uses today's exact unprefixed ids when idPrefix is omitted", () => {
+    // Locks the default so two existing consumers (CaptureSettings.vue,
+    // RecordMode.vue) that don't pass idPrefix keep rendering identical
+    // markup — no id churn from this change.
+    const wrapper = mountWith({ ...baseValue, transcribe: true });
+    expect(
+      wrapper.get('[data-testid="transcribe-toggle"]').attributes("id"),
+    ).toBe("capture-transcribe-toggle");
+    expect(
+      wrapper.get('[data-testid="transcript-timestamps-toggle"]').attributes("id"),
+    ).toBe("capture-transcript-timestamps-toggle");
+  });
+
+  it("scopes every id/for pair with idPrefix so two instances can't collide (C3)", () => {
+    active = mount(TranscriptionSettings, {
+      props: { modelValue: { ...baseValue, transcribe: true }, idPrefix: "record-" },
+      attachTo: document.body,
+    });
+    const wrapper = active;
+    const toggle = wrapper.get('[data-testid="transcribe-toggle"]');
+    expect(toggle.attributes("id")).toBe("record-capture-transcribe-toggle");
+    const timestamps = wrapper.get('[data-testid="transcript-timestamps-toggle"]');
+    expect(timestamps.attributes("id")).toBe("record-capture-transcript-timestamps-toggle");
+    // Each label's `for` must match its control's scoped `id`, not the
+    // unprefixed default — otherwise clicking the label would target nothing.
+    // `.get()` itself throws (a clear failure) if the selector matches nothing.
+    wrapper.get(`label[for="${toggle.attributes("id")}"]`);
+    wrapper.get(`label[for="${timestamps.attributes("id")}"]`);
+  });
+
   it("never mutates the modelValue prop object", async () => {
     const modelValue = { ...baseValue, transcribe: true };
     const frozen = Object.freeze({ ...modelValue });

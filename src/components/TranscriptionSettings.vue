@@ -15,11 +15,29 @@ interface TranscriptionSettingsValue {
 // emits, so the prop is never mutated in place and CaptureSettings.vue (or
 // any future consumer, e.g. the Record view) stays the single owner of
 // the underlying reactive state.
-const props = defineProps<{ modelValue: TranscriptionSettingsValue }>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: TranscriptionSettingsValue;
+    /**
+     * Scopes this instance's DOM ids (label `for` + input/select `id`) so
+     * two mounted copies of this component can never collide — e.g. a
+     * future layout showing CaptureSettings and the Record view's
+     * TranscriptionSettings in the same document. Default keeps today's
+     * exact unprefixed ids (`capture-transcribe-toggle`, etc.).
+     */
+    idPrefix?: string;
+  }>(),
+  { idPrefix: "" },
+);
 const emit = defineEmits<{ "update:modelValue": [value: TranscriptionSettingsValue] }>();
 
 function patch(change: Partial<TranscriptionSettingsValue>) {
   emit("update:modelValue", { ...props.modelValue, ...change });
+}
+
+/** Prefixes a base id with `idPrefix` (empty by default, so ids match today's exactly). */
+function scopedId(base: string): string {
+  return `${props.idPrefix}${base}`;
 }
 
 const transcribe = computed({
@@ -67,12 +85,12 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
 
 <template>
   <section class="flex items-center justify-between">
-    <label for="capture-transcribe-toggle" class="text-sm text-slate-200">
+    <label :for="scopedId('capture-transcribe-toggle')" class="text-sm text-slate-200">
       Transcribe recordings
       <span class="block text-xs text-slate-500">Local speech-to-text · no cloud</span>
     </label>
     <input
-      id="capture-transcribe-toggle"
+      :id="scopedId('capture-transcribe-toggle')"
       v-model="transcribe"
       data-testid="transcribe-toggle"
       type="checkbox"
@@ -81,30 +99,30 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
   </section>
   <div v-if="transcribe" class="flex flex-col gap-3 border-l border-white/10 pl-3">
     <section class="flex items-center justify-between gap-2">
-      <label for="capture-transcription-model" class="text-sm text-slate-200">Model</label>
+      <label :for="scopedId('capture-transcription-model')" class="text-sm text-slate-200">Model</label>
       <SelectMenu
-        id="capture-transcription-model"
+        :id="scopedId('capture-transcription-model')"
         v-model="transcriptionModel"
         :options="modelOptions"
         data-testid="transcription-model-select"
       />
     </section>
     <section class="flex items-center justify-between gap-2">
-      <label for="capture-transcription-language" class="text-sm text-slate-200">Language</label>
+      <label :for="scopedId('capture-transcription-language')" class="text-sm text-slate-200">Language</label>
       <SelectMenu
-        id="capture-transcription-language"
+        :id="scopedId('capture-transcription-language')"
         v-model="transcriptionLanguage"
         :options="languageOptions"
         data-testid="transcription-language-select"
       />
     </section>
     <section class="flex items-center justify-between">
-      <label for="capture-transcript-timestamps-toggle" class="text-sm text-slate-200">
+      <label :for="scopedId('capture-transcript-timestamps-toggle')" class="text-sm text-slate-200">
         Timestamps
         <span class="block text-xs text-slate-500">Insert time markers in the transcript</span>
       </label>
       <input
-        id="capture-transcript-timestamps-toggle"
+        :id="scopedId('capture-transcript-timestamps-toggle')"
         v-model="transcriptTimestamps"
         data-testid="transcript-timestamps-toggle"
         type="checkbox"

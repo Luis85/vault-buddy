@@ -368,6 +368,57 @@ describe("capture store", () => {
     expect(store.queuedTranscriptions.map((j) => j.mp3)).toEqual(["b.mp3"]);
   });
 
+  it("seeds the active job's byte ratio for a downloading job with received/total (activeSeedProgress)", async () => {
+    // Distinct from the "transcribing" seed test above: activeSeedProgress's
+    // "downloading" branch prefers the received/total byte ratio over the
+    // raw percent field, and this is the only test that seeds init from a
+    // downloading (rather than transcribing) active job, so it's the only
+    // one that actually exercises that branch.
+    mockIPC((cmd) => {
+      if (cmd === "capture_status") return { recording: false, vaultId: null, startedAtMs: null };
+      if (cmd === "transcription_queue_status")
+        return {
+          active: {
+            mp3: "a.mp3",
+            vaultId: "v1",
+            phase: "downloading",
+            progress: null,
+            received: 30,
+            total: 120,
+            startedAtMs: 1,
+          },
+          queued: [],
+          waitingForRecording: false,
+        };
+    });
+    const store = useCaptureStore();
+    await store.init();
+    expect(store.transcriptions["a.mp3"].phase).toBe("downloading");
+    expect(store.transcriptions["a.mp3"].progress).toBeCloseTo(30 / 120);
+  });
+
+  it("keeps finishedTranscriptions bounded to MAX_FINISHED after many jobs finish in one session", async () => {
+    // finishedTranscriptions is a getter over the full (session-long, keyed)
+    // transcriptions map — this locks in that the exposed list stays capped
+    // even as far more jobs than the cap finish, so an unbounded session
+    // never grows the visible "Finished this session" list without limit.
+    const MAX_FINISHED = 20; // mirrors the store's private cap
+    mockIPC((cmd) =>
+      cmd === "capture_status"
+        ? { recording: false, vaultId: null, startedAtMs: null }
+        : { active: null, queued: [], waitingForRecording: false },
+    );
+    const store = useCaptureStore();
+    await store.init();
+    for (let i = 0; i < MAX_FINISHED + 10; i++) {
+      const mp3 = `job-${i}.mp3`;
+      state.eventHandlers["capture:transcribing"]!({ payload: { mp3, vaultId: "v1" } });
+      state.eventHandlers["capture:transcribed"]!({ payload: { mp3, transcript: `${mp3}.transcript.md` } });
+    }
+    expect(Object.keys(store.transcriptions)).toHaveLength(MAX_FINISHED + 10);
+    expect(store.finishedTranscriptions.length).toBe(MAX_FINISHED);
+  });
+
   it("clears waitingForRecording once a job actually starts running, not just at init", async () => {
     // Backend truth (capture_commands.rs): waiting_for_recording = active
     // .is_none() && !pending.is_empty() && is_recording(&app) — recomputed

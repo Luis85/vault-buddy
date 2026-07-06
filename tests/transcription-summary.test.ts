@@ -146,4 +146,73 @@ describe("TranscriptionSummary", () => {
       "whisper inference: out of memory",
     );
   });
+
+  it("titles the chip with the active job, never a failed job's reason, when both exist (pins the !active gate)", () => {
+    // Regression guard: `newestFailedReason` is gated on `if (active.value)
+    // return null` specifically so the tooltip never disagrees with the
+    // visible label, which already prioritizes the active job over a
+    // failure. If that guard were deleted, this would show the failed job's
+    // real, non-null `error` instead of the active job's label.
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "a.mp3": job({ progress: 0.3 }),
+      "failed.mp3": job({
+        mp3: "failed.mp3",
+        name: "Oops",
+        phase: "failed",
+        progress: null,
+        error: "whisper inference: out of memory",
+      }),
+    };
+    const wrapper = mount(TranscriptionSummary);
+    const title = wrapper.get('[data-testid="transcription-summary"]').attributes("title");
+    expect(title).toContain('Transcribing "Standup"');
+    expect(title).not.toContain("whisper inference: out of memory");
+  });
+
+  it("has role=button and is keyboard-activatable via Enter", async () => {
+    const capture = useCaptureStore();
+    capture.transcriptions = { "a.mp3": job({ progress: 0.1 }) };
+    const vaults = useVaultsStore();
+    const spy = vi.spyOn(vaults, "openTranscriptions");
+    const wrapper = mount(TranscriptionSummary);
+    const el = wrapper.get('[data-testid="transcription-summary"]');
+    expect(el.attributes("role")).toBe("button");
+    expect(el.attributes("tabindex")).toBe("0");
+    await el.trigger("keydown", { key: "Enter" });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("is keyboard-activatable via Space", async () => {
+    const capture = useCaptureStore();
+    capture.transcriptions = { "a.mp3": job({ progress: 0.1 }) };
+    const vaults = useVaultsStore();
+    const spy = vi.spyOn(vaults, "openTranscriptions");
+    const wrapper = mount(TranscriptionSummary);
+    const el = wrapper.get('[data-testid="transcription-summary"]');
+    await el.trigger("keydown", { key: " " });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the active-job color classes while a job is transcribing", () => {
+    const capture = useCaptureStore();
+    capture.transcriptions = { "a.mp3": job({ progress: 0.1 }) };
+    const wrapper = mount(TranscriptionSummary);
+    const classes = wrapper.get('[data-testid="transcription-summary"]').classes();
+    expect(classes).toEqual(
+      expect.arrayContaining(["bg-violet-500/15", "text-violet-100"]),
+    );
+    expect(classes).not.toEqual(expect.arrayContaining(["bg-red-500/20"]));
+  });
+
+  it("applies the failed color classes when nothing is active but a job failed", () => {
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "failed.mp3": job({ mp3: "failed.mp3", phase: "failed", progress: null }),
+    };
+    const wrapper = mount(TranscriptionSummary);
+    const classes = wrapper.get('[data-testid="transcription-summary"]').classes();
+    expect(classes).toEqual(expect.arrayContaining(["bg-red-500/20", "text-red-200"]));
+    expect(classes).not.toEqual(expect.arrayContaining(["bg-violet-500/15"]));
+  });
 });
