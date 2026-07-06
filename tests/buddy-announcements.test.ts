@@ -94,6 +94,52 @@ describe("useBuddyAnnouncements", () => {
     expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(true);
   });
 
+  it("stays quiet for a skipped (kept-existing) transcript, but still announces a genuine finish", async () => {
+    const wrapper = mount(Host);
+    const capture = useCaptureStore();
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        mp3: "/v/a.mp3",
+        vaultId: "v1",
+        name: "a",
+        phase: "preparing",
+        progress: null,
+        model: null,
+        error: null,
+        startedAtMs: Date.now(),
+      },
+    };
+    await wrapper.vm.$nextTick();
+    capture.transcriptions = {
+      "/v/a.mp3": {
+        ...capture.transcriptions["/v/a.mp3"],
+        phase: "done",
+        progress: 1,
+        skipped: true,
+      },
+    };
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(false);
+
+    // A genuine (non-skipped) finish for a different job still announces —
+    // the suppression must be specific to skipped jobs, not all "done"s.
+    capture.transcriptions = {
+      ...capture.transcriptions,
+      "/v/b.mp3": {
+        mp3: "/v/b.mp3",
+        vaultId: "v1",
+        name: "b",
+        phase: "done",
+        progress: 1,
+        model: null,
+        error: null,
+        startedAtMs: Date.now() + 1,
+      },
+    };
+    await wrapper.vm.$nextTick();
+    expect(spoken.some((t) => t.includes("Transcript ready"))).toBe(true);
+  });
+
   it("announces a transcription failure once, speaking its reason", async () => {
     const wrapper = mount(Host);
     const capture = useCaptureStore();

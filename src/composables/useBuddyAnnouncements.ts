@@ -74,8 +74,15 @@ export function useBuddyAnnouncements(): void {
     (curr, prev) => {
       if (!curr || curr === prev) return;
       const job = capture.finishedTranscriptions[0];
-      if (job?.phase === "done") announce(transcribedMessage());
-      else if (job?.phase === "failed") announce(failureMessage(job.error ?? undefined));
+      if (job?.phase === "done") {
+        // A skipped job (capture:transcribeSkipped) is "done" in the sense
+        // that a complete transcript exists, but nothing was regenerated —
+        // the skip already raised its own "kept your existing transcript…"
+        // notification, so the cheery "ready" line would be redundant.
+        if (!job.skipped) announce(transcribedMessage());
+      } else if (job?.phase === "failed") {
+        announce(failureMessage(job.error ?? undefined));
+      }
     },
   );
   watch(

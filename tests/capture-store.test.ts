@@ -720,6 +720,30 @@ describe("capture store", () => {
     ).toBe(true);
   });
 
+  it("transcribeSkipped marks the job skipped (so the buddy can stay quiet); a real transcription does not", async () => {
+    mockIPC((cmd) =>
+      cmd === "capture_status"
+        ? { recording: false, vaultId: null, startedAtMs: null }
+        : { active: null, queued: [], waitingForRecording: false },
+    );
+    const capture = useCaptureStore();
+    await capture.init();
+    state.eventHandlers["capture:transcribeSkipped"]!({
+      payload: {
+        mp3: "/v/a.mp3",
+        message: "kept your existing transcript — not overwritten",
+      },
+    });
+    expect(capture.transcriptions["/v/a.mp3"].phase).toBe("done");
+    expect(capture.transcriptions["/v/a.mp3"].skipped).toBe(true);
+
+    state.eventHandlers["capture:transcribed"]!({
+      payload: { mp3: "/v/b.mp3", transcript: "/v/b.transcript.md" },
+    });
+    expect(capture.transcriptions["/v/b.mp3"].phase).toBe("done");
+    expect(capture.transcriptions["/v/b.mp3"].skipped).toBeFalsy();
+  });
+
   it("rename window expires after 30s", async () => {
     vi.useFakeTimers();
     mockIPC(() => undefined);

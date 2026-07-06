@@ -319,7 +319,7 @@ export const useCaptureStore = defineStore("capture", {
         this.waitingForRecording = false;
       });
       await listen<CaptureTranscribed>("capture:transcribed", (event) => {
-        this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
+        this.upsert(event.payload.mp3, { phase: "done", progress: 1, skipped: false });
         this.refreshWaitingForRecording();
       });
       await listen<CaptureTranscribeFailed>("capture:transcribeFailed", (event) => {
@@ -331,9 +331,12 @@ export const useCaptureStore = defineStore("capture", {
       // A Complete/hand-edited transcript we refused to overwrite: a
       // complete transcript DOES exist (phase "done", like a real write),
       // but it's the user's own file, not a fresh transcription — warn
-      // rather than staying silent so they know it was preserved.
+      // rather than staying silent so they know it was preserved. `skipped:
+      // true` also lets the buddy suppress its "Transcript ready" line for
+      // this job (useBuddyAnnouncements) — the warning above already told
+      // the user, so the cheery announcement would be redundant/misleading.
       await listen<CaptureTranscribeSkipped>("capture:transcribeSkipped", (event) => {
-        this.upsert(event.payload.mp3, { phase: "done", progress: 1 });
+        this.upsert(event.payload.mp3, { phase: "done", progress: 1, skipped: true });
         useNotificationsStore().warning(event.payload.message);
         this.refreshWaitingForRecording();
       });

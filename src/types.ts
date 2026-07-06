@@ -69,6 +69,12 @@ export interface TranscriptionJob {
   model: string | null;
   error: string | null;
   startedAtMs: number | null;
+  /** True when a "done" job is a preserved existing transcript we chose not
+   * to overwrite (capture:transcribeSkipped) rather than a freshly
+   * regenerated one. Lets the buddy skip its "ready" announcement (the skip
+   * already raised its own notification) without changing how a "done" job
+   * renders in the Recordings/Transcriptions lists. */
+  skipped?: boolean;
 }
 
 export interface TranscriptionQueueStatus {
