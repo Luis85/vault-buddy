@@ -854,6 +854,10 @@ mod tests {
             warning.contains("Saved the recording, but the companion note couldn't be written"),
             "warning is the complete, user-ready sentence: {warning}"
         );
+        assert!(
+            warning.contains("simulated note write failure (test)"),
+            "warning includes the interpolated {{e}} reason, not just the static prefix: {warning}"
+        );
         assert!(!outcome.ended_early, "a note failure is not an early stop");
     }
 
@@ -885,6 +889,10 @@ mod tests {
         assert!(
             warning.contains("Saved the recording, but the companion note couldn't be written"),
             "note-write warning also present: {warning}"
+        );
+        assert!(
+            warning.contains("simulated note write failure (test)"),
+            "note-write warning includes the interpolated {{e}} reason, not just the static prefix: {warning}"
         );
     }
 }
