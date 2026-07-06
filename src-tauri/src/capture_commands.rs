@@ -1454,7 +1454,7 @@ pub fn transcription_queue_status(app: AppHandle) -> TranscriptionQueueDto {
 /// Cancel a queued or in-flight transcription. The queue mutex is held only
 /// for bookkeeping (flip the active job's `CancelToken`, or drop a pending
 /// job) — NEVER across the sidecar write below, which does a temp+fsync+
-/// rename (`force_write_sidecar`) and would otherwise stall every other
+/// rename (`replace_if_ours`) and would otherwise stall every other
 /// command that needs the same mutex (enqueue, status, a concurrent cancel)
 /// for the duration of a disk flush.
 ///
@@ -1462,10 +1462,15 @@ pub fn transcription_queue_status(app: AppHandle) -> TranscriptionQueueDto {
 /// only flips the token, and the worker's `TranscribeError::Cancelled` arm
 /// (in `process_transcription`) owns that write via `replace_if_ours`, which
 /// already refuses to clobber a finished/hand-edited transcript. A pending
-/// job's sidecar, by contrast, is only ever our own `pending` placeholder or
-/// absent (it never reached the worker), so the unguarded
-/// `force_write_sidecar` is correct there and duplicating the active-job
-/// write here would race the worker's own.
+/// job's sidecar is NOT guaranteed to be our own `pending` placeholder or
+/// absent: `retranscribe` pushes straight into the queue via
+/// `enqueue_transcription` with no up-front placeholder write, so a queued
+/// forced re-transcribe of an already-`Complete` (or hand-edited) recording
+/// still has that original on disk while pending. The write below therefore
+/// uses the same never-clobber `replace_if_ours` as the worker's arm above,
+/// not the unguarded `force_write_sidecar` — and duplicating the active
+/// job's write here (instead of leaving it to the worker) would still be
+/// wrong, since it would race the worker's own write to the same path.
 #[tauri::command]
 pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> {
     let mp3 = PathBuf::from(&path);
@@ -1491,7 +1496,7 @@ pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> 
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let _ = vault_buddy_core::transcript::force_write_sidecar(
+        let _ = vault_buddy_core::transcript::replace_if_ours(
             &vault_buddy_core::transcript::transcript_path(&mp3),
             &vault_buddy_core::transcript::render_cancelled(&name),
         );
