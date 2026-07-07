@@ -48,14 +48,19 @@ impl Transcriber for WhisperTranscriber {
             .create_state()
             .map_err(|e| format!("whisper state: {e}"))?;
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        // Leave CPU headroom so a recording started mid-inference isn't
-        // starved (the worker already postpones STARTING a job while
-        // recording, but whisper.full() is a blocking multi-minute FFI call
-        // that cannot yield once running).
-        let n_threads = std::thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(2).max(1))
-            .unwrap_or(2) as std::os::raw::c_int;
+        // Thread count is capped (see whisper_thread_count): the encoder
+        // gains little past a handful of threads, and a very high ggml thread
+        // count is a leading suspect in `-6 failed to encode` on high-core
+        // machines. The helper also keeps CPU headroom so a recording started
+        // mid-inference isn't starved (whisper.full() is a blocking
+        // multi-minute FFI call that cannot yield once running).
+        let n_threads = crate::whisper_thread_count(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(2),
+        ) as std::os::raw::c_int;
         params.set_n_threads(n_threads);
+        log::info!("whisper: transcribing with {n_threads} threads");
         // Always transcribe in the spoken/selected language — never translate
         // to English. The multilingual models (small especially) otherwise
         // drift to English translation on auto-detect; pinning the task off is
@@ -69,8 +74,10 @@ impl Transcriber for WhisperTranscriber {
         params.set_print_realtime(false);
         params.set_print_special(false);
         // Owned clone → 'static abort closure; returning true aborts full().
-        let cancel = cancel.clone();
-        params.set_abort_callback_safe(move || cancel.is_cancelled());
+        // Named distinctly (not shadowing `cancel`) so the `cancel` param
+        // stays usable in the failure log below — this clone is moved in.
+        let cancel_cb = cancel.clone();
+        params.set_abort_callback_safe(move || cancel_cb.is_cancelled());
         // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by value.
         params.set_progress_callback_safe(on_progress);
         state.full(params, samples).map_err(|e| {
@@ -84,6 +91,18 @@ impl Transcriber for WhisperTranscriber {
                 whisper_rs::WhisperError::GenericError(c) => Some(c),
                 _ => None,
             };
+            // Self-diagnosing: a bare `-6` told us nothing last time. Record
+            // the conditions the next failure needs — whether it was OUR abort
+            // (cancel set) vs a genuine compute failure, the thread count (the
+            // leading `-6` suspect on high-core machines), and the clip size —
+            // so the log alone says which. whisper.cpp's own "failed to
+            // encode/decode" line is already captured via install_logging_hooks.
+            log::error!(
+                "whisper inference failed: code={code:?} n_threads={n_threads} cancelled={} samples={} (~{}s audio)",
+                cancel.is_cancelled(),
+                samples.len(),
+                samples.len() / crate::decode::WHISPER_RATE as usize
+            );
             crate::inference_failure_message(code, &raw)
         })?;
 
