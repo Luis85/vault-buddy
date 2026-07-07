@@ -5,6 +5,7 @@
 
 use crate::session::{SourceInput, SourceMsg};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::Sample as _;
 use std::sync::mpsc::Sender;
 
 /// `DeviceTrait::name()` was removed in cpal 0.18 in favour of a `Display`
@@ -64,6 +65,34 @@ pub struct OpenSources {
     pub warnings: Vec<String>,
 }
 
+/// Build and start an input stream for one concrete PCM sample type,
+/// converting every sample to f32 via cpal's own (dasp_sample-backed)
+/// conversion. Hand-rolled per-format scaling used to cover only F32/I16/U16;
+/// WASAPI/ALSA/CoreAudio can report a default config in any of the other
+/// integer formats (24-bit devices surface as I24/U24, some as I32), and
+/// those fell through to `build_stream`'s catch-all "unsupported sample
+/// format" — refusing to record at all rather than mis-decoding audio.
+fn build_typed_stream<T>(
+    device: &cpal::Device,
+    stream_config: cpal::StreamConfig,
+    tx: Sender<SourceMsg>,
+    on_error: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    device.build_input_stream(
+        stream_config,
+        move |data: &[T], _| {
+            let samples = data.iter().map(|&s| f32::from_sample(s)).collect();
+            let _ = tx.send(SourceMsg::Samples(samples));
+        },
+        on_error,
+        None,
+    )
+}
+
 fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
@@ -76,35 +105,26 @@ fn build_stream(
     };
     let stream_config: cpal::StreamConfig = config.config();
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            stream_config,
-            move |data: &[f32], _| {
-                let _ = tx.send(SourceMsg::Samples(data.to_vec()));
-            },
-            on_error,
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            stream_config,
-            move |data: &[i16], _| {
-                let samples = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
-                let _ = tx.send(SourceMsg::Samples(samples));
-            },
-            on_error,
-            None,
-        ),
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            stream_config,
-            move |data: &[u16], _| {
-                let samples = data
-                    .iter()
-                    .map(|s| (*s as f32 / u16::MAX as f32) * 2.0 - 1.0)
-                    .collect();
-                let _ = tx.send(SourceMsg::Samples(samples));
-            },
-            on_error,
-            None,
-        ),
+        cpal::SampleFormat::I8 => build_typed_stream::<i8>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::I16 => build_typed_stream::<i16>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::I24 => {
+            build_typed_stream::<cpal::I24>(device, stream_config, tx, on_error)
+        }
+        cpal::SampleFormat::I32 => build_typed_stream::<i32>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::I64 => build_typed_stream::<i64>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U8 => build_typed_stream::<u8>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U16 => build_typed_stream::<u16>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U24 => {
+            build_typed_stream::<cpal::U24>(device, stream_config, tx, on_error)
+        }
+        cpal::SampleFormat::U32 => build_typed_stream::<u32>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U64 => build_typed_stream::<u64>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::F32 => build_typed_stream::<f32>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::F64 => build_typed_stream::<f64>(device, stream_config, tx, on_error),
+        // DSD is a 1-bit density-modulated bitstream, not PCM — converting it
+        // to f32 needs a dedicated DSD-to-PCM filter, not a numeric cast, and
+        // no known consumer microphone or loopback device exposes it. Left as
+        // an explicit unsupported error rather than silently mis-decoding.
         other => return Err(format!("unsupported sample format {other:?}")),
     }
     .map_err(|e| e.to_string())?;
