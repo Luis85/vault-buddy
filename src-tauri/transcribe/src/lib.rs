@@ -121,7 +121,16 @@ pub fn transcribe_recording(
     on_progress: Box<dyn FnMut(i32) + Send>,
 ) -> Result<TranscribeOutcome, TranscribeError> {
     let started = std::time::Instant::now();
-    let samples = decode::decode_to_16k_mono(mp3).map_err(TranscribeError::Failed)?;
+    // Decode is now cancellable mid-file (it polls the same token). An
+    // aborted decode returns Err, so disambiguate exactly as the inference
+    // error branch below does: the token, not the error text, is the truth.
+    let samples = decode::decode_to_16k_mono(mp3, cancel).map_err(|e| {
+        if cancel.is_cancelled() {
+            TranscribeError::Cancelled
+        } else {
+            TranscribeError::Failed(e)
+        }
+    })?;
     if cancel.is_cancelled() {
         return Err(TranscribeError::Cancelled); // cheap to bail before inference
     }

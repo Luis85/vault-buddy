@@ -1186,9 +1186,16 @@ fn process_transcription(
         let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
     }
 
-    let model = match ensure_model(app, tier, &job.mp3) {
+    let model = match ensure_model(app, tier, &job.mp3, &cancel) {
         Ok(p) => p,
-        Err(e) => return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}")),
+        Err(e) => {
+            // A cancel during download returns Err too — the token says which.
+            // A user cancel is a cancellation, not a failure.
+            if cancel.is_cancelled() {
+                return emit_cancelled(app, &job.mp3);
+            }
+            return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}"));
+        }
     };
     // Handover: the model is on disk now (just downloaded, or already
     // present) — replace the download row with "preparing" BEFORE the
@@ -1199,6 +1206,11 @@ fn process_transcription(
         serde_json::json!({ "mp3": job.mp3.to_string_lossy() }),
     );
 
+    // A cancel that landed during download/prepare: honor it before the
+    // (uninterruptible, multi-second) model load rather than after it.
+    if cancel.is_cancelled() {
+        return emit_cancelled(app, &job.mp3);
+    }
     if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
         match WhisperTranscriber::load(&model) {
             Ok(w) => *loaded = Some((tier, w)),
@@ -1276,23 +1288,7 @@ fn process_transcription(
             );
         }
         Err(TranscribeError::Failed(e)) => fail_transcription(app, &job.mp3, &e),
-        Err(TranscribeError::Cancelled) => {
-            // Our own placeholder → cancelled; never a complete/user file.
-            let name = job
-                .mp3
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let _ = vault_buddy_core::transcript::replace_if_ours(
-                &vault_buddy_core::transcript::transcript_path(&job.mp3),
-                &vault_buddy_core::transcript::render_cancelled(&name),
-            );
-            let _ = app.emit(
-                "capture:transcribeCancelled",
-                serde_json::json!({ "mp3": job.mp3.to_string_lossy() }),
-            );
-            log::info!("transcribe: cancelled {}", job.mp3.display());
-        }
+        Err(TranscribeError::Cancelled) => emit_cancelled(app, &job.mp3),
     }
 }
 
@@ -1300,7 +1296,12 @@ fn process_transcription(
 /// `mp3` identifies the job in the download-progress event and in the
 /// `active` phase this sets while a download is running (Task 4 reads
 /// both) — it names nothing else here.
-fn ensure_model(app: &AppHandle, tier: ModelTier, mp3: &Path) -> Result<PathBuf, String> {
+fn ensure_model(
+    app: &AppHandle,
+    tier: ModelTier,
+    mp3: &Path,
+    cancel: &CancelToken,
+) -> Result<PathBuf, String> {
     if let Some(p) = model_path(tier) {
         if p.exists() {
             return Ok(p);
@@ -1310,7 +1311,7 @@ fn ensure_model(app: &AppHandle, tier: ModelTier, mp3: &Path) -> Result<PathBuf,
     let app = app.clone();
     let mp3 = mp3.to_path_buf();
     let mut last_emit: u64 = 0;
-    download_model(tier, &mut |received, total| {
+    download_model(tier, cancel, &mut |received, total| {
         // Throttle: an event every ~4 MB (and the final byte).
         if received.saturating_sub(last_emit) >= 4_000_000 || Some(received) == total {
             last_emit = received;
@@ -1328,6 +1329,27 @@ fn ensure_model(app: &AppHandle, tier: ModelTier, mp3: &Path) -> Result<PathBuf,
             );
         }
     })
+}
+
+/// Terminal bookkeeping for a cancelled transcription — shared by the
+/// worker's `TranscribeError::Cancelled` arm and the pre-inference cancel
+/// checks (a cancel during download or model-prepare). Replaces only OUR own
+/// regenerable sidecar (`replace_if_ours` never clobbers a complete/hand-
+/// edited transcript) with a `cancelled` note, and emits the terminal event.
+fn emit_cancelled(app: &AppHandle, mp3: &Path) {
+    let name = mp3
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let _ = vault_buddy_core::transcript::replace_if_ours(
+        &vault_buddy_core::transcript::transcript_path(mp3),
+        &vault_buddy_core::transcript::render_cancelled(&name),
+    );
+    let _ = app.emit(
+        "capture:transcribeCancelled",
+        serde_json::json!({ "mp3": mp3.to_string_lossy() }),
+    );
+    log::info!("transcribe: cancelled {}", mp3.display());
 }
 
 /// Best-effort failure: leave the audio + note untouched, replace the
