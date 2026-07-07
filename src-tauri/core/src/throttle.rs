@@ -16,6 +16,18 @@ impl EmitThrottle {
         }
     }
 
+    /// Like `new`, but seeds `last` to a value the caller has already
+    /// announced out-of-band (e.g. an immediate "0%" emitted the instant a
+    /// phase starts, before inference's own progress callback ticks for the
+    /// first time). Without this, `new`'s "first call always emits" rule
+    /// fires again on that same value and produces a redundant duplicate.
+    pub fn new_seeded(min_delta: u64, seed: u64) -> Self {
+        Self {
+            min_delta,
+            last: Some(seed),
+        }
+    }
+
     /// True when `value` should be emitted: the first call, any call whose
     /// value advanced by >= `min_delta` since the last emit, or any `terminal`
     /// call. Records the approved value so the next delta measures from it.
@@ -58,6 +70,23 @@ mod tests {
         assert!(t.should_emit(0, false));
         assert!(!t.should_emit(3_999_999, false));
         assert!(t.should_emit(4_000_000, false));
+    }
+
+    #[test]
+    fn seeded_throttle_suppresses_a_value_already_announced_out_of_band() {
+        // Regression: transcription.rs emits an immediate "0%" when the
+        // transcribing phase starts, then constructs a throttle for the
+        // inference progress callback. Seeding it at that already-announced
+        // value must suppress a same-or-nearby first tick — `new`'s "first
+        // call always emits" rule exists for callers with no such seed, and
+        // used unseeded here it re-announced "0%" a second time.
+        let mut t = EmitThrottle::new_seeded(5, 0);
+        assert!(
+            !t.should_emit(0, false),
+            "already announced via the seed, not a fresh first call"
+        );
+        assert!(!t.should_emit(3, false), "3-0=3 < 5: still suppressed");
+        assert!(t.should_emit(5, false), "5-0=5 >= 5: fires");
     }
 
     #[test]
