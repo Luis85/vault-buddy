@@ -484,6 +484,14 @@ fn owning_vault_id(mp3: &Path) -> Option<String> {
         .map(|v| v.id)
 }
 
+/// Run one job body, converting a panic into a `false` so the worker loop can
+/// fail just that job and keep going. Mirrors the `catch_unwind` guard lib.rs
+/// uses around the metronome tick; the build is not `panic=abort` and the
+/// panic hook only logs, so the unwind is catchable on this worker thread.
+fn catch_job<F: FnOnce()>(f: F) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_ok()
+}
+
 /// Startup + on-demand worker: drains the transcription queue, postponing
 /// while a recording is active. The loaded whisper model is cached across
 /// jobs of the same tier. Mirrors `run_recovery`'s shape (own thread, coarse
@@ -538,7 +546,15 @@ pub fn run_transcription(app: &AppHandle) {
                     guard.pending.pop_front()
                 };
                 let Some(job) = job else { continue };
-                process_transcription(&app, &job, &mut loaded);
+                let completed = catch_job(|| process_transcription(&app, &job, &mut loaded));
+                if !completed {
+                    // The job panicked. Fail just this recording, drop the
+                    // cached model (it may be mid-load / inconsistent), and let
+                    // the loop continue — one bad job must not stop the worker.
+                    log::error!("transcribe: worker caught a panic on {}", job.mp3.display());
+                    loaded = None;
+                    fail_transcription(&app, &job.mp3, "internal error during transcription");
+                }
                 // Clear the active-job slot after every `process_transcription`
                 // return path (success, failure, or an early-return on a bad
                 // model/load) — it's the one place that needs to. Dedup now
@@ -724,6 +740,18 @@ mod tests {
             phase: Phase::Preparing,
             progress: Arc::new(AtomicU8::new(0)),
         }
+    }
+
+    #[test]
+    fn catch_job_survives_a_panicking_job() {
+        // Regression: a panic in process_transcription must NOT propagate out of
+        // the worker loop (that silently stops all future transcriptions). The
+        // seam reports the panic so the loop can fail just that job and continue.
+        assert!(super::catch_job(|| {}), "a normal job reports completed");
+        assert!(
+            !super::catch_job(|| panic!("boom")),
+            "a panicking job is caught and reported, not propagated"
+        );
     }
 
     #[test]
