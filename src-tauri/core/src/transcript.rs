@@ -166,11 +166,20 @@ pub fn transcript_path(mp3: &Path) -> PathBuf {
     dir.join(transcript_file_name(&name))
 }
 
-/// Missing sidecar, or one of our own not-yet-finished sidecars → work to do.
+/// Whether the automatic backfill scan (`pending_transcriptions`, run once at
+/// startup) should pick this recording up: no sidecar yet, or a `pending`
+/// placeholder left behind by an attempt that didn't get to finish (e.g. a
+/// crash mid-download/mid-inference) — resuming that is completing work
+/// already promised, not starting something new. A `failed` sidecar is a
+/// completed, deliberate outcome: the buddy must not keep silently
+/// re-attempting it on every launch, same as a `cancelled` one — only an
+/// explicit user retry (`transcribe_recording_now` / `retranscribe`) may
+/// regenerate it. `failed` still reports `is_regenerable` so that explicit
+/// retry can still overwrite it; only the auto-backfill gate excludes it.
 pub fn needs_transcription(mp3: &Path) -> bool {
     let path = transcript_path(mp3);
     match std::fs::read_to_string(&path) {
-        Ok(content) => is_regenerable(&content),
+        Ok(content) => content.contains(MARKER_PENDING),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
         // Unreadable (permissions/AV lock): don't spin on it this pass.
         Err(_) => false,
@@ -722,6 +731,46 @@ mod tests {
         assert!(
             pending_transcriptions(dir.path()).is_empty(),
             "a cancelled recording must not backfill"
+        );
+    }
+
+    #[test]
+    fn failed_marker_is_regenerable_but_not_auto_requeued() {
+        // A failed attempt is a completed, deliberate outcome — unlike a
+        // `pending` placeholder (an attempt interrupted mid-flight, e.g. by a
+        // crash), the buddy must not keep silently re-attempting it on every
+        // launch. It still needs to stay `is_regenerable` (an explicit user
+        // retry via `retranscribe`/`transcribe_recording_now` must still be
+        // able to overwrite it) — only the automatic backfill gate excludes it.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-06 0930 Meeting.mp3");
+        let f = render_error("2026-07-06 0930 Meeting.mp3", "boom");
+        assert!(
+            is_regenerable(&f),
+            "an explicit retry must still be able to overwrite a failed sidecar"
+        );
+        std::fs::write(transcript_path(&mp3), &f).unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Failed);
+        assert!(
+            !needs_transcription(&mp3),
+            "a failed sidecar is not automatic backfill work — only an explicit retry regenerates it"
+        );
+    }
+
+    #[test]
+    fn scan_skips_a_failed_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        let mp3 = month.join("2026-07-06 0930 Meeting.mp3");
+        std::fs::write(&mp3, b"audio").unwrap();
+        std::fs::write(
+            transcript_path(&mp3),
+            render_error("2026-07-06 0930 Meeting.mp3", "boom"),
+        )
+        .unwrap();
+        assert!(
+            pending_transcriptions(dir.path()).is_empty(),
+            "a failed recording must not auto-backfill — only an explicit retry regenerates it"
         );
     }
 }
