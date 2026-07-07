@@ -3,9 +3,67 @@
 //! windows-app CI job is the compile gate.
 
 use crate::{CancelToken, Transcriber};
+use std::ffi::c_void;
 use std::path::Path;
 use vault_buddy_core::transcript::Segment;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+/// The abort wiring installed into a `FullParams`: the boxed token whose
+/// address ggml holds as `user_data`. This guard MUST outlive the `full()`
+/// call — ggml dereferences `user_data` from its worker threads — so callers
+/// keep it on the stack for the whole inference. The `callback`/`user_data`
+/// fields (test-only) are the exact C function pointer + `user_data` we handed
+/// whisper.cpp, so the regression test can invoke them directly (no model, no
+/// audio needed).
+struct AbortWiring {
+    // Owns the heap allocation `user_data` points at. Boxed so its address is
+    // stable across the move out of `wire_abort_callback`.
+    _token: Box<CancelToken>,
+    #[cfg(test)]
+    callback: unsafe extern "C" fn(*mut c_void) -> bool,
+    #[cfg(test)]
+    user_data: *mut c_void,
+}
+
+/// Wire whisper's abort callback to `cancel`, WITHOUT going through
+/// whisper-rs 0.16's `set_abort_callback_safe`. That wrapper monomorphizes its
+/// trampoline as `trampoline::<F>` (the concrete closure) but installs a
+/// `user_data` that points at a `Box<Box<dyn FnMut() -> bool>>` (a fat
+/// pointer); the trampoline then reads a garbage byte as the abort bool
+/// (upstream tazz4843/whisper-rs#277, still open). On some CPUs that byte is
+/// consistently truthy, so whisper.cpp aborts every encode window at 0% and
+/// EVERY transcription fails with `-6 "failed to encode"` — with our own
+/// cancel token never set (`cancelled=false` in the log). Here the trampoline
+/// and the `user_data` type agree: `user_data` is a `*const CancelToken`, and
+/// the trampoline casts it straight back, so the abort reflects the real token.
+fn wire_abort_callback(params: &mut FullParams, cancel: &CancelToken) -> AbortWiring {
+    // The trampoline's `user_data` is exactly `*const CancelToken` — no boxing
+    // of a trait object, so no thin/fat pointer mismatch.
+    unsafe extern "C" fn trampoline(user_data: *mut c_void) -> bool {
+        // Safety: `user_data` is the address of the `CancelToken` inside the
+        // `Box` held by the returned `AbortWiring`, which the caller keeps
+        // alive for the whole `full()` call. `is_cancelled()` is an atomic
+        // load, safe to call from ggml's worker threads.
+        let token = &*(user_data as *const CancelToken);
+        token.is_cancelled()
+    }
+
+    let token = Box::new(cancel.clone());
+    let user_data = &*token as *const CancelToken as *mut c_void;
+    // SAFETY: the trampoline reads `user_data` as `*const CancelToken`, which
+    // is exactly what we install; the box keeps it alive (see AbortWiring).
+    unsafe {
+        params.set_abort_callback(Some(trampoline));
+        params.set_abort_callback_user_data(user_data);
+    }
+    AbortWiring {
+        _token: token,
+        #[cfg(test)]
+        callback: trampoline,
+        #[cfg(test)]
+        user_data,
+    }
+}
 
 /// Route whisper.cpp + ggml's native (C-level) logs into the Rust `log`
 /// crate — and thus Vault Buddy's log files — instead of their default
@@ -73,12 +131,16 @@ impl Transcriber for WhisperTranscriber {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_special(false);
-        // Owned clone → 'static abort closure; returning true aborts full().
-        // Named distinctly (not shadowing `cancel`) so the `cancel` param
-        // stays usable in the failure log below — this clone is moved in.
-        let cancel_cb = cancel.clone();
-        params.set_abort_callback_safe(move || cancel_cb.is_cancelled());
-        // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by value.
+        // Wire the abort callback ourselves rather than via whisper-rs's
+        // `set_abort_callback_safe`, which is broken (see wire_abort_callback:
+        // a trampoline/user_data type mismatch made it read a garbage abort
+        // bool and fail every encode with `-6`). `_abort` owns the boxed token
+        // ggml dereferences from its worker threads, so it must stay alive for
+        // the whole `full()` call below — do NOT drop or `let _ =` it.
+        let _abort = wire_abort_callback(&mut params, cancel);
+        // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by
+        // value. Progress uses whisper-rs's safe setter, which (unlike abort)
+        // wires its trampoline correctly.
         params.set_progress_callback_safe(on_progress);
         state.full(params, samples).map_err(|e| {
             // whisper.cpp's whisper_full failures arrive as GenericError(rc)
@@ -127,5 +189,46 @@ impl Transcriber for WhisperTranscriber {
             });
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: whisper-rs 0.16's `FullParams::set_abort_callback_safe`
+    // monomorphizes its C trampoline as `trampoline::<F>` (the concrete
+    // closure type) while the `user_data` it installs points at a
+    // `Box<Box<dyn FnMut() -> bool>>` — a fat pointer. The trampoline then
+    // reinterprets that as the (thin) closure and reads a garbage byte as the
+    // "abort" bool (upstream bug tazz4843/whisper-rs#277, still open). On this
+    // machine that byte is consistently truthy, so whisper.cpp aborted EVERY
+    // encode window at 0% and every transcription failed with
+    // `-6 "failed to encode"` (or `-9`), with our own cancel token never set.
+    // `wire_abort_callback` bypasses the broken wrapper with a correctly-typed
+    // trampoline, so the installed C callback reflects the token exactly.
+    #[test]
+    fn wired_abort_callback_reflects_token_not_garbage() {
+        let cancel = CancelToken::new();
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // Installs the callback into `params` AND hands back the exact C
+        // function pointer + user_data whisper.cpp will call, so we can invoke
+        // it here without a model or any audio. The guard owns the boxed token
+        // and must outlive the callback.
+        let wiring = wire_abort_callback(&mut params, &cancel);
+
+        // Not cancelled → must return false. The broken `set_abort_callback_safe`
+        // returns a garbage bool here (truthy on this machine), which is the
+        // whole bug.
+        assert!(
+            !unsafe { (wiring.callback)(wiring.user_data) },
+            "an un-cancelled token must not report an abort"
+        );
+
+        cancel.cancel();
+        assert!(
+            unsafe { (wiring.callback)(wiring.user_data) },
+            "a cancelled token must report an abort"
+        );
     }
 }
