@@ -24,3 +24,12 @@ whisper-rs = { version = "0.16", optional = true, features = ["log_backend"] }
 [dev-dependencies]
 mp3lame-encoder = "0.2"
 tempfile = "3"
+
+# The verification harness links the whisper engine (the `engine` module is
+# gated behind the `whisper` feature), so it only builds with that feature on.
+# `required-features` makes `cargo build/clippy --all-targets` SKIP it when the
+# feature is off — CI's transcribe clippy runs the default (no-whisper) feature
+# set — and build it under `--features whisper`.
+[[example]]
+name = "transcribe_file"
+required-features = ["whisper"]
