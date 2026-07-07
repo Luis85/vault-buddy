@@ -672,10 +672,15 @@ pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> 
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let _ = vault_buddy_core::transcript::replace_if_ours(
+        if let Err(e) = vault_buddy_core::transcript::replace_if_ours(
             &vault_buddy_core::transcript::transcript_path(&mp3),
             &vault_buddy_core::transcript::render_cancelled(&name),
-        );
+        ) {
+            log::warn!(
+                "transcribe: writing cancelled sidecar for {} failed: {e}",
+                mp3.display()
+            );
+        }
         let _ = app.emit(
             "capture:transcribeCancelled",
             serde_json::json!({ "mp3": mp3.to_string_lossy() }),

@@ -59,4 +59,19 @@ mod tests {
         assert!(!t.should_emit(3_999_999, false));
         assert!(t.should_emit(4_000_000, false));
     }
+
+    #[test]
+    fn a_value_below_last_is_suppressed_without_underflow() {
+        // Regression: saturating_sub must never underflow (which would yield a
+        // spuriously large delta and fire) when a caller passes a value BELOW
+        // the last emitted value (e.g. a progress counter that resets or goes
+        // non-monotonic). The guard is the saturating_sub already in place.
+        let mut t = EmitThrottle::new(5);
+        assert!(t.should_emit(10, false)); // first call always emits; last = 10
+        assert!(
+            !t.should_emit(3, false),
+            "a value below last is suppressed, never underflows"
+        );
+        assert!(t.should_emit(3, true), "terminal always fires");
+    }
 }

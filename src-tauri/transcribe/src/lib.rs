@@ -148,7 +148,7 @@ pub fn transcribe_recording(
         return Err(TranscribeError::Cancelled); // cheap to bail before inference
     }
     let duration_secs = samples.len() as u64 / decode::WHISPER_RATE as u64;
-    let decode_secs = started.elapsed().as_secs();
+    let decode_secs = started.elapsed().as_secs_f32();
     let inference_start = std::time::Instant::now();
     // Honest logging: the log never goes dark on inference start again.
     log::info!(
@@ -167,7 +167,7 @@ pub fn transcribe_recording(
                 })
             }
         };
-    let inference_secs = inference_start.elapsed().as_secs();
+    let inference_secs = inference_start.elapsed().as_secs_f32();
     let n_segments = segments
         .iter()
         .filter(|s| !s.text.trim().is_empty())
@@ -179,7 +179,7 @@ pub fn transcribe_recording(
         );
     }
     log::info!(
-        "transcribe: complete {} — {n_segments} segments, {duration_secs}s audio, decode {decode_secs}s + inference {inference_secs}s",
+        "transcribe: complete {} — {n_segments} segments, {duration_secs}s audio, decode {decode_secs:.1}s + inference {inference_secs:.1}s",
         mp3.display()
     );
     // Wall-clock of the actual work (decode + inference). Measured here, not in

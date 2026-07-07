@@ -626,7 +626,12 @@ fn maybe_enqueue_transcription(app: &AppHandle, vault_id: &str, mp3: &Path) {
     if !cfg.transcribe {
         return;
     }
-    let _ = vault_buddy_core::transcript::write_placeholder(mp3);
+    if let Err(e) = vault_buddy_core::transcript::write_placeholder(mp3) {
+        log::warn!(
+            "transcribe: writing placeholder for {} failed: {e}",
+            mp3.display()
+        );
+    }
     enqueue_transcription(
         app,
         TranscriptionJob {
@@ -910,8 +915,14 @@ pub fn run_recovery(app: &AppHandle) {
                                         .unwrap_or_default();
                                     toast(&app, "Recording recovered", &name);
                                     if v.transcribe {
-                                        let _ =
-                                            vault_buddy_core::transcript::write_placeholder(&mp3);
+                                        if let Err(e) =
+                                            vault_buddy_core::transcript::write_placeholder(&mp3)
+                                        {
+                                            log::warn!(
+                                                "transcribe: writing placeholder for {} failed: {e}",
+                                                mp3.display()
+                                            );
+                                        }
                                         enqueue_transcription(
                                             &app,
                                             TranscriptionJob {

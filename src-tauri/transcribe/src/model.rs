@@ -202,7 +202,11 @@ fn download_stream(
         if n == 0 {
             break;
         }
-        std::io::Write::write_all(&mut file, &buf[..n]).map_err(|e| format!("write model: {e}"))?;
+        if let Err(e) = std::io::Write::write_all(&mut file, &buf[..n]) {
+            drop(file);
+            let _ = std::fs::remove_file(&part);
+            return Err(format!("write model: {e}"));
+        }
         received += n as u64;
         hasher.update(&buf[..n]);
         on_progress(received, total);
@@ -241,7 +245,7 @@ fn download_stream(
         let digest = hasher.finalize();
         let mut actual = String::with_capacity(digest.len() * 2);
         for b in digest.iter() {
-            let _ = write!(actual, "{b:02x}");
+            write!(actual, "{b:02x}").expect("writing to a String is infallible");
         }
         if !actual.eq_ignore_ascii_case(expected_sha256) {
             let _ = std::fs::remove_file(&part);
@@ -548,7 +552,10 @@ mod tests {
             res.is_ok(),
             "a body matching its hash must finalize: {res:?}"
         );
-        assert!(dir.path().join("ggml-base.bin").exists());
+        assert!(
+            dir.path().join("ggml-base.bin").exists(),
+            "the verified model is finalized to its .bin path"
+        );
     }
 
     #[test]
