@@ -496,6 +496,19 @@ export const useCaptureStore = defineStore("capture", {
         logWarning(`retranscribe rejected: ${String(e)}`);
       }
     },
+    /**
+     * Remove a finished (done/failed/cancelled) transcription from the list —
+     * the user clearing a row they've dealt with, e.g. dismissing a failure
+     * they've read. Purely local UI state; the sidecar/note on disk is
+     * untouched. Guarded to TERMINAL jobs only: in-flight or queued work must
+     * be stopped with `cancelTranscription`, never silently dropped by a
+     * dismiss.
+     */
+    dismissTranscription(mp3: string) {
+      const job = this.transcriptions[mp3];
+      if (!job || !FINISHED_PHASES.includes(job.phase)) return;
+      delete this.transcriptions[mp3];
+    },
     async openTranscript(mp3: string) {
       try {
         await invoke("open_transcript", { path: mp3 });

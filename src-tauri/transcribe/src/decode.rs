@@ -3,6 +3,7 @@
 //! binary is bundled. Resampling is linear — adequate for 16 kHz speech and
 //! fully testable; rubato is a future quality upgrade.
 
+use crate::CancelToken;
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
@@ -14,7 +15,7 @@ use symphonia::core::probe::Hint;
 
 pub const WHISPER_RATE: u32 = 16_000;
 
-pub fn decode_to_16k_mono(path: &Path) -> Result<Vec<f32>, String> {
+pub fn decode_to_16k_mono(path: &Path, cancel: &CancelToken) -> Result<Vec<f32>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -41,6 +42,15 @@ pub fn decode_to_16k_mono(path: &Path) -> Result<Vec<f32>, String> {
     let mut src_rate = track.codec_params.sample_rate.unwrap_or(44_100);
     let mut mono: Vec<f32> = Vec::new();
     loop {
+        // Decoding a long recording is many seconds of uninterruptible work
+        // if we don't look here — the whisper abort callback only covers
+        // inference, not this pre-inference decode. Check once per packet
+        // (thousands of them for a real recording) so a cancel lands
+        // promptly instead of waiting out the whole file. The caller
+        // disambiguates this Err from a real decode failure via the token.
+        if cancel.is_cancelled() {
+            return Err("cancelled".to_string());
+        }
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -132,7 +142,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.mp3");
         std::fs::write(&path, make_mp3(44_100, 1.0)).unwrap();
-        let pcm = decode_to_16k_mono(&path).unwrap();
+        let pcm = decode_to_16k_mono(&path, &crate::CancelToken::new()).unwrap();
         let secs = pcm.len() as f32 / WHISPER_RATE as f32;
         assert!(
             (secs - 1.0).abs() < 0.25,
@@ -142,6 +152,24 @@ mod tests {
         assert!(
             pcm.iter().any(|&s| s.abs() > 0.01),
             "decoded audio is not silent"
+        );
+    }
+
+    #[test]
+    fn precancelled_decode_bails_instead_of_running_to_completion() {
+        // Regression: cancelling a transcription used to wait out the entire
+        // MP3 decode (uninterruptible) before the single post-decode check
+        // noticed. A pre-cancelled token must abort inside the packet loop —
+        // the same valid MP3 that `decodes_mp3_to_16k_mono` decodes in full
+        // returns Err here purely because the token is set.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mp3");
+        std::fs::write(&path, make_mp3(44_100, 1.0)).unwrap();
+        let cancel = crate::CancelToken::new();
+        cancel.cancel();
+        assert!(
+            decode_to_16k_mono(&path, &cancel).is_err(),
+            "a pre-cancelled decode must not run the whole file to completion"
         );
     }
 

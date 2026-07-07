@@ -3,6 +3,7 @@
 //! models — the only network access added for local transcription (the
 //! pre-existing updater also talks to the network, for app updates).
 
+use crate::CancelToken;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -74,10 +75,19 @@ pub fn model_path(tier: ModelTier) -> Option<PathBuf> {
 
 /// Download the tier's ggml model with progress, `.part`-then-rename. Skips
 /// if already present. `on_progress(received, total)` is called per chunk.
+/// `cancel` is polled before the request and on every chunk so a cancel
+/// during a first-use download (up to ~1.5 GB for `medium`) aborts promptly
+/// instead of running to completion — an aborted download returns `Err`,
+/// which the caller disambiguates from a real failure via the same token.
 pub fn download_model(
     tier: ModelTier,
+    cancel: &CancelToken,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<PathBuf, String> {
+    // Already cancelled: do no work and open no connection.
+    if cancel.is_cancelled() {
+        return Err("cancelled".to_string());
+    }
     let dir = model_dir().ok_or("cannot resolve model directory")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create model dir: {e}"))?;
     let dest = dir.join(tier.file_name());
@@ -94,6 +104,14 @@ pub fn download_model(
     let mut buf = [0u8; 64 * 1024];
     let mut received: u64 = 0;
     loop {
+        if cancel.is_cancelled() {
+            // Close our handle before removing the temp — Windows refuses to
+            // unlink a still-open file (matches the drop-before-remove the
+            // incomplete-transfer branch below already relies on).
+            drop(file);
+            let _ = std::fs::remove_file(&part);
+            return Err("cancelled".to_string());
+        }
         let n =
             std::io::Read::read(&mut reader, &mut buf).map_err(|e| format!("read stream: {e}"))?;
         if n == 0 {
@@ -158,5 +176,21 @@ mod tests {
             assert_eq!(models.parent(), Some(app.as_path()));
             assert_eq!(models.file_name().unwrap(), "models");
         }
+    }
+
+    #[test]
+    fn precancelled_download_bails_without_touching_the_network() {
+        // Regression: a cancel during a first-use model download used to be
+        // ignored until the entire file had been fetched. A pre-cancelled
+        // token must return Err at the very top — before ureq::get — so this
+        // is hermetic (no network in CI) precisely because the abort happens
+        // before any request is made.
+        let cancel = crate::CancelToken::new();
+        cancel.cancel();
+        let mut progress = |_received: u64, _total: Option<u64>| {};
+        assert!(
+            download_model(ModelTier::Base, &cancel, &mut progress).is_err(),
+            "a pre-cancelled download must not proceed to the network"
+        );
     }
 }

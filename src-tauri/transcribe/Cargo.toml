@@ -15,7 +15,10 @@ vault_buddy_core = { path = "../core" }
 log = "0.4"
 symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 ureq = "2"
-whisper-rs = { version = "0.16", optional = true }
+# `log_backend` lets `install_logging_hooks` route whisper.cpp/ggml's native
+# C-level logs through the Rust `log` crate into the app's log files instead
+# of the default stderr sink (discarded by a windowed Windows build).
+whisper-rs = { version = "0.16", optional = true, features = ["log_backend"] }
 
 [dev-dependencies]
 mp3lame-encoder = "0.2"

@@ -233,6 +233,29 @@ const isStuck = computed(() => {
             >
               Re-transcribe
             </button>
+            <!-- Clear a finished row (and, for a failure, its error) from the
+                 list. The row used to be undismissable — it just lingered. -->
+            <button
+              type="button"
+              data-testid="transcription-dismiss"
+              :aria-label="`Dismiss ${j.name}`"
+              :title="`Dismiss ${j.name}`"
+              class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              @click="capture.dismissTranscription(j.mp3)"
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="3"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
           </div>
           <p v-if="j.phase === 'failed' && j.error" class="text-xs text-red-300">
             {{ j.error }}

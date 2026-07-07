@@ -7,6 +7,18 @@ use std::path::Path;
 use vault_buddy_core::transcript::Segment;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+/// Route whisper.cpp + ggml's native (C-level) logs into the Rust `log`
+/// crate — and thus Vault Buddy's log files — instead of their default
+/// stderr sink, which a windowed Windows build silently discards. Without
+/// this the engine's own diagnostics (model-load details, and the context
+/// behind an aborted inference like the `-9` that `inference_failure_message`
+/// maps) went nowhere at all. Call ONCE before the first context is created;
+/// re-installing the same global hook is harmless. Relies on whisper-rs's
+/// `log_backend` feature (enabled in Cargo.toml).
+pub fn install_logging_hooks() {
+    whisper_rs::install_logging_hooks();
+}
+
 pub struct WhisperTranscriber {
     ctx: WhisperContext,
 }
@@ -61,9 +73,19 @@ impl Transcriber for WhisperTranscriber {
         params.set_abort_callback_safe(move || cancel.is_cancelled());
         // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by value.
         params.set_progress_callback_safe(on_progress);
-        state
-            .full(params, samples)
-            .map_err(|e| format!("whisper inference: {e}"))?;
+        state.full(params, samples).map_err(|e| {
+            // whisper.cpp's whisper_full failures arrive as GenericError(rc)
+            // carrying the raw return code (e.g. -9 = "failed to decode" in the
+            // sampling loop). Hand the code to the shared, unit-tested mapper so
+            // the user sees actionable guidance instead of "Generic whisper
+            // error. ... Error code: -9"; the raw text is kept for other codes.
+            let raw = e.to_string();
+            let code = match e {
+                whisper_rs::WhisperError::GenericError(c) => Some(c),
+                _ => None,
+            };
+            crate::inference_failure_message(code, &raw)
+        })?;
 
         // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
         // timestamps are in centiseconds, converted to ms below (×10).
