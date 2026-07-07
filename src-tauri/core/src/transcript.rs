@@ -90,16 +90,23 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
     ));
     out.push_str(&format!("generated: {}\n", yaml_quote(&meta.generated_at)));
     out.push_str("created-by: Vault Buddy\n---\n\n");
+    let mut wrote_any = false;
     for s in segments {
         let text = s.text.trim();
         if text.is_empty() {
             continue;
         }
+        wrote_any = true;
         if meta.timestamps {
             out.push_str(&format!("{} {text}\n\n", format_timestamp(s.start_ms)));
         } else {
             out.push_str(&format!("{text}\n\n"));
         }
+    }
+    if !wrote_any {
+        // Zero segments (or all-empty) is a valid whisper result for silence —
+        // a complete transcript with an honest notice, not a blank body.
+        out.push_str("_No speech detected._\n\n");
     }
     out.push_str(&render_stats(meta, segments));
     out
@@ -456,6 +463,20 @@ mod tests {
         let mut m = meta();
         m.language = None;
         assert!(render_transcript(&m, &[]).contains(r#"language: "auto""#));
+    }
+
+    #[test]
+    fn empty_segments_render_a_no_speech_body_not_a_blank_one() {
+        // whisper legitimately returns no segments for silence/non-speech; a blank
+        // `complete` sidecar looks broken. It must stay `complete` (not a failure)
+        // but say so, and still carry the stats table.
+        let t = render_transcript(&meta(), &[]);
+        assert!(t.contains("vault-buddy-transcript: complete"));
+        assert!(t.contains("_No speech detected._"));
+        assert!(t.contains("## Statistics"));
+        // All-empty-text segments take the same path.
+        let t2 = render_transcript(&meta(), &[seg(0, 10, "   "), seg(10, 20, "")]);
+        assert!(t2.contains("_No speech detected._"));
     }
 
     #[test]
