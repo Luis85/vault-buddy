@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod process;
 pub mod recordings;
 pub mod sync_util;
+pub mod throttle;
 pub mod transcript;
 pub mod uri;
 
