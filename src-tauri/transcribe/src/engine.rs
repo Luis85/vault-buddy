@@ -332,6 +332,52 @@ mod tests {
         );
     }
 
+    // Regression: the whole reason this crate hand-wires the abort callback is
+    // that whisper-rs 0.16's set_abort_callback_safe read a garbage byte as the
+    // abort bool and made whisper.cpp abort every encode window with
+    // -6 "failed to encode". This is the end-to-end guard: with a real model it
+    // must run full() to Ok, not abort. #[ignore] because it needs a ~150 MB
+    // model that CI cannot host; a Windows dev runs it with `-- --ignored`.
+    // Provide VB_TEST_MODEL (a ggml .bin) and optionally VB_TEST_AUDIO (a speech
+    // clip); with no model it skips (passes) rather than failing spuriously.
+    #[test]
+    #[ignore]
+    fn real_model_transcribes_without_spurious_abort() {
+        use crate::decode::decode_to_16k_mono;
+        use crate::{CancelToken, Transcriber};
+        let model = std::env::var("VB_TEST_MODEL")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| crate::model::model_path(crate::model::ModelTier::Base));
+        let Some(model) = model.filter(|p| p.exists()) else {
+            eprintln!("skipping: no VB_TEST_MODEL and no cached base model");
+            return;
+        };
+        let cancel = CancelToken::new();
+        // A short synthetic 16 kHz tone: enough to reach the encoder (where the
+        // -6 fired), even if it yields no speech segments.
+        let samples: Vec<f32> = if let Ok(audio) = std::env::var("VB_TEST_AUDIO") {
+            decode_to_16k_mono(std::path::Path::new(&audio), &cancel).expect("decode VB_TEST_AUDIO")
+        } else {
+            (0..16_000)
+                .map(|i| (i as f32 / 16_000.0 * 440.0 * std::f32::consts::TAU).sin() * 0.2)
+                .collect()
+        };
+        let t = WhisperTranscriber::load(&model).expect("load model");
+        let out = t.transcribe(&samples, None, &cancel, Box::new(|_| {}));
+        assert!(
+            out.is_ok(),
+            "fixed engine must not abort at the first encode window (the -6 bug): {}",
+            out.err().unwrap_or_default()
+        );
+        if std::env::var("VB_TEST_AUDIO").is_ok() {
+            assert!(
+                !out.unwrap().is_empty(),
+                "a real speech clip must yield at least one segment"
+            );
+        }
+    }
+
     // Regression / correctness gate for the leak fix: whisper-rs 0.16's
     // `set_progress_callback_safe` is type-correct but LEAKS — it
     // `Box::into_raw`s the closure and `FullParams` has no `Drop` reclaiming
