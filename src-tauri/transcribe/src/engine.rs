@@ -75,6 +75,15 @@ fn wire_abort_callback(params: &mut FullParams, cancel: &CancelToken) -> AbortWi
 /// `callback`/`user_data` fields (test-only) are the exact C function pointer +
 /// `user_data` we handed whisper.cpp, so the regression test can invoke them
 /// directly (no model, no audio needed).
+///
+/// `on_progress` only needs `Send`, not `Sync`, because — unlike
+/// `abort_callback`, which whisper.cpp threads down into ggml's own compute
+/// plan (`ggml_backend_set_abort_callback` → `cplan.abort_callback`, invoked
+/// from inside a spawned worker thread in `ggml_graph_compute_thread`) —
+/// `progress_callback` is only ever invoked from `whisper_full_with_state`'s
+/// own single-threaded outer segment loop, on whichever thread called
+/// `full()` (checked directly against the vendored whisper.cpp/ggml source,
+/// not assumed): one call per seek/segment iteration, never concurrently.
 //
 // `_closure` is a `Box<Box<dyn FnMut>>` on purpose, NOT a redundant allocation:
 // `user_data` must be a THIN pointer, but `&mut dyn FnMut` is a FAT pointer
