@@ -123,19 +123,26 @@ pub fn download_model(
 /// `Err` (which the caller already turns into a retryable failure) instead of
 /// wedging the single background transcription worker for the whole app
 /// session — the cancel token is only polled between reads, so a blocked
-/// `read()` can never be interrupted. `timeout_recv_body` reads as a
-/// whole-body deadline in ureq's docs, but is empirically a per-read (idle)
-/// timeout that resets on every chunk received — confirmed against a local
-/// server that trickles bytes slower than the configured timeout but never
-/// stalls for longer than it, which completes successfully; a genuine stall
-/// past the timeout still errors. So a healthy but slow transfer of the
-/// up-to-~1.5 GB `medium` model keeps going as long as bytes keep flowing;
-/// only a socket silent for a full minute trips it. A true whole-body
-/// deadline is deliberately avoided: it would abort a legitimately slow
-/// multi-hundred-MB download.
+/// `read()` can never be interrupted. The old ureq 2.x `timeout_read` was a
+/// single socket-level read timeout that covered the *entire* exchange
+/// (headers and body alike); ureq 3.x splits that into separate per-phase
+/// timeouts, so both phases need to be set explicitly or a server that
+/// accepts the connection but never sends a response would hang forever
+/// (`timeout_recv_body` alone doesn't start until the response headers have
+/// already arrived). `timeout_recv_response` and `timeout_recv_body` both
+/// read as whole-phase deadlines in ureq's docs, but are empirically per-read
+/// (idle) timeouts that reset on every chunk received — confirmed against a
+/// local server that trickles bytes slower than the configured timeout but
+/// never stalls for longer than it, which completes successfully; a genuine
+/// stall past the timeout still errors, in both phases. So a healthy but slow
+/// transfer of the up-to-~1.5 GB `medium` model keeps going as long as bytes
+/// keep flowing; only a socket silent for a full minute trips it. A true
+/// whole-response or whole-body deadline is deliberately avoided: it would
+/// abort a legitimately slow multi-hundred-MB download.
 fn model_download_agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
         .timeout_recv_body(Some(std::time::Duration::from_secs(60)))
         .build();
     ureq::Agent::new_with_config(config)
@@ -422,6 +429,74 @@ mod tests {
             Err(_) => {
                 panic!("download did not return in time — a stalled read is not surfacing as Err")
             }
+        }
+    }
+
+    #[test]
+    fn stalled_before_response_headers_errors_instead_of_hanging() {
+        // Regression: ureq 3.x splits the old single socket-read timeout
+        // (which covered headers and body alike) into separate per-phase
+        // timeouts. timeout_recv_body only starts once the response has
+        // arrived, so a server that accepts the connection, reads the
+        // request, then sends nothing at all would hang forever without a
+        // dedicated timeout_recv_response — flagged in review on PR #34.
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_srv = stop.clone();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                // No response at all — hold the connection open past the
+                // client's timeout so a missing guard manifests as a hang.
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                while !stop_srv.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        });
+
+        let config = ureq::Agent::config_builder()
+            .timeout_recv_response(Some(Duration::from_millis(500)))
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir_path = dir.path().to_path_buf();
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let cancel = crate::CancelToken::new();
+            let mut progress = |_received: u64, _total: Option<u64>| {};
+            let res = download_stream(
+                &agent,
+                &url,
+                &dir_path,
+                "ggml-base.bin",
+                ModelTier::Base.min_size(),
+                "",
+                &cancel,
+                &mut progress,
+            );
+            let _ = tx.send(res.is_err());
+        });
+
+        let outcome = rx.recv_timeout(Duration::from_secs(3));
+        stop.store(true, Ordering::SeqCst);
+        let _ = server.join();
+        match outcome {
+            Ok(is_err) => assert!(is_err, "a stall before any response must return Err, not Ok"),
+            Err(_) => panic!(
+                "download did not return in time — a stall before response headers is not surfacing as Err"
+            ),
         }
     }
 
