@@ -285,3 +285,14 @@ ever written into your vaults except recordings and their notes.
   `[HH:MM:SS]`.
 
 The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.
+
+### Transcription dependencies
+
+The local speech-to-text path pins `whisper-rs` 0.16 / `whisper-rs-sys` 0.15
+deliberately: `src-tauri/transcribe/src/engine.rs` hand-wires the abort and
+progress callbacks around upstream whisper-rs bugs (abort UB #277; the
+progress/language closure leaks). A future whisper-rs that fixes these would
+let us delete that wiring — tracked as a standalone upgrade, not done casually,
+having just stabilized the engine. `sha2` verifies downloaded model integrity;
+`symphonia` (MP3-only) decodes; `ureq` downloads with connect/idle timeouts.
+Full review: `docs/superpowers/specs/2026-07-07-transcription-reliability-and-verification-design.md`.
