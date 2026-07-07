@@ -11,9 +11,9 @@
 
 The Local MCP Hub adds an optional local assistant layer to Vault Buddy.
 
-When explicitly enabled and configured by the user, Vault Buddy can connect a cheap local LLM to user-configured MCP servers and let the buddy use those servers as tools for knowledge ingestion, retrieval, and lightweight workflow assistance.
+When explicitly enabled and configured by the user, Vault Buddy can connect a cheap local LLM served by Ollama to user-configured MCP servers and let the buddy use those servers as tools for knowledge ingestion, retrieval, and lightweight workflow assistance.
 
-This is not a mandatory runtime dependency. A default Vault Buddy installation must continue to start, build, and run exactly as it does today without Ollama, LM Studio, MCP server configuration, downloaded models, or any assistant state.
+This is not a mandatory runtime dependency. A default Vault Buddy installation must continue to start, build, and run exactly as it does today without Ollama, MCP server configuration, downloaded models, or any assistant state.
 
 ## Vision
 
@@ -28,7 +28,7 @@ The first version should optimize for simple, local, tool-using interaction rath
 ### Primary Goals
 
 - Provide an opt-in local assistant mode that is disabled by default.
-- Let users configure a local model provider such as Ollama or LM Studio.
+- Let users configure Ollama as the local model provider.
 - Let users configure MCP servers that Vault Buddy can connect to as a client.
 - Discover MCP tools and expose a small, relevant subset to the local model.
 - Support ingestion-oriented workflows that produce previews before anything is written.
@@ -37,7 +37,7 @@ The first version should optimize for simple, local, tool-using interaction rath
 
 ### Secondary Goals
 
-- Make the model provider replaceable so embedded llama.cpp can be considered later.
+- Keep the internal model adapter replaceable so other local providers or embedded llama.cpp can be considered later.
 - Support both stdio and streamable HTTP MCP transports over time.
 - Provide a foundation for future workflow automation without introducing background autonomy in the first version.
 - Keep the UX understandable for users who know what MCP servers are but do not want to operate a separate agent framework.
@@ -49,7 +49,7 @@ The first version should optimize for simple, local, tool-using interaction rath
 - No autonomous background agents in the first version.
 - No unrestricted shell execution.
 - No direct filesystem writes into Obsidian vaults through arbitrary MCP filesystem tools.
-- No requirement that Vault Buddy ships or downloads an LLM model itself.
+- No requirement that Vault Buddy ships, downloads, or manages an LLM model itself.
 - No replacement for external power-user MCP clients such as Cursor or Claude Desktop.
 
 ## User Experience
@@ -66,7 +66,7 @@ Before opt-in:
 
 After opt-in:
 
-- The user chooses a model provider type and local endpoint.
+- The user configures the Ollama local endpoint.
 - The user selects or enters a model name.
 - The user adds MCP servers with command, arguments, environment references, or HTTP endpoint.
 - Vault Buddy shows each server's health, discovered tools, and permission classification.
@@ -78,7 +78,7 @@ The assistant should feel like asking the buddy to use connected tools, not like
 ## Core User Stories
 
 - As a user, I can enable the local assistant only when I want it, so Vault Buddy remains lightweight by default.
-- As a user, I can configure Ollama or LM Studio as the model provider, so I control the local model and its resource usage.
+- As a user, I can configure Ollama as the model provider, so I control the local model and its resource usage.
 - As a user, I can add MCP servers, so Vault Buddy can use external sources such as files, calendars, issue trackers, or knowledge stores.
 - As a user, I can see what tools a server exposes before the assistant uses them.
 - As a user, I can ask the buddy to gather information through connected MCP servers and produce an ingestion preview.
@@ -91,18 +91,36 @@ The assistant should feel like asking the buddy to use connected tools, not like
 
 - The local assistant has a top-level `enabled: false` default.
 - Disabled mode is a first-class state, not an error state.
-- Enabling requires at least a provider type and endpoint before chat is available.
+- Enabling requires an Ollama endpoint and selected model before chat is available.
 - Disabling stops managed MCP server processes, cancels active assistant sessions, clears transient tool state, and hides assistant UI entry points.
-- The app must not fail startup if a previously configured model provider or MCP server is unavailable.
+- The app must not fail startup if a previously configured Ollama endpoint or MCP server is unavailable.
 
 ### Model Provider
 
-- The first provider interface targets local HTTP APIs exposed by Ollama or LM Studio.
-- The implementation depends on a provider abstraction, not a specific runtime.
-- The provider supports listing configured/available models when supported by the backend.
-- The provider supports chat requests with tool definitions.
-- Streaming responses are preferred for UX but not required for the first spike.
+- The first provider is Ollama through its local HTTP API, defaulting to `http://localhost:11434`.
+- The implementation should still hide Ollama behind an internal adapter so future providers do not affect MCP orchestration.
+- The provider lists installed local models through Ollama when available.
+- The provider sends chat requests through Ollama's `/api/chat` endpoint with MCP-derived tool definitions in the `tools` parameter.
+- When Ollama returns `tool_calls`, Vault Buddy validates the call, applies permission rules, executes the approved MCP tool locally, appends the tool result to the conversation, and sends a follow-up chat request for the final answer.
+- Streaming responses are preferred because Ollama supports streaming chat and streaming tool calls, but non-streaming mode is acceptable for the first spike.
 - Tool-call parsing must be validated deterministically before any MCP call is executed.
+
+### Candidate Ollama Models
+
+Research summary: Ollama supports tool calling for models that expose the tools capability. Current Ollama documentation demonstrates `qwen3` with tools, and Ollama's tool-calling blog names Qwen 3, Devstral, Qwen2.5, Qwen2.5 Coder, Llama 3.1, Llama 4, and other tool-capable models. Community guidance consistently points to Qwen 2.5+, Llama 3.1+, and Mistral-family instruct models as practical local tool-calling choices.
+
+Recommended first choices:
+
+| Tier | Model | Why | Notes |
+| --- | --- | --- | --- |
+| Default cheap | `qwen2.5:7b` | Strong JSON adherence and good small-model tool use | Good default for constrained machines. |
+| Current cheap | `qwen3` or a small Qwen 3 tag | Official Ollama docs use Qwen 3 for tool-calling examples | Validate exact tag and thinking behavior in the spike. |
+| Reliable small | `llama3.1:8b` | Widely supported Ollama tool-calling baseline | Good fallback if Qwen performs poorly. |
+| Better reliability | `qwen2.5:14b` | More reliable tool selection than 7B-class models | Needs more RAM/VRAM; optional recommendation. |
+| Specialized dev tools | `devstral` or `qwen2.5-coder:7b` | Better for code-oriented MCP servers | Not the default for general knowledge ingestion. |
+| Multilingual/general alternative | `mistral-nemo` or `mistral-small` | Useful multilingual instruct family | Heavier than the default small tier. |
+
+Models below roughly 7B parameters may be offered as experimental only. They can answer simple prompts cheaply, but tool selection and argument quality are likely to be unreliable for MCP orchestration. The first product slice should keep the active tool set small, prefer read-only tools during evaluation, and include an internal evaluation harness before recommending a default model.
 
 ### MCP Server Registry
 
@@ -169,7 +187,7 @@ flowchart LR
 
 The Rust side owns process supervision, logging, permissions, audit, model calls, MCP clients, and safe handoff to Vault Buddy services. The Vue side owns settings, status display, chat interaction, approval prompts, and previews.
 
-The first implementation should use external local model providers rather than embedding model inference in the Tauri process. This keeps the app lightweight and avoids making model runtime setup part of the core Vault Buddy installation.
+The first implementation should use Ollama rather than embedding model inference in the Tauri process. This keeps the app lightweight and avoids making model runtime setup part of the core Vault Buddy installation. The boundary should still be an internal `ModelProvider`-style adapter so later provider changes stay isolated.
 
 ## Safety And Privacy
 
@@ -179,14 +197,14 @@ The first implementation should use external local model providers rather than e
 - Every tool call is audited with server, tool, argument summary, permission decision, approval state, result state, and timestamp.
 - Sensitive arguments should be summarized or redacted in logs when possible.
 - Managed MCP server processes should inherit only explicitly configured environment values.
-- The assistant must degrade gracefully when providers or servers are offline.
+- The assistant must degrade gracefully when Ollama or configured MCP servers are offline.
 
 ## Phased Delivery
 
 ### Phase 1 - Inert Configuration
 
 - Add disabled-by-default configuration.
-- Add settings UI for opt-in, provider endpoint, model name, and server definitions.
+- Add settings UI for opt-in, Ollama endpoint, model name, and server definitions.
 - Verify normal startup does not initialize the assistant runtime.
 
 ### Phase 2 - Read-only MCP Spike
@@ -195,11 +213,13 @@ The first implementation should use external local model providers rather than e
 - List tools and display health state.
 - Call a harmless read-only tool from Rust and log the result.
 
-### Phase 3 - Local Model Adapter
+### Phase 3 - Ollama Model Adapter
 
-- Add Ollama or LM Studio-compatible model provider adapter.
+- Add an Ollama model provider adapter.
+- Support model listing and a configurable endpoint.
 - Send a small tool set to the model.
 - Parse and validate tool calls.
+- Test with `qwen2.5:7b`, one Qwen 3 tag, and `llama3.1:8b` before choosing the default recommendation in the UI.
 
 ### Phase 4 - Assistant UI
 
@@ -222,7 +242,7 @@ The first implementation should use external local model providers rather than e
 ## Success Metrics
 
 - Vault Buddy starts and functions normally with the feature disabled.
-- Users can enable the feature and connect at least one local provider and one MCP server.
+- Users can enable the feature and connect Ollama plus at least one MCP server.
 - The hub can discover and display tools from a configured MCP server.
 - The model can successfully request a read-only tool call in a constrained test flow.
 - Risky tools are never executed without confirmation.
@@ -231,8 +251,14 @@ The first implementation should use external local model providers rather than e
 
 ## Open Questions
 
-- Which provider should be implemented first: Ollama, LM Studio, or an OpenAI-compatible local endpoint abstraction?
 - Which MCP SDK should be used in Rust for the first spike?
+- Which Ollama model should the UI recommend first after empirical testing on typical Windows hardware?
 - Should MCP server configuration support importing Claude Desktop-style MCP JSON?
 - How much conversation history should be persisted, if any?
 - Should audit records live in the existing app log, a separate assistant audit file, or both?
+
+## Research References
+
+- [Ollama Tool Calling](https://docs.ollama.com/capabilities/tool-calling)
+- [Ollama API Documentation](https://docs.ollama.com/api)
+- [Ollama Streaming Tool Calling Blog](https://ollama.com/blog/streaming-tool)
