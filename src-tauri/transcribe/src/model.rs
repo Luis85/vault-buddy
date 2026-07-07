@@ -123,17 +123,28 @@ pub fn download_model(
 /// `Err` (which the caller already turns into a retryable failure) instead of
 /// wedging the single background transcription worker for the whole app
 /// session — the cancel token is only polled between reads, so a blocked
-/// `read()` can never be interrupted. `timeout_read` is a per-read (idle)
-/// timeout that resets on every chunk that arrives, NOT a whole-body deadline,
-/// so a healthy but slow transfer of the up-to-~1.5 GB `medium` model keeps
-/// going as long as bytes keep flowing; only a socket silent for a full minute
-/// trips it. (`ureq::timeout()` is deliberately avoided: it deadlines the
-/// entire body and would abort a legitimately slow multi-hundred-MB download.)
+/// `read()` can never be interrupted. `timeout_recv_body` reads as a
+/// whole-body deadline in ureq's docs, but is empirically a per-read (idle)
+/// timeout that resets on every chunk received — confirmed against a local
+/// server that trickles bytes slower than the configured timeout but never
+/// stalls for longer than it, which completes successfully; a genuine stall
+/// past the timeout still errors. So a healthy but slow transfer of the
+/// up-to-~1.5 GB `medium` model keeps going as long as bytes keep flowing;
+/// only a socket silent for a full minute trips it. A true whole-body
+/// deadline is deliberately avoided: it would abort a legitimately slow
+/// multi-hundred-MB download.
 fn model_download_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(30))
-        .timeout_read(std::time::Duration::from_secs(60))
-        .build()
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_recv_body(Some(std::time::Duration::from_secs(60)))
+        .build();
+    ureq::Agent::new_with_config(config)
+}
+
+/// `ureq::http::Response` has no `.header()` convenience method (unlike the
+/// pre-3.x API) — headers live behind the `http` crate's typed `HeaderMap`.
+fn header<'a>(resp: &'a ureq::http::Response<ureq::Body>, name: &str) -> Option<&'a str> {
+    resp.headers().get(name).and_then(|v| v.to_str().ok())
 }
 
 /// Streams the response body into a `.part` file, then renames it into place.
@@ -152,25 +163,24 @@ fn download_stream(
     cancel: &CancelToken,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<PathBuf, String> {
-    let resp = agent
+    let mut resp = agent
         .get(url)
         .call()
         .map_err(|e| format!("request model: {e}"))?;
-    let total: Option<u64> = resp.header("Content-Length").and_then(|v| v.parse().ok());
+    let total: Option<u64> = header(&resp, "Content-Length").and_then(|v| v.parse().ok());
     // A hedge for the completeness check below. In practice ureq strips BOTH
     // Content-Encoding and Content-Length whenever it transparently decompresses
     // a body (see its response.rs), so a decoded body reaches us with
     // total=None and the check is skipped regardless — but were a future ureq to
     // keep the length, comparing our decoded byte count to the *encoded*
     // Content-Length would false-positive, so we still guard on it. Absent
-    // header == identity. Read before into_reader() consumes the response.
-    let encoded_body = resp
-        .header("Content-Encoding")
+    // header == identity. Read before into_body() consumes the response.
+    let encoded_body = header(&resp, "Content-Encoding")
         .map(|v| !v.eq_ignore_ascii_case("identity"))
         .unwrap_or(false);
     let part = dir.join(format!("{file_name}.part"));
     let dest = dir.join(file_name);
-    let mut reader = resp.into_reader();
+    let mut reader = resp.body_mut().as_reader();
     let mut file = std::fs::File::create(&part).map_err(|e| format!("create model temp: {e}"))?;
     let mut buf = [0u8; 64 * 1024];
     let mut received: u64 = 0;
@@ -377,9 +387,10 @@ mod tests {
             }
         });
 
-        let agent = ureq::AgentBuilder::new()
-            .timeout_read(Duration::from_millis(500))
+        let config = ureq::Agent::config_builder()
+            .timeout_recv_body(Some(Duration::from_millis(500)))
             .build();
+        let agent = ureq::Agent::new_with_config(config);
         let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
         let dir = tempfile::tempdir().expect("tempdir");
         let dir_path = dir.path().to_path_buf();

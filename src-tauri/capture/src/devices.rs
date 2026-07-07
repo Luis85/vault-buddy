@@ -7,6 +7,14 @@ use crate::session::{SourceInput, SourceMsg};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::mpsc::Sender;
 
+/// `DeviceTrait::name()` was removed in cpal 0.18 in favour of a `Display`
+/// impl that panics on a lookup failure — `description()` keeps the old
+/// graceful-degradation shape (`Option`, never a panic) for a device whose
+/// name can't be read.
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_string())
+}
+
 pub struct DeviceInfo {
     pub name: String,
     pub is_default: bool,
@@ -22,15 +30,15 @@ pub struct DeviceList {
 /// the settings UI shows "System default" alone in that case.
 pub fn list_devices() -> DeviceList {
     let host = cpal::default_host();
-    let default_in = host.default_input_device().and_then(|d| d.name().ok());
-    let default_out = host.default_output_device().and_then(|d| d.name().ok());
+    let default_in = host.default_input_device().and_then(|d| device_name(&d));
+    let default_out = host.default_output_device().and_then(|d| device_name(&d));
     let inputs = host
         .input_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect::<Vec<_>>())
+        .map(|it| it.filter_map(|d| device_name(&d)).collect::<Vec<_>>())
         .unwrap_or_default();
     let outputs = host
         .output_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect::<Vec<_>>())
+        .map(|it| it.filter_map(|d| device_name(&d)).collect::<Vec<_>>())
         .unwrap_or_default();
     DeviceList {
         inputs: to_device_infos(inputs, &default_in),
@@ -62,14 +70,14 @@ fn build_stream(
     tx: Sender<SourceMsg>,
 ) -> Result<cpal::Stream, String> {
     let err_tx = tx.clone();
-    let on_error = move |e: cpal::StreamError| {
+    let on_error = move |e: cpal::Error| {
         log::warn!("capture stream error: {e}");
         let _ = err_tx.send(SourceMsg::Lost);
     };
     let stream_config: cpal::StreamConfig = config.config();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
-            &stream_config,
+            stream_config,
             move |data: &[f32], _| {
                 let _ = tx.send(SourceMsg::Samples(data.to_vec()));
             },
@@ -77,7 +85,7 @@ fn build_stream(
             None,
         ),
         cpal::SampleFormat::I16 => device.build_input_stream(
-            &stream_config,
+            stream_config,
             move |data: &[i16], _| {
                 let samples = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
                 let _ = tx.send(SourceMsg::Samples(samples));
@@ -86,7 +94,7 @@ fn build_stream(
             None,
         ),
         cpal::SampleFormat::U16 => device.build_input_stream(
-            &stream_config,
+            stream_config,
             move |data: &[u16], _| {
                 let samples = data
                     .iter()
@@ -108,7 +116,7 @@ fn build_stream(
 /// None = not found (caller falls back to the default with a warning).
 fn find_by_name<I: Iterator<Item = cpal::Device>>(devices: I, name: &str) -> Option<cpal::Device> {
     let mut devices = devices;
-    devices.find(|d| d.name().map(|n| n == name).unwrap_or(false))
+    devices.find(|d| device_name(d).map(|n| n == name).unwrap_or(false))
 }
 
 pub fn open_sources(
@@ -151,11 +159,11 @@ pub fn open_sources(
         .default_input_config()
         .map_err(|e| format!("Microphone unavailable: {e}"))?;
     let (mic_tx, mic_rx) = std::sync::mpsc::channel();
-    let mic_name = mic.name().unwrap_or_else(|_| "Microphone".to_string());
+    let mic_name = device_name(&mic).unwrap_or_else(|| "Microphone".to_string());
     streams.push(build_stream(&mic, &mic_config, mic_tx)?);
     inputs.push(SourceInput {
         name: mic_name,
-        rate: mic_config.sample_rate().0,
+        rate: mic_config.sample_rate(),
         channels: mic_config.channels(),
         rx: mic_rx,
     });
@@ -194,12 +202,12 @@ pub fn open_sources(
         let (tx, rx) = std::sync::mpsc::channel();
         let name = format!(
             "{} (loopback)",
-            output.name().unwrap_or_else(|_| "Speakers".to_string())
+            device_name(&output).unwrap_or_else(|| "Speakers".to_string())
         );
         streams.push(build_stream(&output, &config, tx)?);
         inputs.push(SourceInput {
             name,
-            rate: config.sample_rate().0,
+            rate: config.sample_rate(),
             channels: config.channels(),
             rx,
         });

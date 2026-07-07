@@ -5,13 +5,12 @@
 
 use crate::CancelToken;
 use std::path::Path;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 pub const WHISPER_RATE: u32 = 16_000;
 
@@ -22,21 +21,26 @@ pub fn decode_to_16k_mono(path: &Path, cancel: &CancelToken) -> Result<Vec<f32>,
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| format!("probe audio: {e}"))?;
-    let mut format = probed.format;
     let track = format
-        .default_track()
+        .default_track(TrackType::Audio)
         .ok_or_else(|| "no audio track in recording".to_string())?;
     let track_id = track.id;
+    let audio_params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| "no audio codec parameters in recording".to_string())?
+        .clone();
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
         .map_err(|e| format!("init decoder: {e}"))?;
 
     // Resample each packet straight into the 16 kHz output as it decodes, so we
@@ -46,6 +50,7 @@ pub fn decode_to_16k_mono(path: &Path, cancel: &CancelToken) -> Result<Vec<f32>,
     // FIRST packet's rate — our captures use one constant rate for the file.
     let mut out: Vec<f32> = Vec::new();
     let mut resampler: Option<StreamingLinearResampler> = None;
+    let mut interleaved: Vec<f32> = Vec::new(); // per-packet decode scratch, reused
     let mut mono: Vec<f32> = Vec::new(); // per-packet downmix scratch, reused
     let mut warned_rate_change = false; // latch: warn once, never per packet
     loop {
@@ -59,20 +64,21 @@ pub fn decode_to_16k_mono(path: &Path, cancel: &CancelToken) -> Result<Vec<f32>,
             return Err("cancelled".to_string());
         }
         let packet = match format.next_packet() {
-            Ok(p) => p,
+            Ok(Some(p)) => p,
+            Ok(None) => break,
             Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 break
             }
             Err(SymphoniaError::ResetRequired) => break,
             Err(e) => return Err(format!("read packet: {e}")),
         };
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
         match decoder.decode(&packet) {
             Ok(decoded) => {
-                let spec = *decoded.spec();
-                let channels = spec.channels.count().max(1);
+                let spec = decoded.spec();
+                let channels = spec.channels().count().max(1);
                 // A mid-stream rate change would need its own resampler to be
                 // correct; it must not happen for our recordings. If it does we
                 // keep feeding the original-rate resampler (no worse than the
@@ -82,23 +88,23 @@ pub fn decode_to_16k_mono(path: &Path, cancel: &CancelToken) -> Result<Vec<f32>,
                 if let Some(r) = resampler.as_ref() {
                     // Once, not per packet: a genuinely variable-rate stream
                     // would otherwise flood the log with a warning per frame.
-                    if spec.rate != r.from && !warned_rate_change {
+                    if spec.rate() != r.from && !warned_rate_change {
                         warned_rate_change = true;
                         log::warn!(
                             "unexpected sample-rate change decoding {}: {} -> {}; keeping {}",
                             path.display(),
                             r.from,
-                            spec.rate,
+                            spec.rate(),
                             r.from
                         );
                     }
                 }
+                let rate = spec.rate();
                 let r = resampler
-                    .get_or_insert_with(|| StreamingLinearResampler::new(spec.rate, WHISPER_RATE));
-                let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-                buf.copy_interleaved_ref(decoded);
+                    .get_or_insert_with(|| StreamingLinearResampler::new(rate, WHISPER_RATE));
+                decoded.copy_to_vec_interleaved(&mut interleaved);
                 mono.clear();
-                for frame in buf.samples().chunks(channels) {
+                for frame in interleaved.chunks(channels) {
                     let sum: f32 = frame.iter().copied().sum();
                     mono.push(sum / channels as f32);
                 }

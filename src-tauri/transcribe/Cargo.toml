@@ -13,8 +13,8 @@ whisper = ["dep:whisper-rs"]
 [dependencies]
 vault_buddy_core = { path = "../core" }
 log = "0.4"
-symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
-ureq = "2"
+symphonia = { version = "0.6", default-features = false, features = ["mp3"] }
+ureq = "3"
 sha2 = "0.10"
 # `log_backend` lets `install_logging_hooks` route whisper.cpp/ggml's native
 # C-level logs through the Rust `log` crate into the app's log files instead
