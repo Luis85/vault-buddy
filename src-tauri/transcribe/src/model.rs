@@ -211,8 +211,17 @@ fn download_stream(
         hasher.update(&buf[..n]);
         on_progress(received, total);
     }
-    let _ = std::io::Write::flush(&mut file);
-    let _ = file.sync_all();
+    // Best-effort durability: the integrity check below re-hashes the bytes
+    // already handed to `write_all`, not a re-read from disk, so a flush/sync
+    // failure can't make a corrupt file pass verification — but it's still a
+    // real durability gap (an unflushed `.part` lost to a crash before
+    // rename), worth a warning rather than silence.
+    if let Err(e) = std::io::Write::flush(&mut file) {
+        log::warn!("model download: flush failed for {}: {e}", part.display());
+    }
+    if let Err(e) = file.sync_all() {
+        log::warn!("model download: fsync failed for {}: {e}", part.display());
+    }
     drop(file);
     if received < min_size {
         let _ = std::fs::remove_file(&part);
@@ -628,6 +637,61 @@ mod tests {
         assert!(
             download_model(ModelTier::Base, &cancel, &mut progress).is_err(),
             "a pre-cancelled download must not proceed to the network"
+        );
+    }
+
+    #[test]
+    fn cancelling_mid_download_cleans_up_the_part_file() {
+        // Regression: only a PRE-cancelled token (above) was covered — a
+        // cancel that arrives AFTER at least one chunk has already landed on
+        // disk must still remove the `.part`. The loop's cancel check sits at
+        // the TOP of the loop, so a cancel signalled from inside the progress
+        // callback (which runs once per received chunk) is exactly what a
+        // real mid-download cancel looks like: the very next iteration must
+        // see it and clean up rather than reading to completion.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let body = vec![b'a'; 128 * 1024]; // several 64 KiB read-buffer chunks
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                let _ = sock.write_all(header.as_bytes());
+                let _ = sock.write_all(&body);
+                let _ = sock.flush();
+            }
+        });
+
+        let agent = model_download_agent();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cancel = crate::CancelToken::new();
+        let cancel_from_progress = cancel.clone();
+        let mut progress = move |_r: u64, _t: Option<u64>| cancel_from_progress.cancel();
+        let res = download_stream(
+            &agent,
+            &url,
+            dir.path(),
+            "ggml-base.bin",
+            0,
+            "",
+            &cancel,
+            &mut progress,
+        );
+        let _ = server.join();
+
+        assert!(res.is_err(), "a mid-download cancel must return Err");
+        assert!(
+            !dir.path().join("ggml-base.bin").exists(),
+            "a cancelled download must never finalize"
+        );
+        assert!(
+            !dir.path().join("ggml-base.bin.part").exists(),
+            "the .part temp must be cleaned up after a mid-download cancel"
         );
     }
 
