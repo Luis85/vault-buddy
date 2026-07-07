@@ -60,6 +60,15 @@ struct ActiveJob {
     started_at_ms: u64,
     phase: Phase,
     progress: Arc<AtomicU8>, // 0..100 inference %, written lock-free from the callback
+    /// Set when an explicit force re-transcribe was requested for this same
+    /// path while it was already running (`enqueue`'s `WillRerunAfterActive`
+    /// case, instead of pushing a second `pending` entry for the same mp3).
+    /// `finish_active` requeues it once this run ends; `cancel` clears it, so
+    /// cancelling truly stops all pending work on the path rather than
+    /// leaving a duplicate to silently restart right after (the bug a Codex
+    /// review caught: cancelling the active job left an already-queued
+    /// duplicate for the same path untouched).
+    rerun_force: bool,
 }
 
 #[derive(Default)]
@@ -75,7 +84,25 @@ struct TranscriptionQueue {
 enum Enqueued {
     Queued,
     UpgradedToForce,
+    /// A force re-transcribe was requested for a path already running — no
+    /// new entry was queued; the active job was marked to rerun itself once
+    /// it finishes (see `finish_active`).
+    WillRerunAfterActive,
     Duplicate,
+}
+
+/// Outcome of a cancel request against the queue, so `cancel_transcription`
+/// knows which sidecar write (if any) is its own responsibility.
+#[derive(Debug, PartialEq)]
+enum CancelOutcome {
+    /// The active job for this path had its token flipped (and any pending
+    /// rerun request cleared) — the worker's own `TranscribeError::Cancelled`
+    /// arm owns the sidecar write, not the caller.
+    CancelledActive,
+    /// A pending (not yet started) job for this path was dropped — the
+    /// caller owns writing the cancelled sidecar.
+    RemovedPending,
+    NotFound,
 }
 
 impl TranscriptionQueue {
@@ -83,10 +110,15 @@ impl TranscriptionQueue {
     /// is derived from live state (`pending` + `active`) instead of a side set,
     /// so it can never drift out of sync with the real queue. A `force`
     /// (explicit re-transcribe) is NEVER silently dropped: it promotes a queued
-    /// plain job, and it queues even while the same path is actively
-    /// transcribing — so a cancel→retry landing in that window re-runs
-    /// afterwards instead of vanishing. A plain (auto-scan) enqueue still skips
-    /// anything already pending or in flight.
+    /// plain job; if the same path is already running, it marks the ACTIVE job
+    /// to rerun itself once it finishes (`WillRerunAfterActive`) instead of
+    /// pushing a second `pending` entry for that path — `transcription_queue_status`
+    /// would otherwise report one path as both `active` and `queued` (the
+    /// frontend store keys jobs by mp3, so the queued seed silently overwrote
+    /// the active phase), and `cancel_transcription`'s active-first check would
+    /// never even look at that duplicate, so a cancel wouldn't stop it (a
+    /// Codex review caught exactly this). A plain (auto-scan) enqueue still
+    /// skips anything already pending or in flight.
     fn enqueue(&mut self, job: TranscriptionJob) -> Enqueued {
         let active_same = self
             .active
@@ -101,7 +133,13 @@ impl TranscriptionQueue {
                 existing.force = true; // promote a queued plain job
                 return Enqueued::UpgradedToForce;
             }
-            self.pending.push_back(job); // queue even if active_same → re-runs after
+            if active_same {
+                if let Some(active) = self.active.as_mut() {
+                    active.rerun_force = true;
+                }
+                return Enqueued::WillRerunAfterActive;
+            }
+            self.pending.push_back(job);
             return Enqueued::Queued;
         }
         if active_same || self.pending.iter().any(|j| j.mp3 == job.mp3) {
@@ -109,6 +147,49 @@ impl TranscriptionQueue {
         }
         self.pending.push_back(job);
         Enqueued::Queued
+    }
+
+    /// Clear the active slot after a job finishes (success/fail/panic) — the
+    /// worker's one call, right after `process_transcription` returns.
+    /// Requeues the path as a fresh `force` job when a rerun was requested
+    /// while it ran (`enqueue`'s `WillRerunAfterActive`), returning that job so
+    /// the caller can log it; `None` for a normal finish, an idle queue, or a
+    /// rerun request that `cancel` cleared in the meantime.
+    fn finish_active(&mut self) -> Option<TranscriptionJob> {
+        let active = self.active.take()?;
+        if !active.rerun_force {
+            return None;
+        }
+        let job = TranscriptionJob {
+            mp3: active.mp3,
+            vault_id: active.vault_id,
+            force: true,
+        };
+        self.pending.push_back(job.clone());
+        Some(job)
+    }
+
+    /// Cancel whatever is queued or running for `mp3`. Checks `active` first:
+    /// if it's the same path, flip its token AND clear `rerun_force` — a
+    /// cancel must stop ALL pending work on the path, not just the current
+    /// run, or a force re-transcribe requested while it ran would silently
+    /// restart right after `finish_active` (the Codex-caught bug). Otherwise
+    /// drop a matching pending job.
+    fn cancel(&mut self, mp3: &Path) -> CancelOutcome {
+        if let Some(active) = self.active.as_mut() {
+            if active.mp3 == mp3 {
+                active.cancel.cancel(); // aborts inference; the worker writes the cancelled sidecar
+                active.rerun_force = false;
+                return CancelOutcome::CancelledActive;
+            }
+        }
+        let before = self.pending.len();
+        self.pending.retain(|j| j.mp3 != mp3);
+        if self.pending.len() != before {
+            CancelOutcome::RemovedPending
+        } else {
+            CancelOutcome::NotFound
+        }
     }
 }
 
@@ -162,6 +243,14 @@ pub(crate) fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
         // notify is needed; just record the promotion.
         Enqueued::UpgradedToForce => {
             log::info!("transcribe: upgraded queued job to force {}", mp3.display());
+        }
+        // Nothing new in `pending` to wake the worker for — it's already
+        // busy with this exact path and will requeue it via `finish_active`.
+        Enqueued::WillRerunAfterActive => {
+            log::info!(
+                "transcribe: {} is already running — will re-run once it finishes",
+                mp3.display()
+            );
         }
         Enqueued::Duplicate => {}
     }
@@ -227,27 +316,21 @@ fn process_transcription(
     }
     let tier = ModelTier::from_str(&cfg.transcription_model);
 
-    // Publish the active job BEFORE any observable work starts, so a future
-    // cancel command (Task 4) always has a token to flip. The mutex hold is
-    // brief — just the insert — never across the download/model-load/
-    // inference that follows. `cancel`/`progress` are kept as locals too
-    // (not re-read from `active` later) — they share state with the clones
-    // stored below via CancelToken's/Arc's Clone, so either handle works.
-    let started_at_ms = now_ms();
-    let cancel = CancelToken::new();
-    let progress = Arc::new(AtomicU8::new(0));
-    {
+    // The worker loop already published this job as `active` in the SAME
+    // lock acquisition it popped it under, before calling this function —
+    // so there is no gap where this path is neither `pending` nor `active`.
+    // (There used to be: this used to construct and publish `ActiveJob` here,
+    // after the `load_config` call above already did synchronous I/O, which
+    // left a same-path enqueue briefly undetectable as a duplicate.)
+    let (cancel, progress) = {
         let state = app.state::<TranscriptionState>();
-        let mut guard = lock_ignoring_poison(&state.inner);
-        guard.active = Some(ActiveJob {
-            mp3: job.mp3.clone(),
-            vault_id: job.vault_id.clone(),
-            cancel: cancel.clone(),
-            started_at_ms,
-            phase: Phase::Preparing,
-            progress: progress.clone(),
-        });
-    }
+        let guard = lock_ignoring_poison(&state.inner);
+        let active = guard
+            .active
+            .as_ref()
+            .expect("the worker loop publishes `active` before calling process_transcription");
+        (active.cancel.clone(), active.progress.clone())
+    };
     let _ = app.emit(
         "capture:transcribing",
         serde_json::json!({ "mp3": job.mp3.to_string_lossy(), "vaultId": job.vault_id }),
@@ -347,8 +430,11 @@ fn process_transcription(
     );
     let app_cb = app.clone();
     let mp3_cb = job.mp3.clone();
-    let mut emit_throttle = EmitThrottle::new(5);
-    let mut log_throttle = EmitThrottle::new(25);
+    // Seeded at 0, matching the "progress": 0 emit just above — an unseeded
+    // throttle's own first call always fires regardless of value, which
+    // re-announced/re-logged that same 0% a second time.
+    let mut emit_throttle = EmitThrottle::new_seeded(5, 0);
+    let mut log_throttle = EmitThrottle::new_seeded(25, 0);
     let on_progress: Box<dyn FnMut(i32) + Send> = Box::new(move |p| {
         let p = p.clamp(0, 100);
         progress.store(p as u8, Ordering::Relaxed); // lock-free, no queue mutex
@@ -547,18 +633,33 @@ pub fn run_transcription(app: &AppHandle) {
                     std::thread::sleep(Duration::from_secs(30));
                     continue;
                 }
-                // Claim the front under the lock and process THAT value — a
-                // force upgrade that landed after the peek is already reflected
-                // in the job we pop here (dedup derives from live pending +
-                // active, so it can't drift). `None` means the queue emptied in
-                // the unlocked gap between the peek above and this pop — only
-                // `cancel_transcription`'s `pending.retain` can do that (this is
-                // the sole popper), e.g. cancelling the last queued job — so
-                // just loop back.
+                // Claim the front AND publish `active` in the SAME lock
+                // acquisition — a force upgrade that landed after the peek is
+                // already reflected in the job we pop here (dedup derives from
+                // live pending + active, so it can't drift), and publishing
+                // `active` here (rather than inside `process_transcription`,
+                // after that function's own I/O) closes the gap where this
+                // path used to be neither `pending` nor `active` for a moment.
+                // `None` means the queue emptied in the unlocked gap between
+                // the peek above and this pop — only `cancel_transcription`'s
+                // `pending.retain` can do that (this is the sole popper), e.g.
+                // cancelling the last queued job — so just loop back.
                 let job = {
                     let state = app.state::<TranscriptionState>();
                     let mut guard = lock_ignoring_poison(&state.inner);
-                    guard.pending.pop_front()
+                    let job = guard.pending.pop_front();
+                    if let Some(job) = &job {
+                        guard.active = Some(ActiveJob {
+                            mp3: job.mp3.clone(),
+                            vault_id: job.vault_id.clone(),
+                            cancel: CancelToken::new(),
+                            started_at_ms: now_ms(),
+                            phase: Phase::Preparing,
+                            progress: Arc::new(AtomicU8::new(0)),
+                            rerun_force: false,
+                        });
+                    }
+                    job
                 };
                 let Some(job) = job else { continue };
                 let completed = catch_job(|| process_transcription(&app, &job, &mut loaded));
@@ -576,11 +677,17 @@ pub fn run_transcription(app: &AppHandle) {
                 // derives from live state (`pending` + `active`): success leaves
                 // a `complete` sidecar (won't rescan), failure a `failed` one (a
                 // later launch's scan or a manual retry re-queues it), so
-                // dropping `active` here is all the cleanup the dedup needs.
+                // `finish_active` (which also requeues an explicit rerun
+                // request marked while this job ran) is all the cleanup needed.
                 {
                     let state = app.state::<TranscriptionState>();
                     let mut guard = lock_ignoring_poison(&state.inner);
-                    guard.active = None;
+                    if let Some(rerun) = guard.finish_active() {
+                        log::info!(
+                            "transcribe: re-queued {} for a force re-transcribe requested while it was running",
+                            rerun.mp3.display()
+                        );
+                    }
                 }
             }
         })
@@ -627,15 +734,17 @@ pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 /// Cancel a queued or in-flight transcription. The queue mutex is held only
-/// for bookkeeping (flip the active job's `CancelToken`, or drop a pending
-/// job) — NEVER across the sidecar write below, which does a temp+fsync+
-/// rename (`replace_if_ours`) and would otherwise stall every other
-/// command that needs the same mutex (enqueue, status, a concurrent cancel)
-/// for the duration of a disk flush.
+/// for bookkeeping (`TranscriptionQueue::cancel`: flip the active job's
+/// `CancelToken` and clear its `rerun_force`, or drop a pending job) — NEVER
+/// across the sidecar write below, which does a temp+fsync+rename
+/// (`replace_if_ours`) and would otherwise stall every other command that
+/// needs the same mutex (enqueue, status, a concurrent cancel) for the
+/// duration of a disk flush.
 ///
 /// The active job's sidecar is deliberately NOT written here: cancelling it
-/// only flips the token, and the worker's `TranscribeError::Cancelled` arm
-/// (in `process_transcription`) owns that write via `replace_if_ours`, which
+/// only flips the token (and clears any pending rerun — see `cancel`'s doc),
+/// and the worker's `TranscribeError::Cancelled` arm (in
+/// `process_transcription`) owns that write via `replace_if_ours`, which
 /// already refuses to clobber a finished/hand-edited transcript. A pending
 /// job's sidecar is NOT guaranteed to be our own `pending` placeholder or
 /// absent: `retranscribe` pushes straight into the queue via
@@ -650,43 +759,35 @@ pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
 pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> {
     let mp3 = PathBuf::from(&path);
     // Phase 1: fast bookkeeping under the mutex; decide what to write after.
-    let write_cancelled = {
+    let outcome = {
         let state = app.state::<TranscriptionState>();
         let mut guard = lock_ignoring_poison(&state.inner);
-        if guard.active.as_ref().map(|a| a.mp3 == mp3).unwrap_or(false) {
-            guard.active.as_ref().unwrap().cancel.cancel(); // aborts inference; the worker writes the cancelled sidecar
-            return Ok(()); // worker owns the terminal bookkeeping for the active job
-        }
-        // Pending job: drop it now; write its sidecar AFTER releasing the lock.
-        let before = guard.pending.len();
-        guard.pending.retain(|j| j.mp3 != mp3);
-        if guard.pending.len() == before {
-            return Err("No such transcription in the queue.".into());
-        }
-        // `pending.retain` above already dropped the job; dedup derives from
-        // live state now, so there is no separate set to prune.
-        true
+        guard.cancel(&mp3)
     }; // <-- mutex released here
-    if write_cancelled {
-        let name = mp3
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if let Err(e) = vault_buddy_core::transcript::replace_if_ours(
-            &vault_buddy_core::transcript::transcript_path(&mp3),
-            &vault_buddy_core::transcript::render_cancelled(&name),
-        ) {
-            log::warn!(
-                "transcribe: writing cancelled sidecar for {} failed: {e}",
-                mp3.display()
+    match outcome {
+        CancelOutcome::CancelledActive => Ok(()), // worker owns the terminal bookkeeping
+        CancelOutcome::NotFound => Err("No such transcription in the queue.".into()),
+        CancelOutcome::RemovedPending => {
+            let name = mp3
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if let Err(e) = vault_buddy_core::transcript::replace_if_ours(
+                &vault_buddy_core::transcript::transcript_path(&mp3),
+                &vault_buddy_core::transcript::render_cancelled(&name),
+            ) {
+                log::warn!(
+                    "transcribe: writing cancelled sidecar for {} failed: {e}",
+                    mp3.display()
+                );
+            }
+            let _ = app.emit(
+                "capture:transcribeCancelled",
+                serde_json::json!({ "mp3": mp3.to_string_lossy() }),
             );
+            Ok(())
         }
-        let _ = app.emit(
-            "capture:transcribeCancelled",
-            serde_json::json!({ "mp3": mp3.to_string_lossy() }),
-        );
     }
-    Ok(())
 }
 
 /// Live snapshot of the transcription queue for the Recordings panel: the
@@ -749,8 +850,9 @@ mod tests {
         }
     }
 
-    // Minimal in-flight job for the dedup tests — only `mp3` is read by
-    // `enqueue`; the rest are inert placeholders the struct requires.
+    // Minimal in-flight job for the dedup tests — only `mp3` (and, in the
+    // rerun tests, `rerun_force`) is read; the rest are inert placeholders
+    // the struct requires.
     fn active_job(path: &str) -> ActiveJob {
         ActiveJob {
             mp3: PathBuf::from(path),
@@ -759,6 +861,7 @@ mod tests {
             started_at_ms: 0,
             phase: Phase::Preparing,
             progress: Arc::new(AtomicU8::new(0)),
+            rerun_force: false,
         }
     }
 
@@ -794,15 +897,90 @@ mod tests {
     }
 
     #[test]
-    fn force_is_queued_even_while_path_is_actively_transcribing() {
+    fn force_marks_the_active_job_to_rerun_instead_of_queueing_a_duplicate() {
+        // Regression (Codex P2): a force re-transcribe of an ALREADY-active
+        // path used to push a second `pending` entry for the same mp3, so
+        // `transcription_queue_status` reported one path as both `active`
+        // and `queued` — the frontend store (keyed by mp3) then let the
+        // queued seed silently overwrite the active phase — and
+        // `cancel_transcription`'s active-first check returned before ever
+        // looking at that duplicate, so cancelling appeared to work but the
+        // duplicate ran right after. It must instead mark the running job.
         let mut q = TranscriptionQueue {
             active: Some(active_job("X")),
             ..Default::default()
         };
-        assert_eq!(q.enqueue(job("X", true)), Enqueued::Queued);
+        assert_eq!(q.enqueue(job("X", true)), Enqueued::WillRerunAfterActive);
+        assert!(
+            q.pending.is_empty(),
+            "no duplicate entry for the active path"
+        );
+        assert!(q.active.as_ref().unwrap().rerun_force);
+    }
+
+    #[test]
+    fn finish_active_requeues_a_forced_rerun_request() {
+        let mut q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        q.active.as_mut().unwrap().rerun_force = true;
+        let requeued = q.finish_active();
+        assert!(q.active.is_none());
         assert_eq!(q.pending.len(), 1);
         assert!(q.pending[0].force);
-        assert_eq!(q.pending[0].mp3, PathBuf::from("X"));
+        assert_eq!(requeued.map(|j| j.mp3), Some(PathBuf::from("X")));
+    }
+
+    #[test]
+    fn finish_active_does_not_requeue_without_a_rerun_request() {
+        let mut q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        assert!(q.finish_active().is_none());
+        assert!(q.active.is_none());
+        assert!(q.pending.is_empty());
+    }
+
+    #[test]
+    fn finish_active_on_an_idle_queue_is_a_no_op() {
+        let mut q = TranscriptionQueue::default();
+        assert!(q.finish_active().is_none());
+    }
+
+    #[test]
+    fn cancel_active_clears_the_token_and_any_pending_rerun_request() {
+        // Regression (Codex P2): cancelling the active job must also cancel
+        // a rerun requested while it ran, or the cancel appears to stop the
+        // work but the rerun silently starts right after `finish_active`.
+        let mut q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        q.active.as_mut().unwrap().rerun_force = true;
+        assert_eq!(q.cancel(Path::new("X")), CancelOutcome::CancelledActive);
+        let active = q.active.as_ref().unwrap();
+        assert!(active.cancel.is_cancelled());
+        assert!(!active.rerun_force);
+        assert!(
+            q.finish_active().is_none(),
+            "a cleared rerun request must not requeue"
+        );
+    }
+
+    #[test]
+    fn cancel_removes_a_pending_job() {
+        let mut q = TranscriptionQueue::default();
+        q.enqueue(job("X", false));
+        assert_eq!(q.cancel(Path::new("X")), CancelOutcome::RemovedPending);
+        assert!(q.pending.is_empty());
+    }
+
+    #[test]
+    fn cancel_reports_not_found_for_an_unknown_path() {
+        let mut q = TranscriptionQueue::default();
+        assert_eq!(q.cancel(Path::new("nope")), CancelOutcome::NotFound);
     }
 
     #[test]
