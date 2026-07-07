@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::capture_commands::{is_recording, now_ms, toast};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_core::throttle::EmitThrottle;
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
@@ -268,13 +269,21 @@ fn process_transcription(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let _ = vault_buddy_core::transcript::force_write_sidecar(
+            if let Err(e) = vault_buddy_core::transcript::force_write_sidecar(
                 &vault_buddy_core::transcript::transcript_path(&job.mp3),
                 &vault_buddy_core::transcript::render_placeholder(&name),
-            );
+            ) {
+                log::warn!(
+                    "transcribe: writing placeholder for {} failed: {e}",
+                    job.mp3.display()
+                );
+            }
         }
-    } else {
-        let _ = vault_buddy_core::transcript::write_placeholder(&job.mp3);
+    } else if let Err(e) = vault_buddy_core::transcript::write_placeholder(&job.mp3) {
+        log::warn!(
+            "transcribe: writing placeholder for {} failed: {e}",
+            job.mp3.display()
+        );
     }
 
     let model = match ensure_model(app, tier, &job.mp3, &cancel) {
@@ -338,21 +347,19 @@ fn process_transcription(
     );
     let app_cb = app.clone();
     let mp3_cb = job.mp3.clone();
-    let mut last_sent: i32 = -1;
-    let mut last_logged: i32 = -1;
+    let mut emit_throttle = EmitThrottle::new(5);
+    let mut log_throttle = EmitThrottle::new(25);
     let on_progress: Box<dyn FnMut(i32) + Send> = Box::new(move |p| {
-        progress.store(p.clamp(0, 100) as u8, Ordering::Relaxed); // lock-free, no queue mutex
-        if p - last_sent >= 5 || p >= 100 {
-            // throttled UI event
-            last_sent = p;
+        let p = p.clamp(0, 100);
+        progress.store(p as u8, Ordering::Relaxed); // lock-free, no queue mutex
+        let terminal = p >= 100;
+        if emit_throttle.should_emit(p as u64, terminal) {
             let _ = app_cb.emit(
                 "capture:transcribeProgress",
                 serde_json::json!({ "mp3": mp3_cb.to_string_lossy(), "progress": p }),
             );
         }
-        if p - last_logged >= 25 || p >= 100 {
-            // honest log: coarse periodic progress
-            last_logged = p;
+        if log_throttle.should_emit(p as u64, terminal) {
             log::info!("transcribe: {} inference {}%", mp3_cb.display(), p);
         }
     });
@@ -416,11 +423,9 @@ fn ensure_model(
     log::info!("transcribe: downloading model {}", tier.as_str());
     let app = app.clone();
     let mp3 = mp3.to_path_buf();
-    let mut last_emit: u64 = 0;
+    let mut throttle = EmitThrottle::new(4_000_000);
     download_model(tier, cancel, &mut |received, total| {
-        // Throttle: an event every ~4 MB (and the final byte).
-        if received.saturating_sub(last_emit) >= 4_000_000 || Some(received) == total {
-            last_emit = received;
+        if throttle.should_emit(received, Some(received) == total) {
             // Phase update is brief (one field write, via set_phase); the
             // emit itself happens after its guard drops internally.
             set_phase(&app, Phase::Downloading { received, total });
@@ -447,10 +452,15 @@ fn emit_cancelled(app: &AppHandle, mp3: &Path) {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let _ = vault_buddy_core::transcript::replace_if_ours(
+    if let Err(e) = vault_buddy_core::transcript::replace_if_ours(
         &vault_buddy_core::transcript::transcript_path(mp3),
         &vault_buddy_core::transcript::render_cancelled(&name),
-    );
+    ) {
+        log::warn!(
+            "transcribe: writing cancelled sidecar for {} failed: {e}",
+            mp3.display()
+        );
+    }
     let _ = app.emit(
         "capture:transcribeCancelled",
         serde_json::json!({ "mp3": mp3.to_string_lossy() }),
@@ -468,7 +478,12 @@ fn fail_transcription(app: &AppHandle, mp3: &Path, message: &str) {
         .unwrap_or_default();
     let path = vault_buddy_core::transcript::transcript_path(mp3);
     let content = vault_buddy_core::transcript::render_error(&name, message);
-    let _ = vault_buddy_core::transcript::replace_if_ours(&path, &content);
+    if let Err(e) = vault_buddy_core::transcript::replace_if_ours(&path, &content) {
+        log::warn!(
+            "transcribe: writing failed sidecar for {} failed: {e}",
+            mp3.display()
+        );
+    }
     let _ = app.emit(
         "capture:transcribeFailed",
         serde_json::json!({ "mp3": mp3.to_string_lossy(), "message": message }),
