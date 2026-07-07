@@ -4,7 +4,7 @@
 //! pre-existing updater also talks to the network, for app updates).
 
 use crate::CancelToken;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModelTier {
@@ -94,11 +94,67 @@ pub fn download_model(
     if dest.exists() {
         return Ok(dest);
     }
-    let resp = ureq::get(&tier.url())
+    let agent = model_download_agent();
+    download_stream(
+        &agent,
+        &tier.url(),
+        &dir,
+        tier.file_name(),
+        tier.min_size(),
+        cancel,
+        on_progress,
+    )
+}
+
+/// Agent used for model downloads. A *fully stalled* socket must surface as an
+/// `Err` (which the caller already turns into a retryable failure) instead of
+/// wedging the single background transcription worker for the whole app
+/// session — the cancel token is only polled between reads, so a blocked
+/// `read()` can never be interrupted. `timeout_read` is a per-read (idle)
+/// timeout that resets on every chunk that arrives, NOT a whole-body deadline,
+/// so a healthy but slow transfer of the up-to-~1.5 GB `medium` model keeps
+/// going as long as bytes keep flowing; only a socket silent for a full minute
+/// trips it. (`ureq::timeout()` is deliberately avoided: it deadlines the
+/// entire body and would abort a legitimately slow multi-hundred-MB download.)
+fn model_download_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .build()
+}
+
+/// Streams the response body into a `.part` file, then renames it into place.
+/// Split out from `download_model` so the timeout behavior can be exercised by
+/// a short-timeout agent against a localhost server in tests. `dest` is assumed
+/// not to exist yet (the caller returns early when it does), which is what makes
+/// the plain rename below safe.
+fn download_stream(
+    agent: &ureq::Agent,
+    url: &str,
+    dir: &Path,
+    file_name: &str,
+    min_size: u64,
+    cancel: &CancelToken,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<PathBuf, String> {
+    let resp = agent
+        .get(url)
         .call()
         .map_err(|e| format!("request model: {e}"))?;
     let total: Option<u64> = resp.header("Content-Length").and_then(|v| v.parse().ok());
-    let part = dir.join(format!("{}.part", tier.file_name()));
+    // A hedge for the completeness check below. In practice ureq strips BOTH
+    // Content-Encoding and Content-Length whenever it transparently decompresses
+    // a body (see its response.rs), so a decoded body reaches us with
+    // total=None and the check is skipped regardless — but were a future ureq to
+    // keep the length, comparing our decoded byte count to the *encoded*
+    // Content-Length would false-positive, so we still guard on it. Absent
+    // header == identity. Read before into_reader() consumes the response.
+    let encoded_body = resp
+        .header("Content-Encoding")
+        .map(|v| !v.eq_ignore_ascii_case("identity"))
+        .unwrap_or(false);
+    let part = dir.join(format!("{file_name}.part"));
+    let dest = dir.join(file_name);
     let mut reader = resp.into_reader();
     let mut file = std::fs::File::create(&part).map_err(|e| format!("create model temp: {e}"))?;
     let mut buf = [0u8; 64 * 1024];
@@ -112,8 +168,21 @@ pub fn download_model(
             let _ = std::fs::remove_file(&part);
             return Err("cancelled".to_string());
         }
-        let n =
-            std::io::Read::read(&mut reader, &mut buf).map_err(|e| format!("read stream: {e}"))?;
+        let n = match std::io::Read::read(&mut reader, &mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                // A mid-body read error includes the truncation case: when the
+                // sender closes early on a Content-Length response, ureq's
+                // length-limited reader surfaces it as an UnexpectedEof rather
+                // than a clean end-of-stream, so the loop never reaches the
+                // completeness check below. Clean up the temp here too (drop
+                // before remove — Windows won't unlink an open file) so a
+                // truncated transfer leaves no `.part` behind, same as cancel.
+                drop(file);
+                let _ = std::fs::remove_file(&part);
+                return Err(format!("read stream: {e}"));
+            }
+        };
         if n == 0 {
             break;
         }
@@ -124,13 +193,57 @@ pub fn download_model(
     let _ = std::io::Write::flush(&mut file);
     let _ = file.sync_all();
     drop(file);
-    if received < tier.min_size() {
+    if received < min_size {
         let _ = std::fs::remove_file(&part);
         return Err(format!("model download incomplete: {received} bytes"));
+    }
+    // Completeness, not just a floor: a sender can close after advertising a
+    // Content-Length but before sending all of it, leaving a body that still
+    // clears min_size (e.g. base stops at 120 MB of ~142 MB) which, cached,
+    // would fail to load forever. Defense-in-depth: on the current ureq a
+    // truncated Content-Length body actually surfaces earlier as an
+    // UnexpectedEof from the length-limited reader (cleaned up on the read-error
+    // path above), so this equality catches only the residual case of a clean
+    // short EOF (or a future reader that returns Ok(0) early). Skipped for a
+    // content-encoded body (the advertised length is then the encoded size, see
+    // `encoded_body`); no `total` (close-delimited) keeps the min_size-only
+    // behavior. `file` is already dropped above, so a bare remove is fine.
+    if let Some(total) = total {
+        if !encoded_body && received != total {
+            let _ = std::fs::remove_file(&part);
+            return Err(format!(
+                "model download incomplete: {received} of {total} bytes"
+            ));
+        }
     }
     // We own `part` and `dest` didn't exist above — a plain rename is fine.
     std::fs::rename(&part, &dest).map_err(|e| format!("finalize model: {e}"))?;
     Ok(dest)
+}
+
+/// Discard a cached model so the next download re-fetches it. A model that
+/// downloaded but won't load is corrupt (a large-but-broken file can clear the
+/// `min_size` floor and be cached anyway); without a way to drop it the shell
+/// would short-circuit on `dest.exists()` and hand back the same broken file
+/// forever. Best-effort: an unresolvable model dir is a no-op (nothing to
+/// remove), and an already-absent file is success.
+pub fn remove_model(tier: ModelTier) -> std::io::Result<()> {
+    match model_dir() {
+        Some(dir) => remove_cached(&dir, tier.file_name()),
+        None => Ok(()),
+    }
+}
+
+/// Delete `dir/file_name`, treating an already-absent file as success — the
+/// contract is "the path is clear", not "we did the deleting". Split from
+/// `remove_model` so it can be tested against a tempdir instead of the real
+/// %APPDATA% models dir.
+fn remove_cached(dir: &Path, file_name: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(file_name)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -179,6 +292,191 @@ mod tests {
     }
 
     #[test]
+    fn stalled_download_errors_instead_of_hanging() {
+        // Regression (M1): ureq's default agent has no read timeout, so a
+        // server that stalls mid-body blocks the single transcription worker
+        // for the whole app session — and a user "cancel" appears to do
+        // nothing, because the token is only polled *between* reads and the
+        // blocked read() is never reached again. The streaming download must
+        // surface a fully-stalled socket as an Err via a per-read (idle)
+        // timeout on the agent. We drive the seam with a short-timeout agent
+        // against a localhost server that sends a header advertising a large
+        // body, dribbles a few bytes, then goes silent (never closing), so the
+        // ONLY way to finish is the read timeout — not an EOF.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+
+        // Hold the socket open and silent well past the client's recv bound, so
+        // a missing read timeout manifests as a hang (not an early EOF that
+        // would pass for the wrong reason). `stop` lets the healthy path tear
+        // the server down immediately instead of waiting out the deadline.
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_srv = stop.clone();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                let _ =
+                    sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000000\r\n\r\nabcd");
+                let _ = sock.flush();
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                while !stop_srv.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        });
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_read(Duration::from_millis(500))
+            .build();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir_path = dir.path().to_path_buf();
+
+        // Run the download on its own thread so a HANG fails the test with a
+        // clear message via recv_timeout instead of wedging the whole suite.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let cancel = crate::CancelToken::new();
+            let mut progress = |_received: u64, _total: Option<u64>| {};
+            let res = download_stream(
+                &agent,
+                &url,
+                &dir_path,
+                "ggml-base.bin",
+                ModelTier::Base.min_size(),
+                &cancel,
+                &mut progress,
+            );
+            let _ = tx.send(res.is_err());
+        });
+
+        let outcome = rx.recv_timeout(Duration::from_secs(3));
+        stop.store(true, Ordering::SeqCst);
+        let _ = server.join();
+        match outcome {
+            Ok(is_err) => assert!(is_err, "a stalled download must return Err, not Ok"),
+            Err(_) => {
+                panic!("download did not return in time — a stalled read is not surfacing as Err")
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_download_under_content_length_errors_and_leaves_no_files() {
+        // Regression (M2a): a transfer that ends early yet still clears the
+        // min_size floor must never be cached. The server advertises a
+        // 1000-byte body, sends 4 bytes, then closes; with min_size = 0 the
+        // floor cannot reject it. On the current ureq the early close surfaces
+        // as an UnexpectedEof from the length-limited reader, so the read-error
+        // cleanup is what rejects it (the post-loop received != total check is
+        // the belt-and-suspenders for a clean short EOF). Either way a truncated
+        // file must not become `dest` — which the shell would then short-circuit
+        // on via dest.exists() and never re-download, failing to load forever —
+        // and the .part temp must be gone too: a rejected transfer leaves no
+        // litter.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+
+        // Single accept, then close after a short body — an EOF (not a stall),
+        // so no read-timeout/thread guard is needed (contrast the stalled test).
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nabcd");
+                let _ = sock.flush();
+                // sock drops here -> client sees EOF after 4 of 1000 bytes.
+            }
+        });
+
+        let agent = model_download_agent();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cancel = crate::CancelToken::new();
+        let mut progress = |_r: u64, _t: Option<u64>| {};
+        let res = download_stream(
+            &agent,
+            &url,
+            dir.path(),
+            "ggml-base.bin",
+            0, // floor disabled: only the completeness check can reject
+            &cancel,
+            &mut progress,
+        );
+        let _ = server.join();
+
+        assert!(
+            res.is_err(),
+            "a body short of its Content-Length must be an Err, got {res:?}"
+        );
+        assert!(
+            !dir.path().join("ggml-base.bin").exists(),
+            "a truncated download must never be renamed into place"
+        );
+        assert!(
+            !dir.path().join("ggml-base.bin.part").exists(),
+            "the .part temp must not be left behind on a truncated download"
+        );
+    }
+
+    #[test]
+    fn download_without_content_length_still_succeeds() {
+        // Guards against the completeness check over-triggering: a length-less
+        // (connection-close-delimited) response advertises no total to compare
+        // against, so the existing min_size-only behavior must still accept it.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                // No Content-Length: the body is delimited by the socket close.
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello world");
+                let _ = sock.flush();
+            }
+        });
+
+        let agent = model_download_agent();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cancel = crate::CancelToken::new();
+        let mut progress = |_r: u64, _t: Option<u64>| {};
+        let res = download_stream(
+            &agent,
+            &url,
+            dir.path(),
+            "ggml-base.bin",
+            0,
+            &cancel,
+            &mut progress,
+        );
+        let _ = server.join();
+
+        assert!(
+            res.is_ok(),
+            "a length-less body must still succeed: {res:?}"
+        );
+        assert!(
+            dir.path().join("ggml-base.bin").exists(),
+            "the finalized model file must exist"
+        );
+    }
+
+    #[test]
     fn precancelled_download_bails_without_touching_the_network() {
         // Regression: a cancel during a first-use model download used to be
         // ignored until the entire file had been fetched. A pre-cancelled
@@ -192,5 +490,27 @@ mod tests {
             download_model(ModelTier::Base, &cancel, &mut progress).is_err(),
             "a pre-cancelled download must not proceed to the network"
         );
+    }
+
+    #[test]
+    fn remove_cached_deletes_then_is_ok_when_absent() {
+        // A model that downloaded but won't load is corrupt; remove_cached
+        // clears the path so the next attempt re-downloads, and treats an
+        // already-absent file as success (the goal is a clear path, not proof
+        // we did the deleting). Only remove_cached is exercised — remove_model
+        // resolves the REAL %APPDATA%\vault-buddy\models dir and must never run
+        // in a test, or it would delete a user's actual model.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let name = "ggml-base.bin";
+        std::fs::write(dir.path().join(name), b"corrupt").expect("seed file");
+        assert!(dir.path().join(name).exists());
+
+        remove_cached(dir.path(), name).expect("removing an existing file must succeed");
+        assert!(
+            !dir.path().join(name).exists(),
+            "the cached file must be gone after remove_cached"
+        );
+
+        remove_cached(dir.path(), name).expect("removing an absent file must still be Ok");
     }
 }

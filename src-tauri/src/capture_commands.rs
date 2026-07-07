@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -81,11 +81,51 @@ struct ActiveJob {
 #[derive(Default)]
 struct TranscriptionQueue {
     pending: VecDeque<TranscriptionJob>,
-    /// Paths currently queued or in flight — dedupes the save-time enqueue
-    /// against the startup/late-recovery scans.
-    known: HashSet<PathBuf>,
     /// The job the worker is presently on; None between jobs and at idle.
     active: Option<ActiveJob>,
+}
+
+/// Outcome of an enqueue attempt, so `enqueue_transcription` knows whether to
+/// wake the worker (`Queued` only) and what to log.
+#[derive(Debug, PartialEq)]
+enum Enqueued {
+    Queued,
+    UpgradedToForce,
+    Duplicate,
+}
+
+impl TranscriptionQueue {
+    /// Add a job unless it duplicates one already queued or in flight. Dedup
+    /// is derived from live state (`pending` + `active`) instead of a side set,
+    /// so it can never drift out of sync with the real queue. A `force`
+    /// (explicit re-transcribe) is NEVER silently dropped: it promotes a queued
+    /// plain job, and it queues even while the same path is actively
+    /// transcribing — so a cancel→retry landing in that window re-runs
+    /// afterwards instead of vanishing. A plain (auto-scan) enqueue still skips
+    /// anything already pending or in flight.
+    fn enqueue(&mut self, job: TranscriptionJob) -> Enqueued {
+        let active_same = self
+            .active
+            .as_ref()
+            .map(|a| a.mp3 == job.mp3)
+            .unwrap_or(false);
+        if job.force {
+            if let Some(existing) = self.pending.iter_mut().find(|j| j.mp3 == job.mp3) {
+                if existing.force {
+                    return Enqueued::Duplicate;
+                }
+                existing.force = true; // promote a queued plain job
+                return Enqueued::UpgradedToForce;
+            }
+            self.pending.push_back(job); // queue even if active_same → re-runs after
+            return Enqueued::Queued;
+        }
+        if active_same || self.pending.iter().any(|j| j.mp3 == job.mp3) {
+            return Enqueued::Duplicate; // plain auto-scan: skip if pending or in flight
+        }
+        self.pending.push_back(job);
+        Enqueued::Queued
+    }
 }
 
 /// Background transcription queue. One worker (see `run_transcription`)
@@ -100,10 +140,19 @@ pub struct TranscriptionState {
 fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
     let state = app.state::<TranscriptionState>();
     let mut guard = lock_ignoring_poison(&state.inner);
-    if guard.known.insert(job.mp3.clone()) {
-        log::info!("transcribe: queued {}", job.mp3.display());
-        guard.pending.push_back(job);
-        state.cv.notify_all();
+    // Keep the path for logging — `enqueue` consumes the job.
+    let mp3 = job.mp3.clone();
+    match guard.enqueue(job) {
+        Enqueued::Queued => {
+            log::info!("transcribe: queued {}", mp3.display());
+            state.cv.notify_all();
+        }
+        // Already pending as a plain job — the worker will reach it, so no
+        // notify is needed; just record the promotion.
+        Enqueued::UpgradedToForce => {
+            log::info!("transcribe: upgraded queued job to force {}", mp3.display());
+        }
+        Enqueued::Duplicate => {}
     }
 }
 
@@ -1043,36 +1092,51 @@ pub fn run_transcription(app: &AppHandle) {
             scan_and_enqueue(&app);
             let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
             loop {
-                // Block until a job is available; peek without claiming it.
-                let job = {
+                // Wait until a job is present, but only PEEK: the recording gate
+                // below may leave it queued, and popping before that gate would
+                // drop the job (or a force upgrade that lands between the peek
+                // and the pop). We claim it only once we've decided to run it.
+                {
                     let state = app.state::<TranscriptionState>();
-                    let mut guard = state.inner.lock().unwrap();
+                    let mut guard = lock_ignoring_poison(&state.inner);
                     while guard.pending.is_empty() {
-                        guard = state.cv.wait(guard).unwrap();
+                        // The Condvar guard is poisonable too — recover it the
+                        // same way `lock_ignoring_poison` recovers the mutex, so
+                        // a panic elsewhere can't wedge the worker permanently on
+                        // a poisoned wait.
+                        guard = state.cv.wait(guard).unwrap_or_else(|e| e.into_inner());
                     }
-                    guard.pending.front().cloned().unwrap()
-                };
+                }
                 // Never contend with a live recording for CPU — re-check soon.
                 if is_recording(&app) {
                     std::thread::sleep(Duration::from_secs(30));
                     continue;
                 }
-                {
+                // Claim the front under the lock and process THAT value — a
+                // force upgrade that landed after the peek is already reflected
+                // in the job we pop here (dedup derives from live pending +
+                // active, so it can't drift). `None` means the queue emptied in
+                // the unlocked gap between the peek above and this pop — only
+                // `cancel_transcription`'s `pending.retain` can do that (this is
+                // the sole popper), e.g. cancelling the last queued job — so
+                // just loop back.
+                let job = {
                     let state = app.state::<TranscriptionState>();
-                    state.inner.lock().unwrap().pending.pop_front();
-                }
+                    let mut guard = lock_ignoring_poison(&state.inner);
+                    guard.pending.pop_front()
+                };
+                let Some(job) = job else { continue };
                 process_transcription(&app, &job, &mut loaded);
-                // Drop from the dedupe set: success leaves a `complete` sidecar
-                // (won't rescan); failure leaves a `failed` one (a later
-                // launch's scan or a manual retry re-queues it). Clear the
-                // active-job slot the same way, under the same lock — this
-                // runs after every `process_transcription` return path
-                // (success, failure, or an early-return on a bad model/load),
-                // so it's the one place that needs to clear `active`.
+                // Clear the active-job slot after every `process_transcription`
+                // return path (success, failure, or an early-return on a bad
+                // model/load) — it's the one place that needs to. Dedup now
+                // derives from live state (`pending` + `active`): success leaves
+                // a `complete` sidecar (won't rescan), failure a `failed` one (a
+                // later launch's scan or a manual retry re-queues it), so
+                // dropping `active` here is all the cleanup the dedup needs.
                 {
                     let state = app.state::<TranscriptionState>();
-                    let mut guard = state.inner.lock().unwrap();
-                    guard.known.remove(&job.mp3);
+                    let mut guard = lock_ignoring_poison(&state.inner);
                     guard.active = None;
                 }
             }
@@ -1121,7 +1185,7 @@ fn scan_and_enqueue(app: &AppHandle) {
 /// emitted by each caller, right after this returns, never under the lock.
 fn set_phase(app: &AppHandle, phase: Phase) {
     let state = app.state::<TranscriptionState>();
-    let mut guard = state.inner.lock().unwrap();
+    let mut guard = lock_ignoring_poison(&state.inner);
     if let Some(active) = guard.active.as_mut() {
         active.phase = phase;
     }
@@ -1151,7 +1215,7 @@ fn process_transcription(
     let progress = Arc::new(AtomicU8::new(0));
     {
         let state = app.state::<TranscriptionState>();
-        let mut guard = state.inner.lock().unwrap();
+        let mut guard = lock_ignoring_poison(&state.inner);
         guard.active = Some(ActiveJob {
             mp3: job.mp3.clone(),
             vault_id: job.vault_id.clone(),
@@ -1219,7 +1283,22 @@ fn process_transcription(
     if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
         match WhisperTranscriber::load(&model) {
             Ok(w) => *loaded = Some((tier, w)),
-            Err(e) => return fail_transcription(app, &job.mp3, &e),
+            Err(e) => {
+                // A model that downloaded but won't load is corrupt on disk;
+                // ensure_model returns early on dest.exists(), so leaving it
+                // means every future job reloads the same broken file and
+                // fails identically. Discard it so the next attempt
+                // re-downloads. A removal failure only costs the self-heal
+                // (the load error is still surfaced), but it must not be
+                // swallowed silently.
+                if let Err(rm) = vault_buddy_transcribe::model::remove_model(tier) {
+                    log::warn!(
+                        "failed to remove corrupt {} model after load error: {rm}",
+                        tier.label()
+                    );
+                }
+                return fail_transcription(app, &job.mp3, &e);
+            }
         }
     }
     let transcriber = &loaded.as_ref().unwrap().1;
@@ -1534,7 +1613,8 @@ pub fn cancel_transcription(app: AppHandle, path: String) -> Result<(), String> 
         if guard.pending.len() == before {
             return Err("No such transcription in the queue.".into());
         }
-        guard.known.remove(&mp3);
+        // `pending.retain` above already dropped the job; dedup derives from
+        // live state now, so there is no separate set to prune.
         true
     }; // <-- mutex released here
     if write_cancelled {
@@ -1588,4 +1668,71 @@ pub fn open_transcript(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_recording(path: String) -> Result<(), String> {
     open_recording_note(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(path: &str, force: bool) -> TranscriptionJob {
+        TranscriptionJob {
+            mp3: PathBuf::from(path),
+            vault_id: "v".to_string(),
+            force,
+        }
+    }
+
+    // Minimal in-flight job for the dedup tests — only `mp3` is read by
+    // `enqueue`; the rest are inert placeholders the struct requires.
+    fn active_job(path: &str) -> ActiveJob {
+        ActiveJob {
+            mp3: PathBuf::from(path),
+            vault_id: "v".to_string(),
+            cancel: CancelToken::new(),
+            started_at_ms: 0,
+            phase: Phase::Preparing,
+            progress: Arc::new(AtomicU8::new(0)),
+        }
+    }
+
+    #[test]
+    fn plain_enqueue_dedupes_when_already_pending() {
+        let mut q = TranscriptionQueue::default();
+        assert_eq!(q.enqueue(job("X", false)), Enqueued::Queued);
+        assert_eq!(q.pending.len(), 1);
+        assert_eq!(q.pending[0].mp3, PathBuf::from("X"));
+        assert_eq!(q.enqueue(job("X", false)), Enqueued::Duplicate);
+        assert_eq!(q.pending.len(), 1);
+    }
+
+    #[test]
+    fn force_upgrades_a_pending_plain_job() {
+        let mut q = TranscriptionQueue::default();
+        assert_eq!(q.enqueue(job("X", false)), Enqueued::Queued);
+        assert_eq!(q.enqueue(job("X", true)), Enqueued::UpgradedToForce);
+        assert_eq!(q.pending.len(), 1);
+        assert!(q.pending[0].force);
+    }
+
+    #[test]
+    fn force_is_queued_even_while_path_is_actively_transcribing() {
+        let mut q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        assert_eq!(q.enqueue(job("X", true)), Enqueued::Queued);
+        assert_eq!(q.pending.len(), 1);
+        assert!(q.pending[0].force);
+        assert_eq!(q.pending[0].mp3, PathBuf::from("X"));
+    }
+
+    #[test]
+    fn plain_enqueue_is_dropped_while_path_is_active() {
+        let mut q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        assert_eq!(q.enqueue(job("X", false)), Enqueued::Duplicate);
+        assert!(q.pending.is_empty());
+    }
 }
