@@ -7,6 +7,18 @@ use std::path::Path;
 use vault_buddy_core::transcript::Segment;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+/// Route whisper.cpp + ggml's native (C-level) logs into the Rust `log`
+/// crate — and thus Vault Buddy's log files — instead of their default
+/// stderr sink, which a windowed Windows build silently discards. Without
+/// this the engine's own diagnostics (model-load details, and the context
+/// behind an aborted inference like the `-9` that `inference_failure_message`
+/// maps) went nowhere at all. Call ONCE before the first context is created;
+/// re-installing the same global hook is harmless. Relies on whisper-rs's
+/// `log_backend` feature (enabled in Cargo.toml).
+pub fn install_logging_hooks() {
+    whisper_rs::install_logging_hooks();
+}
+
 pub struct WhisperTranscriber {
     ctx: WhisperContext,
 }

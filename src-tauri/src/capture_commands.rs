@@ -1032,6 +1032,11 @@ pub fn run_transcription(app: &AppHandle) {
     std::thread::Builder::new()
         .name("transcribe-worker".into())
         .spawn(move || {
+            // Route whisper.cpp/ggml native logs into our log files before any
+            // model is loaded — they default to stderr, which a windowed build
+            // discards, so this is where an inference failure's real detail was
+            // being lost. Once, up front; re-installing the hook is harmless.
+            vault_buddy_transcribe::engine::install_logging_hooks();
             // Backfill: transcribe anything already on disk missing a transcript
             // (previous-session saves, crash-recovered captures, freshly enabled
             // vaults).
