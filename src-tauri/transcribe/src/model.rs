@@ -4,6 +4,8 @@
 //! pre-existing updater also talks to the network, for app updates).
 
 use crate::CancelToken;
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,6 +50,16 @@ impl ModelTier {
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
             self.file_name()
         )
+    }
+    /// Canonical SHA-256 of the ggml file on Hugging Face
+    /// (ggerganov/whisper.cpp). Verified during download so a complete-but-
+    /// corrupt fetch is rejected instead of cached and reloaded forever.
+    pub fn sha256(&self) -> &'static str {
+        match self {
+            ModelTier::Base => "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+            ModelTier::Small => "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+            ModelTier::Medium => "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        }
     }
     /// A sanity floor (not a checksum): a downloaded file far below this is a
     /// partial/failed transfer. A corrupt-but-large file is caught when the
@@ -101,6 +113,7 @@ pub fn download_model(
         &dir,
         tier.file_name(),
         tier.min_size(),
+        tier.sha256(),
         cancel,
         on_progress,
     )
@@ -128,12 +141,14 @@ fn model_download_agent() -> ureq::Agent {
 /// a short-timeout agent against a localhost server in tests. `dest` is assumed
 /// not to exist yet (the caller returns early when it does), which is what makes
 /// the plain rename below safe.
+#[allow(clippy::too_many_arguments)]
 fn download_stream(
     agent: &ureq::Agent,
     url: &str,
     dir: &Path,
     file_name: &str,
     min_size: u64,
+    expected_sha256: &str,
     cancel: &CancelToken,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<PathBuf, String> {
@@ -159,6 +174,7 @@ fn download_stream(
     let mut file = std::fs::File::create(&part).map_err(|e| format!("create model temp: {e}"))?;
     let mut buf = [0u8; 64 * 1024];
     let mut received: u64 = 0;
+    let mut hasher = Sha256::new();
     loop {
         if cancel.is_cancelled() {
             // Close our handle before removing the temp — Windows refuses to
@@ -188,6 +204,7 @@ fn download_stream(
         }
         std::io::Write::write_all(&mut file, &buf[..n]).map_err(|e| format!("write model: {e}"))?;
         received += n as u64;
+        hasher.update(&buf[..n]);
         on_progress(received, total);
     }
     let _ = std::io::Write::flush(&mut file);
@@ -214,6 +231,21 @@ fn download_stream(
             return Err(format!(
                 "model download incomplete: {received} of {total} bytes"
             ));
+        }
+    }
+    // Integrity: a complete-but-corrupt body clears both the size floor and the
+    // Content-Length check, so only the published hash can reject it. An empty
+    // expected hash means "unverified" (kept for tests / a hypothetical future
+    // tier); every real tier supplies one. `file` is already dropped above.
+    if !expected_sha256.is_empty() {
+        let digest = hasher.finalize();
+        let mut actual = String::with_capacity(digest.len() * 2);
+        for b in digest.iter() {
+            let _ = write!(actual, "{b:02x}");
+        }
+        if !actual.eq_ignore_ascii_case(expected_sha256) {
+            let _ = std::fs::remove_file(&part);
+            return Err(format!("model checksum mismatch: got {actual}"));
         }
     }
     // We own `part` and `dest` didn't exist above — a plain rename is fine.
@@ -351,6 +383,7 @@ mod tests {
                 &dir_path,
                 "ggml-base.bin",
                 ModelTier::Base.min_size(),
+                "",
                 &cancel,
                 &mut progress,
             );
@@ -410,6 +443,7 @@ mod tests {
             dir.path(),
             "ggml-base.bin",
             0, // floor disabled: only the completeness check can reject
+            "",
             &cancel,
             &mut progress,
         );
@@ -461,6 +495,7 @@ mod tests {
             dir.path(),
             "ggml-base.bin",
             0,
+            "",
             &cancel,
             &mut progress,
         );
@@ -474,6 +509,103 @@ mod tests {
             dir.path().join("ggml-base.bin").exists(),
             "the finalized model file must exist"
         );
+    }
+
+    #[test]
+    fn download_matching_sha256_succeeds() {
+        // The full body hashes to the expected value → finalized into place.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello world");
+                let _ = sock.flush();
+            }
+        });
+        // sha256("hello world")
+        let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        let agent = model_download_agent();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cancel = crate::CancelToken::new();
+        let mut progress = |_r: u64, _t: Option<u64>| {};
+        let res = download_stream(
+            &agent,
+            &url,
+            dir.path(),
+            "ggml-base.bin",
+            0,
+            expected,
+            &cancel,
+            &mut progress,
+        );
+        let _ = server.join();
+        assert!(
+            res.is_ok(),
+            "a body matching its hash must finalize: {res:?}"
+        );
+        assert!(dir.path().join("ggml-base.bin").exists());
+    }
+
+    #[test]
+    fn download_wrong_sha256_is_rejected_and_leaves_no_files() {
+        // Regression: a complete-but-corrupt model (right length, wrong bytes)
+        // passes the size/length checks, so only a checksum can reject it. A
+        // mismatch must delete the .part and never finalize `dest` — otherwise the
+        // shell short-circuits on dest.exists() and loads a corrupt model forever.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello world");
+                let _ = sock.flush();
+            }
+        });
+        let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
+        let agent = model_download_agent();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cancel = crate::CancelToken::new();
+        let mut progress = |_r: u64, _t: Option<u64>| {};
+        let res = download_stream(
+            &agent,
+            &url,
+            dir.path(),
+            "ggml-base.bin",
+            0,
+            wrong,
+            &cancel,
+            &mut progress,
+        );
+        let _ = server.join();
+        assert!(res.is_err(), "a hash mismatch must be an Err, got {res:?}");
+        assert!(
+            !dir.path().join("ggml-base.bin").exists(),
+            "corrupt model must not finalize"
+        );
+        assert!(
+            !dir.path().join("ggml-base.bin.part").exists(),
+            "the .part must be cleaned up"
+        );
+    }
+
+    #[test]
+    fn tier_sha256_values_are_lowercase_hex_of_expected_length() {
+        for t in [ModelTier::Base, ModelTier::Small, ModelTier::Medium] {
+            let h = t.sha256();
+            assert_eq!(h.len(), 64, "sha256 hex is 64 chars for {t:?}");
+            assert!(h
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        }
     }
 
     #[test]
