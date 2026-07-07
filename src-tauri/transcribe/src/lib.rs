@@ -98,6 +98,19 @@ pub fn inference_failure_message(code: Option<i32>, raw: &str) -> String {
     }
 }
 
+/// Threads to hand whisper's encoder, capped at `WHISPER_MAX_THREADS`. The
+/// encoder gains little past a handful of threads, and a very high ggml
+/// thread count (e.g. ~30 on a high-core i9 under the old `cores - 2`) is a
+/// leading suspect in a `-6 "failed to encode"` on otherwise capable
+/// hardware. Keeps a 2-thread headroom so a recording started mid-inference
+/// isn't CPU-starved, then clamps into `[1, WHISPER_MAX_THREADS]`. Pure and
+/// unit-tested here; `engine.rs` (Windows-only) feeds it
+/// `available_parallelism()`.
+pub const WHISPER_MAX_THREADS: usize = 8;
+pub fn whisper_thread_count(available: usize) -> usize {
+    available.saturating_sub(2).clamp(1, WHISPER_MAX_THREADS)
+}
+
 /// Decode → transcribe → atomically replace the sidecar with the finished
 /// transcript. `generated_at` (RFC3339) is passed in so this stays
 /// clock-free and testable. `cancel`/`on_progress` are threaded into the
@@ -239,6 +252,21 @@ mod tests {
         assert!(
             inference_failure_message(None, "context load failed").contains("context load failed")
         );
+    }
+
+    #[test]
+    fn whisper_thread_count_keeps_headroom_and_caps_high_core_machines() {
+        // Never zero, even on 1-2 logical cores.
+        assert_eq!(whisper_thread_count(1), 1);
+        assert_eq!(whisper_thread_count(2), 1);
+        // Modest machines: logical cores minus the 2-thread headroom.
+        assert_eq!(whisper_thread_count(4), 2);
+        assert_eq!(whisper_thread_count(9), 7);
+        // High-core i9 (the -6 report): capped, NOT ~30.
+        assert_eq!(whisper_thread_count(10), WHISPER_MAX_THREADS);
+        assert_eq!(whisper_thread_count(32), WHISPER_MAX_THREADS);
+        // Defensive: a bogus 0 from a broken probe still yields a usable count.
+        assert_eq!(whisper_thread_count(0), 1);
     }
 
     struct FakeOk;
