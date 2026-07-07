@@ -54,10 +54,15 @@ pub fn render_placeholder(mp3_file_name: &str) -> String {
 
 pub fn render_error(mp3_file_name: &str, message: &str) -> String {
     // Message is flattened to one line so the callout can't be broken out of.
+    // `needs_transcription` deliberately does NOT auto-backfill a `failed`
+    // sidecar on startup (only an explicit retry regenerates it), so the copy
+    // must point at that action rather than claim an automatic retry that
+    // won't happen — same guidance render_cancelled already gives.
     let flat = message.replace(['\n', '\r'], " ");
     format!(
         "---\n{MARKER_FAILED}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n\
-         > [!warning] Transcription failed\n> {flat}\n>\n> This will be retried automatically.\n",
+         > [!warning] Transcription failed\n> {flat}\n>\n\
+         > Re-transcribe from the Recordings list to try again.\n",
         yaml_quote(mp3_file_name)
     )
 }
@@ -406,6 +411,21 @@ mod tests {
         assert!(e.contains("vault-buddy-transcript: failed"));
         assert!(e.contains("model download failed"));
         assert!(is_regenerable(&e));
+    }
+
+    #[test]
+    fn error_points_to_the_explicit_retry_action_not_automatic_retry() {
+        // Regression (Codex): needs_transcription no longer auto-backfills a
+        // failed sidecar on startup, so telling the user "this will be
+        // retried automatically" is now false — it must point at the
+        // explicit Re-transcribe action instead, same guidance as
+        // render_cancelled already gives.
+        let e = render_error("x.mp3", "model download failed");
+        assert!(
+            !e.contains("retried automatically"),
+            "a failed transcript is no longer auto-retried"
+        );
+        assert!(e.contains("Re-transcribe from the Recordings list"));
     }
 
     #[test]
