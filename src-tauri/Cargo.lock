@@ -5201,7 +5201,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vault-buddy"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "crash-handler",
