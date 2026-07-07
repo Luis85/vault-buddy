@@ -3,10 +3,13 @@
 //! windows-app CI job is the compile gate.
 
 use crate::{CancelToken, Transcriber};
-use std::ffi::c_void;
+use std::ffi::{c_int, c_void};
 use std::path::Path;
 use vault_buddy_core::transcript::Segment;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperSysContext,
+    WhisperSysState,
+};
 
 /// The abort wiring installed into a `FullParams`: the boxed token whose
 /// address ggml holds as `user_data`. This guard MUST outlive the `full()`
@@ -58,6 +61,97 @@ fn wire_abort_callback(params: &mut FullParams, cancel: &CancelToken) -> AbortWi
     }
     AbortWiring {
         _token: token,
+        #[cfg(test)]
+        callback: trampoline,
+        #[cfg(test)]
+        user_data,
+    }
+}
+
+/// The progress wiring installed into a `FullParams`: the closure whose (inner)
+/// heap address ggml holds as `user_data`. Like `AbortWiring` this guard MUST
+/// outlive the `full()` call, but it exists for a DIFFERENT reason — it OWNS
+/// the closure so the closure is FREED when the guard drops. The
+/// `callback`/`user_data` fields (test-only) are the exact C function pointer +
+/// `user_data` we handed whisper.cpp, so the regression test can invoke them
+/// directly (no model, no audio needed).
+///
+/// `on_progress` only needs `Send`, not `Sync`, because — unlike
+/// `abort_callback`, which whisper.cpp threads down into ggml's own compute
+/// plan (`ggml_backend_set_abort_callback` → `cplan.abort_callback`, invoked
+/// from inside a spawned worker thread in `ggml_graph_compute_thread`) —
+/// `progress_callback` is only ever invoked from `whisper_full_with_state`'s
+/// own single-threaded outer segment loop, on whichever thread called
+/// `full()` (checked directly against the vendored whisper.cpp/ggml source,
+/// not assumed): one call per seek/segment iteration, never concurrently.
+//
+// `_closure` is a `Box<Box<dyn FnMut>>` on purpose, NOT a redundant allocation:
+// `user_data` must be a THIN pointer, but `&mut dyn FnMut` is a FAT pointer
+// (data + vtable) that silently loses its vtable half when cast to
+// `*mut c_void` — the exact fat/thin mismatch class that broke abort. The OUTER
+// box lets us hand out `&mut *outer` (a `&mut Box<dyn FnMut>`, i.e. a thin
+// pointer to the inner fat box). Boxed so the inner box's heap address stays
+// stable across the move out of `wire_progress_callback` — moving the outer box
+// moves only its stack-side thin pointer, never its heap allocation (the same
+// reasoning as `AbortWiring::_token`).
+#[allow(clippy::redundant_allocation)]
+struct ProgressWiring {
+    _closure: Box<Box<dyn FnMut(i32) + Send>>,
+    #[cfg(test)]
+    callback:
+        unsafe extern "C" fn(*mut WhisperSysContext, *mut WhisperSysState, c_int, *mut c_void),
+    #[cfg(test)]
+    user_data: *mut c_void,
+}
+
+/// Wire whisper's progress callback to `on_progress` WITHOUT whisper-rs 0.16's
+/// `set_progress_callback_safe`. That wrapper's trampoline is type-correct
+/// (unlike the abort one), but it `Box::into_raw`s the closure and NOTHING ever
+/// reclaims it — `FullParams` has no `Drop` that touches
+/// `progress_callback_user_data` — so every transcription job leaks the closure
+/// and everything it captures (an `AppHandle` + `PathBuf`) permanently. Here the
+/// returned guard owns the closure and frees it on drop, after `full()`
+/// returns. The trampoline and the installed `user_data` type agree: `user_data`
+/// is a `*mut Box<dyn FnMut(i32) + Send>` (a thin pointer to the inner fat box)
+/// and the trampoline casts it straight back, so no thin/fat mismatch (see the
+/// `ProgressWiring` note for why the double box is load-bearing).
+#[allow(clippy::redundant_allocation)]
+fn wire_progress_callback(
+    params: &mut FullParams,
+    on_progress: Box<dyn FnMut(i32) + Send>,
+) -> ProgressWiring {
+    // `progress` is whisper.cpp's percent-complete (0..=100) as `c_int`; the
+    // ctx/state pointers are unused (we never reach into whisper state here).
+    unsafe extern "C" fn trampoline(
+        _ctx: *mut WhisperSysContext,
+        _state: *mut WhisperSysState,
+        progress: c_int,
+        user_data: *mut c_void,
+    ) {
+        // Safety: `user_data` is the address of the inner `Box<dyn FnMut(i32) +
+        // Send>` owned by the returned `ProgressWiring`, which the caller keeps
+        // alive for the whole `full()` call. The cast target matches EXACTLY
+        // what we installed below — a thin pointer to the inner fat box — so the
+        // vtable is intact and we call the real closure, not a garbage read.
+        let closure = &mut *(user_data as *mut Box<dyn FnMut(i32) + Send>);
+        closure(progress);
+    }
+
+    // Double-box: `on_progress` is already the inner fat `Box<dyn FnMut>`;
+    // wrapping it once more yields an outer box we can take a THIN pointer into.
+    // `&mut *closure` is `&mut Box<dyn FnMut>` — a thin pointer to the inner fat
+    // box, which is what the trampoline reconstructs.
+    let mut closure = Box::new(on_progress);
+    let user_data = &mut *closure as *mut Box<dyn FnMut(i32) + Send> as *mut c_void;
+    // SAFETY: the trampoline reads `user_data` as `*mut Box<dyn FnMut(i32) +
+    // Send>`, which is exactly what we install; the box keeps it alive (see
+    // ProgressWiring).
+    unsafe {
+        params.set_progress_callback(Some(trampoline));
+        params.set_progress_callback_user_data(user_data);
+    }
+    ProgressWiring {
+        _closure: closure,
         #[cfg(test)]
         callback: trampoline,
         #[cfg(test)]
@@ -126,6 +220,16 @@ impl Transcriber for WhisperTranscriber {
         // the drift entirely.
         params.set_translate(false);
         if let Some(lang) = language {
+            // NOTE: `set_language` leaks a small `CString` per job — whisper-rs
+            // `CString::into_raw()`s the language and `FullParams` has no `Drop`
+            // that reclaims `fp.language`. Unlike the progress closure (an
+            // `AppHandle` + `PathBuf`, owned/freed above), this is a bounded
+            // few-bytes-per-job upstream leak (a 2-letter code + NUL), and it is
+            // UNFIXABLE from here: the only public setter is this leaking one,
+            // and `FullParams::fp` is `pub(crate)`, so we cannot point the C
+            // struct at a `CString` we own without transferring ownership to it.
+            // Left as-is deliberately; revisit if whisper-rs adds a non-leaking
+            // language API.
             params.set_language(Some(lang));
         }
         params.set_print_progress(false);
@@ -138,10 +242,15 @@ impl Transcriber for WhisperTranscriber {
         // ggml dereferences from its worker threads, so it must stay alive for
         // the whole `full()` call below — do NOT drop or `let _ =` it.
         let _abort = wire_abort_callback(&mut params, cancel);
-        // Box<dyn FnMut(i32)+Send> is itself FnMut(i32)+'static — pass by
-        // value. Progress uses whisper-rs's safe setter, which (unlike abort)
-        // wires its trampoline correctly.
-        params.set_progress_callback_safe(on_progress);
+        // Wire progress the same hand-rolled way, for a DIFFERENT reason:
+        // whisper-rs's `set_progress_callback_safe` is type-correct but LEAKS —
+        // it `Box::into_raw`s the closure and `FullParams` has no `Drop` freeing
+        // `progress_callback_user_data`. Our progress closure captures an
+        // `AppHandle` + `PathBuf`, so every job would leak that permanently.
+        // `wire_progress_callback` OWNS the closure in `_progress` and frees it
+        // when the guard drops after `full()`. Like `_abort` it must outlive the
+        // `full()` call below — do NOT drop or `let _ =` it.
+        let _progress = wire_progress_callback(&mut params, on_progress);
         state.full(params, samples).map_err(|e| {
             // whisper.cpp's whisper_full failures arrive as GenericError(rc)
             // carrying the raw return code (e.g. -9 = "failed to decode" in the
@@ -229,6 +338,98 @@ mod tests {
         assert!(
             unsafe { (wiring.callback)(wiring.user_data) },
             "a cancelled token must report an abort"
+        );
+    }
+
+    // Regression: the whole reason this crate hand-wires the abort callback is
+    // that whisper-rs 0.16's set_abort_callback_safe read a garbage byte as the
+    // abort bool and made whisper.cpp abort every encode window with
+    // -6 "failed to encode". This is the end-to-end guard: with a real model it
+    // must run full() to Ok, not abort. #[ignore] because it needs a ~150 MB
+    // model that CI cannot host; a Windows dev runs it with `-- --ignored`.
+    // Provide VB_TEST_MODEL (a ggml .bin) and optionally VB_TEST_AUDIO (a speech
+    // clip); with no model it skips (passes) rather than failing spuriously.
+    #[test]
+    #[ignore]
+    fn real_model_transcribes_without_spurious_abort() {
+        use crate::decode::decode_to_16k_mono;
+        use crate::{CancelToken, Transcriber};
+        let model = std::env::var("VB_TEST_MODEL")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| crate::model::model_path(crate::model::ModelTier::Base));
+        let Some(model) = model.filter(|p| p.exists()) else {
+            eprintln!("skipping: no VB_TEST_MODEL and no cached base model");
+            return;
+        };
+        let cancel = CancelToken::new();
+        // A short synthetic 16 kHz tone: enough to reach the encoder (where the
+        // -6 fired), even if it yields no speech segments.
+        let samples: Vec<f32> = if let Ok(audio) = std::env::var("VB_TEST_AUDIO") {
+            decode_to_16k_mono(std::path::Path::new(&audio), &cancel).expect("decode VB_TEST_AUDIO")
+        } else {
+            (0..16_000)
+                .map(|i| (i as f32 / 16_000.0 * 440.0 * std::f32::consts::TAU).sin() * 0.2)
+                .collect()
+        };
+        let t = WhisperTranscriber::load(&model).expect("load model");
+        let out = t.transcribe(&samples, None, &cancel, Box::new(|_| {}));
+        assert!(
+            out.is_ok(),
+            "fixed engine must not abort at the first encode window (the -6 bug): {}",
+            out.err().unwrap_or_default()
+        );
+        if std::env::var("VB_TEST_AUDIO").is_ok() {
+            assert!(
+                !out.unwrap().is_empty(),
+                "a real speech clip must yield at least one segment"
+            );
+        }
+    }
+
+    // Regression / correctness gate for the leak fix: whisper-rs 0.16's
+    // `set_progress_callback_safe` is type-correct but LEAKS — it
+    // `Box::into_raw`s the closure and `FullParams` has no `Drop` reclaiming
+    // `progress_callback_user_data`, so every job leaks the closure's captures
+    // (an AppHandle + PathBuf) forever. `wire_progress_callback` owns the
+    // closure instead, and to keep `user_data` a THIN pointer it DOUBLE-boxes
+    // (a `&mut dyn FnMut` is a fat pointer that would drop its vtable when cast
+    // to `*mut c_void` — the same fat/thin mismatch that broke abort). This
+    // test proves the installed C trampoline recovers the REAL closure through
+    // `user_data` and forwards the value — not garbage — by invoking it
+    // directly with a sentinel and null ctx/state (the trampoline never
+    // dereferences those), needing no model or audio.
+    #[test]
+    fn wired_progress_callback_invokes_real_closure() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        use std::sync::Arc;
+
+        let seen = Arc::new(AtomicI32::new(-1));
+        let seen_cb = Arc::clone(&seen);
+        let on_progress: Box<dyn FnMut(i32) + Send> =
+            Box::new(move |p: i32| seen_cb.store(p, Ordering::SeqCst));
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // Installs the callback into `params` AND hands back the exact C
+        // function pointer + user_data whisper.cpp will call. The guard owns
+        // the (double-boxed) closure and must outlive the callback.
+        let wiring = wire_progress_callback(&mut params, on_progress);
+
+        // Sentinel forwarded verbatim proves the closure — not a fat/thin
+        // pointer garbage read — ran. Null ctx/state are safe: the trampoline
+        // ignores them.
+        unsafe {
+            (wiring.callback)(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                42,
+                wiring.user_data,
+            );
+        }
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            42,
+            "the trampoline must invoke the real closure with the forwarded progress value"
         );
     }
 }

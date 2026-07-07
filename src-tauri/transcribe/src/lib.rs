@@ -148,6 +148,8 @@ pub fn transcribe_recording(
         return Err(TranscribeError::Cancelled); // cheap to bail before inference
     }
     let duration_secs = samples.len() as u64 / decode::WHISPER_RATE as u64;
+    let decode_secs = started.elapsed().as_secs_f32();
+    let inference_start = std::time::Instant::now();
     // Honest logging: the log never goes dark on inference start again.
     log::info!(
         "transcribe: inference start {} ({duration_secs}s audio)",
@@ -165,10 +167,20 @@ pub fn transcribe_recording(
                 })
             }
         };
+    let inference_secs = inference_start.elapsed().as_secs_f32();
+    let n_segments = segments
+        .iter()
+        .filter(|s| !s.text.trim().is_empty())
+        .count();
+    if n_segments == 0 {
+        log::warn!(
+            "transcribe: no speech detected in {} ({duration_secs}s audio)",
+            mp3.display()
+        );
+    }
     log::info!(
-        "transcribe: inference done {} in {}s",
-        mp3.display(),
-        started.elapsed().as_secs()
+        "transcribe: complete {} — {n_segments} segments, {duration_secs}s audio, decode {decode_secs:.1}s + inference {inference_secs:.1}s",
+        mp3.display()
     );
     // Wall-clock of the actual work (decode + inference). Measured here, not in
     // core, so render_transcript stays clock-free and deterministic.
@@ -286,6 +298,42 @@ mod tests {
             }])
         }
     }
+    struct FakeEmpty;
+    impl Transcriber for FakeEmpty {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _l: Option<&str>,
+            _c: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<Vec<Segment>, String> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn no_speech_writes_a_complete_transcript_with_a_notice() {
+        // A successful inference with zero segments is not a failure: it writes a
+        // `complete` sidecar that says "No speech detected", not a blank one, and
+        // does not error.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let outcome = transcribe_recording(
+            &mp3,
+            &FakeEmpty,
+            &opts(),
+            "2026-07-07T09:00:00+00:00",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, TranscribeOutcome::Written(_)));
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(text.contains("vault-buddy-transcript: complete"));
+        assert!(text.contains("_No speech detected._"));
+    }
+
     struct FakeErr;
     impl Transcriber for FakeErr {
         fn transcribe(
