@@ -116,6 +116,7 @@ pub fn download_model(
         tier.sha256(),
         cancel,
         on_progress,
+        std::time::Duration::from_secs(60),
     )
 }
 
@@ -123,29 +124,61 @@ pub fn download_model(
 /// `Err` (which the caller already turns into a retryable failure) instead of
 /// wedging the single background transcription worker for the whole app
 /// session — the cancel token is only polled between reads, so a blocked
-/// `read()` can never be interrupted. The old ureq 2.x `timeout_read` was a
-/// single socket-level read timeout that covered the *entire* exchange
-/// (headers and body alike); ureq 3.x splits that into separate per-phase
-/// timeouts, so both phases need to be set explicitly or a server that
-/// accepts the connection but never sends a response would hang forever
-/// (`timeout_recv_body` alone doesn't start until the response headers have
-/// already arrived). `timeout_recv_response` and `timeout_recv_body` both
-/// read as whole-phase deadlines in ureq's docs, but are empirically per-read
-/// (idle) timeouts that reset on every chunk received — confirmed against a
-/// local server that trickles bytes slower than the configured timeout but
-/// never stalls for longer than it, which completes successfully; a genuine
-/// stall past the timeout still errors, in both phases. So a healthy but slow
-/// transfer of the up-to-~1.5 GB `medium` model keeps going as long as bytes
-/// keep flowing; only a socket silent for a full minute trips it. A true
-/// whole-response or whole-body deadline is deliberately avoided: it would
-/// abort a legitimately slow multi-hundred-MB download.
+/// `read()` can never be interrupted. `timeout_recv_body` reads as a
+/// whole-body deadline in ureq's docs, but is empirically a per-read (idle)
+/// timeout that resets on every chunk received — confirmed against a local
+/// server that trickles bytes slower than the configured timeout but never
+/// stalls for longer than it, which completes successfully; a genuine stall
+/// past the timeout still errors. So a healthy but slow transfer of the
+/// up-to-~1.5 GB `medium` model keeps going as long as bytes keep flowing;
+/// only a socket silent for a full minute trips it. A true whole-body
+/// deadline is deliberately avoided: it would abort a legitimately slow
+/// multi-hundred-MB download.
+///
+/// There is deliberately no `timeout_recv_response` here (guarding a server
+/// that accepts the connection but never sends a response at all): setting
+/// it alongside `timeout_recv_body` was tried and reverted after testing
+/// showed its deadline is *not* released once headers arrive — it persists
+/// as a hard ceiling on the whole exchange (headers + body together), so any
+/// download taking longer in total than that value fails even with bytes
+/// still flowing, exactly defeating the idle-timeout goal above. See
+/// `call_with_timeout` for where that guard lives instead.
 fn model_download_agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
-        .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
         .timeout_recv_body(Some(std::time::Duration::from_secs(60)))
         .build();
     ureq::Agent::new_with_config(config)
+}
+
+/// Bounds how long we'll wait for `agent.get(url).call()` to return a
+/// response — i.e. a guard against a server that accepts the connection and
+/// reads the request but never sends anything back. This can't be one of the
+/// agent's own per-phase timeouts (see `model_download_agent`'s doc comment
+/// for why `timeout_recv_response` doesn't work), so it runs the call on its
+/// own thread and bounds only the wait for it to return. `Agent::clone()` is
+/// documented as cheap — it just shares the connection pool. If the timeout
+/// elapses the spawned thread is abandoned (Rust has no way to interrupt a
+/// blocked read); acceptable since this is a rare edge case and the OS or
+/// peer eventually reclaims a truly dead connection.
+fn call_with_timeout(
+    agent: &ureq::Agent,
+    url: &str,
+    timeout: std::time::Duration,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let agent = agent.clone();
+    let url = url.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("model-download-call".to_string())
+        .spawn(move || {
+            let _ = tx.send(agent.get(&url).call());
+        })
+        .map_err(|e| format!("spawn download request: {e}"))?;
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result.map_err(|e| format!("request model: {e}")),
+        Err(_) => Err("request model: timed out waiting for a response".to_string()),
+    }
 }
 
 /// `ureq::http::Response` has no `.header()` convenience method (unlike the
@@ -169,11 +202,9 @@ fn download_stream(
     expected_sha256: &str,
     cancel: &CancelToken,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
+    response_timeout: std::time::Duration,
 ) -> Result<PathBuf, String> {
-    let mut resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("request model: {e}"))?;
+    let mut resp = call_with_timeout(agent, url, response_timeout)?;
     let total: Option<u64> = header(&resp, "Content-Length").and_then(|v| v.parse().ok());
     // A hedge for the completeness check below. In practice ureq strips BOTH
     // Content-Encoding and Content-Length whenever it transparently decompresses
@@ -417,6 +448,7 @@ mod tests {
                 "",
                 &cancel,
                 &mut progress,
+                Duration::from_secs(5),
             );
             let _ = tx.send(res.is_err());
         });
@@ -434,12 +466,16 @@ mod tests {
 
     #[test]
     fn stalled_before_response_headers_errors_instead_of_hanging() {
-        // Regression: ureq 3.x splits the old single socket-read timeout
-        // (which covered headers and body alike) into separate per-phase
-        // timeouts. timeout_recv_body only starts once the response has
-        // arrived, so a server that accepts the connection, reads the
-        // request, then sends nothing at all would hang forever without a
-        // dedicated timeout_recv_response — flagged in review on PR #34.
+        // Regression: a server that accepts the connection, reads the
+        // request, then sends nothing at all would hang forever — flagged in
+        // review on PR #34. ureq's own `timeout_recv_response` looked like
+        // the fix, but testing showed its deadline persists as a hard
+        // ceiling on the whole exchange (headers + body) rather than being
+        // released once headers arrive, capping every real download at that
+        // value regardless of `timeout_recv_body` — so this guard is
+        // `call_with_timeout`'s external wait, driven here via
+        // `download_stream`'s `response_timeout` parameter, not an agent
+        // config option.
         use std::io::Read;
         use std::net::TcpListener;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -464,10 +500,7 @@ mod tests {
             }
         });
 
-        let config = ureq::Agent::config_builder()
-            .timeout_recv_response(Some(Duration::from_millis(500)))
-            .build();
-        let agent = ureq::Agent::new_with_config(config);
+        let agent = model_download_agent();
         let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
         let dir = tempfile::tempdir().expect("tempdir");
         let dir_path = dir.path().to_path_buf();
@@ -485,6 +518,7 @@ mod tests {
                 "",
                 &cancel,
                 &mut progress,
+                Duration::from_millis(500),
             );
             let _ = tx.send(res.is_err());
         });
@@ -498,6 +532,62 @@ mod tests {
                 "download did not return in time — a stall before response headers is not surfacing as Err"
             ),
         }
+    }
+
+    #[test]
+    fn slow_but_healthy_body_survives_past_the_response_timeout() {
+        // Regression: setting timeout_recv_response alongside timeout_recv_body
+        // on the agent was tried first and reverted — its deadline turned out
+        // to persist as a hard ceiling on the WHOLE exchange (not just the
+        // header wait), so any download whose total time exceeded that value
+        // failed even with bytes still actively flowing. This pins down the
+        // fix: a response_timeout far shorter than the total transfer time
+        // must NOT abort a slow-but-healthy body as long as each individual
+        // gap stays under timeout_recv_body's own (separate, idle) budget.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = sock.read(&mut req);
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+                let _ = sock.flush();
+                // Trickle well past what response_timeout alone would allow,
+                // in gaps well under timeout_recv_body's idle budget.
+                for _ in 0..8 {
+                    std::thread::sleep(Duration::from_millis(150));
+                    let _ = sock.write_all(b"a");
+                    let _ = sock.flush();
+                }
+            }
+        });
+
+        let agent = model_download_agent();
+        let url = format!("http://127.0.0.1:{port}/ggml-base.bin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cancel = crate::CancelToken::new();
+        let mut progress = |_r: u64, _t: Option<u64>| {};
+        let res = download_stream(
+            &agent,
+            &url,
+            dir.path(),
+            "ggml-base.bin",
+            0,
+            "",
+            &cancel,
+            &mut progress,
+            Duration::from_millis(500), // response_timeout: shorter than the ~1.2s total transfer
+        );
+        let _ = server.join();
+
+        assert!(
+            res.is_ok(),
+            "a slow-but-flowing body must not be capped by response_timeout: {res:?}"
+        );
     }
 
     #[test]
@@ -545,6 +635,7 @@ mod tests {
             "",
             &cancel,
             &mut progress,
+            std::time::Duration::from_secs(5),
         );
         let _ = server.join();
 
@@ -597,6 +688,7 @@ mod tests {
             "",
             &cancel,
             &mut progress,
+            std::time::Duration::from_secs(5),
         );
         let _ = server.join();
 
@@ -641,6 +733,7 @@ mod tests {
             expected,
             &cancel,
             &mut progress,
+            std::time::Duration::from_secs(5),
         );
         let _ = server.join();
         assert!(
@@ -686,6 +779,7 @@ mod tests {
             wrong,
             &cancel,
             &mut progress,
+            std::time::Duration::from_secs(5),
         );
         let _ = server.join();
         assert!(res.is_err(), "a hash mismatch must be an Err, got {res:?}");
@@ -767,6 +861,7 @@ mod tests {
             "",
             &cancel,
             &mut progress,
+            std::time::Duration::from_secs(5),
         );
         let _ = server.join();
 
