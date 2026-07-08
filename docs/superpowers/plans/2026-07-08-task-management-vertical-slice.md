@@ -416,9 +416,23 @@ pub struct TaskItem {
     pub done: bool,
 }
 
-/// True iff the file's leading frontmatter declares `type: Task`.
+/// True iff the leading `---` frontmatter block is properly closed. A block
+/// that opens but never closes is malformed: the surgical `set_status` write
+/// refuses it (no closing fence to anchor an insert), so the list must not
+/// surface it either — the list and the toggle must agree on what is a task.
+fn has_closed_frontmatter(content: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    lines.any(|line| line.trim_end() == "---")
+}
+
+/// True iff the file declares `type: Task` AND its frontmatter block is
+/// properly closed — a never-closed block is not surfaced as a task (it can't
+/// be toggled either; see `set_status`).
 pub fn is_task(content: &str) -> bool {
-    note_field(content, "type").as_deref() == Some("Task")
+    has_closed_frontmatter(content) && note_field(content, "type").as_deref() == Some("Task")
 }
 
 /// Every `type: Task` file directly under `root`, best-effort. Open tasks
