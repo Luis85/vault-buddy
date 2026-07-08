@@ -351,6 +351,36 @@ mod tests {
     }
 
     #[test]
+    fn render_quotes_and_escapes_special_title() {
+        // A title with a quote and backslash must be escaped so it can't break
+        // the frontmatter (read back by note_field).
+        let doc = render_task("a\"b\\c", "2026-07-08");
+        assert!(doc.contains("title: \"a\\\"b\\\\c\"\n"));
+    }
+
+    #[test]
+    fn list_tasks_ties_break_on_title_when_created_matches() {
+        // Two open tasks sharing the same created date must fall back to the
+        // title tiebreak (`.then(a.title.cmp(&b.title))`) — ascending order.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "2026-07-08-z.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Zebra\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            root,
+            "2026-07-08-a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Apple\"\ncreated: 2026-07-08\n---\n",
+        );
+
+        let items = list_tasks(root);
+        let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["Apple", "Zebra"]);
+    }
+
+    #[test]
     fn create_task_writes_file_and_never_clobbers() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");

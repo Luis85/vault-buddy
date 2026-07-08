@@ -29,6 +29,7 @@ function sortInPlace() {
 async function reload() {
   try {
     tasks.value = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
+    loadError.value = null;
   } catch (e) {
     loadError.value = String(e);
   }
