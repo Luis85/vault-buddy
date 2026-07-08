@@ -65,6 +65,9 @@ pub struct VaultCaptureConfig {
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
     pub follow_up_template: bool,
+    /// Vault-relative folder holding this vault's task documents.
+    /// None → the default "Tasks".
+    pub tasks_folder: Option<String>,
 }
 
 impl Default for VaultCaptureConfig {
@@ -81,6 +84,7 @@ impl Default for VaultCaptureConfig {
             transcription_language: None,
             transcript_timestamps: true,
             follow_up_template: true,
+            tasks_folder: None,
         }
     }
 }
@@ -109,6 +113,11 @@ impl VaultCaptureConfig {
             Some(folder) => vec![folder.as_str()],
             None => vec!["Meetings", "Voice Notes"],
         }
+    }
+
+    /// The vault-relative folder holding this vault's task documents.
+    pub fn tasks_root(&self) -> &str {
+        self.tasks_folder.as_deref().unwrap_or("Tasks")
     }
 }
 
@@ -184,6 +193,10 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("followUpTemplate")
             .and_then(|v| v.as_bool())
             .unwrap_or(defaults.follow_up_template),
+        tasks_folder: entry
+            .get("tasksFolder")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -250,6 +263,9 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
             json!(v.transcript_timestamps),
         );
         entry.insert("followUpTemplate".to_string(), json!(v.follow_up_template));
+        if let Some(folder) = &v.tasks_folder {
+            entry.insert("tasksFolder".to_string(), json!(folder));
+        }
         vaults.insert(id.clone(), Value::Object(entry));
     }
     let root = json!({ "vaults": Value::Object(vaults) });
@@ -496,6 +512,7 @@ mod tests {
                 transcription_language: Some("es".to_string()),
                 transcript_timestamps: false,
                 follow_up_template: true,
+                tasks_folder: Some("Inbox/Tasks".to_string()),
             },
         );
         cfg.vaults
@@ -592,5 +609,31 @@ mod tests {
         cfg.vaults.insert("a".into(), v);
         let reparsed = parse_config(&serialize_config(&cfg));
         assert!(!vault_config(&reparsed, "a").follow_up_template);
+    }
+
+    #[test]
+    fn tasks_folder_round_trips_and_defaults() {
+        // Regression: a per-vault tasks folder must survive serialize→parse and
+        // default to "Tasks" when absent, exactly like the recording folder does.
+        let mut cfg = AppConfig::default();
+        let mut v = VaultCaptureConfig::default();
+        assert_eq!(v.tasks_root(), "Tasks"); // None → default
+        v.tasks_folder = Some("Inbox/Tasks".to_string());
+        assert_eq!(v.tasks_root(), "Inbox/Tasks");
+        cfg.vaults.insert("v1".to_string(), v);
+
+        let json = serialize_config(&cfg);
+        assert!(json.contains("\"tasksFolder\": \"Inbox/Tasks\""));
+        let parsed = parse_config(&json);
+        assert_eq!(
+            parsed.vaults["v1"].tasks_folder.as_deref(),
+            Some("Inbox/Tasks")
+        );
+
+        // A None tasks_folder is omitted from the serialized entry.
+        let mut cfg2 = AppConfig::default();
+        cfg2.vaults
+            .insert("v2".to_string(), VaultCaptureConfig::default());
+        assert!(!serialize_config(&cfg2).contains("tasksFolder"));
     }
 }
