@@ -117,12 +117,22 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
 /// Return `content` with the frontmatter `status:` line set to `new_status`,
 /// preserving every other line and its exact ending. If the frontmatter has no
 /// `status:` line, insert one at the closing fence (a hand-authored `type:
-/// Task` file the list surfaces must stay toggleable). `None` only if the file
-/// is not `type: Task` — then the caller skips + warns.
+/// Task` file the list surfaces must stay toggleable). `None` if the file is
+/// not `type: Task`, or if its frontmatter block never closes (malformed) —
+/// in that case there is no safe insertion point, so we refuse rather than
+/// guess — then the caller skips + warns.
 pub fn set_status(content: &str, new_status: &str) -> Option<String> {
     if !is_task(content) {
         return None;
     }
+    // The inserted status line needs its own terminator so it can't glue onto
+    // the closing fence when that fence lacks a trailing newline. Match the
+    // document's existing convention.
+    let nl = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     // Split keeping line endings so CRLF is preserved verbatim.
     let mut out = String::with_capacity(content.len() + 16);
     let mut in_frontmatter = false;
@@ -138,11 +148,12 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
             continue;
         }
         if in_frontmatter && trimmed == "---" {
-            // Closing fence: if no status line was found, insert one now,
-            // matching this fence line's ending so CRLF stays CRLF.
+            // Closing fence: if no status line was found, insert one now. The
+            // inserted line gets its own `nl` terminator — never the fence
+            // line's ending — so it can't glue onto the fence when the fence
+            // has no trailing newline (e.g. end of file).
             if !done {
-                let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
-                out.push_str(&format!("status: {new_status}{ending}"));
+                out.push_str(&format!("status: {new_status}{nl}"));
                 done = true;
             }
             in_frontmatter = false;
@@ -177,8 +188,9 @@ pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), Strin
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    let updated = set_status(&content, if done { "done" } else { "new" })
-        .ok_or("Not a Vault Buddy task (not a type: Task document)")?;
+    let updated = set_status(&content, if done { "done" } else { "new" }).ok_or(
+        "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
+    )?;
 
     let dir = canon_path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = canon_path
@@ -393,6 +405,31 @@ mod tests {
         assert!(out.contains("status: done\n"));
         assert!(out.contains("title: \"x\"\n"));
         assert!(out.contains("\nbody\n"));
+    }
+
+    #[test]
+    fn set_status_inserts_line_when_missing_no_trailing_newline() {
+        // Regression: a hand-authored task with no status line AND no trailing
+        // newline after the closing fence must not glue status onto the fence.
+        let doc = "---\ntype: Task\ntitle: \"x\"\n---";
+        let out = set_status(doc, "done").unwrap();
+        assert_eq!(out, "---\ntype: Task\ntitle: \"x\"\nstatus: done\n---");
+    }
+
+    #[test]
+    fn set_status_insert_preserves_crlf_when_missing() {
+        let doc = "---\r\ntype: Task\r\ntitle: \"x\"\r\n---\r\n";
+        let out = set_status(doc, "done").unwrap();
+        assert!(out.contains("status: done\r\n"));
+        assert!(out.contains("---\r\n"));
+    }
+
+    #[test]
+    fn set_status_none_for_unterminated_frontmatter() {
+        // Opening fence + type: Task but no closing --- : malformed; refuse
+        // rather than guess where to insert (documented narrow contract).
+        let doc = "---\ntype: Task\ntitle: \"x\"\n";
+        assert!(set_status(doc, "done").is_none());
     }
 
     #[test]
