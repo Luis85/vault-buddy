@@ -5,7 +5,16 @@
 
 use crate::session::{SourceInput, SourceMsg};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::Sample as _;
 use std::sync::mpsc::Sender;
+
+/// `DeviceTrait::name()` was removed in cpal 0.18 in favour of a `Display`
+/// impl that panics on a lookup failure — `description()` keeps the old
+/// graceful-degradation shape (`Option`, never a panic) for a device whose
+/// name can't be read.
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_string())
+}
 
 pub struct DeviceInfo {
     pub name: String,
@@ -22,15 +31,15 @@ pub struct DeviceList {
 /// the settings UI shows "System default" alone in that case.
 pub fn list_devices() -> DeviceList {
     let host = cpal::default_host();
-    let default_in = host.default_input_device().and_then(|d| d.name().ok());
-    let default_out = host.default_output_device().and_then(|d| d.name().ok());
+    let default_in = host.default_input_device().and_then(|d| device_name(&d));
+    let default_out = host.default_output_device().and_then(|d| device_name(&d));
     let inputs = host
         .input_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect::<Vec<_>>())
+        .map(|it| it.filter_map(|d| device_name(&d)).collect::<Vec<_>>())
         .unwrap_or_default();
     let outputs = host
         .output_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect::<Vec<_>>())
+        .map(|it| it.filter_map(|d| device_name(&d)).collect::<Vec<_>>())
         .unwrap_or_default();
     DeviceList {
         inputs: to_device_infos(inputs, &default_in),
@@ -56,47 +65,66 @@ pub struct OpenSources {
     pub warnings: Vec<String>,
 }
 
+/// Build and start an input stream for one concrete PCM sample type,
+/// converting every sample to f32 via cpal's own (dasp_sample-backed)
+/// conversion. Hand-rolled per-format scaling used to cover only F32/I16/U16;
+/// WASAPI/ALSA/CoreAudio can report a default config in any of the other
+/// integer formats (24-bit devices surface as I24/U24, some as I32), and
+/// those fell through to `build_stream`'s catch-all "unsupported sample
+/// format" — refusing to record at all rather than mis-decoding audio.
+fn build_typed_stream<T>(
+    device: &cpal::Device,
+    stream_config: cpal::StreamConfig,
+    tx: Sender<SourceMsg>,
+    on_error: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    device.build_input_stream(
+        stream_config,
+        move |data: &[T], _| {
+            let samples = data.iter().map(|&s| f32::from_sample(s)).collect();
+            let _ = tx.send(SourceMsg::Samples(samples));
+        },
+        on_error,
+        None,
+    )
+}
+
 fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     tx: Sender<SourceMsg>,
 ) -> Result<cpal::Stream, String> {
     let err_tx = tx.clone();
-    let on_error = move |e: cpal::StreamError| {
+    let on_error = move |e: cpal::Error| {
         log::warn!("capture stream error: {e}");
         let _ = err_tx.send(SourceMsg::Lost);
     };
     let stream_config: cpal::StreamConfig = config.config();
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &stream_config,
-            move |data: &[f32], _| {
-                let _ = tx.send(SourceMsg::Samples(data.to_vec()));
-            },
-            on_error,
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &stream_config,
-            move |data: &[i16], _| {
-                let samples = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect();
-                let _ = tx.send(SourceMsg::Samples(samples));
-            },
-            on_error,
-            None,
-        ),
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            &stream_config,
-            move |data: &[u16], _| {
-                let samples = data
-                    .iter()
-                    .map(|s| (*s as f32 / u16::MAX as f32) * 2.0 - 1.0)
-                    .collect();
-                let _ = tx.send(SourceMsg::Samples(samples));
-            },
-            on_error,
-            None,
-        ),
+        cpal::SampleFormat::I8 => build_typed_stream::<i8>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::I16 => build_typed_stream::<i16>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::I24 => {
+            build_typed_stream::<cpal::I24>(device, stream_config, tx, on_error)
+        }
+        cpal::SampleFormat::I32 => build_typed_stream::<i32>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::I64 => build_typed_stream::<i64>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U8 => build_typed_stream::<u8>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U16 => build_typed_stream::<u16>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U24 => {
+            build_typed_stream::<cpal::U24>(device, stream_config, tx, on_error)
+        }
+        cpal::SampleFormat::U32 => build_typed_stream::<u32>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::U64 => build_typed_stream::<u64>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::F32 => build_typed_stream::<f32>(device, stream_config, tx, on_error),
+        cpal::SampleFormat::F64 => build_typed_stream::<f64>(device, stream_config, tx, on_error),
+        // DSD is a 1-bit density-modulated bitstream, not PCM — converting it
+        // to f32 needs a dedicated DSD-to-PCM filter, not a numeric cast, and
+        // no known consumer microphone or loopback device exposes it. Left as
+        // an explicit unsupported error rather than silently mis-decoding.
         other => return Err(format!("unsupported sample format {other:?}")),
     }
     .map_err(|e| e.to_string())?;
@@ -108,7 +136,7 @@ fn build_stream(
 /// None = not found (caller falls back to the default with a warning).
 fn find_by_name<I: Iterator<Item = cpal::Device>>(devices: I, name: &str) -> Option<cpal::Device> {
     let mut devices = devices;
-    devices.find(|d| d.name().map(|n| n == name).unwrap_or(false))
+    devices.find(|d| device_name(d).map(|n| n == name).unwrap_or(false))
 }
 
 pub fn open_sources(
@@ -151,11 +179,11 @@ pub fn open_sources(
         .default_input_config()
         .map_err(|e| format!("Microphone unavailable: {e}"))?;
     let (mic_tx, mic_rx) = std::sync::mpsc::channel();
-    let mic_name = mic.name().unwrap_or_else(|_| "Microphone".to_string());
+    let mic_name = device_name(&mic).unwrap_or_else(|| "Microphone".to_string());
     streams.push(build_stream(&mic, &mic_config, mic_tx)?);
     inputs.push(SourceInput {
         name: mic_name,
-        rate: mic_config.sample_rate().0,
+        rate: mic_config.sample_rate(),
         channels: mic_config.channels(),
         rx: mic_rx,
     });
@@ -194,12 +222,12 @@ pub fn open_sources(
         let (tx, rx) = std::sync::mpsc::channel();
         let name = format!(
             "{} (loopback)",
-            output.name().unwrap_or_else(|_| "Speakers".to_string())
+            device_name(&output).unwrap_or_else(|| "Speakers".to_string())
         );
         streams.push(build_stream(&output, &config, tx)?);
         inputs.push(SourceInput {
             name,
-            rate: config.sample_rate().0,
+            rate: config.sample_rate(),
             channels: config.channels(),
             rx,
         });
