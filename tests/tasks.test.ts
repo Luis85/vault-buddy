@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import Tasks from "../src/components/Tasks.vue";
+import { useNotificationsStore } from "../src/stores/notifications";
 import type { TaskItem } from "../src/types";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
@@ -14,7 +15,10 @@ const sample: TaskItem[] = [
 
 function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>> = {}) {
   const calls: Array<{ cmd: string; args: unknown }> = [];
-  let list = [...sample];
+  // Per-item clone, not just a new array: toggle() mutates task.done/status in
+  // place on the object it's handed, and sample's objects are shared across
+  // tests — a shallow array copy would leak state between tests.
+  let list = sample.map((t) => ({ ...t }));
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
@@ -68,6 +72,39 @@ describe("Tasks", () => {
     await flushPromises();
     const call = calls.find((c) => c.cmd === "set_task_status");
     expect(call?.args).toMatchObject({ id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", done: true });
+  });
+
+  it("reverts the checkbox and notifies on toggle failure", async () => {
+    const notifications = useNotificationsStore();
+    const { wrapper } = mountView({
+      set_task_status: () => {
+        throw new Error("disk full");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    const checkbox = wrapper.findAll('[data-testid="task-checkbox"]')[0];
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false);
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+  });
+
+  it("does not add a task when the title is empty or whitespace", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("   ");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toBeUndefined();
+  });
+
+  it("submits a new task on Enter", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
+    await wrapper.get('[data-testid="task-input"]').trigger("keydown.enter");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
   });
 
   it("saves a new tasks folder", async () => {
