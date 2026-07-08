@@ -1,0 +1,84 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import Tasks from "../src/components/Tasks.vue";
+import type { TaskItem } from "../src/types";
+
+vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
+
+const sample: TaskItem[] = [
+  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false },
+  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true },
+];
+
+function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>> = {}) {
+  const calls: Array<{ cmd: string; args: unknown }> = [];
+  let list = [...sample];
+  mockIPC((cmd, args) => {
+    calls.push({ cmd, args });
+    if (handlers[cmd]) return handlers[cmd]!(args);
+    if (cmd === "get_tasks_config") return { tasksFolder: null };
+    if (cmd === "list_tasks") return list;
+    if (cmd === "add_task") {
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false };
+      list = [created, ...list];
+      return created;
+    }
+    if (cmd === "set_task_status") return null;
+    if (cmd === "set_tasks_config") return null;
+  });
+  const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+  return { wrapper, calls };
+}
+
+describe("Tasks", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => clearMocks());
+
+  it("loads config and tasks for the vault on mount", async () => {
+    const { calls } = mountView();
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({ cmd: "list_tasks", args: { id: "v1" } });
+    expect(calls.find((c) => c.cmd === "get_tasks_config")).toBeTruthy();
+  });
+
+  it("renders open tasks before done ones", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    expect(rows[0].text()).toContain("B open");
+    expect(rows[1].text()).toContain("A done");
+  });
+
+  it("adds a task from the input", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
+    expect(wrapper.text()).toContain("Ship it");
+  });
+
+  it("toggles a task via set_task_status", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    const call = calls.find((c) => c.cmd === "set_task_status");
+    expect(call?.args).toMatchObject({ id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", done: true });
+  });
+
+  it("saves a new tasks folder", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Inbox/Tasks");
+    await wrapper.get('[data-testid="tasks-folder-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_tasks_config")).toEqual({
+      cmd: "set_tasks_config",
+      args: { id: "v1", tasksFolder: "Inbox/Tasks" },
+    });
+  });
+});
