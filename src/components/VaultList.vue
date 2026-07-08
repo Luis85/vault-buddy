@@ -15,6 +15,7 @@ defineEmits<{
   (e: "open-daily-note", id: string): void;
   (e: "capture", id: string): void;
   (e: "capture-settings", id: string): void;
+  (e: "open-tasks", id: string): void;
 }>();
 
 // Obsidian allows two registered vaults whose folders share a name; without a
@@ -153,6 +154,30 @@ const groups = computed(() => {
           >
             <rect x="3" y="5" width="18" height="16" rx="2" />
             <path d="M8 3v4M16 3v4M3 11h18" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          data-testid="open-tasks"
+          class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+          :disabled="busyVaultId !== null"
+          :aria-label="`Tasks in ${accessibleName(vault)}`"
+          title="Tasks"
+          @click="$emit('open-tasks', vault.id)"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 11l3 3 8-8" />
+            <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
           </svg>
         </button>
         <button
