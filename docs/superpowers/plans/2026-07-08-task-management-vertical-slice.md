@@ -572,12 +572,20 @@ Add to `tasks.rs`:
 /// Return `content` with the frontmatter `status:` line set to `new_status`,
 /// preserving every other line and its exact ending. If the frontmatter has no
 /// `status:` line, insert one at the closing fence (a hand-authored `type:
-/// Task` file the list surfaces must stay toggleable). `None` only if the file
-/// is not `type: Task` — then the caller skips + warns.
+/// Task` file the list surfaces must stay toggleable). `None` if the file is
+/// not `type: Task`, OR its frontmatter block is never closed (malformed) — we
+/// won't guess an insert point in a file we can't safely edit; the caller then
+/// surfaces an accurate error.
 pub fn set_status(content: &str, new_status: &str) -> Option<String> {
     if !is_task(content) {
         return None;
     }
+    // The inserted status line needs its OWN terminator so it can't glue onto
+    // the closing fence when that fence lacks a trailing newline (a
+    // hand-authored file's `---` with no final `\n` would otherwise become
+    // `status: done---`, destroying the delimiter). Match the document's
+    // convention.
+    let nl = if content.contains("\r\n") { "\r\n" } else { "\n" };
     // Split keeping line endings so CRLF is preserved verbatim.
     let mut out = String::with_capacity(content.len() + 16);
     let mut in_frontmatter = false;
@@ -593,11 +601,10 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
             continue;
         }
         if in_frontmatter && trimmed == "---" {
-            // Closing fence: if no status line was found, insert one now,
-            // matching this fence line's ending so CRLF stays CRLF.
+            // Closing fence: if no status line was found, insert one now on its
+            // own line (nl terminator), then emit the fence unchanged.
             if !done {
-                let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
-                out.push_str(&format!("status: {new_status}{ending}"));
+                out.push_str(&format!("status: {new_status}{nl}"));
                 done = true;
             }
             in_frontmatter = false;
@@ -605,6 +612,7 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
             continue;
         }
         if in_frontmatter && !done && trimmed.starts_with("status:") {
+            // Replace: keep the existing line's own ending (byte-for-byte).
             let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
             out.push_str(&format!("status: {new_status}{ending}"));
             done = true;
@@ -633,7 +641,7 @@ pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), Strin
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
     let updated = set_status(&content, if done { "done" } else { "new" })
-        .ok_or("Not a Vault Buddy task (not a type: Task document)")?;
+        .ok_or("Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)")?;
 
     let dir = canon_path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = canon_path
