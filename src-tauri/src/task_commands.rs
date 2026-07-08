@@ -1,7 +1,6 @@
 use std::path::Path;
-use tauri::Manager;
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_paths, discovery, tasks};
+use vault_buddy_core::{capture_config, capture_paths, discovery};
 
 use crate::capture_commands::ConfigWriteLock;
 
