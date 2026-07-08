@@ -287,6 +287,9 @@ pub fn run() {
             capture_commands::rename_capture,
             task_commands::get_tasks_config,
             task_commands::set_tasks_config,
+            task_commands::list_tasks,
+            task_commands::add_task,
+            task_commands::set_task_status,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
