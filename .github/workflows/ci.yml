@@ -42,8 +42,24 @@ jobs:
       - name: clippy (core + capture + transcribe crates)
         run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --all-targets -- -D warnings
         working-directory: src-tauri
+      # `whisper` isn't a default feature (the real engine only builds where
+      # whisper.cpp does), so the plain invocation above never compiles
+      # engine.rs at all — including its FFI regression tests guarding the
+      # whisper-rs abort-callback UB (#277) and callback-leak fixes. ubuntu-latest
+      # ships cmake + clang, so whisper-rs-sys builds here too; this is the only
+      # place those tests run (windows-app only runs `tauri build`, never `cargo
+      # test`). `--all-targets` also compiles examples/transcribe_file.rs
+      # (required-features = ["whisper"]) so that verification harness can't
+      # silently bit-rot — it isn't run here (it needs a real model + audio
+      # file), just proven to still build.
+      - name: clippy (transcribe crate, whisper feature)
+        run: cargo clippy -p vault_buddy_transcribe --all-targets --features whisper -- -D warnings
+        working-directory: src-tauri
       - name: tests (core + capture + transcribe crates)
         run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
+        working-directory: src-tauri
+      - name: tests (transcribe crate, whisper feature)
+        run: cargo test -p vault_buddy_transcribe --features whisper
         working-directory: src-tauri
 
   windows-app:

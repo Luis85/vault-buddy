@@ -1,6 +1,7 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+mod transcription;
 mod tray;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -187,7 +188,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(capture_commands::CaptureState::default())
-        .manage(capture_commands::TranscriptionState::default())
+        .manage(transcription::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
@@ -270,10 +271,10 @@ pub fn run() {
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status,
-            capture_commands::transcribe_recording_now,
-            capture_commands::retranscribe,
-            capture_commands::cancel_transcription,
-            capture_commands::transcription_queue_status,
+            transcription::transcribe_recording_now,
+            transcription::retranscribe,
+            transcription::cancel_transcription,
+            transcription::transcription_queue_status,
             capture_commands::open_transcript,
             capture_commands::list_recordings,
             capture_commands::open_recording,
@@ -371,7 +372,7 @@ pub fn run() {
             tray::create_tray(app.handle())?;
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
-            capture_commands::run_transcription(app.handle());
+            transcription::run_transcription(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {

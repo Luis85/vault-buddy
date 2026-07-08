@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cpal = "0.15"
+cpal = "0.18"
 mp3lame-encoder = "0.2"
 log = "0.4"
 vault_buddy_core = { path = "../core" }
 
 [dev-dependencies]
-minimp3 = "0.5"
+minimp3 = "0.6"
 tempfile = "3"

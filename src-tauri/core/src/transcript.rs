@@ -54,10 +54,15 @@ pub fn render_placeholder(mp3_file_name: &str) -> String {
 
 pub fn render_error(mp3_file_name: &str, message: &str) -> String {
     // Message is flattened to one line so the callout can't be broken out of.
+    // `needs_transcription` deliberately does NOT auto-backfill a `failed`
+    // sidecar on startup (only an explicit retry regenerates it), so the copy
+    // must point at that action rather than claim an automatic retry that
+    // won't happen — same guidance render_cancelled already gives.
     let flat = message.replace(['\n', '\r'], " ");
     format!(
         "---\n{MARKER_FAILED}\ntranscript-of: {}\ncreated-by: Vault Buddy\n---\n\n\
-         > [!warning] Transcription failed\n> {flat}\n>\n> This will be retried automatically.\n",
+         > [!warning] Transcription failed\n> {flat}\n>\n\
+         > Re-transcribe from the Recordings list to try again.\n",
         yaml_quote(mp3_file_name)
     )
 }
@@ -90,16 +95,23 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
     ));
     out.push_str(&format!("generated: {}\n", yaml_quote(&meta.generated_at)));
     out.push_str("created-by: Vault Buddy\n---\n\n");
+    let mut wrote_any = false;
     for s in segments {
         let text = s.text.trim();
         if text.is_empty() {
             continue;
         }
+        wrote_any = true;
         if meta.timestamps {
             out.push_str(&format!("{} {text}\n\n", format_timestamp(s.start_ms)));
         } else {
             out.push_str(&format!("{text}\n\n"));
         }
+    }
+    if !wrote_any {
+        // Zero segments (or all-empty) is a valid whisper result for silence —
+        // a complete transcript with an honest notice, not a blank body.
+        out.push_str("_No speech detected._\n\n");
     }
     out.push_str(&render_stats(meta, segments));
     out
@@ -159,11 +171,20 @@ pub fn transcript_path(mp3: &Path) -> PathBuf {
     dir.join(transcript_file_name(&name))
 }
 
-/// Missing sidecar, or one of our own not-yet-finished sidecars → work to do.
+/// Whether the automatic backfill scan (`pending_transcriptions`, run once at
+/// startup) should pick this recording up: no sidecar yet, or a `pending`
+/// placeholder left behind by an attempt that didn't get to finish (e.g. a
+/// crash mid-download/mid-inference) — resuming that is completing work
+/// already promised, not starting something new. A `failed` sidecar is a
+/// completed, deliberate outcome: the buddy must not keep silently
+/// re-attempting it on every launch, same as a `cancelled` one — only an
+/// explicit user retry (`transcribe_recording_now` / `retranscribe`) may
+/// regenerate it. `failed` still reports `is_regenerable` so that explicit
+/// retry can still overwrite it; only the auto-backfill gate excludes it.
 pub fn needs_transcription(mp3: &Path) -> bool {
     let path = transcript_path(mp3);
     match std::fs::read_to_string(&path) {
-        Ok(content) => is_regenerable(&content),
+        Ok(content) => content.contains(MARKER_PENDING),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
         // Unreadable (permissions/AV lock): don't spin on it this pass.
         Err(_) => false,
@@ -393,6 +414,21 @@ mod tests {
     }
 
     #[test]
+    fn error_points_to_the_explicit_retry_action_not_automatic_retry() {
+        // Regression (Codex): needs_transcription no longer auto-backfills a
+        // failed sidecar on startup, so telling the user "this will be
+        // retried automatically" is now false — it must point at the
+        // explicit Re-transcribe action instead, same guidance as
+        // render_cancelled already gives.
+        let e = render_error("x.mp3", "model download failed");
+        assert!(
+            !e.contains("retried automatically"),
+            "a failed transcript is no longer auto-retried"
+        );
+        assert!(e.contains("Re-transcribe from the Recordings list"));
+    }
+
+    #[test]
     fn real_transcript_is_complete_not_regenerable() {
         let t = render_transcript(&meta(), &[seg(0, 12_000, "Hola a todos")]);
         assert!(t.contains("vault-buddy-transcript: complete"));
@@ -456,6 +492,20 @@ mod tests {
         let mut m = meta();
         m.language = None;
         assert!(render_transcript(&m, &[]).contains(r#"language: "auto""#));
+    }
+
+    #[test]
+    fn empty_segments_render_a_no_speech_body_not_a_blank_one() {
+        // whisper legitimately returns no segments for silence/non-speech; a blank
+        // `complete` sidecar looks broken. It must stay `complete` (not a failure)
+        // but say so, and still carry the stats table.
+        let t = render_transcript(&meta(), &[]);
+        assert!(t.contains("vault-buddy-transcript: complete"));
+        assert!(t.contains("_No speech detected._"));
+        assert!(t.contains("## Statistics"));
+        // All-empty-text segments take the same path.
+        let t2 = render_transcript(&meta(), &[seg(0, 10, "   "), seg(10, 20, "")]);
+        assert!(t2.contains("_No speech detected._"));
     }
 
     #[test]
@@ -701,6 +751,46 @@ mod tests {
         assert!(
             pending_transcriptions(dir.path()).is_empty(),
             "a cancelled recording must not backfill"
+        );
+    }
+
+    #[test]
+    fn failed_marker_is_regenerable_but_not_auto_requeued() {
+        // A failed attempt is a completed, deliberate outcome — unlike a
+        // `pending` placeholder (an attempt interrupted mid-flight, e.g. by a
+        // crash), the buddy must not keep silently re-attempting it on every
+        // launch. It still needs to stay `is_regenerable` (an explicit user
+        // retry via `retranscribe`/`transcribe_recording_now` must still be
+        // able to overwrite it) — only the automatic backfill gate excludes it.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-06 0930 Meeting.mp3");
+        let f = render_error("2026-07-06 0930 Meeting.mp3", "boom");
+        assert!(
+            is_regenerable(&f),
+            "an explicit retry must still be able to overwrite a failed sidecar"
+        );
+        std::fs::write(transcript_path(&mp3), &f).unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Failed);
+        assert!(
+            !needs_transcription(&mp3),
+            "a failed sidecar is not automatic backfill work — only an explicit retry regenerates it"
+        );
+    }
+
+    #[test]
+    fn scan_skips_a_failed_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = month_dir(dir.path());
+        let mp3 = month.join("2026-07-06 0930 Meeting.mp3");
+        std::fs::write(&mp3, b"audio").unwrap();
+        std::fs::write(
+            transcript_path(&mp3),
+            render_error("2026-07-06 0930 Meeting.mp3", "boom"),
+        )
+        .unwrap();
+        assert!(
+            pending_transcriptions(dir.path()).is_empty(),
+            "a failed recording must not auto-backfill — only an explicit retry regenerates it"
         );
     }
 }

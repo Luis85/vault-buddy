@@ -340,8 +340,14 @@ note (`core::transcript`):
   `Complete`, so a forced job that fails mid-flight leaves the original intact
   (the UI confirms before replacing a finished transcript).
 - **Recovery backfill.** `pending_transcriptions` scans the dated `YYYY/MM`
-  capture layout for capture-named MP3s whose sidecar is missing or regenerable
-  and enqueues them — same layout/basename discipline as the recording recovery.
+  capture layout for capture-named MP3s whose sidecar is missing, or a `pending`
+  placeholder from an attempt that didn't get to finish (e.g. a crash
+  mid-download/mid-inference), and enqueues them — same layout/basename
+  discipline as the recording recovery. A `failed` sidecar is deliberately
+  **not** backfilled — the buddy must not keep silently re-attempting a
+  completed failure on every launch; only an explicit user retry
+  (`transcribe_recording_now` / `retranscribe`) regenerates it, same as
+  `cancelled`.
 
 The **recordings list** (`core::recordings`) is a read-only surface over the same
 folders: `recording_roots` enumerates a vault's capture folders, `list_recordings`
