@@ -945,8 +945,15 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
 /// inside the vault's tasks root by `tasks::set_task_status`.
 #[tauri::command]
 pub fn set_task_status(id: String, path: String, done: bool) -> Result<(), String> {
-    let (_vault_path, root) = tasks_root_for(&id)?;
-    // Core canonicalizes root + path and requires containment before writing.
+    let (vault_path, root) = tasks_root_for(&id)?;
+    // Mirror list_tasks/add_task: safe_recording_root is only lexical, so
+    // canonicalize and reject a tasks folder that resolves outside the vault
+    // before writing — keeps the "assert root inside vault before any write"
+    // invariant uniform across all three task commands. (Core also
+    // canonicalizes root + path and requires containment.)
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    }
     tasks::set_task_status(&root, Path::new(&path), done)
 }
 ```
