@@ -114,6 +114,120 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     out
 }
 
+/// Return `content` with the frontmatter `status:` line set to `new_status`,
+/// preserving every other line and its exact ending. If the frontmatter has no
+/// `status:` line, insert one at the closing fence (a hand-authored `type:
+/// Task` file the list surfaces must stay toggleable). `None` only if the file
+/// is not `type: Task` — then the caller skips + warns.
+pub fn set_status(content: &str, new_status: &str) -> Option<String> {
+    if !is_task(content) {
+        return None;
+    }
+    // Split keeping line endings so CRLF is preserved verbatim.
+    let mut out = String::with_capacity(content.len() + 16);
+    let mut in_frontmatter = false;
+    let mut seen_open = false;
+    let mut done = false;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if !seen_open {
+            // First line is the opening `---` (guaranteed by is_task).
+            seen_open = true;
+            in_frontmatter = true;
+            out.push_str(line);
+            continue;
+        }
+        if in_frontmatter && trimmed == "---" {
+            // Closing fence: if no status line was found, insert one now,
+            // matching this fence line's ending so CRLF stays CRLF.
+            if !done {
+                let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
+                out.push_str(&format!("status: {new_status}{ending}"));
+                done = true;
+            }
+            in_frontmatter = false;
+            out.push_str(line);
+            continue;
+        }
+        if in_frontmatter && !done && trimmed.starts_with("status:") {
+            let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
+            out.push_str(&format!("status: {new_status}{ending}"));
+            done = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    done.then_some(out)
+}
+
+/// Flip a task's completion status on disk. Canonicalizes `root` and `path`
+/// and requires containment — a lexical check can't see through a symlink at
+/// the file or folder — then reads, applies `set_status`, and writes atomically
+/// (hidden `create_new` temp + fsync + REPLACING rename). Replacing is correct
+/// here: the target is the `type: Task` file we just read and are editing in
+/// place, and we touch only its status line (see the spec's surgical-write rule).
+pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), String> {
+    // Canonical containment: resolve both and require the file under the root.
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let canon_path =
+        std::fs::canonicalize(path).map_err(|e| format!("Cannot resolve task file: {e}"))?;
+    if !canon_path.starts_with(&canon_root) {
+        return Err("Task file is outside the vault's tasks folder".to_string());
+    }
+    let content =
+        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+    let updated = set_status(&content, if done { "done" } else { "new" })
+        .ok_or("Not a Vault Buddy task (not a type: Task document)")?;
+
+    let dir = canon_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = canon_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Owned temp with suffix-retry — a crash between create_new and rename can
+    // strand a predictable temp; without retry every future toggle of the same
+    // task would fail AlreadyExists on that stranded temp and be permanently
+    // stuck. Mirrors write_note_atomic's numbered-temp loop; the marker suffix
+    // lets recovery clean strays.
+    use std::io::Write;
+    let (tmp, mut f) = {
+        let mut attempt = 0u32;
+        loop {
+            let candidate = if attempt == 0 {
+                dir.join(format!(
+                    ".{file_name}{}",
+                    crate::capture_note::NOTE_TMP_SUFFIX
+                ))
+            } else {
+                dir.join(format!(
+                    ".{file_name}.{attempt}{}",
+                    crate::capture_note::NOTE_TMP_SUFFIX
+                ))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => break (candidate, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
+                Err(e) => return Err(format!("Cannot stage task write: {e}")),
+            }
+        }
+    };
+    f.write_all(updated.as_bytes())
+        .map_err(|e| format!("Cannot write task: {e}"))?;
+    f.sync_all()
+        .map_err(|e| format!("Cannot flush task: {e}"))?;
+    drop(f);
+    let result = std::fs::rename(&tmp, &canon_path);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(|e| format!("Cannot save task: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +355,80 @@ mod tests {
         assert_ne!(p1, p2);
         assert_eq!(p2.file_name().unwrap(), "2026-07-08-buy-milk (2).md");
         assert!(p1.exists() && p2.exists());
+    }
+
+    #[test]
+    fn set_status_flips_only_the_status_line_preserving_body() {
+        let doc = "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-08\n---\n\nSome body\n- [ ] sub\n";
+        let flipped = set_status(doc, "done").unwrap();
+        assert!(flipped.contains("status: done\n"));
+        assert!(!flipped.contains("status: new\n"));
+        // Everything else byte-for-byte intact.
+        assert!(flipped.contains("title: \"A\"\n"));
+        assert!(flipped.contains("created: 2026-07-08\n"));
+        assert!(flipped.contains("\nSome body\n- [ ] sub\n"));
+    }
+
+    #[test]
+    fn set_status_preserves_crlf_endings() {
+        let doc = "---\r\ntype: Task\r\nstatus: new\r\ntitle: \"A\"\r\n---\r\n\r\nbody\r\n";
+        let flipped = set_status(doc, "done").unwrap();
+        assert!(flipped.contains("status: done\r\n"));
+        assert!(flipped.contains("body\r\n"));
+    }
+
+    #[test]
+    fn set_status_refuses_non_task() {
+        // Not our document — never rewrite it.
+        assert!(set_status("---\ntype: Meeting\nstatus: new\n---\n", "done").is_none());
+        assert!(set_status("no frontmatter", "done").is_none());
+    }
+
+    #[test]
+    fn set_status_inserts_line_when_missing() {
+        // A hand-authored type: Task with no status line is surfaced in the list
+        // as an unchecked row, so it MUST become toggleable — insert the status.
+        let doc = "---\ntype: Task\ntitle: \"x\"\n---\n\nbody\n";
+        let out = set_status(doc, "done").unwrap();
+        assert!(out.contains("status: done\n"));
+        assert!(out.contains("title: \"x\"\n"));
+        assert!(out.contains("\nbody\n"));
+    }
+
+    #[test]
+    fn set_task_status_writes_and_rejects_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+
+        set_task_status(&root, &p, true).unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("status: done\n"));
+        set_task_status(&root, &p, false).unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("status: new\n"));
+
+        // A path outside the root is refused.
+        let outside = dir.path().join("outside.md");
+        std::fs::write(&outside, "---\ntype: Task\nstatus: new\n---\n").unwrap();
+        assert!(set_task_status(&root, &outside, true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_task_status_rejects_symlinked_file_escaping_root() {
+        // Canonicalization (not a lexical starts_with) must catch a task file that
+        // is a symlink pointing outside the tasks root — the write would otherwise
+        // land outside the vault.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let real = dir.path().join("elsewhere.md");
+        std::fs::write(&real, "---\ntype: Task\nstatus: new\n---\n").unwrap();
+        let link = root.join("2026-07-08-linked.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(set_task_status(&root, &link, true).is_err());
     }
 }
