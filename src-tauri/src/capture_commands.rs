@@ -214,10 +214,13 @@ pub fn set_capture_config(
     if let Some(folder) = &folder {
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
-    // Preserve fields CaptureConfigDto doesn't carry (tasks are configured on
-    // their own surface) so saving capture settings can't reset them.
-    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
     let _guard = lock_ignoring_poison(&lock.0);
+    // Preserve fields CaptureConfigDto doesn't carry (tasks are configured on
+    // their own surface) so saving capture settings can't reset them. The read
+    // must sit INSIDE the lock: a concurrent set_tasks_config also
+    // read-modify-writes this vault, so reading tasks_folder before the guard
+    // would let us write back a stale value and clobber its update.
+    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
     let value = capture_config::VaultCaptureConfig {
         mode,
         recording_folder: folder,
