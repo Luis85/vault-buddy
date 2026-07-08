@@ -61,12 +61,16 @@ from *surgical, validated* writes, mirroring the transcript sidecar discipline:
    create can never overwrite an existing file.
 2. **Toggle (`status` flip)** is a read-modify-write that is *surgical*:
    - Read the file. Refuse unless its frontmatter is `type: Task` **and** the
-     target path resolves inside the vault's tasks root (else skip with a
-     `log::warn!` + a user-facing notification — never a silent no-op that
-     looks like success).
-   - Change **only** the single `status:` line; preserve every other
-     frontmatter field and the entire body byte-for-byte (including the file's
-     existing line endings).
+     canonicalized target path resolves inside the canonicalized tasks root
+     (else skip with a `log::warn!` + a user-facing notification — never a
+     silent no-op that looks like success).
+   - Set the frontmatter `status:` line to the new value, changing **only**
+     that line and preserving every other frontmatter field and the entire
+     body byte-for-byte (including the file's existing line endings). If a
+     `type: Task` file has **no** `status:` line (a hand-authored task the list
+     still surfaces), insert one at the top of the frontmatter rather than
+     refusing — otherwise a task shown as an unchecked row could never be
+     checked off. Only a non-`type: Task` file is refused.
    - Write to a hidden `*.vault-buddy.tmp` temp (`create_new` + fsync), then
      **replacing** rename into place. This is the one *replacing* write into a
      vault — justified exactly like `transcript::replace_if_ours`: the
@@ -81,7 +85,14 @@ from *surgical, validated* writes, mirroring the transcript sidecar discipline:
 Path validation reuses `capture_paths::safe_recording_root` (lexically rejects
 `..` / absolute / drive-letter escapes) + `assert_root_inside_vault`
 (canonicalizes both, catches pre-existing symlink/junction escapes) before any
-read or write.
+read or write. The lexical check alone can't see through a symlink/junction
+planted *at* the tasks folder, so canonicalization guards **both** paths:
+
+- **Reads (`list_tasks`)** canonicalize the root before scanning; if it exists
+  but resolves outside the vault, skip with a `log::warn!` and return an empty
+  list (a merely missing folder degrades quietly to empty — no warning).
+- **Writes (`add_task`, toggle)** canonicalize after ensuring the folder
+  exists and **error** on an escape rather than skipping.
 
 ## Rust — new `core/src/tasks.rs` (pure, unit-tested on Linux)
 
@@ -111,10 +122,10 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem>;
 /// True iff the file's frontmatter `type` is `Task`.
 pub fn is_task(content: &str) -> bool;
 
-/// Return `content` with only the `status:` frontmatter line set to
-/// `new_status`, everything else preserved (line endings included). `None`
-/// if the file is not `type: Task` or has no frontmatter `status` line to
-/// replace — the caller then skips + warns.
+/// Return `content` with the frontmatter `status:` line set to `new_status`,
+/// everything else preserved (line endings included). If no `status:` line
+/// exists, insert one at the top of the frontmatter so a hand-authored task
+/// stays toggleable. `None` only if the file is not `type: Task`.
 pub fn set_status(content: &str, new_status: &str) -> Option<String>;
 ```
 
@@ -124,8 +135,8 @@ from the leading `---` block; never scans the body). `list_tasks` mirrors
 `.md` files, read `title`/`status`/`created` best-effort, degrade silently.
 `task_basename`, `render_task`, `set_status`, `is_task`, and the sort order all
 get direct unit tests; `set_status` gets tests proving it preserves the body,
-other frontmatter fields, and CRLF endings, and refuses a non-`type: Task`
-file.
+other frontmatter fields, and CRLF endings, replaces an existing `status:`
+line, **inserts** one when absent, and refuses a non-`type: Task` file.
 
 The `today` / `created` date is passed in from the shell (the core crate stays
 clock-free and testable), formatted `YYYY-MM-DD`.
@@ -165,15 +176,18 @@ module, to keep the file focused.
   `safe_recording_root` **before** writing, then read-modify-writes the shared
   config behind `ConfigWriteLock` via `update_vault_config`.
 - `list_tasks(id) -> Vec<TaskDto>` — resolve vault → tasks root via
-  `safe_recording_root` → `tasks::list_tasks`. Read-only; degrades to empty.
+  `safe_recording_root`; if the root exists, `assert_root_inside_vault`
+  (canonicalize) and skip+warn→empty on an escape → `tasks::list_tasks`.
+  Read-only; degrades to empty.
 - `add_task(id, title) -> Result<TaskDto, String>` — reject empty/whitespace
-  title; resolve+validate root (creating the folder if missing, like capture
-  does for its root); render with today's date; `write_note_collision_safe`;
-  return the created `TaskDto`.
-- `set_task_status(id, path, done) -> Result<(), String>` — resolve+validate
-  root; assert `path` is inside it; read → `is_task` + `set_status(content,
-  if done { "done" } else { "new" })` → atomic replacing write; on refusal
-  (not a task / no status line) return a descriptive `Err`.
+  title; resolve root, create the folder if missing (like capture does for its
+  root), then `assert_root_inside_vault` (error on escape); render with today's
+  date; `write_note_collision_safe`; return the created `TaskDto`.
+- `set_task_status(id, path, done) -> Result<(), String>` — resolve root; the
+  core `tasks::set_task_status` canonicalizes both root and `path` and requires
+  containment, then read → `is_task` + `set_status(content, if done { "done" }
+  else { "new" })` → atomic replacing write; on refusal (path outside the root,
+  or not a `type: Task` file) return a descriptive `Err`.
 
 `TaskDto` is `#[serde(rename_all = "camelCase")]` with `path`, `title`,
 `status`, `created`, `done`.
