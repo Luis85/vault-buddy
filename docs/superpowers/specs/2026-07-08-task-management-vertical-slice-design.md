@@ -159,7 +159,11 @@ pub tasks_folder: Option<String>,
 - Helper `pub fn tasks_root(&self) -> &str { self.tasks_folder.as_deref().unwrap_or("Tasks") }`.
 - `CaptureConfigDto` (in `capture_commands.rs`) is **not** extended; the Tasks
   view uses its own dedicated config commands (below) so the two domains stay
-  decoupled at the IPC layer while sharing one storage struct.
+  decoupled at the IPC layer while sharing one storage struct. Because
+  `set_capture_config` rebuilds the whole `VaultCaptureConfig` from that DTO, it
+  must **preserve** the existing `tasks_folder` (load the current value and
+  carry it across) — otherwise saving Capture Settings would silently reset a
+  configured tasks folder to `None`.
 
 ## IPC commands (in `src-tauri/src/`, registered in `lib.rs`)
 

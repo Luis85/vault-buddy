@@ -165,6 +165,17 @@ mod tests {
     }
 
     #[test]
+    fn basename_caps_long_slug_for_filesystem_limits() {
+        // A very long title must not overflow a Windows path component (255)
+        // and blow the ~260-char default MAX_PATH. Slug is capped; the full
+        // title still lives in frontmatter (render_task, not the filename).
+        let base = task_basename(&"a".repeat(300), "2026-07-08");
+        let slug = base.strip_prefix("2026-07-08-").unwrap();
+        assert!(slug.len() <= 80, "slug should be capped, got {}", slug.len());
+        assert!(slug.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
     fn render_writes_type_task_status_new_quoted_title() {
         let doc = render_task("Buy milk", "2026-07-08");
         assert_eq!(
@@ -194,8 +205,11 @@ Add above the `#[cfg(test)]` block:
 
 ```rust
 /// Lower-case, collapse every run of non-alphanumeric chars to a single
-/// hyphen, trim leading/trailing hyphens. Empty result → "task".
+/// hyphen, cap the length (so the filename component stays inside Windows'
+/// 255-char segment / ~260-char MAX_PATH limits — the full title survives in
+/// frontmatter), trim leading/trailing hyphens. Empty result → "task".
 fn slugify(title: &str) -> String {
+    const MAX_SLUG: usize = 80;
     let mut slug = String::new();
     let mut prev_hyphen = false;
     for ch in title.chars() {
@@ -207,6 +221,8 @@ fn slugify(title: &str) -> String {
             prev_hyphen = true;
         }
     }
+    // slug is ASCII (alnum + '-'), so truncating by byte index is char-safe.
+    slug.truncate(MAX_SLUG);
     let trimmed = slug.trim_matches('-');
     if trimmed.is_empty() {
         "task".to_string()
@@ -684,6 +700,7 @@ git commit -m "feat(tasks): flip task status with a surgical atomic write"
 
 **Files:**
 - Create: `src-tauri/src/task_commands.rs`
+- Modify: `src-tauri/src/capture_commands.rs` (`set_capture_config` — preserve `tasks_folder`)
 - Modify: `src-tauri/src/lib.rs` (add `mod task_commands;` near the other `mod` lines ~top; register commands in `generate_handler!` ~256-287)
 
 **Interfaces:**
@@ -692,7 +709,31 @@ git commit -m "feat(tasks): flip task status with a surgical atomic write"
 
 *This crate does not compile on Linux — mirror `capture_commands::get_capture_config`/`set_capture_config` exactly, run `cargo fmt --check`, and rely on CI's Windows job. Its behavior is exercised from the frontend via `mockIPC` in Task 11.*
 
-- [ ] **Step 1: Create the module**
+- [ ] **Step 1: Preserve `tasks_folder` when saving capture settings**
+
+Task 1 added `tasks_folder` to `VaultCaptureConfig`, but `set_capture_config`
+(`src-tauri/src/capture_commands.rs`) rebuilds the whole struct from
+`CaptureConfigDto` — which has no tasks field. After Task 1 that struct literal
+won't compile (missing field), and naively defaulting it to `None` would wipe a
+configured tasks folder every time the user saves Capture Settings. Load the
+existing value and carry it across. In `set_capture_config`, immediately after
+the `let _guard = lock_ignoring_poison(&lock.0);` line and before
+`let value = capture_config::VaultCaptureConfig {`, add:
+
+```rust
+    // Preserve fields CaptureConfigDto doesn't carry (tasks are configured on
+    // their own surface) so saving capture settings can't reset them.
+    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
+```
+
+and add this field inside the `VaultCaptureConfig { … }` literal (e.g. after
+`follow_up_template: cfg.follow_up_template,`):
+
+```rust
+        tasks_folder: existing.tasks_folder,
+```
+
+- [ ] **Step 2: Create the module**
 
 Create `src-tauri/src/task_commands.rs`:
 
@@ -749,7 +790,7 @@ pub fn set_tasks_config(
 }
 ```
 
-- [ ] **Step 2: Register the module + commands**
+- [ ] **Step 3: Register the module + commands**
 
 In `src-tauri/src/lib.rs`, add `mod task_commands;` beside the other `mod` declarations, and add to the `generate_handler!` list (after `capture_commands::rename_capture`, adding a comma to that line):
 
@@ -759,16 +800,16 @@ In `src-tauri/src/lib.rs`, add `mod task_commands;` beside the other `mod` decla
             task_commands::set_tasks_config,
 ```
 
-- [ ] **Step 3: Format check**
+- [ ] **Step 4: Format check**
 
 Run: `cd src-tauri && cargo fmt --check`
 Expected: PASS (no diff). Full compile is verified by CI's `windows-app` job.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src-tauri/src/task_commands.rs src-tauri/src/lib.rs
-git commit -m "feat(tasks): add get_tasks_config/set_tasks_config commands"
+git add src-tauri/src/task_commands.rs src-tauri/src/capture_commands.rs src-tauri/src/lib.rs
+git commit -m "feat(tasks): add tasks config commands, preserve folder on capture save"
 ```
 
 ---
