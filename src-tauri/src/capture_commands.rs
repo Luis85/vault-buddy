@@ -214,6 +214,9 @@ pub fn set_capture_config(
     if let Some(folder) = &folder {
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
+    // Preserve fields CaptureConfigDto doesn't carry (tasks are configured on
+    // their own surface) so saving capture settings can't reset them.
+    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
     let _guard = lock_ignoring_poison(&lock.0);
     let value = capture_config::VaultCaptureConfig {
         mode,
@@ -227,6 +230,7 @@ pub fn set_capture_config(
         transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
         transcript_timestamps: cfg.transcript_timestamps,
         follow_up_template: cfg.follow_up_template,
+        tasks_folder: existing.tasks_folder,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {

@@ -1,6 +1,7 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+mod task_commands;
 mod transcription;
 mod tray;
 
@@ -283,7 +284,9 @@ pub fn run() {
             capture_commands::list_audio_devices,
             capture_commands::pause_capture,
             capture_commands::resume_capture,
-            capture_commands::rename_capture
+            capture_commands::rename_capture,
+            task_commands::get_tasks_config,
+            task_commands::set_tasks_config,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
