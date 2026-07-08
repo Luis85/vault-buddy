@@ -5,6 +5,7 @@
 //! docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md.
 
 use crate::capture_note::yaml_quote;
+use std::path::Path;
 
 /// Lower-case, collapse every run of non-alphanumeric chars to a single
 /// hyphen, cap the length (so the filename component stays inside Windows'
@@ -47,6 +48,15 @@ pub fn render_task(title: &str, created: &str) -> String {
         "---\ntype: Task\nstatus: new\ntitle: {}\ncreated: {created}\n---\n\n",
         yaml_quote(title)
     )
+}
+
+/// Create a new task file under `root` (creating `root` if needed). Uses the
+/// collision-safe atomic writer shared with the capture note, so it can never
+/// overwrite an existing file — a name clash takes the ` (N)` suffix instead.
+pub fn create_task(root: &Path, title: &str, today: &str) -> std::io::Result<std::path::PathBuf> {
+    std::fs::create_dir_all(root)?;
+    let target = root.join(format!("{}.md", task_basename(title, today)));
+    crate::capture_note::write_note_collision_safe(&target, &render_task(title, today))
 }
 
 #[cfg(test)]
@@ -100,5 +110,24 @@ mod tests {
         // A colon in the title would break unquoted YAML — must be quoted.
         let doc = render_task("Ship: v1", "2026-07-08");
         assert!(doc.contains("title: \"Ship: v1\"\n"));
+    }
+
+    #[test]
+    fn create_task_writes_file_and_never_clobbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+
+        let p1 = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        assert_eq!(p1.file_name().unwrap(), "2026-07-08-buy-milk.md");
+        let body = std::fs::read_to_string(&p1).unwrap();
+        assert!(body.contains("type: Task"));
+        assert!(body.contains("status: new"));
+        assert!(body.contains("title: \"Buy milk\""));
+
+        // Same title again → suffixed, original untouched (collision-safe).
+        let p2 = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        assert_ne!(p1, p2);
+        assert_eq!(p2.file_name().unwrap(), "2026-07-08-buy-milk (2).md");
+        assert!(p1.exists() && p2.exists());
     }
 }
