@@ -367,4 +367,15 @@ describe("ActionPanel", () => {
     expect(store.view).toBe("list");
     expect(wrapper.text()).toContain("Personal");
   });
+
+  it("renders the Tasks view with a back button when view is tasks", async () => {
+    const store = useVaultsStore();
+    store.openTasks("v1");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { Tasks: true } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("Tasks");
+  });
 });

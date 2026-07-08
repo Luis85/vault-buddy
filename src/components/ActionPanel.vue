@@ -12,6 +12,7 @@ import RenamePrompt from "./RenamePrompt.vue";
 import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
 import Transcriptions from "./Transcriptions.vue";
+import Tasks from "./Tasks.vue";
 import NotificationHost from "./NotificationHost.vue";
 
 const store = useVaultsStore();
@@ -79,7 +80,9 @@ watch(
                   ? "Record"
                   : view === "transcriptions"
                     ? "Transcriptions"
-                    : "Vaults"
+                    : view === "tasks"
+                      ? "Tasks"
+                      : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -217,6 +220,12 @@ watch(
     >
       <Transcriptions />
     </div>
+    <div
+      v-else-if="view === 'tasks' && store.tasksVaultId"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Tasks :key="store.tasksVaultId" :vault-id="store.tasksVaultId" />
+    </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
         v-if="filtered.length > 0"
@@ -230,6 +239,7 @@ watch(
         @open-daily-note="store.runAction('open_daily_note', $event)"
         @capture="store.openRecordMode($event)"
         @capture-settings="store.openCaptureSettings($event)"
+        @open-tasks="store.openTasks($event)"
       />
       <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
         No vaults match "{{ filter }}".
