@@ -120,6 +120,18 @@ export interface AudioDevices {
   outputs: AudioDevice[];
 }
 
+export interface TaskItem {
+  path: string;
+  title: string;
+  status: string;
+  created: string;
+  done: boolean;
+}
+
+export interface TasksConfig {
+  tasksFolder: string | null;
+}
+
 export interface Recording {
   mp3: string;
   title: string;

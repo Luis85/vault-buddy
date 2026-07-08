@@ -296,4 +296,19 @@ describe("vaults store", () => {
     s.back();
     expect(s.view).toBe("list");
   });
+
+  it("openTasks sets the tasks view and vault id", () => {
+    const store = useVaultsStore();
+    store.openTasks("v1");
+    expect(store.view).toBe("tasks");
+    expect(store.tasksVaultId).toBe("v1");
+  });
+
+  it("back() from tasks returns to the list and clears the vault id", () => {
+    const store = useVaultsStore();
+    store.openTasks("v1");
+    store.back();
+    expect(store.view).toBe("list");
+    expect(store.tasksVaultId).toBeNull();
+  });
 });
