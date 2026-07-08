@@ -624,21 +624,38 @@ pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), Strin
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = dir.join(format!(
-        ".{file_name}{}",
-        crate::capture_note::NOTE_TMP_SUFFIX
-    ));
-    {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .map_err(|e| format!("Cannot stage task write: {e}"))?;
-        f.write_all(updated.as_bytes())
-            .map_err(|e| format!("Cannot write task: {e}"))?;
-        f.sync_all().map_err(|e| format!("Cannot flush task: {e}"))?;
-    }
+    // Owned temp with suffix-retry — a crash between create_new and rename can
+    // strand a predictable temp; without retry every future toggle of the same
+    // task would fail AlreadyExists on that stranded temp and be permanently
+    // stuck. Mirrors write_note_atomic's numbered-temp loop; the marker suffix
+    // lets recovery clean strays.
+    use std::io::Write;
+    let (tmp, mut f) = {
+        let mut attempt = 0u32;
+        loop {
+            let candidate = if attempt == 0 {
+                dir.join(format!(".{file_name}{}", crate::capture_note::NOTE_TMP_SUFFIX))
+            } else {
+                dir.join(format!(
+                    ".{file_name}.{attempt}{}",
+                    crate::capture_note::NOTE_TMP_SUFFIX
+                ))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => break (candidate, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
+                Err(e) => return Err(format!("Cannot stage task write: {e}")),
+            }
+        }
+    };
+    f.write_all(updated.as_bytes())
+        .map_err(|e| format!("Cannot write task: {e}"))?;
+    f.sync_all().map_err(|e| format!("Cannot flush task: {e}"))?;
+    drop(f);
     let result = std::fs::rename(&tmp, &canon_path);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -853,11 +870,17 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
     }
     let (vault_path, root) = tasks_root_for(&id)?;
     // Create the folder, THEN canonicalize-verify it stays inside the vault
-    // (a symlinked folder must not carry the write outside) before writing.
+    // before any task file is written — the exact create-then-assert order the
+    // capture recording folder uses (capture_commands.rs). No vault DATA is
+    // written before the assert passes; a symlinked folder can at worst create
+    // a stray empty dir, then this errors out (create_task never runs).
     std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
     capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-    // Today, formatted YYYY-MM-DD, from the shell so core stays clock-free.
-    let today = today_ymd();
+    // Local calendar date (YYYY-MM-DD), matching every other date-sensitive
+    // path in the app (capture uses chrono::Local::now().date_naive()). A UTC
+    // date would name a task with tomorrow's/yesterday's date near local
+    // midnight. Passed into the clock-free core so core stays testable.
+    let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
     let path = tasks::create_task(&root, title, &today)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
@@ -877,38 +900,9 @@ pub fn set_task_status(id: String, path: String, done: bool) -> Result<(), Strin
     // Core canonicalizes root + path and requires containment before writing.
     tasks::set_task_status(&root, Path::new(&path), done)
 }
-
-/// Local date as YYYY-MM-DD. Uses the same SystemTime→civil-date approach the
-/// capture path already relies on for dated folders.
-fn today_ymd() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = secs / 86_400;
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Howard Hinnant's days-from-civil inverse (public-domain algorithm), for a
-/// UTC calendar date without pulling in a date crate. Matches the dated-folder
-/// math already used in the capture layer.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
 ```
 
-*If a shared `today_ymd`/civil-date helper already exists in the shell (grep `civil_from_days` / `fn today` in `src-tauri/src/`), reuse it and drop these two functions rather than duplicating.*
+*`chrono` is already a shell dependency (`chrono = { version = "0.4", … features = ["clock"] }`) and `chrono::Local::now().date_naive()` is the app's established local-date idiom (see `capture_commands.rs`'s dated recording folder). No new dependency, no hand-rolled UTC date.*
 
 - [ ] **Step 3: Register the commands**
 
