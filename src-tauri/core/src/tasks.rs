@@ -4,8 +4,10 @@
 //! discipline as the capture note and transcript sidecar. See
 //! docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md.
 
+use crate::capture_note::note_field;
 use crate::capture_note::yaml_quote;
-use std::path::Path;
+use crate::transcript::dir_entries;
+use std::path::{Path, PathBuf};
 
 /// Lower-case, collapse every run of non-alphanumeric chars to a single
 /// hyphen, cap the length (so the filename component stays inside Windows'
@@ -59,9 +61,119 @@ pub fn create_task(root: &Path, title: &str, today: &str) -> std::io::Result<std
     crate::capture_note::write_note_collision_safe(&target, &render_task(title, today))
 }
 
+/// One task surfaced in the list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskItem {
+    pub path: PathBuf,
+    pub title: String,
+    pub status: String,
+    pub created: String,
+    pub done: bool,
+}
+
+/// True iff the file's leading frontmatter declares `type: Task`.
+pub fn is_task(content: &str) -> bool {
+    note_field(content, "type").as_deref() == Some("Task")
+}
+
+/// Every `type: Task` file directly under `root`, best-effort. Open tasks
+/// (status != "done") first, newest `created` first with title as tiebreaker;
+/// completed tasks after. A missing/unreadable root or file degrades silently.
+pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
+    let mut out = Vec::new();
+    for (path, ft, name) in dir_entries(root) {
+        if !ft.is_file() || !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !is_task(&content) {
+            continue;
+        }
+        let stem = name.strip_suffix(".md").unwrap_or(&name).to_string();
+        let title = note_field(&content, "title").unwrap_or(stem);
+        let status = note_field(&content, "status").unwrap_or_else(|| "new".to_string());
+        let created = note_field(&content, "created").unwrap_or_default();
+        let done = status == "done";
+        out.push(TaskItem {
+            path,
+            title,
+            status,
+            created,
+            done,
+        });
+    }
+    // Open first; within each group newest created first, then title.
+    out.sort_by(|a, b| {
+        a.done
+            .cmp(&b.done)
+            .then(b.created.cmp(&a.created))
+            .then(a.title.cmp(&b.title))
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write(root: &Path, name: &str, body: &str) {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join(name), body).unwrap();
+    }
+
+    #[test]
+    fn list_tasks_returns_only_type_task_files_sorted_open_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "2026-07-06-a.md",
+            "---\ntype: Task\nstatus: done\ntitle: \"A done\"\ncreated: 2026-07-06\n---\n",
+        );
+        write(
+            root,
+            "2026-07-08-b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B open\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            root,
+            "2026-07-07-c.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"C open\"\ncreated: 2026-07-07\n---\n",
+        );
+        // Not a task — must be ignored even though it lives in the folder.
+        write(
+            root,
+            "note.md",
+            "---\ntype: Meeting\ntitle: \"Nope\"\n---\n",
+        );
+        // No frontmatter — ignored.
+        write(root, "plain.md", "just text\n");
+
+        let items = list_tasks(root);
+        let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
+        // Open tasks first, newest created first; the done task last.
+        assert_eq!(titles, vec!["B open", "C open", "A done"]);
+        assert!(!items[0].done);
+        assert!(items[2].done);
+        assert_eq!(items[0].status, "new");
+        assert_eq!(items[2].created, "2026-07-06");
+    }
+
+    #[test]
+    fn list_tasks_missing_root_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(list_tasks(&dir.path().join("nope")).is_empty());
+    }
+
+    #[test]
+    fn is_task_only_true_for_type_task() {
+        assert!(is_task("---\ntype: Task\nstatus: new\n---\n"));
+        assert!(is_task("---\ntype: \"Task\"\n---\n")); // quoted also fine
+        assert!(!is_task("---\ntype: Meeting\n---\n"));
+        assert!(!is_task("no frontmatter"));
+    }
 
     #[test]
     fn basename_slugifies_title_with_date() {
