@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-04
 - **Status:** Approved
-- **Source:** First increment cut from [docs/PRD-knowledge-intake.md](../../PRD-knowledge-intake.md) (Knowledge Intake, Version 1 — Audio Recording)
+- **Source:** First increment cut from [docs/PRD-knowledge-intake.md](knowledge-intake.md) (Knowledge Intake, Version 1 — Audio Recording)
 
 ## Goal
 

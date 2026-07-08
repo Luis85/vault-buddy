@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-04
 - **Status:** Approved
-- **Source:** Second increment cut from [docs/PRD-knowledge-intake.md](../../PRD-knowledge-intake.md); builds on the shipped increment 2 ([spec](2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md), PR #4).
+- **Source:** Second increment cut from [docs/PRD-knowledge-intake.md](knowledge-intake.md); builds on the shipped increment 2 ([spec](2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md), PR #4).
 
 ## Goal
 

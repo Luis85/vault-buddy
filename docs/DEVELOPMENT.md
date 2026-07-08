@@ -2,7 +2,7 @@
 
 Contributor documentation: building from source, tests, the CI/release
 pipelines, and the agentic development setup. For what the product is and
-where it's going, see the [PRD](PRD.md).
+where it's going, see the [PRD - Product Vision](PRD%20-%20Product%20Vision.md).
 
 ## Run it from source
 

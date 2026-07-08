@@ -3,7 +3,7 @@
 Operating guide for coding agents working in this repository. The
 human-facing equivalents are [README.md](README.md) (what the product does),
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (contributor setup, CI, releases)
-and [docs/PRD.md](docs/PRD.md) (vision, principles, roadmap). Design specs
+and [docs/PRD.md](PRD%20-%20Product%20Vision.md) (vision, principles, roadmap). Design specs
 live in [docs/superpowers/specs/](docs/superpowers/specs/).
 
 Vault Buddy is a Windows desktop companion for Obsidian: a Tauri v2 shell

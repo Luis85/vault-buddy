@@ -4,7 +4,7 @@
 - **Status:** Version 1 shipped in Vault Buddy v0.3.0 (audio recording +
   on-device transcription); later versions planned — see the roadmap
 - **Version:** 1.1
-- **Parent Product:** [Vault Buddy](./PRD.md)
+- **Parent Product:** [Vault Buddy](PRD%20-%20Product%20Vision.md)
 
 ---
 
