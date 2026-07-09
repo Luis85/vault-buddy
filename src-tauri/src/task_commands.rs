@@ -123,6 +123,13 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
         return Err("A task needs a title.".to_string());
     }
     let (vault_path, root) = tasks_root_for(&id)?;
+    // The registry can list a vault whose folder was moved/deleted; without
+    // this guard the create_dir_all below would RESURRECT the missing vault
+    // path (+ Tasks) and write a task into a directory that is no longer a
+    // real vault. `start_capture` guards its recording write the same way.
+    if !vault_path.is_dir() {
+        return Err(format!("Vault folder not found: {}", vault_path.display()));
+    }
     // Create the folder, THEN canonicalize-verify it stays inside the vault
     // before any task file is written — the exact create-then-assert order the
     // capture recording folder uses (capture_commands.rs). No vault DATA is
