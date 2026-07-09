@@ -1,8 +1,19 @@
 # Task Management — Capability PRD
 
-- **Status:** Draft
+- **Status:** Draft — Version 1's first vertical slice (task creation,
+  listing, and completion, per vault) shipped in v0.5.0; aggregation,
+  lists, dashboard, templates, Task Tags/Todos and AI features below remain
+  unbuilt. See [Per-Vault Task List](../use-cases/per-vault-task-list.md).
 - **Version:** 1.0
 - **Parent Product:** Vault Buddy
+
+Use cases extracted from this PRD, with shipping status: [Per-Vault Task
+List](../use-cases/per-vault-task-list.md) (shipped v0.5.0), [Task Tags &
+Todos](../use-cases/task-tags-and-todos.md), [Aggregated Task Dashboard &
+Lists](../use-cases/aggregated-task-dashboard-and-lists.md), [AI-Assisted
+Task Management](../use-cases/ai-assisted-task-management.md) (all
+planned). See [docs/use-cases/](../use-cases/README.md) for the full
+catalog.
 
 ---
 
