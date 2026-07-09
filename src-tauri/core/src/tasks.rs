@@ -166,6 +166,10 @@ fn collect_tasks(
         let stem = name.strip_suffix(".md").unwrap_or(&name).to_string();
         let title = note_field(&content, "title").unwrap_or(stem);
         let status = note_field(&content, "status").unwrap_or_else(|| "new".to_string());
+        // Archived tasks are removed from view — never surfaced in the list.
+        if status == "archived" {
+            continue;
+        }
         let created = note_field(&content, "created").unwrap_or_default();
         let done = status == "done";
         out.push(TaskItem {
@@ -239,13 +243,13 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
     done.then_some(out)
 }
 
-/// Flip a task's completion status on disk. Canonicalizes `root` and `path`
+/// Set a task's `status:` frontmatter on disk. Canonicalizes `root` and `path`
 /// and requires containment — a lexical check can't see through a symlink at
 /// the file or folder — then reads, applies `set_status`, and writes atomically
 /// (hidden `create_new` temp + fsync + REPLACING rename). Replacing is correct
 /// here: the target is the `type: Task` file we just read and are editing in
 /// place, and we touch only its status line (see the spec's surgical-write rule).
-pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), String> {
+pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
     // Canonical containment: resolve both and require the file under the root.
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -256,7 +260,7 @@ pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), Strin
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    let updated = set_status(&content, if done { "done" } else { "new" }).ok_or(
+    let updated = set_status(&content, new_status).ok_or(
         "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
     )?;
     // The REPLACING atomic write (temp + fsync + rename) is shared with the
@@ -312,6 +316,48 @@ mod tests {
         assert!(items[2].done);
         assert_eq!(items[0].status, "new");
         assert_eq!(items[2].created, "2026-07-06");
+    }
+
+    #[test]
+    fn list_tasks_excludes_archived() {
+        // Archived tasks are removed from view — the list surfaces only open +
+        // done, never archived (no show-archived surface this slice).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "open.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Open\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            root,
+            "done.md",
+            "---\ntype: Task\nstatus: done\ntitle: \"Done\"\ncreated: 2026-07-07\n---\n",
+        );
+        write(
+            root,
+            "arch.md",
+            "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\ncreated: 2026-07-06\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["Open", "Done"]); // archived is not surfaced
+    }
+
+    #[test]
+    fn set_task_status_writes_an_arbitrary_status() {
+        // set_task_status now takes a status string, so it can write archived
+        // (and still new/done), not just a done bool.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        set_task_status(&root, &p, "archived").unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("status: archived\n"));
+        set_task_status(&root, &p, "done").unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("status: done\n"));
     }
 
     #[test]
@@ -623,11 +669,11 @@ mod tests {
         let root = dir.path().join("Tasks");
         let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
 
-        set_task_status(&root, &p, true).unwrap();
+        set_task_status(&root, &p, "done").unwrap();
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("status: done\n"));
-        set_task_status(&root, &p, false).unwrap();
+        set_task_status(&root, &p, "new").unwrap();
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("status: new\n"));
@@ -635,7 +681,7 @@ mod tests {
         // A path outside the root is refused.
         let outside = dir.path().join("outside.md");
         std::fs::write(&outside, "---\ntype: Task\nstatus: new\n---\n").unwrap();
-        assert!(set_task_status(&root, &outside, true).is_err());
+        assert!(set_task_status(&root, &outside, "done").is_err());
     }
 
     #[cfg(unix)]
@@ -651,6 +697,6 @@ mod tests {
         std::fs::write(&real, "---\ntype: Task\nstatus: new\n---\n").unwrap();
         let link = root.join("2026-07-08-linked.md");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(set_task_status(&root, &link, true).is_err());
+        assert!(set_task_status(&root, &link, "done").is_err());
     }
 }
