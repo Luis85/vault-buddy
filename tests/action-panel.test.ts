@@ -38,7 +38,7 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(8); // 2 vaults × (row + daily note + capture + gear)
+    expect(buttons).toHaveLength(10); // 2 vaults × (row + daily note + tasks + capture + gear)
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
   });
@@ -131,7 +131,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     // vault action buttons only — the header's settings gear stays usable
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(8);
+    expect(buttons).toHaveLength(10);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );
@@ -366,5 +366,16 @@ describe("ActionPanel", () => {
     await wrapper.get('[data-testid="back-button"]').trigger("click");
     expect(store.view).toBe("list");
     expect(wrapper.text()).toContain("Personal");
+  });
+
+  it("renders the Tasks view with a back button when view is tasks", async () => {
+    const store = useVaultsStore();
+    store.openTasks("v1");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { Tasks: true } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("Tasks");
   });
 });

@@ -19,13 +19,16 @@ export const useVaultsStore = defineStore("vaults", {
       | "captureSettings"
       | "recordings"
       | "recordMode"
-      | "transcriptions",
+      | "transcriptions"
+      | "tasks",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
     recordingsVaultId: null as string | null,
     // Which vault the recordMode view shows.
     recordModeVaultId: null as string | null,
+    // Which vault the tasks view lists.
+    tasksVaultId: null as string | null,
     // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
@@ -115,6 +118,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.captureSettingsVaultId = null;
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
+      this.tasksVaultId = null;
     },
     openSettings() {
       this.view = "settings";
@@ -134,11 +138,17 @@ export const useVaultsStore = defineStore("vaults", {
     openTranscriptions() {
       this.view = "transcriptions";
     },
+    openTasks(vaultId: string) {
+      this.view = "tasks";
+      this.tasksVaultId = vaultId;
+    },
     /** Back to the current view's fixed parent (no history stack). */
     back() {
       if (this.view === "recordings" && this.recordingsVaultId) {
         this.openRecordMode(this.recordingsVaultId);
       } else if (this.view === "transcriptions") {
+        return this.showList();
+      } else if (this.view === "tasks") {
         return this.showList();
       } else {
         this.showList();

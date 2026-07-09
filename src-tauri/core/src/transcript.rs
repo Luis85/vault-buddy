@@ -4,9 +4,8 @@
 //! marker (pending/failed/complete) is how the worker tells its own
 //! regenerable sidecars from a finished transcript or a user's edits.
 
-use crate::capture_note::{format_duration, write_note_atomic, yaml_quote, NOTE_TMP_SUFFIX};
+use crate::capture_note::{format_duration, write_atomic_replacing, write_note_atomic, yaml_quote};
 use crate::capture_paths::is_capture_base;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Frontmatter marker line values. `pending`/`failed` sidecars are ours to
@@ -276,42 +275,11 @@ pub fn force_write_sidecar(transcript_path: &Path, content: &str) -> std::io::Re
 }
 
 /// The atomic temp + fsync + REPLACING-rename shared by `replace_if_ours` and
-/// `force_write_sidecar`. Exclusive-creates a marker-suffixed temp (numbered on
-/// collision) so recovery's cleanup can sweep it; mirrors capture_note's writer
-/// deliberately so the never-replace audio writer is untouched.
+/// `force_write_sidecar` — one thin wrapper over `capture_note`'s shared
+/// replacing writer (which the task status flip also uses), so the never-replace
+/// audio writer stays untouched.
 fn write_sidecar_atomic(transcript_path: &Path, content: &str) -> std::io::Result<()> {
-    let dir = transcript_path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = transcript_path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let (tmp, mut f) = {
-        let mut attempt = 0u32;
-        loop {
-            let candidate = if attempt == 0 {
-                dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"))
-            } else {
-                dir.join(format!(".{file_name}.{attempt}{NOTE_TMP_SUFFIX}"))
-            };
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
-                Ok(f) => break (candidate, f),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
-                Err(e) => return Err(e),
-            }
-        }
-    };
-    f.write_all(content.as_bytes())?;
-    f.sync_all()?;
-    drop(f);
-    let result = std::fs::rename(&tmp, transcript_path);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
+    write_atomic_replacing(transcript_path, content)
 }
 
 /// Capture MP3s under `<root>/YYYY/MM` that still need a transcript (missing

@@ -88,7 +88,7 @@ describe("VaultList", () => {
     const wrapper = mountList(sample, "aaa111", "open_vault");
     expect(wrapper.find('[role="status"]').exists()).toBe(true);
     const buttons = wrapper.findAll("button");
-    expect(buttons.length).toBe(8);
+    expect(buttons.length).toBe(10);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true,
     );
@@ -167,5 +167,13 @@ describe("VaultList", () => {
   it("shows no recording dot when nothing records", () => {
     const wrapper = mountList(sample);
     expect(wrapper.find('[title="Recording…"]').exists()).toBe(false);
+  });
+
+  it("emits open-tasks with the vault id", async () => {
+    const wrapper = mountList([
+      { id: "v1", name: "Test", path: "C:\\vaults\\Test", open: false },
+    ]);
+    await wrapper.get('[data-testid="open-tasks"]').trigger("click");
+    expect(wrapper.emitted("open-tasks")?.[0]).toEqual(["v1"]);
   });
 });

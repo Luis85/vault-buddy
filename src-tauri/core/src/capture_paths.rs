@@ -196,6 +196,37 @@ pub fn assert_root_inside_vault(vault_path: &Path, root: &Path) -> Result<(), St
     }
 }
 
+/// Like `assert_root_inside_vault`, but for a folder that need NOT exist yet:
+/// canonicalize the nearest EXISTING ancestor of `root` and require it under
+/// the (canonical) vault. This catches a symlink/junction planted at any
+/// existing ancestor even when the leaf is missing — `assert_root_inside_vault`
+/// can't, because it can only canonicalize a path that exists. Pair with
+/// `safe_recording_root` (which lexically rejects `..`/absolute), so the
+/// not-yet-created tail can only descend, never escape the validated ancestor.
+/// Use it to validate a configured folder up front (before saving or creating).
+pub fn assert_path_inside_vault(vault_path: &Path, root: &Path) -> Result<(), String> {
+    let vault =
+        std::fs::canonicalize(vault_path).map_err(|e| format!("Cannot resolve vault path: {e}"))?;
+    // Walk up to the first ancestor that exists on disk and resolve it. A
+    // never-created leaf (`Tasks`, `Inbox/Tasks`) just resolves to the vault;
+    // a symlinked ancestor resolves outside and is rejected.
+    let mut ancestor = root;
+    loop {
+        if let Ok(resolved) = std::fs::canonicalize(ancestor) {
+            return if resolved.starts_with(&vault) {
+                Ok(())
+            } else {
+                Err("Configured folder resolves outside the vault".to_string())
+            };
+        }
+        match ancestor.parent() {
+            Some(parent) => ancestor = parent,
+            // Ran out of ancestors without finding one inside the vault.
+            None => return Err("Configured folder resolves outside the vault".to_string()),
+        }
+    }
+}
+
 /// Whether a `hard_link` error is decisive on its own and must propagate
 /// rather than be papered over by the guarded rename fallback.
 /// `AlreadyExists` is the live collision signal — `to` is taken, exactly
@@ -416,6 +447,39 @@ mod tests {
         let root = vault.path().join("Meetings");
         std::fs::create_dir_all(&root).unwrap();
         assert!(assert_root_inside_vault(vault.path(), &root).is_ok());
+    }
+
+    #[test]
+    fn path_inside_vault_accepts_a_not_yet_created_leaf() {
+        // A folder that doesn't exist yet resolves to the (existing) vault via
+        // its nearest ancestor — accepted so a first-time save/create works.
+        let vault = tempfile::tempdir().unwrap();
+        assert!(assert_path_inside_vault(vault.path(), &vault.path().join("Tasks")).is_ok());
+        assert!(assert_path_inside_vault(vault.path(), &vault.path().join("Inbox/Tasks")).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_inside_vault_rejects_symlinked_ancestor_with_missing_leaf() {
+        // `Link` is a symlink OUT of the vault and the leaf `Sub` doesn't exist:
+        // assert_root_inside_vault couldn't see this (leaf missing), but the
+        // nearest-existing-ancestor canonicalization catches the escape.
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("Link")).unwrap();
+        let escaping = vault.path().join("Link").join("Sub");
+        assert!(!escaping.exists());
+        assert!(assert_path_inside_vault(vault.path(), &escaping).is_err());
+    }
+
+    #[test]
+    fn path_inside_vault_rejects_when_vault_dir_is_gone() {
+        // Vault folder removed from disk (stale registry): nothing under it can
+        // be validated, so the nearest existing ancestor is outside the vault.
+        let parent = tempfile::tempdir().unwrap();
+        let vault = parent.path().join("gone-vault");
+        // vault dir never created
+        assert!(assert_path_inside_vault(&vault, &vault.join("Tasks")).is_err());
     }
 
     // Also stands in for the "odd hard_link errors fall back, not
