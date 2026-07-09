@@ -128,6 +128,7 @@ watch(visibleHits, (list) => {
 });
 
 function onArrow(event: KeyboardEvent, delta: 1 | -1) {
+  if (event.isComposing) return; // IME candidate navigation owns the arrows
   if (visibleHits.value.length === 0) return;
   event.preventDefault(); // the list owns arrows; keep the caret still
   selected.value = Math.min(
@@ -142,6 +143,9 @@ function onArrow(event: KeyboardEvent, delta: 1 | -1) {
 }
 
 function onEnter(event: KeyboardEvent) {
+  // An IME commit's Enter arrives as a keydown with isComposing — the user
+  // is finishing their query text, not opening the selection.
+  if (event.isComposing) return;
   const hit = visibleHits.value[selected.value];
   if (hit) void openHit(hit, event.ctrlKey || event.metaKey);
 }
@@ -227,6 +231,7 @@ function onClearRecents() {
 }
 
 function onEscape(event: KeyboardEvent) {
+  if (event.isComposing) return; // IME cancel, not a query clear
   if (query.value) {
     // First Escape clears the query; a second one bubbles up to PanelRoot
     // and closes the panel (same pattern as the vault filter).

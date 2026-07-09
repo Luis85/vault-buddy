@@ -413,6 +413,24 @@ describe("Search", () => {
     expect(wrapper.find('[data-testid="recent-chip"]').exists()).toBe(false);
   });
 
+  it("ignores Enter and arrows from IME composition", async () => {
+    // Failure mode: committing CJK text via an IME delivers Enter as a
+    // keydown with isComposing — treating it as an open command launches a
+    // note while the user is still typing their query; arrows during
+    // composition belong to the IME candidate list, not the result list.
+    const { wrapper, calls } = mountSearch({
+      search_vaults: () =>
+        response([hit(), hit({ name: "second", file: "Notes/second" })]),
+    });
+    await type(wrapper, "alpha");
+    const input = wrapper.get('[data-testid="search-input"]');
+    await input.trigger("keydown", { key: "ArrowDown", isComposing: true });
+    expect(input.attributes("aria-activedescendant")).toBe("search-hit-0"); // unchanged
+    await input.trigger("keydown", { key: "Enter", isComposing: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.some((c) => c.cmd === "open_search_result")).toBe(false);
+  });
+
   it("Escape clears the query first instead of bubbling", async () => {
     const { wrapper } = mountSearch();
     const input = wrapper.get('[data-testid="search-input"]');
