@@ -27,11 +27,15 @@ function sortInPlace() {
 }
 
 async function reload() {
+  // Post-mount refresh (after a folder change): keep the existing list on a
+  // transient failure — never blank a working list (mirrors the vaults store)
+  // — and surface the error as a toast instead of the blocking banner.
   try {
     tasks.value = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
     loadError.value = null;
   } catch (e) {
-    loadError.value = String(e);
+    notifications.error(String(e));
+    logWarning(`list_tasks refresh failed: ${String(e)}`);
   }
 }
 
@@ -39,7 +43,9 @@ onMounted(async () => {
   try {
     const cfg = await invoke<TasksConfig>("get_tasks_config", { id: props.vaultId });
     folder.value = cfg.tasksFolder ?? "";
-    await reload();
+    // Initial load: a failure here has no list to preserve, so it shows the
+    // blocking loadError banner rather than a toast.
+    tasks.value = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
   } catch (e) {
     loadError.value = String(e);
   } finally {

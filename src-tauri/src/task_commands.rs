@@ -1,12 +1,10 @@
-use std::path::Path;
-use std::path::PathBuf;
-use vault_buddy_core::capture_config::VaultCaptureConfig;
+use std::path::{Path, PathBuf};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery, tasks};
 
 use crate::capture_commands::ConfigWriteLock;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TasksConfigDto {
     pub tasks_folder: Option<String>,
@@ -81,7 +79,7 @@ fn tasks_root_for(id: &str) -> Result<(PathBuf, PathBuf), String> {
         .into_iter()
         .find(|v| v.id == id)
         .ok_or("Vault not found — was it removed from Obsidian?")?;
-    let cfg: VaultCaptureConfig = capture_config::vault_config(&capture_config::load_config(), id);
+    let cfg = capture_config::vault_config(&capture_config::load_config(), id);
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
     Ok((PathBuf::from(&vault.path), root))
 }

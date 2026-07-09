@@ -55,7 +55,7 @@ pub fn render_task(title: &str, created: &str) -> String {
 /// Create a new task file under `root` (creating `root` if needed). Uses the
 /// collision-safe atomic writer shared with the capture note, so it can never
 /// overwrite an existing file — a name clash takes the ` (N)` suffix instead.
-pub fn create_task(root: &Path, title: &str, today: &str) -> std::io::Result<std::path::PathBuf> {
+pub fn create_task(root: &Path, title: &str, today: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let target = root.join(format!("{}.md", task_basename(title, today)));
     crate::capture_note::write_note_collision_safe(&target, &render_task(title, today))
@@ -162,7 +162,11 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
             out.push_str(line);
             continue;
         }
-        if in_frontmatter && trimmed == "---" {
+        // `trimmed.trim_end()` (not just the CR/LF-stripped `trimmed`) so a
+        // closing fence with trailing whitespace (`---  `) is recognized here
+        // too — `is_task`/`note_field` accept it, so the toggle must agree or a
+        // listed row becomes un-toggleable.
+        if in_frontmatter && trimmed.trim_end() == "---" {
             // Closing fence: if no status line was found, insert one now. The
             // inserted line gets its own `nl` terminator — never the fence
             // line's ending — so it can't glue onto the fence when the fence
@@ -206,53 +210,12 @@ pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), Strin
     let updated = set_status(&content, if done { "done" } else { "new" }).ok_or(
         "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
     )?;
-
-    let dir = canon_path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = canon_path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    // Owned temp with suffix-retry — a crash between create_new and rename can
-    // strand a predictable temp; without retry every future toggle of the same
-    // task would fail AlreadyExists on that stranded temp and be permanently
-    // stuck. Mirrors write_note_atomic's numbered-temp loop; the marker suffix
-    // lets recovery clean strays.
-    use std::io::Write;
-    let (tmp, mut f) = {
-        let mut attempt = 0u32;
-        loop {
-            let candidate = if attempt == 0 {
-                dir.join(format!(
-                    ".{file_name}{}",
-                    crate::capture_note::NOTE_TMP_SUFFIX
-                ))
-            } else {
-                dir.join(format!(
-                    ".{file_name}.{attempt}{}",
-                    crate::capture_note::NOTE_TMP_SUFFIX
-                ))
-            };
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
-                Ok(f) => break (candidate, f),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
-                Err(e) => return Err(format!("Cannot stage task write: {e}")),
-            }
-        }
-    };
-    f.write_all(updated.as_bytes())
-        .map_err(|e| format!("Cannot write task: {e}"))?;
-    f.sync_all()
-        .map_err(|e| format!("Cannot flush task: {e}"))?;
-    drop(f);
-    let result = std::fs::rename(&tmp, &canon_path);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result.map_err(|e| format!("Cannot save task: {e}"))
+    // The REPLACING atomic write (temp + fsync + rename) is shared with the
+    // transcript sidecar; replacing is correct here because `canon_path` is the
+    // `type: Task` file we just read and are editing in place, touching only its
+    // status line.
+    crate::capture_note::write_atomic_replacing(&canon_path, &updated)
+        .map_err(|e| format!("Cannot save task: {e}"))
 }
 
 #[cfg(test)]
@@ -502,6 +465,18 @@ mod tests {
         // rather than guess where to insert (documented narrow contract).
         let doc = "---\ntype: Task\ntitle: \"x\"\n";
         assert!(set_status(doc, "done").is_none());
+    }
+
+    #[test]
+    fn set_status_inserts_when_closing_fence_has_trailing_whitespace() {
+        // Regression: is_task/note_field accept a closing fence with trailing
+        // whitespace, so set_status must too — otherwise a listed status-less
+        // task would be un-toggleable (set_status returns None, toggle errors).
+        let doc = "---\ntype: Task\ntitle: \"x\"\n---  \n";
+        assert!(is_task(doc)); // the list surfaces it…
+        let out = set_status(doc, "done").unwrap(); // …so the toggle must accept it
+        assert!(out.contains("status: done\n"));
+        assert!(out.contains("---  \n")); // fence preserved verbatim
     }
 
     #[test]

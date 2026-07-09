@@ -221,6 +221,49 @@ pub fn write_note_atomic(note_path: &Path, content: &str) -> std::io::Result<()>
     result
 }
 
+/// Atomically write `content` to `path`, REPLACING any existing file. For files
+/// we own and intentionally overwrite in place — the transcript sidecar and the
+/// task status flip — NOT the never-clobber audio-note path (that uses
+/// `write_note_atomic`/`write_note_collision_safe`, which refuse to replace).
+/// Exclusive-creates a marker-suffixed temp (numbered on collision, so a
+/// stranded temp from an interrupted write can't permanently block the next
+/// attempt at `create_new`), fsyncs it, then does the REPLACING rename. The
+/// temp is removed on ANY failure — write, flush, or rename — so an interrupted
+/// write leaves nothing behind.
+pub fn write_atomic_replacing(path: &Path, content: &str) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (tmp, mut f) = {
+        let mut attempt = 0u32;
+        loop {
+            let candidate = if attempt == 0 {
+                dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"))
+            } else {
+                dir.join(format!(".{file_name}.{attempt}{NOTE_TMP_SUFFIX}"))
+            };
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => break (candidate, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => attempt += 1,
+                Err(e) => return Err(e),
+            }
+        }
+    };
+    let written = f.write_all(content.as_bytes()).and_then(|()| f.sync_all());
+    drop(f);
+    let result = written.and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
