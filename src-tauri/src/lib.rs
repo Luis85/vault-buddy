@@ -1,6 +1,7 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+mod search_commands;
 mod task_commands;
 mod transcription;
 mod tray;
@@ -40,6 +41,37 @@ fn ms_since_last_move() -> Option<u64> {
     (*lock_ignoring_poison(&LAST_MOVE)).map(|at| at.elapsed().as_millis() as u64)
 }
 
+/// Instant until which the panel's focus-out check must NOT hide the panel.
+/// Stamped by a Ctrl-open (`open_search_result` with `keep_open`): Obsidian
+/// grabs foreground focus while handling the `obsidian://` URI, which blurs
+/// the panel and would close it moments after the user explicitly asked it to
+/// stay up for multi-open. The pin expires on its own; the check still only
+/// ever HIDES — a fresh pin merely declines one hide — so it can never fight
+/// `toggle_panel` into a reopen. Written by a sync command and read by a
+/// `run_on_main_thread` closure (both main thread); the Mutex is the
+/// codebase's shared-state idiom (see `LAST_MOVE`), not a cross-thread need.
+static PANEL_PIN_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long a Ctrl-open holds the panel against the focus-out check.
+/// Obsidian's foreground grab lands well under a second after the URI
+/// launch; a few seconds absorbs a slow cold start without making the panel
+/// feel stuck open on ordinary click-aways afterwards.
+const PANEL_PIN_MS: u64 = 3_000;
+
+/// Pin the panel open across Obsidian's imminent focus grab (Ctrl-open).
+pub(crate) fn pin_panel_open() {
+    *lock_ignoring_poison(&PANEL_PIN_UNTIL) =
+        Some(Instant::now() + std::time::Duration::from_millis(PANEL_PIN_MS));
+}
+
+/// True while a Ctrl-open pin is fresh — the focus-out check consults this.
+fn panel_pinned_open() -> bool {
+    matches!(
+        *lock_ignoring_poison(&PANEL_PIN_UNTIL),
+        Some(until) if Instant::now() < until
+    )
+}
+
 /// Hide the panel once focus has really left the app. Clicking from the panel
 /// to the buddy (or back) fires the source window's blur BEFORE the
 /// destination's focus lands, so a check run at blur time would see neither
@@ -73,6 +105,14 @@ fn schedule_focus_out_check(app: &tauri::AppHandle) {
                         .unwrap_or(false)
                 };
                 if !focused("main") && !focused("panel") {
+                    // A fresh Ctrl-open pin means this blur IS Obsidian's
+                    // foreground grab from the URI the user just launched —
+                    // decline the hide, the user asked the panel to stay for
+                    // multi-open. (Only-hide invariant intact: a pin never
+                    // shows anything.)
+                    if panel_pinned_open() {
+                        return;
+                    }
                     if let Some(panel) = checked.get_webview_window("panel") {
                         if panel.is_visible().unwrap_or(false) {
                             let _ = panel.hide();
@@ -299,6 +339,8 @@ pub fn run() {
             task_commands::add_task,
             task_commands::set_task_status,
             task_commands::count_open_tasks,
+            search_commands::search_vaults,
+            search_commands::open_search_result,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

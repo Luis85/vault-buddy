@@ -62,6 +62,65 @@ describe("ActionPanel", () => {
     ]);
   });
 
+  it("shows the search icon beside the cog on the list view and opens the search view", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="search-toggle"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="search-toggle"]').trigger("click");
+    expect(store.view).toBe("search");
+    expect(wrapper.text()).toContain("Search");
+    expect(wrapper.find('[data-testid="search-input"]').exists()).toBe(true);
+    // Off the list view the header swaps to the back button — no search icon.
+    expect(wrapper.find('[data-testid="search-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+  });
+
+  it("slash on the list view opens search, but not while typing in the filter", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults; // > threshold so the filter input renders
+    store.loaded = true;
+    const wrapper = mount(ActionPanel, { attachTo: document.body });
+    // typing "/" into the filter must keep typing, not switch views
+    await wrapper.get('input[type="search"]').trigger("keydown", { key: "/" });
+    expect(store.view).toBe("list");
+    // "/" anywhere else on the list view jumps to search
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(store.view).toBe("search");
+    wrapper.unmount();
+  });
+
+  it("Ctrl+F opens search from the list view and is inert elsewhere", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel, { attachTo: document.body });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(store.view).toBe("search");
+    // on a non-list view the shortcut must not fire (search's own input owns keys)
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(store.view).toBe("search"); // unchanged, no re-trigger side effects
+    wrapper.unmount();
+  });
+
+  it("back from the search view returns to the vault list", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper.get('[data-testid="search-toggle"]').trigger("click");
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("list");
+    expect(wrapper.text()).toContain("Personal");
+  });
+
   it("hides the filter for short lists", () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;

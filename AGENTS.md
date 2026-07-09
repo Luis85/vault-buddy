@@ -70,10 +70,13 @@ launched the app on the CI runner and never exited.
 `resume_capture`, `get_capture_config`, `set_capture_config`,
 `list_audio_devices`, `rename_capture`, the recordings/transcription
 surface: `list_recordings`, `open_recording`, `open_transcript`,
-`retranscribe`, `transcribe_recording_now`, and the tasks surface:
+`retranscribe`, `transcribe_recording_now`, the tasks surface:
 `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
-`set_task_status` — commands live in `src-tauri/src/commands.rs`,
-`src-tauri/src/capture_commands.rs`, and `src-tauri/src/task_commands.rs`.
+`set_task_status`, and the search surface: `search_vaults` (**async** on
+purpose — the scan must not run on the main thread) + `open_search_result`
+— commands live in `src-tauri/src/commands.rs`,
+`src-tauri/src/capture_commands.rs`, `src-tauri/src/task_commands.rs`, and
+`src-tauri/src/search_commands.rs`.
 Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
 are handled in `lib.rs`.
 
@@ -167,7 +170,14 @@ bubble to the buddy's pre-restore default corner. Invariants:
   thread, where a panic aborts across the WebView2 FFI boundary). The check
   only ever HIDES, never shows, so it can never fight `toggle_panel` into a
   reopen: a buddy click that closed the panel leaves the deferred check a
-  no-op.
+  no-op. One sanctioned exception to the hide: a **Ctrl-open pin**
+  (`PANEL_PIN_UNTIL`, stamped by `open_search_result` with `keep_open`)
+  makes the check decline the hide for ~3 s — Obsidian grabs foreground
+  focus while handling the launched `obsidian://` URI, and that grab IS the
+  blur being sampled; without the pin the multi-open flow the user
+  explicitly requested would collapse after the first result. The pin
+  expires on its own and never shows anything, so the only-hide invariant
+  stands.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -426,12 +436,13 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
   deleted vault. `set_capture_config` preserves `tasks_folder` (read under
   `ConfigWriteLock`) so saving capture settings can't reset it.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
-  tasks organized into subfolders are all surfaced. `collect_tasks` descends
-  only after canonicalizing each child directory and confirming it stays under
-  the canonical tasks root (a symlink/junction escaping the folder is skipped;
-  a reparse cycle is bounded by a walked-set), and skips dot-directories
-  (`.obsidian`/`.trash`/`.git`). Output is one flat sorted list — open first
-  (`status != "done"`), newest `created`, then title — across the whole subtree.
+  tasks organized into subfolders are all surfaced. The recursive walk is the
+  shared `core::vault_walk` helper — canonical containment (a
+  symlink/junction escaping the folder is skipped), a walked-set bounding
+  reparse cycles, dot-directory skips (`.obsidian`/`.trash`/`.git`) — with
+  the per-file `type: Task` filter in `tasks.rs`. Output is one flat sorted
+  list — open first (`status != "done"`), newest `created`, then title —
+  across the whole subtree.
 - **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
   store): a `tasks` panel view reached from a per-row Tasks button; a folder
   setting, an add-task input, and a checkbox list. Toggles are optimistic
@@ -439,6 +450,54 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
   Set disables the checkbox until its write resolves, so two concurrent writes
   for one task can't land out of order). `TaskItem`/`TaskDto` fields match
   camelCase across Rust↔TS.
+
+### The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
+
+Cross-vault, read-only, on-demand search (no index): `core::search::search_vaults`
+walks every registered vault via the shared `core::vault_walk` helper
+(canonical containment, cycle set, dot-dir skips, deterministic name-ordered
+walk — single-sourced with the tasks scan), matching case-insensitive
+substrings against note stems + note content (notes are **any-case** `.md`;
+content ≤ 1 MiB UTF-8 with one whole-file-lowercase early-out — larger/binary
+files match by name only) and attachment filenames. **Extensionless files
+are excluded** (Obsidian doesn't index them; opening one would resolve to
+the like-named note). Hard caps: 2-char minimum query (code points — the
+frontend gate counts the same way), 100 hits globally (`truncated` flag →
+"refine your query" footer). "Filename matches surface before content-only
+matches" is a **hard guarantee**: per vault, two independently-capped class
+lists; a full content list stops content *reads* but names are checked to
+the vault's end. Each hit carries `is_note` and the ready-made
+`obsidian://open` `file` parameter (extension dropped only for exactly-`.md`
+notes, kept otherwise — a `.MD` note opens by exact path);
+`open_search_result` launches it via `uri::launch` — search never writes.
+`search_vaults` (command) is deliberately **async** (sync commands run on
+the main thread; a content scan there would freeze window show/hide and
+drags), wraps the walk in `spawn_blocking`, touches no window APIs and no
+locks, and returns `Result` — an infrastructure failure rejects so the
+panel keeps its previous results instead of blanking. Each call bumps a
+scan-generation atomic that the core walk polls per file
+(`search_vaults_with_cancel`), so superseded scans abort; per-vault scans
+run in parallel on **named** scoped threads and merge in vault order
+(serial-identical output). Core search types derive camelCase `Serialize`
+and cross the IPC boundary directly (no DTO layer — `discovery::Vault`
+precedent). The panel's `search` view (parent: the vault list) is a
+self-contained `Search.vue` — 300 ms debounce, monotonic request ticket
+against stale responses, vault-grouped rows with count chips and
+note/attachment icons, `HighlightText` (index-based, never a RegExp from
+user input), and keyboard navigation over the **visible** rows only
+(collapsed groups and kind-filtered hits are skipped; arrows move a clamped
+selection wired to `aria-activedescendant`, Enter opens it, Ctrl+Enter /
+Ctrl+click keep the panel open for multi-open — `keep_open` travels to Rust,
+which pins the panel through Obsidian's focus grab (see the focus-out check
+above) — hover syncs the selection via mousemove, not mouseenter, which
+would fight arrow-key scrolling).
+`/` or Ctrl+F on the vault list jump into search (`ActionPanel`'s
+window-keydown, gated on the list view and off text inputs). The view also
+renders an aria-live match summary ("N matches in M vaults", `100+` when
+truncated), per-vault collapse chevrons, All/Notes/Files filter chips
+(client-side over the returned hits), and recent-search chips backed by
+localStorage (`src/utils/recentSearches.ts`, capped at 5, recorded only on
+successful responses).
 
 ### Diagnostics invariants
 
@@ -483,15 +542,16 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks`, with `captureSettingsVaultId` / `recordingsVaultId` /
-`recordModeVaultId` / `tasksVaultId`) because that must survive the panel window
-being hidden. Views form a fixed one-parent-per-view tree (no history stack):
-the vault-row capture button `openRecordMode`s (Meeting / Voice Note / Browse
-recordings), `openRecordings` opens the read-only list, the vault-row Tasks
-button `openTasks` opens the per-vault todo view, and `back()` returns to the
-immediate parent (`recordings` → record view, everything else → the list) — the
-header renders the cog (buddy settings) on the list and a ← back button on every
-other view.
+transcriptions | tasks | search`, with `captureSettingsVaultId` /
+`recordingsVaultId` / `recordModeVaultId` / `tasksVaultId`) because that must
+survive the panel window being hidden. Views form a fixed one-parent-per-view
+tree (no history stack): the vault-row capture button `openRecordMode`s
+(Meeting / Voice Note / Browse recordings), `openRecordings` opens the
+read-only list, the vault-row Tasks button `openTasks` opens the per-vault
+todo view, the header's magnifier `openSearch`es the cross-vault search view,
+and `back()` returns to the immediate parent (`recordings` → record view,
+everything else → the list) — the header renders the magnifier + cog (buddy
+settings) on the list and a ← back button on every other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy

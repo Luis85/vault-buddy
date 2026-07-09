@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   vaultOpenedMessage,
   dailyNoteOpenedMessage,
+  noteOpenedMessage,
   recordingStartedMessage,
   recordingPausedMessage,
   recordingResumedMessage,
@@ -21,6 +22,11 @@ describe("buddyMessages", () => {
     // no dangling "Opening  ✨" with a hole where the name should be
     expect(vaultOpenedMessage("")).not.toMatch(/Opening\s{2,}/);
     expect(vaultOpenedMessage("   ").trim().length).toBeGreaterThan(0);
+  });
+
+  it("noteOpenedMessage names the note and falls back when blank", () => {
+    expect(noteOpenedMessage("Meeting notes")).toBe("Opening Meeting notes 📄");
+    expect(noteOpenedMessage("   ")).toBe("Opening your note 📄");
   });
 
   it("has a distinct, non-empty line for each moment", () => {
