@@ -416,12 +416,13 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
   deleted vault. `set_capture_config` preserves `tasks_folder` (read under
   `ConfigWriteLock`) so saving capture settings can't reset it.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
-  tasks organized into subfolders are all surfaced. `collect_tasks` descends
-  only after canonicalizing each child directory and confirming it stays under
-  the canonical tasks root (a symlink/junction escaping the folder is skipped;
-  a reparse cycle is bounded by a walked-set), and skips dot-directories
-  (`.obsidian`/`.trash`/`.git`). Output is one flat sorted list — open first
-  (`status != "done"`), newest `created`, then title — across the whole subtree.
+  tasks organized into subfolders are all surfaced. The recursive walk is the
+  shared `core::vault_walk` helper — canonical containment (a
+  symlink/junction escaping the folder is skipped), a walked-set bounding
+  reparse cycles, dot-directory skips (`.obsidian`/`.trash`/`.git`) — with
+  the per-file `type: Task` filter in `tasks.rs`. Output is one flat sorted
+  list — open first (`status != "done"`), newest `created`, then title —
+  across the whole subtree.
 - **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
   store): a `tasks` panel view reached from a per-row Tasks button; a folder
   setting, an add-task input, and a checkbox list. Toggles are optimistic
@@ -433,22 +434,38 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
 ### The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 
 Cross-vault, read-only, on-demand search (no index): `core::search::search_vaults`
-walks every registered vault with the tasks-walk discipline (canonical
-containment, cycle set, dot-entry skips, deterministic name-ordered walk),
-matching case-insensitive substrings against note stems + note content
-(≤ 1 MiB, UTF-8 — larger/binary files match by name only) and attachment
-filenames. Hard caps: 2-char minimum query, 100 hits globally (`truncated`
-flag → "refine your query" footer), filename matches surface before
-content-only matches. Each hit carries the ready-made `obsidian://open`
-`file` parameter (`.md` dropped for notes, extension kept for attachments);
+walks every registered vault via the shared `core::vault_walk` helper
+(canonical containment, cycle set, dot-dir skips, deterministic name-ordered
+walk — single-sourced with the tasks scan), matching case-insensitive
+substrings against note stems + note content (notes are **any-case** `.md`;
+content ≤ 1 MiB UTF-8 with one whole-file-lowercase early-out — larger/binary
+files match by name only) and attachment filenames. **Extensionless files
+are excluded** (Obsidian doesn't index them; opening one would resolve to
+the like-named note). Hard caps: 2-char minimum query (code points — the
+frontend gate counts the same way), 100 hits globally (`truncated` flag →
+"refine your query" footer). "Filename matches surface before content-only
+matches" is a **hard guarantee**: per vault, two independently-capped class
+lists; a full content list stops content *reads* but names are checked to
+the vault's end. Each hit carries `is_note` and the ready-made
+`obsidian://open` `file` parameter (extension dropped only for exactly-`.md`
+notes, kept otherwise — a `.MD` note opens by exact path);
 `open_search_result` launches it via `uri::launch` — search never writes.
-`search_vaults` is deliberately **async** (sync commands run on the main
-thread; a content scan there would freeze window show/hide and drags) and
-wraps the walk in `spawn_blocking`; it touches no window APIs and no locks.
-The panel's `search` view (parent: the vault list) is a self-contained
-`Search.vue` — 300 ms debounce, monotonic request ticket against stale
-responses, vault-grouped rows, index-based highlighting (never a RegExp from
-user input).
+`search_vaults` (command) is deliberately **async** (sync commands run on
+the main thread; a content scan there would freeze window show/hide and
+drags), wraps the walk in `spawn_blocking`, touches no window APIs and no
+locks, and returns `Result` — an infrastructure failure rejects so the
+panel keeps its previous results instead of blanking. Each call bumps a
+scan-generation atomic that the core walk polls per file
+(`search_vaults_with_cancel`), so superseded scans abort; per-vault scans
+run in parallel on **named** scoped threads and merge in vault order
+(serial-identical output). Core search types derive camelCase `Serialize`
+and cross the IPC boundary directly (no DTO layer — `discovery::Vault`
+precedent). The panel's `search` view (parent: the vault list) is a
+self-contained `Search.vue` — 300 ms debounce, monotonic request ticket
+against stale responses, vault-grouped rows with count chips and
+note/attachment icons, `HighlightText` (index-based, never a RegExp from
+user input), and keyboard navigation (arrows move a clamped selection wired
+to `aria-activedescendant`; Enter opens the selected hit).
 
 ### Diagnostics invariants
 
