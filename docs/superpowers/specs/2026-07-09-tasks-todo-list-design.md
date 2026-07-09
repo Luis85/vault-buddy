@@ -113,9 +113,10 @@ priority: high
   **Overdue** (`due < today`, open), **Today** (`due == today`, open),
   **Upcoming** (`due > today`, open), **No date** (open, no parseable due),
   **Done** (`status == done`, any due). Section headers render only for
-  non-empty buckets; when only one bucket is non-empty its header is still
-  shown except for a list that is entirely "No date" (pure flat list stays
-  visually unchanged from today). Order within buckets comes from the
+  non-empty buckets, and only once at least one open task has a parseable
+  due date — a vault with no dated open tasks (however many done/undated
+  tasks it has) keeps the flat, header-less list it had before this feature.
+  Order within buckets comes from the
   backend sort (kept mirrored in `sortInPlace`).
 - **Row.** The title becomes a click target that invokes
   `open_task {id, path}` (failure → toast, panel stays open). A due chip

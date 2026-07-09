@@ -230,6 +230,26 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(false);
   });
 
+  it("falls back to the raw due string for an out-of-range month", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/x.md", title: "Bad month", status: "new", created: "2026-07-08", done: false, due: "2026-13-05", priority: null },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-due"]').text()).toBe("2026-13-05");
+  });
+
+  it("renders a due chip with no leading zero on the day", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/x.md", title: "Single digit day", status: "new", created: "2026-07-08", done: false, due: "2026-07-05", priority: null },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 5");
+  });
+
   it("groups tasks into date buckets with headers", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] }); // 2026-07-09 local
     try {
@@ -340,6 +360,9 @@ describe("Tasks", () => {
   it("reverts the row and notifies when the edit save fails", async () => {
     const notifications = useNotificationsStore();
     const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null },
+      ],
       update_task: () => {
         throw new Error("disk full");
       },
@@ -347,10 +370,17 @@ describe("Tasks", () => {
     await flushPromises();
     await wrapper.get('[data-testid="task-edit"]').trigger("click");
     await wrapper.get('[data-testid="task-edit-title"]').setValue("Broken");
+    await wrapper.get('[data-testid="task-edit-due"]').setValue("2026-08-01");
+    await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
     await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
     await flushPromises();
-    expect(wrapper.text()).toContain("B open"); // reverted
+    // All three fields (title, due, priority) revert together — pins that
+    // saveEdit's failure path restores the whole `before` snapshot, not just
+    // the field a given test happens to check.
+    expect(wrapper.text()).toContain("B open"); // reverted title
     expect(wrapper.text()).not.toContain("Broken");
+    expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 10"); // reverted due
+    expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(false); // reverted priority
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
 

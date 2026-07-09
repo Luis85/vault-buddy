@@ -23,7 +23,8 @@ function localToday(): string {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function dueLabel(d: string): string {
   const [, m, day] = d.split("-");
-  return `${MONTHS[Number(m) - 1]} ${Number(day)}`;
+  const month = MONTHS[Number(m) - 1];
+  return month ? `${month} ${Number(day)}` : d;
 }
 const isOverdue = (t: TaskItem): boolean => {
   const d = dueOf(t);
