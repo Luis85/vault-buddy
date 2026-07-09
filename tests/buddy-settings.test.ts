@@ -50,6 +50,47 @@ describe("BuddySettings", () => {
     ).toBe("true");
   });
 
+  it("previews a character's motion on hover and stops on leave", async () => {
+    const wrapper = mount(BuddySettings);
+    const knight = wrapper.get('[aria-label="Choose Knight"]');
+    await knight.trigger("pointerenter");
+    // BuddyAvatar renders the run loop via the .running class on its sheet
+    expect(knight.find(".sheet").classes()).toContain("running");
+    await knight.trigger("pointerleave");
+    expect(knight.find(".sheet").classes()).not.toContain("running");
+  });
+
+  it("does not preview while animations are off", async () => {
+    useSettingsStore().toggleAnimations(); // off
+    const wrapper = mount(BuddySettings);
+    const knight = wrapper.get('[aria-label="Choose Knight"]');
+    await knight.trigger("pointerenter");
+    expect(knight.find(".sheet").classes()).not.toContain("running");
+  });
+
+  it("marks the selected character with a badge", async () => {
+    const wrapper = mount(BuddySettings);
+    expect(
+      wrapper
+        .get('[aria-label="Choose Classic"]')
+        .find('[data-testid="selected-badge"]')
+        .exists(),
+    ).toBe(true);
+    expect(
+      wrapper
+        .get('[aria-label="Choose Knight"]')
+        .find('[data-testid="selected-badge"]')
+        .exists(),
+    ).toBe(false);
+    await wrapper.get('[aria-label="Choose Knight"]').trigger("click");
+    expect(
+      wrapper
+        .get('[aria-label="Choose Knight"]')
+        .find('[data-testid="selected-badge"]')
+        .exists(),
+    ).toBe(true);
+  });
+
   it("no longer shows a manual view-direction control (facing is derived from position)", () => {
     const wrapper = mount(BuddySettings);
     expect(wrapper.findAll(".facing-option")).toHaveLength(0);

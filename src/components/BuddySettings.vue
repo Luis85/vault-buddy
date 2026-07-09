@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { CHARACTERS } from "../characters";
 import { useSettingsStore, type MessageDuration } from "../stores/settings";
 import BuddyAvatar from "./BuddyAvatar.vue";
@@ -19,6 +19,12 @@ const messageDuration = computed({
   get: () => settings.messageDuration,
   set: (v: string | number) => settings.setMessageDuration(v as MessageDuration),
 });
+
+// Card under the pointer/keyboard focus — its avatar plays the run loop as a
+// try-before-you-pick preview. Gated on animationsEnabled so animations-off
+// also silences previews (BuddyAvatar's .still would freeze them anyway; the
+// gate keeps the semantics honest).
+const previewId = ref<string | null>(null);
 </script>
 
 <template>
@@ -39,7 +45,7 @@ const messageDuration = computed({
           :key="c.id"
           type="button"
           role="radio"
-          class="character-option flex cursor-pointer flex-col items-center rounded-xl border p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="character-option relative flex cursor-pointer flex-col items-center rounded-xl border p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
           :class="
             settings.character === c.id
               ? 'border-violet-400 bg-violet-500/20'
@@ -48,10 +54,22 @@ const messageDuration = computed({
           :aria-checked="settings.character === c.id"
           :aria-label="`Choose ${c.name}`"
           @click="settings.setCharacter(c.id)"
+          @pointerenter="previewId = c.id"
+          @pointerleave="previewId = null"
+          @focusin="previewId = c.id"
+          @focusout="previewId = null"
         >
+          <span
+            v-if="settings.character === c.id"
+            data-testid="selected-badge"
+            class="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-500 text-[9px] font-bold text-white"
+            aria-hidden="true"
+            >✓</span
+          >
           <BuddyAvatar
             :character-id="c.id"
             :animated="settings.animationsEnabled"
+            :working="previewId === c.id && settings.animationsEnabled"
           />
           <span class="text-xs text-slate-200">{{ c.name }}</span>
         </button>
