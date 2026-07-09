@@ -63,7 +63,9 @@ launched the app on the CI runner and never exited.
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
 `toggle_panel`, `close_panel`, `close_bubble`, `get_buddy_facing`,
 `get_bubble_anchor`, `announce`, `start_buddy_drag`, `show_buddy_menu`,
-`open_logs_folder`, `rearm_crash_detection`, plus the capture surface:
+`open_logs_folder`, `rearm_crash_detection`, `get_autostart`,
+`set_autostart` (launch-at-login, OS-owned state behind
+`tauri-plugin-autostart`), plus the capture surface:
 `capture_status`, `start_capture`, `stop_capture`, `pause_capture`,
 `resume_capture`, `get_capture_config`, `set_capture_config`,
 `list_audio_devices`, `rename_capture`, the recordings/transcription
@@ -482,7 +484,7 @@ other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
-character/animation, persisted to localStorage), and `capture` (recording
+character/animation/message duration, persisted to localStorage), and `capture` (recording
 state mirrored from Rust: `paused`, `pausedTotalMs`, `pausedSinceMs`, `level`,
 `vaultId`, `lastSaved`, plus transcription state `transcribing` /
 `transcribingVaultId` driven by
@@ -492,8 +494,9 @@ Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture
 level/state; `panel-shown`), and localStorage `storage` events — a settings
 change in one window fires `settings.syncFromStorage()` in the others (via the
-shared `useSettingsStorageSync` composable, installed by the buddy and panel
-roots that read settings) so they re-read character/animation without an IPC
+shared `useSettingsStorageSync` composable, installed by the buddy, panel, and
+bubble roots that read settings — the bubble resolves `messageDuration` at
+show time) so they re-read character/animation/duration without an IPC
 round-trip.
 
 ## Testing conventions
