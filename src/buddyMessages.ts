@@ -14,6 +14,12 @@ export function dailyNoteOpenedMessage(): string {
   return "Here's today's note 📅";
 }
 
+/** Opening a note/file from search — names it, generic fallback for blank. */
+export function noteOpenedMessage(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? `Opening ${trimmed} 📄` : "Opening your note 📄";
+}
+
 /** A recording just started. */
 export function recordingStartedMessage(): string {
   return "Listening… 🎙️";
