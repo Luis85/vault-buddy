@@ -40,8 +40,13 @@ Two capabilities were confirmed shipped but **missing from their own PRD's
 status line**: [Per-Vault Task List](per-vault-task-list.md) (the Task
 Management PRD still says `Status: Draft`) and
 [Rename Recording](rename-recording.md) (never narrated in the Knowledge
-Intake PRD at all). One shipped capability has **no PRD whatsoever**:
-[Software Auto-Update](software-auto-update.md).
+Intake PRD at all). Two shipped capabilities had **no PRD whatsoever** —
+[Software Auto-Update](software-auto-update.md) and
+[Diagnostics, Crash Reporting & Recovery](diagnostics-and-crash-reporting.md)
+— which is why the [Platform & Cross-Cutting Capabilities
+PRD](../prds/platform-and-cross-cutting.md) now exists: a home for product-wide
+mechanics that don't map to any one capability domain, also absorbing the
+main PRD's former Non-Functional Requirements section.
 
 ---
 
@@ -52,7 +57,8 @@ Intake PRD at all). One shipped capability has **no PRD whatsoever**:
 | [Desktop Companion](desktop-companion.md) | Desktop Companion | v0.3.0 | [PRD](../PRD%20-%20Product%20Vision.md) |
 | [Vault Discovery, Listing & Opening](vault-discovery-and-open.md) | Vault Management | v0.3.0 | [PRD](../PRD%20-%20Product%20Vision.md) |
 | [Daily Note: Open & Create](daily-note.md) | Vault Management | v0.3.0 | [PRD](../PRD%20-%20Product%20Vision.md) |
-| [Software Auto-Update](software-auto-update.md) ⚠ no PRD | Platform | v0.3.0 | — |
+| [Software Auto-Update](software-auto-update.md) | Platform | v0.3.0 | [Platform & Cross-Cutting](../prds/platform-and-cross-cutting.md) |
+| [Diagnostics, Crash Reporting & Recovery](diagnostics-and-crash-reporting.md) | Platform | v0.3.0 | [Platform & Cross-Cutting](../prds/platform-and-cross-cutting.md) |
 | [Meeting Recording](meeting-recording.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Voice Note Recording](voice-note-recording.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Local Speech-to-Text Transcription](local-transcription.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
@@ -87,16 +93,18 @@ Intake PRD at all). One shipped capability has **no PRD whatsoever**:
 
 ## By source PRD
 
-- [Vault Buddy PRD (Product Vision)](../PRD%20-%20Product%20Vision.md) — Desktop Companion, Vault Discovery & Open, Daily Note, Knowledge Search & Retrieval, Workflow Automation Engine, Natural Language Interface, Plugin Platform & Specialized AI Agents; plus Software Auto-Update (undocumented).
+- [Vault Buddy PRD (Product Vision)](../PRD%20-%20Product%20Vision.md) — Desktop Companion, Vault Discovery & Open, Daily Note, Knowledge Search & Retrieval, Workflow Automation Engine, Natural Language Interface, Plugin Platform & Specialized AI Agents.
 - [Knowledge Intake](../prds/knowledge-intake.md) — Meeting Recording, Voice Note Recording, Local Speech-to-Text Transcription, Companion Note & Follow-up Template, Recordings Browser, Re-transcription, Rename Recording, AI-Enriched Meeting Notes, Additional Capture Providers.
 - [Task Management](../prds/task-management.md) — Per-Vault Task List, Task Tags & Todos, Aggregated Task Dashboard & Lists, AI-Assisted Task Management.
 - [The Knowledge Lifecycle](../prds/knowledge-lifecycle.md) — vision framing for Knowledge Search & Retrieval and Workflow Automation Engine; no capability of its own beyond what those PRDs specify.
 - [AI Platform & Agent Runtime](../prds/ai-platform.md) — Vault Buddy Runtime & Embedded MCP Server.
 - [Local MCP Hub](../prds/local-mcp-hub.md) — Local MCP Hub Assistant.
+- [Platform & Cross-Cutting Capabilities](../prds/platform-and-cross-cutting.md) — Software Auto-Update, Diagnostics/Crash Reporting & Recovery, plus the product-wide Non-Functional Requirements (formerly the main PRD's §15).
 
 ## Known documentation gaps found during this extraction
 
-1. **Software Auto-Update has no PRD at all** — fully shipped, cross-cutting (Rust command, Pinia store, signing pipeline, release workflow), documented only as an implementation detail in `AGENTS.md`.
+1. ~~**Software Auto-Update has no PRD at all**~~ — **fixed**: now covered by the [Platform & Cross-Cutting Capabilities PRD](../prds/platform-and-cross-cutting.md).
 2. **Task Management PRD status is stale** — still reads `Status: Draft`; [Per-Vault Task List](per-vault-task-list.md) shipped in v0.5.0. `AGENTS.md`'s IPC command inventory is also missing the five `task_commands::*` entries.
 3. **Rename Recording is unshipped-by-omission in the PRD's prose** — the feature exists and is safety-critical, but the Knowledge Intake PRD never narrates it as a use case or MVP feature.
 4. **Desktop Audio / Custom recording modes** are named in the Knowledge Intake PRD's Recording Modes table but were never built — only Meeting and Voice Note modes ship.
+5. ~~**Diagnostics & Crash Reporting has no PRD**~~ — **fixed**: found while drafting the Platform & Cross-Cutting PRD; it was documented only in `AGENTS.md`'s invariants. Now covered alongside Software Auto-Update.

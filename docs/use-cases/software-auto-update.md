@@ -3,17 +3,17 @@ type: UseCase
 status: shipped
 domain: platform
 shipped_in: v0.3.0 (approximate — first version with the updater plugin wired up)
-source_prd: none
-tags: [use-case, platform, undocumented-in-prd]
+source_prd: "docs/prds/platform-and-cross-cutting.md"
+tags: [use-case, platform]
 ---
 
 # Software Auto-Update
 
 > Vault Buddy checks GitHub Releases for a newer signed build, downloads it, and relaunches itself into the new version — entirely from the Settings panel.
 
-## ⚠ Not mentioned in any PRD
+## Source
 
-This is a fully shipped, load-bearing capability (its own Pinia store, IPC command, signing pipeline, and release workflow) with **no corresponding entry in any PRD** — not in the main PRD's Core Capabilities/Functional Requirements, not in a `docs/prds/*.md` capability PRD, and not in the Knowledge Lifecycle or AI Platform vision docs. It exists only as an implementation detail inside `AGENTS.md` (§ Updater flow, § Releases). Flagged per the request to surface implemented use-cases missing dedicated PRD coverage.
+[Platform & Cross-Cutting Capabilities PRD](../prds/platform-and-cross-cutting.md) § Capability: Software Auto-Update. This PRD was written specifically to give this shipped-but-previously-undocumented capability a home — see that PRD's Vision section for why. Before this PRD existed, this note flagged the gap directly; it existed only as an implementation detail inside `AGENTS.md` (§ Updater flow, § Releases).
 
 ## Status: Shipped
 
@@ -25,6 +25,6 @@ This is a fully shipped, load-bearing capability (its own Pinia store, IPC comma
 - Distribution: `tauri-plugin-updater`, polling `latest.json` from GitHub Releases (`src-tauri/tauri.conf.json`); the `Release` GitHub Actions workflow (`tauri-action`) signs updater artifacts with `TAURI_SIGNING_PRIVATE_KEY` and attaches `latest.json`. CI builds without updater artifacts when signing secrets are absent (forked PRs).
 - Version bump tooling: `scripts/bump-version.mjs`, the `Bump version` workflow — see [`docs/superpowers/specs/2026-07-06-version-bump-automation-design.md`](../superpowers/specs/2026-07-06-version-bump-automation-design.md).
 
-## Recommendation
+## Related use-cases
 
-Consider adding a short "Software Updates" section to the main PRD's Functional/Non-Functional Requirements (it fits naturally under Reliability — "Automatic recovery" is adjacent but distinct) so this capability is no longer undocumented at the product level.
+- [Diagnostics, Crash Reporting & Recovery](diagnostics-and-crash-reporting.md) — shares the clean-shutdown marker mechanism.

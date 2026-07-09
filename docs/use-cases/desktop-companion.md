@@ -31,7 +31,8 @@ Three separate always-on-top transparent windows (`main`/buddy, `panel`, `bubble
 - Rust commands: `toggle_panel`, `close_panel`, `close_bubble`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `announce`, `open_logs_folder`, `rearm_crash_detection` (`src-tauri/src/commands.rs`).
 - Placement logic: `core::companion_placement::place_beside` (unit-tested), tray chokepoint `tray::hide_buddy`.
 - Frontend: `src/roots/{BuddyRoot,PanelRoot,BubbleRoot}.vue`, `CompanionCharacter.vue`, `SpeechBubble.vue`, character/animation selection persisted in the `settings` Pinia store (localStorage, synced cross-window via `useSettingsStorageSync`).
-- Single-instance enforcement via `tauri-plugin-single-instance`.
+
+Crash-safety and single-instance enforcement underneath these windows (main-thread-only saves, the clean-shutdown marker, `open_logs_folder`/`rearm_crash_detection`) are cross-cutting platform mechanics, not specific to the companion — see [Diagnostics, Crash Reporting & Recovery](diagnostics-and-crash-reporting.md).
 
 ## Not covered by this note
 
@@ -40,3 +41,4 @@ Global hotkeys (listed in the PRD's Desktop Companion bullet list) have no corre
 ## Related use-cases
 
 - [Software Auto-Update](software-auto-update.md) — reuses the buddy's window lifecycle (`prepare_update_install`) to relaunch cleanly.
+- [Diagnostics, Crash Reporting & Recovery](diagnostics-and-crash-reporting.md) — the crash-safety invariants underneath this window system.
