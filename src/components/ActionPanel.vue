@@ -235,6 +235,7 @@ watch(
         :capture-disabled="capture.status !== 'idle'"
         :recording-vault-id="capture.vaultId"
         :transcribing-vault-id="capture.transcribingVaultId"
+        :task-counts="store.taskCounts"
         @open-vault="store.runAction('open_vault', $event)"
         @open-daily-note="store.runAction('open_daily_note', $event)"
         @capture="store.openRecordMode($event)"

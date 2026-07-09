@@ -281,6 +281,18 @@ describe("vaults store", () => {
     expect(store.captureSettingsVaultId).toBe("v1");
   });
 
+  it("refresh populates taskCounts from count_open_tasks", async () => {
+    mockIPC((cmd, args) => {
+      if (cmd === "list_vaults")
+        return [{ id: "v1", name: "A", path: "/a", open: false }];
+      if (cmd === "count_open_tasks")
+        return (args as { id: string }).id === "v1" ? 3 : 0;
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.taskCounts).toEqual({ v1: 3 });
+  });
+
   it("refresh bumps shownNonce so the panel can reset transient UI on open", async () => {
     mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();
