@@ -464,8 +464,18 @@ precedent). The panel's `search` view (parent: the vault list) is a
 self-contained `Search.vue` — 300 ms debounce, monotonic request ticket
 against stale responses, vault-grouped rows with count chips and
 note/attachment icons, `HighlightText` (index-based, never a RegExp from
-user input), and keyboard navigation (arrows move a clamped selection wired
-to `aria-activedescendant`; Enter opens the selected hit).
+user input), and keyboard navigation over the **visible** rows only
+(collapsed groups and kind-filtered hits are skipped; arrows move a clamped
+selection wired to `aria-activedescendant`, Enter opens it, Ctrl+Enter /
+Ctrl+click keep the panel open for multi-open, hover syncs the selection
+via mousemove — not mouseenter, which would fight arrow-key scrolling).
+`/` or Ctrl+F on the vault list jump into search (`ActionPanel`'s
+window-keydown, gated on the list view and off text inputs). The view also
+renders an aria-live match summary ("N matches in M vaults", `100+` when
+truncated), per-vault collapse chevrons, All/Notes/Files filter chips
+(client-side over the returned hits), and recent-search chips backed by
+localStorage (`src/utils/recentSearches.ts`, capped at 5, recorded only on
+successful responses).
 
 ### Diagnostics invariants
 
