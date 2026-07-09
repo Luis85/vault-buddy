@@ -87,7 +87,11 @@ export const useVaultsStore = defineStore("vaults", {
               v.id,
               await invoke<number>("count_open_tasks", { id: v.id }),
             ] as const;
-          } catch {
+          } catch (e) {
+            // Degrade the badge to 0, but never swallow the error silently — a
+            // broken counter must be distinguishable from a vault with no open
+            // tasks (Diagnostics invariant: caught errors go through logging).
+            logWarning(`count_open_tasks failed for vault ${v.id}: ${String(e)}`);
             return [v.id, 0] as const;
           }
         }),
