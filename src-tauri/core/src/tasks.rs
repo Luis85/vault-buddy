@@ -182,30 +182,30 @@ fn collect_tasks(
     }
 }
 
-/// Return `content` with the frontmatter `status:` line set to `new_status`,
-/// preserving every other line and its exact ending. If the frontmatter has no
-/// `status:` line, insert one at the closing fence (a hand-authored `type:
-/// Task` file the list surfaces must stay toggleable). `None` if the file is
-/// not `type: Task`, or if its frontmatter block never closes (malformed) —
-/// in that case there is no safe insertion point, so we refuse rather than
-/// guess — then the caller skips + warns.
-pub fn set_status(content: &str, new_status: &str) -> Option<String> {
+/// Return `content` with the named frontmatter lines updated, preserving every
+/// other line and its exact ending. For each `(key, value)`: `Some(v)` rewrites
+/// the existing `key:` line in place (first occurrence) or inserts `key: v` at
+/// the closing fence; `None` removes the line (a missing line is a no-op).
+/// Values are written VERBATIM — the caller quotes user text (`yaml_quote`).
+/// `None` result iff the file is not `type: Task` or its frontmatter never
+/// closes (no safe anchor; the caller skips + warns) — same contract as the
+/// old single-key set_status.
+pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<String> {
     if !is_task(content) {
         return None;
     }
-    // The inserted status line needs its own terminator so it can't glue onto
-    // the closing fence when that fence lacks a trailing newline. Match the
-    // document's existing convention.
+    // Inserted lines need their own terminator so they can't glue onto a
+    // fence that lacks a trailing newline. Match the document's convention.
     let nl = if content.contains("\r\n") {
         "\r\n"
     } else {
         "\n"
     };
-    // Split keeping line endings so CRLF is preserved verbatim.
-    let mut out = String::with_capacity(content.len() + 16);
+    let mut out = String::with_capacity(content.len() + 32 * updates.len());
+    let mut handled = vec![false; updates.len()];
     let mut in_frontmatter = false;
     let mut seen_open = false;
-    let mut done = false;
+    let mut closed = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if !seen_open {
@@ -215,42 +215,65 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
             out.push_str(line);
             continue;
         }
-        // `trimmed.trim_end()` (not just the CR/LF-stripped `trimmed`) so a
-        // closing fence with trailing whitespace (`---  `) is recognized here
-        // too — `is_task`/`note_field` accept it, so the toggle must agree or a
-        // listed row becomes un-toggleable.
+        // trim_end() so a closing fence with trailing whitespace is accepted,
+        // matching is_task/note_field — the list and the writer must agree.
         if in_frontmatter && trimmed.trim_end() == "---" {
-            // Closing fence: if no status line was found, insert one now. The
-            // inserted line gets its own `nl` terminator — never the fence
-            // line's ending — so it can't glue onto the fence when the fence
-            // has no trailing newline (e.g. end of file).
-            if !done {
-                out.push_str(&format!("status: {new_status}{nl}"));
-                done = true;
+            // Closing fence: insert every not-yet-handled Set here; a pending
+            // removal of a line that never existed is simply done.
+            for (i, (key, value)) in updates.iter().enumerate() {
+                if !handled[i] {
+                    if let Some(v) = value {
+                        out.push_str(&format!("{key}: {v}{nl}"));
+                    }
+                    handled[i] = true;
+                }
             }
             in_frontmatter = false;
+            closed = true;
             out.push_str(line);
             continue;
         }
-        if in_frontmatter && !done && trimmed.starts_with("status:") {
-            let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
-            out.push_str(&format!("status: {new_status}{ending}"));
-            done = true;
-            continue;
+        if in_frontmatter {
+            // Key match requires the colon right after the key so `due` can't
+            // rewrite `duedate:`. Only the first occurrence of a key is edited.
+            let matched = updates.iter().enumerate().find(|(i, (key, _))| {
+                !handled[*i]
+                    && trimmed
+                        .strip_prefix(*key)
+                        .is_some_and(|rest| rest.starts_with(':'))
+            });
+            if let Some((i, (key, value))) = matched {
+                if let Some(v) = value {
+                    let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
+                    out.push_str(&format!("{key}: {v}{ending}"));
+                }
+                // drop the line (its newline goes with it) if value is None
+                handled[i] = true;
+                continue;
+            }
         }
         out.push_str(line);
     }
-    done.then_some(out)
+    closed.then_some(out)
 }
 
-/// Set a task's `status:` frontmatter on disk. Canonicalizes `root` and `path`
-/// and requires containment — a lexical check can't see through a symlink at
-/// the file or folder — then reads, applies `set_status`, and writes atomically
-/// (hidden `create_new` temp + fsync + REPLACING rename). Replacing is correct
-/// here: the target is the `type: Task` file we just read and are editing in
-/// place, and we touch only its status line (see the spec's surgical-write rule).
-pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
-    // Canonical containment: resolve both and require the file under the root.
+/// Single-key convenience over `set_fields` — kept because the status toggle
+/// is the hot path and its list/toggle-agreement tests pin the contract.
+pub fn set_status(content: &str, new_status: &str) -> Option<String> {
+    set_fields(content, &[("status", Some(new_status))])
+}
+
+/// Apply a surgical frontmatter patch to a task file on disk. Canonicalizes
+/// `root` and `path` and requires containment — a lexical check can't see
+/// through a symlink at the file or folder — then reads, applies `set_fields`,
+/// and writes atomically (hidden `create_new` temp + fsync + REPLACING
+/// rename). Replacing is correct here: the target is the `type: Task` file we
+/// just read and are editing in place, touching only the named lines.
+pub fn update_task_fields(
+    root: &Path,
+    path: &Path,
+    updates: &[(&str, Option<&str>)],
+) -> Result<(), String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
     let canon_path =
@@ -260,15 +283,16 @@ pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(),
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    let updated = set_status(&content, new_status).ok_or(
+    let updated = set_fields(&content, updates).ok_or(
         "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
     )?;
-    // The REPLACING atomic write (temp + fsync + rename) is shared with the
-    // transcript sidecar; replacing is correct here because `canon_path` is the
-    // `type: Task` file we just read and are editing in place, touching only its
-    // status line.
     crate::capture_note::write_atomic_replacing(&canon_path, &updated)
         .map_err(|e| format!("Cannot save task: {e}"))
+}
+
+/// Set a task's `status:` frontmatter on disk (see `update_task_fields`).
+pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
+    update_task_fields(root, path, &[("status", Some(new_status))])
 }
 
 #[cfg(test)]
@@ -698,5 +722,66 @@ mod tests {
         let link = root.join("2026-07-08-linked.md");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(set_task_status(&root, &link, "done").is_err());
+    }
+
+    #[test]
+    fn set_fields_updates_multiple_keys_in_one_pass() {
+        let doc = "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-08\ndue: 2026-07-10\n---\n\nbody\n";
+        let out = set_fields(
+            doc,
+            &[
+                ("title", Some("\"B\"")),
+                ("due", Some("2026-07-20")),
+                ("priority", Some("high")),
+            ],
+        )
+        .unwrap();
+        assert!(out.contains("title: \"B\"\n"));
+        assert!(out.contains("due: 2026-07-20\n"));
+        assert!(out.contains("priority: high\n")); // inserted at the fence
+        assert!(out.contains("status: new\n")); // untouched key preserved
+        assert!(out.contains("created: 2026-07-08\n"));
+        assert!(out.contains("\nbody\n")); // body byte-for-byte
+    }
+
+    #[test]
+    fn set_fields_removes_a_line_with_none() {
+        let doc = "---\ntype: Task\nstatus: new\ntitle: \"A\"\ndue: 2026-07-10\npriority: low\n---\n\nbody\n";
+        let out = set_fields(doc, &[("due", None), ("priority", None)]).unwrap();
+        assert!(!out.contains("due:"));
+        assert!(!out.contains("priority:"));
+        assert!(out.contains("title: \"A\"\n"));
+        assert!(out.contains("\nbody\n"));
+    }
+
+    #[test]
+    fn set_fields_removing_a_missing_key_is_a_no_op() {
+        let doc = "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n";
+        assert_eq!(set_fields(doc, &[("due", None)]).unwrap(), doc);
+    }
+
+    #[test]
+    fn set_fields_preserves_crlf_and_unknown_keys() {
+        let doc = "---\r\ntype: Task\r\nstatus: new\r\ncustom: keep-me\r\n---\r\n\r\nbody\r\n";
+        let out = set_fields(doc, &[("due", Some("2026-07-20"))]).unwrap();
+        assert!(out.contains("due: 2026-07-20\r\n")); // inserted line matches CRLF
+        assert!(out.contains("custom: keep-me\r\n"));
+        assert!(out.contains("body\r\n"));
+    }
+
+    #[test]
+    fn set_fields_refuses_non_task_and_unclosed_fence() {
+        assert!(set_fields("---\ntype: Meeting\n---\n", &[("due", Some("x"))]).is_none());
+        assert!(set_fields("---\ntype: Task\ntitle: \"x\"\n", &[("due", Some("x"))]).is_none());
+    }
+
+    #[test]
+    fn set_fields_does_not_match_a_key_prefix() {
+        // "due" must not rewrite a "duedate:" line — key match requires the colon
+        // immediately after the key.
+        let doc = "---\ntype: Task\nstatus: new\nduedate: keep\n---\n";
+        let out = set_fields(doc, &[("due", Some("2026-07-20"))]).unwrap();
+        assert!(out.contains("duedate: keep\n"));
+        assert!(out.contains("due: 2026-07-20\n")); // inserted, not substituted
     }
 }
