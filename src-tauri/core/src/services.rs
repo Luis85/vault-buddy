@@ -53,10 +53,13 @@ pub fn list_vaults(paths: &ServicePaths) -> Vec<discovery::Vault> {
 
 pub fn find_vault(paths: &ServicePaths, id: &str) -> Result<discovery::Vault, String> {
     // The scrub is irrelevant for lookup; pass `true` to skip the process scan.
+    // The error is the panel's own copy (the spec requires MCP/IPC failures to
+    // carry the same user-facing messages the panel shows) with the id
+    // appended — MCP clients and logs still need the failing key.
     list_vaults_with(paths, true)
         .into_iter()
         .find(|v| v.id == id)
-        .ok_or_else(|| format!("vault not found: {id}"))
+        .ok_or_else(|| format!("Vault not found — was it removed from Obsidian? (id: {id})"))
 }
 
 pub fn open_vault(
@@ -244,15 +247,19 @@ pub fn set_task_status(
     // slugified (spaces/case stripped, dated), so it can't stand in for the
     // title itself. Fall back to the file stem only when the title field is
     // absent (a hand-authored task) or the file became unreadable right after
-    // the write above — an honest degrade, not the primary source.
+    // the write above (warned, never swallowed) — an honest degrade, not the
+    // primary source.
     let stem = Path::new(task_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| task_path.to_string());
-    let title = std::fs::read_to_string(task_path)
-        .ok()
-        .and_then(|content| capture_note::note_field(&content, "title"))
-        .unwrap_or(stem);
+    let title = match std::fs::read_to_string(task_path) {
+        Ok(content) => capture_note::note_field(&content, "title").unwrap_or(stem),
+        Err(e) => {
+            log::warn!("set_task_status: could not re-read {task_path} for the title: {e}");
+            stem
+        }
+    };
     Ok(title)
 }
 
@@ -423,7 +430,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (paths, _) = fixture(dir.path(), "MyVault");
         assert!(add_task(&paths, "deadbeef01234567", "   ", "2026-07-09").is_err());
-        assert!(add_task(&paths, "unknown", "x", "2026-07-09").is_err());
+        // The spec requires MCP/IPC failures to carry the same user-facing
+        // message the panel shows ("was it removed from Obsidian?"), not a
+        // terse internal one that leaks only a raw hex id.
+        let err = add_task(&paths, "unknown", "x", "2026-07-09")
+            .err()
+            .expect("unknown vault must fail");
+        assert!(err.contains("was it removed from Obsidian?"), "got: {err}");
         assert!(
             set_task_status(&paths, "deadbeef01234567", "whatever.md", "bogus")
                 .unwrap_err()
