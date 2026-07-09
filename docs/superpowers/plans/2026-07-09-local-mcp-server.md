@@ -2056,7 +2056,15 @@ fn start_from_config(app: &AppHandle, cfg: &capture_config::McpConfig) {
 /// lock, join outside it.
 fn stop_running(app: &AppHandle) {
     let state = app.state::<McpServerState>();
-    let server = lock_ignoring_poison(&state.0).running.take();
+    let server = {
+        let mut inner = lock_ignoring_poison(&state.0);
+        // Stopping also clears a stale error from a failed earlier start:
+        // after a bind failure, disabling must read as "stopped", not as the
+        // ghost of the old error (Codex review catch) — a restart that fails
+        // re-sets last_error immediately after this.
+        inner.last_error = None;
+        inner.running.take()
+    };
     if let Some(server) = server {
         server.stop();
     }
@@ -2272,6 +2280,38 @@ describe("McpSettings", () => {
     expect(wrapper.text()).toContain("tok123");
   });
 
+  it("serializes saves: controls disable while a save is in flight", async () => {
+    // Two quick toggles would otherwise race: the second request is built
+    // from a pre-response snapshot and can undo the first (Codex review
+    // catch). With controls disabled during a save, the stale-snapshot
+    // request can never be issued.
+    let resolveSet: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "get_mcp_config") return { ...baseConfig };
+      if (cmd === "set_mcp_config")
+        return new Promise((res) => {
+          resolveSet = res;
+        });
+      return undefined;
+    });
+    const wrapper = mount(McpSettings);
+    await flushPromises();
+    await wrapper.find('[data-testid="mcp-enabled"]').setValue(true);
+    expect(
+      wrapper.find('[data-testid="mcp-writes"]').attributes("disabled"),
+    ).toBeDefined();
+    resolveSet({
+      ...baseConfig,
+      enabled: true,
+      token: "tok123",
+      status: { state: "running", port: 22082, message: null },
+    });
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="mcp-writes"]').attributes("disabled"),
+    ).toBeUndefined();
+  });
+
   it("regenerate calls the command and mcp:status pushes update the badge", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {
@@ -2371,6 +2411,12 @@ type McpConfig = {
 
 const cfg = ref<McpConfig | null>(null);
 const error = ref<string | null>(null);
+// Serializes saves: every request builds a full config from cfg.value, so
+// two quick toggles would race — the second sent from a pre-response
+// snapshot could undo the first (Codex review catch). While a save is in
+// flight all controls are disabled, so a stale-snapshot request can never
+// be issued.
+const saving = ref(false);
 let unlisten: (() => void) | null = null;
 
 onMounted(async () => {
@@ -2391,7 +2437,8 @@ onMounted(async () => {
 onUnmounted(() => unlisten?.());
 
 async function save(patch: Partial<Pick<McpConfig, "enabled" | "port" | "allowWrites">>) {
-  if (!cfg.value) return;
+  if (!cfg.value || saving.value) return;
+  saving.value = true;
   error.value = null;
   const input = {
     enabled: cfg.value.enabled,
@@ -2403,15 +2450,21 @@ async function save(patch: Partial<Pick<McpConfig, "enabled" | "port" | "allowWr
     cfg.value = await invoke<McpConfig>("set_mcp_config", { input });
   } catch (e) {
     error.value = String(e);
+  } finally {
+    saving.value = false;
   }
 }
 
 async function regenerate() {
+  if (saving.value) return;
+  saving.value = true;
   error.value = null;
   try {
     cfg.value = await invoke<McpConfig>("regenerate_mcp_token");
   } catch (e) {
     error.value = String(e);
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -2484,6 +2537,7 @@ const claudeDesktopSnippet = computed(() =>
           type="checkbox"
           class="h-4 w-4 accent-violet-500"
           :checked="cfg.enabled"
+          :disabled="saving"
           @change="save({ enabled: ($event.target as HTMLInputElement).checked })"
         />
       </div>
@@ -2497,6 +2551,7 @@ const claudeDesktopSnippet = computed(() =>
           max="65535"
           class="w-24 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-right text-sm text-slate-200"
           :value="cfg.port"
+          :disabled="saving"
           @change="save({ port: Number(($event.target as HTMLInputElement).value) })"
         />
       </div>
@@ -2513,6 +2568,7 @@ const claudeDesktopSnippet = computed(() =>
           type="checkbox"
           class="h-4 w-4 accent-violet-500"
           :checked="cfg.allowWrites"
+          :disabled="saving"
           @change="save({ allowWrites: ($event.target as HTMLInputElement).checked })"
         />
       </div>
@@ -2532,6 +2588,7 @@ const claudeDesktopSnippet = computed(() =>
             type="button"
             data-testid="mcp-regenerate"
             class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 hover:bg-white/10"
+            :disabled="saving"
             @click="regenerate"
           >
             Regenerate
