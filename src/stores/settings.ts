@@ -5,6 +5,16 @@ const ANIMATIONS_KEY = "vault-buddy.animations";
 const CHARACTER_KEY = "vault-buddy.character";
 const DRAGGING_KEY = "vault-buddy.dragging";
 const MESSAGES_KEY = "vault-buddy.messages";
+const MESSAGE_DURATION_KEY = "vault-buddy.messageDuration";
+
+/** How long the buddy's speech bubbles stay up (the ms tiers live in
+ * useBuddyBubble's BUBBLE_MS map). */
+export type MessageDuration = "short" | "normal" | "long";
+
+// unknown/stale stored values fall back to normal — the getCharacter pattern
+function normalizeDuration(value: string | null): MessageDuration {
+  return value === "short" || value === "long" ? value : "normal";
+}
 
 // The buddy's view direction is no longer a stored setting — it is derived from
 // the buddy's screen position (it looks toward the centre) and pushed from Rust
@@ -21,6 +31,10 @@ export const useSettingsStore = defineStore("settings", {
     // the buddy's spoken acknowledgements (open vault/note, recording +
     // transcription progress); on by default
     buddyMessagesEnabled: localStorage.getItem(MESSAGES_KEY) !== "off",
+    // how long bubbles stay up; "normal" preserves the pre-setting timings
+    messageDuration: normalizeDuration(
+      localStorage.getItem(MESSAGE_DURATION_KEY),
+    ),
   }),
   actions: {
     toggleAnimations() {
@@ -45,6 +59,10 @@ export const useSettingsStore = defineStore("settings", {
         this.buddyMessagesEnabled ? "on" : "off",
       );
     },
+    setMessageDuration(duration: MessageDuration) {
+      this.messageDuration = normalizeDuration(duration);
+      localStorage.setItem(MESSAGE_DURATION_KEY, this.messageDuration);
+    },
     // re-reads the same keys the state initializer uses, so the buddy
     // window picks up settings changed in the panel window's settings view
     // (separate webviews sharing localStorage — see the `storage` listener
@@ -56,6 +74,9 @@ export const useSettingsStore = defineStore("settings", {
         localStorage.getItem(CHARACTER_KEY) ?? "",
       ).id;
       this.buddyMessagesEnabled = localStorage.getItem(MESSAGES_KEY) !== "off";
+      this.messageDuration = normalizeDuration(
+        localStorage.getItem(MESSAGE_DURATION_KEY),
+      );
     },
   },
 });

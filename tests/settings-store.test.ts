@@ -83,4 +83,27 @@ describe("settings store", () => {
     store.syncFromStorage();
     expect(store.buddyMessagesEnabled).toBe(false);
   });
+
+  it("defaults message duration to normal", () => {
+    expect(useSettingsStore().messageDuration).toBe("normal");
+  });
+
+  it("persists the message duration across store instances", () => {
+    useSettingsStore().setMessageDuration("long");
+    setActivePinia(createPinia());
+    expect(useSettingsStore().messageDuration).toBe("long");
+    expect(localStorage.getItem("vault-buddy.messageDuration")).toBe("long");
+  });
+
+  it("falls back to normal for an unknown stored duration", () => {
+    localStorage.setItem("vault-buddy.messageDuration", "eternal");
+    expect(useSettingsStore().messageDuration).toBe("normal");
+  });
+
+  it("re-reads the message duration when another window changes it", () => {
+    const store = useSettingsStore();
+    localStorage.setItem("vault-buddy.messageDuration", "short");
+    store.syncFromStorage();
+    expect(store.messageDuration).toBe("short");
+  });
 });
