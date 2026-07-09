@@ -43,12 +43,26 @@ pub fn task_basename(title: &str, today: &str) -> String {
     format!("{today}-{}", slugify(title))
 }
 
-/// A `type: Task` document with an empty body. `type`/`status`/`created` are
-/// simple unquoted scalars; the user-supplied title is quoted so a colon or
-/// quote can't break the frontmatter (read back by `capture_note::note_field`).
-pub fn render_task(title: &str, created: &str) -> String {
+/// A `type: Task` document with an empty body. `type`/`status`/`created` (and
+/// the optional `due`/`priority`) are simple unquoted scalars; the
+/// user-supplied title is quoted so a colon or quote can't break the
+/// frontmatter. `due`/`priority` lines are written only when present — absent
+/// priority means normal, and a bare `due:` is never emitted.
+pub fn render_task(
+    title: &str,
+    created: &str,
+    due: Option<&str>,
+    priority: Option<&str>,
+) -> String {
+    let mut extra = String::new();
+    if let Some(d) = due {
+        extra.push_str(&format!("due: {d}\n"));
+    }
+    if let Some(p) = priority {
+        extra.push_str(&format!("priority: {p}\n"));
+    }
     format!(
-        "---\ntype: Task\nstatus: new\ntitle: {}\ncreated: {created}\n---\n\n",
+        "---\ntype: Task\nstatus: new\ntitle: {}\ncreated: {created}\n{extra}---\n\n",
         yaml_quote(title)
     )
 }
@@ -56,10 +70,19 @@ pub fn render_task(title: &str, created: &str) -> String {
 /// Create a new task file under `root` (creating `root` if needed). Uses the
 /// collision-safe atomic writer shared with the capture note, so it can never
 /// overwrite an existing file — a name clash takes the ` (N)` suffix instead.
-pub fn create_task(root: &Path, title: &str, today: &str) -> std::io::Result<PathBuf> {
+pub fn create_task(
+    root: &Path,
+    title: &str,
+    today: &str,
+    due: Option<&str>,
+    priority: Option<&str>,
+) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let target = root.join(format!("{}.md", task_basename(title, today)));
-    crate::capture_note::write_note_collision_safe(&target, &render_task(title, today))
+    crate::capture_note::write_note_collision_safe(
+        &target,
+        &render_task(title, today, due, priority),
+    )
 }
 
 /// One task surfaced in the list.
@@ -70,6 +93,8 @@ pub struct TaskItem {
     pub status: String,
     pub created: String,
     pub done: bool,
+    pub due: Option<String>,
+    pub priority: Option<String>,
 }
 
 /// True iff the leading `---` frontmatter block is properly closed. A block
@@ -92,6 +117,38 @@ pub fn is_task(content: &str) -> bool {
     has_closed_frontmatter(content) && note_field(content, "type").as_deref() == Some("Task")
 }
 
+/// True iff `s` is a plain `YYYY-MM-DD` (digits and hyphens in position — no
+/// calendar validity check; Obsidian tolerates e.g. 2026-02-31 and the UI
+/// uses a native date picker). Shared by the shell's write validation and the
+/// sort's "does this due count" test so they can never disagree.
+pub fn is_valid_due(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            _ => c.is_ascii_digit(),
+        })
+}
+
+/// Sort tier for a priority value: high first, low last, anything else
+/// (normal, absent, hand-authored unknown) in the middle.
+pub fn priority_rank(p: Option<&str>) -> u8 {
+    match p {
+        Some("high") => 0,
+        Some("low") => 2,
+        _ => 1,
+    }
+}
+
+/// (has-no-valid-due, due) — tuple compare puts valid dues first, ascending;
+/// an unparseable hand-authored due sorts with the undated.
+fn due_key(t: &TaskItem) -> (bool, &str) {
+    match t.due.as_deref().filter(|d| is_valid_due(d)) {
+        Some(d) => (false, d),
+        None => (true, ""),
+    }
+}
+
 /// Every `type: Task` file anywhere under `root`, best-effort — the configured
 /// tasks folder is walked recursively so tasks organized into subfolders are
 /// all surfaced. Open tasks (status != "done") first, newest `created` first
@@ -107,13 +164,27 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
         let mut walked = HashSet::new();
         collect_tasks(&canon_root, &canon_root, &mut walked, &mut out);
     }
-    // Open first; within each group newest created first, then title. Sorting
-    // once here (not per directory) orders the whole subtree as one list.
+    // Open first. Open tasks: due ascending (no/invalid due last), then
+    // priority tier, then newest created, then title. Done tasks ignore due —
+    // newest created first, then title. Clock-free: "overdue"/"today" need a
+    // clock, so bucketing is the frontend's job, not the sort's.
     out.sort_by(|a, b| {
-        a.done
-            .cmp(&b.done)
-            .then(b.created.cmp(&a.created))
-            .then(a.title.cmp(&b.title))
+        a.done.cmp(&b.done).then_with(|| {
+            if a.done {
+                b.created
+                    .cmp(&a.created)
+                    .then_with(|| a.title.cmp(&b.title))
+            } else {
+                due_key(a)
+                    .cmp(&due_key(b))
+                    .then_with(|| {
+                        priority_rank(a.priority.as_deref())
+                            .cmp(&priority_rank(b.priority.as_deref()))
+                    })
+                    .then_with(|| b.created.cmp(&a.created))
+                    .then_with(|| a.title.cmp(&b.title))
+            }
+        })
     });
     out
 }
@@ -171,6 +242,8 @@ fn collect_tasks(
             continue;
         }
         let created = note_field(&content, "created").unwrap_or_default();
+        let due = note_field(&content, "due");
+        let priority = note_field(&content, "priority");
         let done = status == "done";
         out.push(TaskItem {
             path,
@@ -178,6 +251,8 @@ fn collect_tasks(
             status,
             created,
             done,
+            due,
+            priority,
         });
     }
 }
@@ -373,7 +448,7 @@ mod tests {
         // (and still new/done), not just a done bool.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        let p = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
         set_task_status(&root, &p, "archived").unwrap();
         assert!(std::fs::read_to_string(&p)
             .unwrap()
@@ -549,7 +624,7 @@ mod tests {
 
     #[test]
     fn render_writes_type_task_status_new_quoted_title() {
-        let doc = render_task("Buy milk", "2026-07-08");
+        let doc = render_task("Buy milk", "2026-07-08", None, None);
         assert_eq!(
             doc,
             "---\ntype: Task\nstatus: new\ntitle: \"Buy milk\"\ncreated: 2026-07-08\n---\n\n"
@@ -559,7 +634,7 @@ mod tests {
     #[test]
     fn render_quotes_a_colon_title() {
         // A colon in the title would break unquoted YAML — must be quoted.
-        let doc = render_task("Ship: v1", "2026-07-08");
+        let doc = render_task("Ship: v1", "2026-07-08", None, None);
         assert!(doc.contains("title: \"Ship: v1\"\n"));
     }
 
@@ -567,7 +642,7 @@ mod tests {
     fn render_quotes_and_escapes_special_title() {
         // A title with a quote and backslash must be escaped so it can't break
         // the frontmatter (read back by note_field).
-        let doc = render_task("a\"b\\c", "2026-07-08");
+        let doc = render_task("a\"b\\c", "2026-07-08", None, None);
         assert!(doc.contains("title: \"a\\\"b\\\\c\"\n"));
     }
 
@@ -598,7 +673,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
 
-        let p1 = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        let p1 = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
         assert_eq!(p1.file_name().unwrap(), "2026-07-08-buy-milk.md");
         let body = std::fs::read_to_string(&p1).unwrap();
         assert!(body.contains("type: Task"));
@@ -606,7 +681,7 @@ mod tests {
         assert!(body.contains("title: \"Buy milk\""));
 
         // Same title again → suffixed, original untouched (collision-safe).
-        let p2 = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        let p2 = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
         assert_ne!(p1, p2);
         assert_eq!(p2.file_name().unwrap(), "2026-07-08-buy-milk (2).md");
         assert!(p1.exists() && p2.exists());
@@ -691,7 +766,7 @@ mod tests {
     fn set_task_status_writes_and_rejects_escape() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        let p = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
 
         set_task_status(&root, &p, "done").unwrap();
         assert!(std::fs::read_to_string(&p)
@@ -783,5 +858,74 @@ mod tests {
         let out = set_fields(doc, &[("due", Some("2026-07-20"))]).unwrap();
         assert!(out.contains("duedate: keep\n"));
         assert!(out.contains("due: 2026-07-20\n")); // inserted, not substituted
+    }
+
+    #[test]
+    fn render_includes_due_and_priority_only_when_present() {
+        let plain = render_task("A", "2026-07-09", None, None);
+        assert_eq!(
+            plain,
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
+        ); // byte-identical to the pre-due/priority output
+        let full = render_task("A", "2026-07-09", Some("2026-07-15"), Some("high"));
+        assert!(full.contains("created: 2026-07-09\ndue: 2026-07-15\npriority: high\n---\n"));
+    }
+
+    #[test]
+    fn list_tasks_reads_due_and_priority() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "t.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ndue: 2026-07-15\npriority: high\n---\n",
+        );
+        let items = list_tasks(root);
+        assert_eq!(items[0].due.as_deref(), Some("2026-07-15"));
+        assert_eq!(items[0].priority.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn is_valid_due_accepts_only_plain_dates() {
+        assert!(is_valid_due("2026-07-15"));
+        assert!(!is_valid_due("2026-7-15"));
+        assert!(!is_valid_due("tomorrow"));
+        assert!(!is_valid_due("2026-07-15T10:00"));
+        assert!(!is_valid_due(""));
+    }
+
+    #[test]
+    fn list_tasks_sorts_by_due_then_priority_then_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mk = |name: &str, extra: &str, title: &str, created: &str| {
+            write(
+                root,
+                name,
+                &format!("---\ntype: Task\nstatus: new\ntitle: \"{title}\"\ncreated: {created}\n{extra}---\n"),
+            )
+        };
+        mk("a.md", "", "NoDue", "2026-07-09");
+        mk("b.md", "due: 2026-07-20\n", "Later", "2026-07-01");
+        mk("c.md", "due: 2026-07-10\n", "Sooner", "2026-07-01");
+        mk(
+            "d.md",
+            "due: 2026-07-10\npriority: high\n",
+            "SoonerHigh",
+            "2026-07-01",
+        );
+        mk("e.md", "due: tomorrow\n", "BadDue", "2026-07-08"); // unparseable → no-date
+        write(
+            root,
+            "z.md",
+            "---\ntype: Task\nstatus: done\ntitle: \"Done\"\ncreated: 2026-07-09\ndue: 2026-07-01\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        // dated (due asc, high before normal) → no-date (created desc) → done last
+        // (done ignores its overdue due — done sorts by created).
+        assert_eq!(
+            titles,
+            vec!["SoonerHigh", "Sooner", "Later", "NoDue", "BadDue", "Done"]
+        );
     }
 }
