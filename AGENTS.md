@@ -21,12 +21,19 @@ The Rust code is deliberately split so agents can work outside Windows:
 | --- | --- | --- |
 | `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection. No GUI deps. | Anywhere — test and lint locally |
 | `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere with default features (no whisper.cpp); the `whisper` feature + real engine build on **Windows** (CI gate). |
-| `src-tauri/` (root crate) | Tauri shell: window, tray, IPC commands, plugins. | **Windows only** (Linux lacks webkit2gtk); CI's Windows job is the compile gate |
+| `src-tauri/` (root crate) | Tauri shell: window, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
-When you change the shell crate (`src-tauri/src/*.rs`), you cannot compile it
-in a Linux container. Mirror existing patterns exactly, run
-`cargo fmt --check`, and let CI's `windows-app` job verify the build.
+When you change the shell crate (`src-tauri/src/*.rs`), you *can* now compile
+it in a Linux container as a compile gate: run `npm run setup:linux` once (it
+installs the WebView/GTK/tray system libs — the single source of truth is
+`scripts/setup-linux-deps.sh`), then `npx tauri build --no-bundle`. This
+catches type errors, IPC signature drift, and missing `cfg` gates locally
+instead of push-and-wait. It is a **compile gate only** — the Windows job
+remains the release + desktop-behavior gate (transparency, tray, drag, the
+Obsidian round-trip). Mirror existing `cfg`-gate patterns for any
+platform-specific code, run `cargo fmt --check`, and let CI's `windows-app`
+and `linux-app` jobs verify the build.
 
 ## Commands
 

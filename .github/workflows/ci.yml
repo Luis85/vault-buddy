@@ -106,3 +106,30 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 14
+
+  linux-app:
+    name: Linux app (compile gate)
+    runs-on: ubuntu-latest
+    needs: [frontend, rust-core]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-app
+      - name: Install Linux GUI/build system deps
+        run: bash scripts/setup-linux-deps.sh
+      - run: npm ci
+      # Compile gate only: --no-bundle links the whole app and runs Tauri's
+      # codegen + capability checks but produces no installer, and
+      # createUpdaterArtifacts:false means no signing secret is referenced
+      # (runs identically on forks). This closes the loop that previously only
+      # the windows-app job could — a shell compile error now fails here, fast
+      # and in parallel with Windows. The Linux build is never released.
+      - name: Compile the Tauri shell (no bundle)
+        run: npx tauri build --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'

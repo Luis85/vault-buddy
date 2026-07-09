@@ -10,7 +10,8 @@
     "test": "vitest run",
     "tauri": "tauri",
     "test-build": "tauri dev",
-    "bump-version": "node scripts/bump-version.mjs"
+    "bump-version": "node scripts/bump-version.mjs",
+    "setup:linux": "bash scripts/setup-linux-deps.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
