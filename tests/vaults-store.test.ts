@@ -339,4 +339,12 @@ describe("vaults store", () => {
     expect(store.view).toBe("list");
     expect(store.tasksVaultId).toBeNull();
   });
+
+  it("opens the search view and back returns to the list", () => {
+    const store = useVaultsStore();
+    store.openSearch();
+    expect(store.view).toBe("search");
+    store.back();
+    expect(store.view).toBe("list");
+  });
 });

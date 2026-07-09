@@ -20,7 +20,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "recordings"
       | "recordMode"
       | "transcriptions"
-      | "tasks",
+      | "tasks"
+      | "search",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -166,6 +167,11 @@ export const useVaultsStore = defineStore("vaults", {
     openTasks(vaultId: string) {
       this.view = "tasks";
       this.tasksVaultId = vaultId;
+    },
+    // Cross-vault, so no per-vault id to remember (unlike tasks/recordings).
+    // back() needs no case: search falls through to the final else → showList.
+    openSearch() {
+      this.view = "search";
     },
     /** Back to the current view's fixed parent (no history stack). */
     back() {
