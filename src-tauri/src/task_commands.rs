@@ -39,15 +39,16 @@ pub fn set_tasks_config(
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .map(str::to_string);
-    if let Some(folder) = &folder {
-        let root = capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
-        // Reject up front a folder that resolves outside the vault via a
-        // symlink/junction at any existing ancestor — even when the leaf
-        // doesn't exist yet. The lexical check above can't see through a link;
-        // without this the setting would save but list_tasks then returns empty
-        // and add/toggle error, i.e. the UI persists an unusable folder.
-        capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
-    }
+    // Validate the folder that will ACTUALLY be used — the explicit one, or the
+    // default "Tasks" when the field is cleared — against a symlink/junction at
+    // any existing ancestor (even when the leaf doesn't exist yet; the lexical
+    // check can't see through a link). Clearing to a default that is itself a
+    // symlink outside the vault must be rejected up front too, not just custom
+    // folders, else the setting saves but list/add/toggle can't use it.
+    // ("Tasks" mirrors VaultCaptureConfig::tasks_root()'s default.)
+    let effective = folder.as_deref().unwrap_or("Tasks");
+    let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
+    capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
     let _guard = lock_ignoring_poison(&lock.0);
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.tasks_folder = folder;
