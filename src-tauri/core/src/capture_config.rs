@@ -243,6 +243,10 @@ fn mcp_entry(entry: &serde_json::Value) -> McpConfig {
             .get("port")
             .and_then(|v| v.as_u64())
             .and_then(|v| u16::try_from(v).ok())
+            // Same range the settings command enforces (1024–65535). A
+            // hand-edited 0 would bind an ephemeral port while the persisted
+            // config and client snippets still say 0 — default it instead.
+            .filter(|p| *p >= 1024)
             .unwrap_or(defaults.port),
         token: entry
             .get("token")
@@ -731,6 +735,15 @@ mod tests {
         assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT);
         assert_eq!(cfg.mcp.token, "");
         assert!(cfg.mcp.allow_writes);
+        // Out-of-range ports (hand-edited) fall back too: the parser enforces
+        // the same 1024–65535 range the settings command does, or startup
+        // would bind port 0 (ephemeral!) while the snippets say otherwise.
+        for bad in ["0", "80", "1023", "70000"] {
+            let cfg = parse_config(&format!(r#"{{ "mcp": {{ "port": {bad} }} }}"#));
+            assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT, "port {bad} must default");
+        }
+        let cfg = parse_config(r#"{ "mcp": { "port": 1024 } }"#);
+        assert_eq!(cfg.mcp.port, 1024);
     }
 
     #[test]
