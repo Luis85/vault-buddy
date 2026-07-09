@@ -402,4 +402,29 @@ describe("Tasks", () => {
     expect(wrapper.get('[data-testid="task-progress"]').text()).toContain("1 / 7");
   });
 
+  it("shows the no-match empty state when the filter excludes everything", async () => {
+    const { wrapper } = mountView({ list_tasks: () => many(6) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-filter"]').setValue("zzz");
+    await flushPromises();
+    expect(wrapper.text()).toContain('No tasks match "zzz"');
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(0);
+  });
+
+  it("hides the filter for exactly 5 tasks (off-by-one boundary)", async () => {
+    const { wrapper } = mountView({ list_tasks: () => many(5) });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+  });
+
+  it("filters case-insensitively by title substring", async () => {
+    const { wrapper } = mountView({ list_tasks: () => many(6) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-filter"]').setValue("task 3");
+    await flushPromises();
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text()).toContain("Task 3");
+  });
+
 });
