@@ -130,6 +130,103 @@ pub fn is_valid_due(s: &str) -> bool {
         })
 }
 
+/// True iff `s` is a valid Obsidian tag: letters (any script), digits, `-`,
+/// `_`, `/`, and at least one non-digit character. Shared by the lenient
+/// read-side normalization (invalid entries are dropped) and the shell's
+/// strict write validation (invalid entries are an error) so the two sides
+/// can never disagree on what a tag is.
+pub fn is_valid_tag(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '/'))
+        && s.chars().any(|c| !c.is_ascii_digit())
+}
+
+/// Normalize one raw tag token from frontmatter: unquote, trim, strip a
+/// leading `#`; None when the result fails `is_valid_tag` (dropped by the
+/// lenient reader).
+fn normalize_tag(raw: &str) -> Option<String> {
+    let unquoted = crate::capture_note::unquote_yaml(raw.trim());
+    let t = unquoted.trim();
+    let t = t.strip_prefix('#').unwrap_or(t);
+    is_valid_tag(t).then(|| t.to_string())
+}
+
+/// Case-insensitive dedupe preserving first-seen casing (Obsidian matches
+/// tags case-insensitively but displays the authored case).
+fn dedupe_tags(items: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for t in items {
+        if seen.insert(t.to_lowercase()) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+/// Parse one frontmatter tags-ish key. None when the key is absent; Some of
+/// the normalized (possibly empty) list when present — so a present-but-empty
+/// `tags:` still shadows the `tag:` alias.
+fn parse_tags_key(content: &str, key: &str) -> Option<Vec<String>> {
+    let mut lines = content.lines().peekable();
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let prefix = format!("{key}:");
+    while let Some(line) = lines.next() {
+        if line.trim_end() == "---" {
+            return None; // end of frontmatter — the body is never scanned
+        }
+        // Top-level keys only: an indented list item can't match (leading
+        // space), same convention as note_field.
+        let Some(rest) = line.strip_prefix(&prefix) else {
+            continue;
+        };
+        let rest = rest.trim();
+        let raw_items: Vec<&str> = if rest.is_empty() {
+            // Block style: consume the following `- item` lines.
+            let mut items = Vec::new();
+            while let Some(next) = lines.peek() {
+                if next.trim_end() == "---" {
+                    break;
+                }
+                let Some(item) = next.trim_start().strip_prefix("- ") else {
+                    break;
+                };
+                items.push(item);
+                lines.next();
+            }
+            items
+        } else if rest.starts_with('[') {
+            // Flow `[a, b]` style: strip brackets, split only on commas.
+            // An unquoted item with a space (e.g. `[a, two words]`) would fail
+            // validation because space is not in the tag charset, so it's
+            // dropped by the lenient reader.
+            let inner = rest
+                .strip_prefix('[')
+                .and_then(|r| r.strip_suffix(']'))
+                .unwrap_or(rest);
+            inner.split(',').map(str::trim).collect()
+        } else {
+            // Legacy `a, b` / `a b` format: split on commas AND whitespace.
+            rest.split(',').flat_map(str::split_whitespace).collect()
+        };
+        return Some(dedupe_tags(raw_items.into_iter().filter_map(normalize_tag)));
+    }
+    None
+}
+
+/// A task's tags from frontmatter, in every form Obsidian accepts (see
+/// parse_tags_key). `tags:` wins; the `tag:` singular alias is read only
+/// when `tags:` is absent. Body `#hashtags` are deliberately out of scope —
+/// the scanner stays frontmatter-only like the rest of the vault domain.
+pub fn note_tags(content: &str) -> Vec<String> {
+    parse_tags_key(content, "tags")
+        .or_else(|| parse_tags_key(content, "tag"))
+        .unwrap_or_default()
+}
+
 /// Sort tier for a priority value: high first, low last, anything else
 /// (normal, absent, hand-authored unknown) in the middle.
 pub fn priority_rank(p: Option<&str>) -> u8 {
@@ -928,5 +1025,55 @@ mod tests {
             titles,
             vec!["SoonerHigh", "Sooner", "Later", "NoDue", "BadDue", "Done"]
         );
+    }
+
+    #[test]
+    fn is_valid_tag_accepts_obsidian_charset_and_rejects_the_rest() {
+        for ok in ["work", "home/errands", "a-b_c", "año", "q3-2026", "1-2"] {
+            assert!(is_valid_tag(ok), "{ok} should be valid");
+        }
+        // all-digits, empty, spaces, punctuation → invalid
+        for bad in ["123", "", "two words", "a.b", "#work", "a,b"] {
+            assert!(!is_valid_tag(bad), "{bad} should be invalid");
+        }
+    }
+
+    #[test]
+    fn note_tags_parses_flow_block_and_legacy_forms() {
+        let flow = "---\ntype: Task\ntags: [work, home/errands]\n---\n";
+        assert_eq!(note_tags(flow), vec!["work", "home/errands"]);
+        let block = "---\ntype: Task\ntags:\n  - work\n  - \"home/errands\"\n---\n";
+        assert_eq!(note_tags(block), vec!["work", "home/errands"]);
+        let legacy = "---\ntype: Task\ntags: work, home/errands\n---\n";
+        assert_eq!(note_tags(legacy), vec!["work", "home/errands"]);
+        let spaces = "---\ntype: Task\ntags: work home/errands\n---\n";
+        assert_eq!(note_tags(spaces), vec!["work", "home/errands"]);
+    }
+
+    #[test]
+    fn note_tags_normalizes_and_dedupes() {
+        // `#` stripped, invalid entries dropped, case-insensitive dedupe keeps
+        // the first-seen casing — lenient read, never an error.
+        let doc = "---\ntype: Task\ntags: [#Work, work, 123, two words, urgent]\n---\n";
+        assert_eq!(note_tags(doc), vec!["Work", "urgent"]);
+    }
+
+    #[test]
+    fn note_tags_reads_the_tag_alias_only_when_tags_is_absent() {
+        let alias = "---\ntype: Task\ntag: work\n---\n";
+        assert_eq!(note_tags(alias), vec!["work"]);
+        let both = "---\ntype: Task\ntags: [a1]\ntag: b1\n---\n";
+        assert_eq!(note_tags(both), vec!["a1"]); // tags: wins
+    }
+
+    #[test]
+    fn note_tags_is_empty_without_frontmatter_or_key_and_never_reads_the_body() {
+        assert!(note_tags("no frontmatter").is_empty());
+        assert!(note_tags("---\ntype: Task\n---\n").is_empty());
+        // A `tags:`-looking line in the body must not be read.
+        assert!(note_tags("---\ntype: Task\n---\ntags: [body]\n").is_empty());
+        // Block list stops at the closing fence.
+        let fenced = "---\ntype: Task\ntags:\n- work\n---\n- not-a-tag\n";
+        assert_eq!(note_tags(fenced), vec!["work"]);
     }
 }
