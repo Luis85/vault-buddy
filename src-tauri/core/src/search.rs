@@ -84,12 +84,42 @@ pub fn search_vaults_with_cancel(
         return SearchResponse::default();
     }
     let query_lower = trimmed.to_lowercase();
-    merge_vault_hits(
-        vaults
-            .iter()
-            .map(|v| scan_vault(v, &query_lower, is_cancelled))
-            .collect(),
-    )
+    // One NAMED scoped thread per vault (crash records must identify the
+    // dying thread), merged in the given vault order afterward — output is
+    // identical to a serial loop, wall-clock is ~the slowest vault. Vault
+    // counts are small (single digits), so no pooling.
+    let mut per_vault: Vec<Option<VaultHits>> = Vec::with_capacity(vaults.len());
+    std::thread::scope(|scope| {
+        let mut pending = Vec::with_capacity(vaults.len());
+        for (i, vault) in vaults.iter().enumerate() {
+            let query_lower = &query_lower;
+            let spawned = std::thread::Builder::new()
+                .name(format!("search-vault-{i}"))
+                .spawn_scoped(scope, move || scan_vault(vault, query_lower, is_cancelled));
+            match spawned {
+                Ok(handle) => pending.push(Ok(handle)),
+                Err(e) => {
+                    // Thread spawn failed (resource pressure): degrade to an
+                    // inline scan on this thread — never a panic, and the
+                    // failure leaves a trace.
+                    log::warn!("search: spawning scan thread failed: {e}");
+                    pending.push(Err(scan_vault(vault, query_lower, is_cancelled)));
+                }
+            }
+        }
+        for entry in pending {
+            per_vault.push(match entry {
+                Ok(handle) => handle.join().unwrap_or_else(|_| {
+                    // A panicked scan thread loses that vault's hits, not the
+                    // whole search; the panic hook already recorded it.
+                    log::warn!("search: a vault scan thread panicked");
+                    None
+                }),
+                Err(inline) => inline,
+            });
+        }
+    });
+    merge_vault_hits(per_vault)
 }
 
 /// Vault-order merge with the global budget: filename hits before content
@@ -362,6 +392,47 @@ mod tests {
         let s = snippet_from_line(&line, "needle").unwrap();
         assert!(s.starts_with('İ'), "got: {s}");
         assert!(s.ends_with('…'), "got: {s}");
+    }
+
+    #[test]
+    fn cancellation_stops_the_scan_early() {
+        // A superseded scan must not walk the whole vault: the closure is
+        // polled per file, and flipping true aborts the walk.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..50 {
+            write(dir.path(), &format!("alpha {i:02}.md"), "x\n");
+        }
+        let polls = AtomicUsize::new(0);
+        let cancelled = move || polls.fetch_add(1, Ordering::Relaxed) >= 3;
+        let r = search_vaults_with_cancel(&[vault("v1", "W", dir.path())], "alpha", &cancelled);
+        assert!(r.hits.len() <= 3, "walk kept going: {} hits", r.hits.len());
+    }
+
+    #[test]
+    fn parallel_scan_keeps_vault_order_and_budget_semantics() {
+        // The scans run on one named thread per vault; the merge must keep
+        // the given vault order and the exact serial budget accounting.
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let c = tempfile::tempdir().unwrap();
+        for i in 0..60 {
+            write(a.path(), &format!("alpha a{i:02}.md"), "x\n");
+            write(b.path(), &format!("alpha b{i:02}.md"), "x\n");
+            write(c.path(), &format!("alpha c{i:02}.md"), "x\n");
+        }
+        let r = search_vaults(
+            &[
+                vault("va", "A", a.path()),
+                vault("vb", "B", b.path()),
+                vault("vc", "C", c.path()),
+            ],
+            "alpha",
+        );
+        assert_eq!(r.hits.len(), MAX_RESULTS);
+        assert!(r.truncated); // 180 total; C never fits the budget
+        assert!(r.hits[..60].iter().all(|h| h.vault_id == "va"));
+        assert!(r.hits[60..].iter().all(|h| h.vault_id == "vb"));
     }
 
     fn vault(id: &str, name: &str, path: &Path) -> Vault {
