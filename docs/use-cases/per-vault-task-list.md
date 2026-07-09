@@ -17,11 +17,13 @@ tags: [use-case, task-management]
 
 First vertical slice of the [Task Management capability PRD](../prds/task-management.md), whose Domain Model, Task Model, and User Experience sections describe the full-featured version (Quick Task Modal, priorities, due dates, lists, aggregation). This use-case implements only the smallest end-to-end path: configure a per-vault tasks folder, list tasks, add a task, toggle completion.
 
-## ⚠ PRD status is stale
+## ~~⚠ PRD status is stale~~ — resolved
 
-The Task Management PRD's header still reads **`Status: Draft`** and its Roadmap → Version 1 bullets ("Task creation", "Task editing", "Task aggregation", "Task lists", "Dashboard") do not distinguish what has actually shipped. In reality, task creation/listing/completion **shipped in v0.5.0** (2026-07-08/09) — task editing beyond the status checkbox, aggregation across vaults, lists, and the dashboard remain unbuilt. `AGENTS.md`'s own IPC command inventory (§ IPC surface) is also out of date: it does not list `task_commands::*`, even though those commands are registered in `src-tauri/src/lib.rs`.
-
-**Recommendation:** update `docs/prds/task-management.md`'s status line and Version 1 roadmap checklist, and add the five `task_commands` entries to `AGENTS.md`'s IPC surface list.
+The staleness this note originally flagged has been fixed since: the Task
+Management PRD's status line now narrates the shipped v0.5.0 slice (task
+creation, listing, completion, per vault) and what remains unbuilt, and
+`AGENTS.md`'s IPC inventory lists the `task_commands::*` entries. Kept as a
+struck-through record per this catalog's convention.
 
 ## Status: Shipped (v0.5.0)
 
