@@ -286,6 +286,11 @@ Nothing in this feature may hurt the core app:
   A thread that panicked instead of exiting surfaces as `error` status,
   never a false "stopped".
 - Regenerating the token restarts the listener; old clients get `401`.
+- A start whose thread never reports its bind outcome (10 s timeout) is
+  treated as failed — and the token is cancelled before returning, so a
+  merely *slow* thread that binds later shuts itself down instead of
+  serving as an orphan no handle can stop (Codex review catch); the join
+  is reaped on a named helper thread so the error path stays bounded.
 
 ## Testing
 

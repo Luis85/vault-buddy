@@ -1850,10 +1850,31 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
     match bind_rx.recv_timeout(std::time::Duration::from_secs(10)) {
         Ok(Ok(port)) => Ok(RunningServer { port, cancel, join }),
         Ok(Err(e)) => {
+            // The thread sent its error and is exiting — a plain join is prompt.
             let _ = join.join();
             Err(e)
         }
-        Err(_) => Err("mcp-server did not report its bind status within 10s".to_string()),
+        Err(_) => {
+            // The thread is delayed, not necessarily dead (Codex review catch):
+            // without this, it could finish binding LATER and serve as an
+            // orphan no RunningServer handle can ever stop. Cancel now — the
+            // serve stage sees an already-cancelled token and shuts straight
+            // down (bounded by DRAIN_GRACE) — and reap the join on a named
+            // helper so this error path returns promptly instead of blocking
+            // on a wedged thread.
+            cancel.cancel();
+            let reap = std::thread::Builder::new()
+                .name("mcp-server-reaper".into())
+                .spawn(move || {
+                    if join.join().is_err() {
+                        log::error!("mcp-server thread panicked after bind-report timeout");
+                    }
+                });
+            if let Err(e) = reap {
+                log::warn!("could not spawn mcp-server-reaper: {e}");
+            }
+            Err("mcp-server did not report its bind status within 10s".to_string())
+        }
     }
 }
 ```
