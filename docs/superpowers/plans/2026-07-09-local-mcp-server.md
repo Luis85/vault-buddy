@@ -1369,12 +1369,20 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<AddTaskParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Denied attempts are audited too (Codex review catch): the spec says
+        // EVERY tool call logs its outcome, and the revoked-grant path — a
+        // session that cached the write tools before the user flipped the
+        // toggle off — is exactly where the log matters most.
         if !self.writes_allowed() {
+            Self::audit("add_task", &p.vault_id, &Err(WRITES_DISABLED.to_string()));
             return Self::tool_error(WRITES_DISABLED);
         }
         let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
             Ok(v) => v,
-            Err(e) => return Self::tool_error(e),
+            Err(e) => {
+                Self::audit("add_task", &p.vault_id, &Err(e.clone()));
+                return Self::tool_error(e);
+            }
         };
         let today = Self::today().format("%Y-%m-%d").to_string();
         let outcome = services::add_task(&self.deps.paths, &p.vault_id, &p.title, &today);
@@ -1403,12 +1411,22 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<SetTaskStatusParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Same audit-before-deny rule as add_task: a gate denial or a
+        // failed vault lookup is still a tool-call outcome.
         if !self.writes_allowed() {
+            Self::audit(
+                "set_task_status",
+                &p.vault_id,
+                &Err(WRITES_DISABLED.to_string()),
+            );
             return Self::tool_error(WRITES_DISABLED);
         }
         let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
             Ok(v) => v,
-            Err(e) => return Self::tool_error(e),
+            Err(e) => {
+                Self::audit("set_task_status", &p.vault_id, &Err(e.clone()));
+                return Self::tool_error(e);
+            }
         };
         let outcome = services::set_task_status(&self.deps.paths, &p.vault_id, &p.path, &p.status);
         Self::audit(
