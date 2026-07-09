@@ -379,8 +379,20 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
     let mut in_frontmatter = false;
     let mut seen_open = false;
     let mut closed = false;
+    // True while consuming the `- item` lines of a block-style value whose
+    // key was just rewritten/removed — the items belong to the replaced
+    // value, so they are dropped with it. Cleared by the first non-item line
+    // (including the closing fence), so body bullets are never at risk: the
+    // fence always clears the flag before the body starts.
+    let mut skip_list_items = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
+        if skip_list_items {
+            if trimmed.trim_start().starts_with("- ") {
+                continue; // part of the consumed block list
+            }
+            skip_list_items = false;
+        }
         if !seen_open {
             // First line is the opening `---` (guaranteed by is_task).
             seen_open = true;
@@ -416,6 +428,15 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
                         .is_some_and(|rest| rest.starts_with(':'))
             });
             if let Some((i, (key, value))) = matched {
+                // `key:` with nothing after the colon means the value is a
+                // block-style list on the following lines — consume it along
+                // with the key line (rewrite and removal alike), so a
+                // hand-authored block list round-trips to one flow line
+                // instead of leaving orphaned `- item` lines.
+                let rest = &trimmed[key.len() + 1..];
+                if rest.trim().is_empty() {
+                    skip_list_items = true;
+                }
                 if let Some(v) = value {
                     let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
                     out.push_str(&format!("{key}: {v}{ending}"));
@@ -1075,5 +1096,65 @@ mod tests {
         // Block list stops at the closing fence.
         let fenced = "---\ntype: Task\ntags:\n- work\n---\n- not-a-tag\n";
         assert_eq!(note_tags(fenced), vec!["work"]);
+    }
+
+    #[test]
+    fn set_fields_rewrites_a_block_list_to_one_flow_line() {
+        // A hand-authored block-style tags list must round-trip to the canonical
+        // flow line — orphaned `- item` lines would corrupt the frontmatter.
+        let doc =
+            "---\ntype: Task\nstatus: new\ntags:\n  - work\n  - home\ntitle: \"A\"\n---\nbody\n";
+        let out = set_fields(doc, &[("tags", Some("[urgent]"))]).unwrap();
+        assert!(out.contains("tags: [urgent]\n"));
+        assert!(!out.contains("- work"));
+        assert!(!out.contains("- home"));
+        assert!(out.contains("title: \"A\"\n")); // key after the block untouched
+        assert!(out.contains("\nbody\n"));
+    }
+
+    #[test]
+    fn set_fields_removes_a_block_list_entirely() {
+        let doc = "---\ntype: Task\nstatus: new\ntags:\n- work\n- home\n---\n";
+        let out = set_fields(doc, &[("tags", None)]).unwrap();
+        assert!(!out.contains("tags"));
+        assert!(!out.contains("- work"));
+        assert!(out.contains("status: new\n"));
+    }
+
+    #[test]
+    fn set_fields_block_consumption_preserves_crlf() {
+        let doc = "---\r\ntype: Task\r\nstatus: new\r\ntags:\r\n  - work\r\n---\r\n";
+        let out = set_fields(doc, &[("tags", Some("[home]"))]).unwrap();
+        assert!(out.contains("tags: [home]\r\n"));
+        assert!(!out.contains("- work"));
+        assert!(out.contains("status: new\r\n"));
+    }
+
+    #[test]
+    fn set_fields_block_list_running_to_the_fence_keeps_the_fence() {
+        let doc = "---\ntype: Task\nstatus: new\ntags:\n- work\n---\nbody\n";
+        let out = set_fields(doc, &[("tags", None)]).unwrap();
+        assert_eq!(out, "---\ntype: Task\nstatus: new\n---\nbody\n");
+    }
+
+    #[test]
+    fn set_fields_empty_value_key_without_items_consumes_nothing() {
+        // A bare `tags:` with no list following: rewrite it in place, and the
+        // next line (a real key) must not be swallowed.
+        let doc = "---\ntype: Task\nstatus: new\ntags:\ntitle: \"A\"\n---\n";
+        let out = set_fields(doc, &[("tags", Some("[x1]"))]).unwrap();
+        assert!(out.contains("tags: [x1]\n"));
+        assert!(out.contains("title: \"A\"\n"));
+    }
+
+    #[test]
+    fn set_fields_body_bullets_are_never_consumed() {
+        // Removing an inline-valued key must not touch `- ` bullet lines in the
+        // body — consumption applies only to a block list directly under an
+        // empty-valued matched key inside the frontmatter.
+        let doc = "---\ntype: Task\nstatus: new\ndue: 2026-07-10\n---\n- a body bullet\n";
+        let out = set_fields(doc, &[("due", None)]).unwrap();
+        assert!(out.contains("- a body bullet\n"));
+        assert!(!out.contains("due:"));
     }
 }
