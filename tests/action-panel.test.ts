@@ -378,4 +378,14 @@ describe("ActionPanel", () => {
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
     expect(wrapper.text()).toContain("Tasks");
   });
+
+  it("titles the per-vault settings view 'Vault settings'", async () => {
+    const store = useVaultsStore();
+    store.openCaptureSettings("v1");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { CaptureSettings: true } },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Vault settings");
+  });
 });

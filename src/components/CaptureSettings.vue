@@ -29,6 +29,13 @@ const transcriptionModel = ref("small");
 const transcriptionLanguage = ref(""); // "" = auto-detect (maps to null on save)
 const transcriptTimestamps = ref(true);
 
+// The per-vault tasks folder lives in the same app-side config but has its own
+// command pair and its own Save — independent of the capture-config save (which
+// already preserves tasks_folder), so a tasks-config failure can't block the
+// capture form and vice versa.
+const tasksFolder = ref(""); // "" shows the "Tasks" placeholder / clears to default
+const tasksFolderError = ref<string | null>(null);
+
 // A configured device that is not currently connected must stay
 // selectable (unplugging a headset must not silently rewrite the
 // config) — it is surfaced with a "(not connected)" suffix instead.
@@ -130,6 +137,16 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
+  // Separate invoke (not in the Promise.all above) so a tasks-config failure
+  // can't block the capture form from loading — the tasks folder is optional.
+  try {
+    const tcfg = await invoke<{ tasksFolder: string | null }>("get_tasks_config", {
+      id: props.vaultId,
+    });
+    tasksFolder.value = tcfg.tasksFolder ?? "";
+  } catch (e) {
+    logWarning(`get_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
+  }
 });
 
 async function save() {
@@ -163,6 +180,20 @@ async function save() {
     if (message.toLowerCase().includes("folder")) folderError.value = message;
     else saveError.value = message;
     logWarning(`capture settings save failed (vault ${props.vaultId}): ${message}`);
+  }
+}
+
+async function saveTasksFolder() {
+  tasksFolderError.value = null;
+  const value = tasksFolder.value.trim();
+  try {
+    await invoke("set_tasks_config", {
+      id: props.vaultId,
+      tasksFolder: value === "" ? null : value,
+    });
+  } catch (e) {
+    tasksFolderError.value = String(e);
+    logWarning(`set_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
   }
 }
 </script>
@@ -286,6 +317,42 @@ async function save() {
         data-testid="output-device-select"
         wide
       />
+    </section>
+    <section>
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Tasks
+      </h2>
+      <label class="mb-1 block text-sm text-slate-200" for="tasks-folder">
+        Tasks folder
+        <span class="block text-xs text-slate-500">Inside the vault</span>
+      </label>
+      <div class="flex items-center gap-1">
+        <input
+          id="tasks-folder"
+          v-model="tasksFolder"
+          data-testid="tasks-folder-input"
+          type="text"
+          placeholder="Tasks"
+          aria-label="Tasks folder"
+          class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          @keydown.enter.prevent="saveTasksFolder"
+        />
+        <button
+          type="button"
+          data-testid="tasks-folder-save"
+          class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          @click="saveTasksFolder"
+        >
+          Save
+        </button>
+      </div>
+      <p
+        v-if="tasksFolderError"
+        data-testid="tasks-folder-error"
+        class="mt-1 text-xs text-red-300"
+      >
+        {{ tasksFolderError }}
+      </p>
     </section>
     <p
       v-if="saveError"

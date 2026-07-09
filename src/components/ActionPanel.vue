@@ -73,7 +73,7 @@ watch(
           view === "settings"
             ? "Buddy settings"
             : view === "captureSettings"
-              ? "Capture settings"
+              ? "Vault settings"
               : view === "recordings"
                 ? "Recordings"
                 : view === "recordMode"

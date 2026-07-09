@@ -39,6 +39,7 @@ const mountLoaded = async (
     config?: Partial<typeof config>;
     devices?: typeof devices;
     onSet?: (args: unknown) => unknown;
+    tasksFolder?: string | null;
   } = {},
 ) => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
@@ -47,6 +48,9 @@ const mountLoaded = async (
     if (cmd === "get_capture_config") return { ...config, ...overrides.config };
     if (cmd === "list_audio_devices") return overrides.devices ?? devices;
     if (cmd === "set_capture_config") return overrides.onSet?.(args);
+    if (cmd === "get_tasks_config")
+      return { tasksFolder: overrides.tasksFolder ?? null };
+    if (cmd === "set_tasks_config") return null;
   });
   // attachTo document.body so the SelectMenu's Teleported popups land in a
   // queryable place; afterEach unmounts and clears the body.
@@ -268,5 +272,18 @@ describe("CaptureSettings", () => {
     await wrapper.get('[data-testid="save-button"]').trigger("click");
     await flushPromises();
     expect(saved?.cfg.followUpTemplate).toBe(false);
+  });
+
+  it("loads and saves the tasks folder via the tasks config commands", async () => {
+    const { wrapper, calls } = await mountLoaded({ tasksFolder: "Inbox/Tasks" });
+    const input = wrapper.get('[data-testid="tasks-folder-input"]');
+    expect((input.element as HTMLInputElement).value).toBe("Inbox/Tasks");
+    await input.setValue("Work/Tasks");
+    await wrapper.get('[data-testid="tasks-folder-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_tasks_config")).toEqual({
+      cmd: "set_tasks_config",
+      args: { id: "v1", tasksFolder: "Work/Tasks" },
+    });
   });
 });
