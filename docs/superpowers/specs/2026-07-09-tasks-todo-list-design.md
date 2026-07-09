@@ -119,7 +119,9 @@ priority: high
   Order within buckets comes from the
   backend sort (kept mirrored in `sortInPlace`).
 - **Row.** The title becomes a click target that invokes
-  `open_task {id, path}` (failure → toast, panel stays open). A due chip
+  `open_task {id, path}`. On success the panel closes (best-effort
+  `close_panel` — Obsidian takes over, mirroring the vault-open and
+  recording-open flows); on failure it stays open with an error toast. A due chip
   (`Jul 15` short format; red text when overdue) and a priority dot (red =
   high, muted = low, nothing for normal) render beside the title. Checkbox /
   pencil / archive are separate buttons (no propagation into the title
@@ -141,9 +143,13 @@ priority: high
   controls reset after a successful add.
 - **Filter.** A search input above the list, shown only when the vault has
   more than 5 tasks (mirrors the vault-list filter threshold), narrowing all
-  buckets by case-insensitive title substring. Empty buckets under the
-  filter hide with their headers; progress bar keeps counting the unfiltered
-  list.
+  buckets by case-insensitive title substring. The query applies only while
+  the input is shown: archiving/editing the vault down to 5 or fewer tasks
+  hides the input AND deactivates any stale query (the text is kept and
+  reactivates if the count climbs back over the threshold), so the user can
+  never be stranded on a narrowed list with no visible control. Empty
+  buckets under the filter hide with their headers; progress bar keeps
+  counting the unfiltered list.
 
 ### Unchanged
 Progress bar (done/total of the visible list), archive action, counter

@@ -456,19 +456,24 @@ delegates.
   `uri::launch(uri::open_file_uri(...))` — logged like every other vault open,
   never writes.
 - **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
-  store): a `tasks` panel view reached from a per-row Tasks button; a folder
-  setting, an add-task input with an optional due/priority row, and a
+  store): a `tasks` panel view reached from a per-row Tasks button; an
+  add-task input with an optional due/priority row (the tasks-folder setting
+  lives in the per-vault Vault settings view, not here), and a
   date-bucketed list (Overdue / Today / Upcoming / No date / Done — bucket
   headers render only once a dated open task exists, so a vault that never
   uses due dates keeps the flat list it always had). A task's title is a click
-  target that calls `open_task`; a pencil opens an inline editor (title, due,
-  priority) with one row editable at a time, Save sending only the changed
-  fields (`clearDue: true` for an emptied date) in a single `update_task` call.
-  Toggle/archive/edit are all optimistic (revert + toast on failure) and
-  **serialized per row** (a reactive in-flight Set disables the row's controls
-  until its write resolves, so two concurrent writes for one task can't land
-  out of order — the editor shares this guard with toggle/archive). A title
-  filter appears above 5 tasks, same threshold as the vault list.
+  target that calls `open_task` — a successful launch closes the panel
+  (best-effort `close_panel`, same as every other Obsidian handoff), a failed
+  one keeps it open for the error toast. A pencil opens an inline editor
+  (title, due, priority) with one row editable at a time, Save sending only
+  the changed fields (`clearDue: true` for an emptied date) in a single
+  `update_task` call. Toggle/archive/edit are all optimistic (revert + toast
+  on failure) and **serialized per row** (a reactive in-flight Set disables
+  the row's controls until its write resolves, so two concurrent writes for
+  one task can't land out of order — the editor shares this guard with
+  toggle/archive). A title filter appears above 5 tasks, same threshold as
+  the vault list; its query applies only while the input is shown, so
+  archiving below the threshold can't strand a stale, invisible filter.
   `TaskItem`/`TaskDto` fields (now including `due`/`priority`) match camelCase
   across Rust↔TS.
 
