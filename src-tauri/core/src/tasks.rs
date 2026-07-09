@@ -53,6 +53,7 @@ pub fn render_task(
     created: &str,
     due: Option<&str>,
     priority: Option<&str>,
+    tags: &[String],
 ) -> String {
     let mut extra = String::new();
     if let Some(d) = due {
@@ -60,6 +61,11 @@ pub fn render_task(
     }
     if let Some(p) = priority {
         extra.push_str(&format!("priority: {p}\n"));
+    }
+    if !tags.is_empty() {
+        // Canonical flow style: single-line, so the surgical writer can
+        // rewrite it; charset-validated tags never need YAML quoting.
+        extra.push_str(&format!("tags: [{}]\n", tags.join(", ")));
     }
     format!(
         "---\ntype: Task\nstatus: new\ntitle: {}\ncreated: {created}\n{extra}---\n\n",
@@ -76,12 +82,13 @@ pub fn create_task(
     today: &str,
     due: Option<&str>,
     priority: Option<&str>,
+    tags: &[String],
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let target = root.join(format!("{}.md", task_basename(title, today)));
     crate::capture_note::write_note_collision_safe(
         &target,
-        &render_task(title, today, due, priority),
+        &render_task(title, today, due, priority, tags),
     )
 }
 
@@ -95,6 +102,7 @@ pub struct TaskItem {
     pub done: bool,
     pub due: Option<String>,
     pub priority: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// True iff the leading `---` frontmatter block is properly closed. A block
@@ -342,6 +350,7 @@ fn collect_tasks(
         let created = note_field(&content, "created").unwrap_or_default();
         let due = note_field(&content, "due");
         let priority = note_field(&content, "priority");
+        let tags = note_tags(&content);
         let done = status == "done";
         out.push(TaskItem {
             path,
@@ -351,6 +360,7 @@ fn collect_tasks(
             done,
             due,
             priority,
+            tags,
         });
     }
 }
@@ -571,7 +581,7 @@ mod tests {
         // (and still new/done), not just a done bool.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
+        let p = create_task(&root, "Buy milk", "2026-07-08", None, None, &[]).unwrap();
         set_task_status(&root, &p, "archived").unwrap();
         assert!(std::fs::read_to_string(&p)
             .unwrap()
@@ -747,7 +757,7 @@ mod tests {
 
     #[test]
     fn render_writes_type_task_status_new_quoted_title() {
-        let doc = render_task("Buy milk", "2026-07-08", None, None);
+        let doc = render_task("Buy milk", "2026-07-08", None, None, &[]);
         assert_eq!(
             doc,
             "---\ntype: Task\nstatus: new\ntitle: \"Buy milk\"\ncreated: 2026-07-08\n---\n\n"
@@ -757,7 +767,7 @@ mod tests {
     #[test]
     fn render_quotes_a_colon_title() {
         // A colon in the title would break unquoted YAML — must be quoted.
-        let doc = render_task("Ship: v1", "2026-07-08", None, None);
+        let doc = render_task("Ship: v1", "2026-07-08", None, None, &[]);
         assert!(doc.contains("title: \"Ship: v1\"\n"));
     }
 
@@ -765,7 +775,7 @@ mod tests {
     fn render_quotes_and_escapes_special_title() {
         // A title with a quote and backslash must be escaped so it can't break
         // the frontmatter (read back by note_field).
-        let doc = render_task("a\"b\\c", "2026-07-08", None, None);
+        let doc = render_task("a\"b\\c", "2026-07-08", None, None, &[]);
         assert!(doc.contains("title: \"a\\\"b\\\\c\"\n"));
     }
 
@@ -796,7 +806,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
 
-        let p1 = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
+        let p1 = create_task(&root, "Buy milk", "2026-07-08", None, None, &[]).unwrap();
         assert_eq!(p1.file_name().unwrap(), "2026-07-08-buy-milk.md");
         let body = std::fs::read_to_string(&p1).unwrap();
         assert!(body.contains("type: Task"));
@@ -804,7 +814,7 @@ mod tests {
         assert!(body.contains("title: \"Buy milk\""));
 
         // Same title again → suffixed, original untouched (collision-safe).
-        let p2 = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
+        let p2 = create_task(&root, "Buy milk", "2026-07-08", None, None, &[]).unwrap();
         assert_ne!(p1, p2);
         assert_eq!(p2.file_name().unwrap(), "2026-07-08-buy-milk (2).md");
         assert!(p1.exists() && p2.exists());
@@ -889,7 +899,7 @@ mod tests {
     fn set_task_status_writes_and_rejects_escape() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "Buy milk", "2026-07-08", None, None).unwrap();
+        let p = create_task(&root, "Buy milk", "2026-07-08", None, None, &[]).unwrap();
 
         set_task_status(&root, &p, "done").unwrap();
         assert!(std::fs::read_to_string(&p)
@@ -985,12 +995,12 @@ mod tests {
 
     #[test]
     fn render_includes_due_and_priority_only_when_present() {
-        let plain = render_task("A", "2026-07-09", None, None);
+        let plain = render_task("A", "2026-07-09", None, None, &[]);
         assert_eq!(
             plain,
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
         ); // byte-identical to the pre-due/priority output
-        let full = render_task("A", "2026-07-09", Some("2026-07-15"), Some("high"));
+        let full = render_task("A", "2026-07-09", Some("2026-07-15"), Some("high"), &[]);
         assert!(full.contains("created: 2026-07-09\ndue: 2026-07-15\npriority: high\n---\n"));
     }
 
@@ -1186,5 +1196,34 @@ mod tests {
         assert!(!out.contains("- work"));
         assert!(!out.contains("tags"));
         assert!(out.contains("due: 2026-08-01\n"));
+    }
+
+    #[test]
+    fn render_includes_flow_tags_only_when_present() {
+        let plain = render_task("A", "2026-07-09", None, None, &[]);
+        assert_eq!(
+            plain,
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
+        ); // byte-identical to the pre-tags output
+        let tagged = render_task(
+            "A",
+            "2026-07-09",
+            Some("2026-07-15"),
+            None,
+            &["work".to_string(), "home/errands".to_string()],
+        );
+        assert!(tagged.contains("due: 2026-07-15\ntags: [work, home/errands]\n---\n"));
+    }
+
+    #[test]
+    fn list_tasks_reads_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "t.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ntags:\n- work\n---\n",
+        );
+        assert_eq!(list_tasks(root)[0].tags, vec!["work"]);
     }
 }
