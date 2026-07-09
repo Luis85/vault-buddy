@@ -4,9 +4,12 @@
 //! Pure over `ServicePaths` so everything here tests on Linux; the caller
 //! injects the clock (`date`/`today`) and the URI launcher.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::{capture_config, daily_note_target, discovery, process, uri};
+use crate::{
+    capture_config, capture_note, capture_paths, daily_note_target, discovery, process, recordings,
+    tasks, uri,
+};
 
 /// Where the real registry/config live. `real()` for the app; tests point
 /// both at a temp dir. `None` degrades to empty/default (never an error) —
@@ -93,6 +96,216 @@ pub fn open_daily_note(
     } else {
         Err(DAILY_NOTE_CREATE_GATED.to_string())
     }
+}
+
+/// Read the app-side config from `paths`, degrading to defaults when there is
+/// none — the same "missing config is never an error" rule `ServicePaths`
+/// documents for the registry.
+fn app_config(paths: &ServicePaths) -> capture_config::AppConfig {
+    match &paths.config_json {
+        Some(p) => capture_config::load_config_from(p),
+        None => capture_config::AppConfig::default(),
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDto {
+    pub path: String,
+    pub title: String,
+    pub status: String,
+    pub created: String,
+    pub done: bool,
+}
+
+impl TaskDto {
+    fn from_item(t: tasks::TaskItem) -> Self {
+        Self {
+            path: t.path.to_string_lossy().into_owned(),
+            title: t.title,
+            status: t.status,
+            created: t.created,
+            done: t.done,
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingDto {
+    pub mp3: String,
+    pub title: String,
+    pub recorded_at: String,
+    pub duration: Option<String>,
+    // `type` is a Rust keyword — expose the camelCase `type` the frontend wants.
+    #[serde(rename = "type")]
+    pub recording_type: Option<String>,
+    pub transcript_status: String,
+}
+
+/// Resolve a vault id to (vault path, lexically-safe tasks root). Shared by
+/// list/add/toggle so folder resolution lives in one place; the canonical
+/// escape check is applied per-command (skip-on-read, error-on-write) since
+/// it needs the folder to exist.
+fn tasks_root_for(paths: &ServicePaths, id: &str) -> Result<(PathBuf, PathBuf), String> {
+    let vault = find_vault(paths, id)?;
+    let cfg = capture_config::vault_config(&app_config(paths), id);
+    let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
+    Ok((PathBuf::from(&vault.path), root))
+}
+
+/// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
+/// folder → empty list, never an error (mirrors list_recordings). Never writes.
+pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
+    let Ok((vault_path, root)) = tasks_root_for(paths, id) else {
+        return Vec::new();
+    };
+    // Canonicalize before scanning: a symlinked tasks folder could otherwise
+    // enumerate/read frontmatter outside the vault. A merely missing folder
+    // degrades quietly (list_tasks returns empty); an escape is warned.
+    if root.exists() {
+        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
+            log::warn!("list_tasks: tasks folder resolves outside the vault: {e}");
+            return Vec::new();
+        }
+    }
+    tasks::list_tasks(&root)
+        .into_iter()
+        .map(TaskDto::from_item)
+        .collect()
+}
+
+/// Create a task from a title (creating the tasks folder if needed). Rejects
+/// an empty title; returns the created task so the UI can prepend it. `today`
+/// (`YYYY-MM-DD`) is supplied by the caller — no clock in core.
+pub fn add_task(
+    paths: &ServicePaths,
+    id: &str,
+    title: &str,
+    today: &str,
+) -> Result<TaskDto, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("A task needs a title.".to_string());
+    }
+    let (vault_path, root) = tasks_root_for(paths, id)?;
+    // The registry can list a vault whose folder was moved/deleted; without
+    // this guard the create_dir_all below would RESURRECT the missing vault
+    // path (+ Tasks) and write a task into a directory that is no longer a
+    // real vault. `start_capture` guards its recording write the same way.
+    if !vault_path.is_dir() {
+        return Err(format!("Vault folder not found: {}", vault_path.display()));
+    }
+    // Validate the folder resolves inside the vault BEFORE creating it: this
+    // canonicalizes the nearest existing ancestor, so a symlink/junction at any
+    // ancestor is caught even when the leaf doesn't exist yet — create_dir_all
+    // then can't create a directory (or write a task) outside the vault. The
+    // lexical safe_recording_root already rejected `..`/absolute components.
+    capture_paths::assert_path_inside_vault(&vault_path, &root)?;
+    std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
+    let path = tasks::create_task(&root, title, today)
+        .map_err(|e| format!("Could not create task: {e}"))?;
+    Ok(TaskDto {
+        path: path.to_string_lossy().into_owned(),
+        title: title.to_string(),
+        status: "new".to_string(),
+        created: today.to_string(),
+        done: false,
+    })
+}
+
+/// Set a task's status. `status` must be one of new/done/archived. The path
+/// (from list_tasks) is re-validated inside the vault's tasks root by
+/// `tasks::set_task_status`. Returns the task's display title (for the
+/// announce hook), not `()` — callers that don't need it (the IPC command)
+/// map it away.
+pub fn set_task_status(
+    paths: &ServicePaths,
+    id: &str,
+    task_path: &str,
+    status: &str,
+) -> Result<String, String> {
+    if !matches!(status, "new" | "done" | "archived") {
+        return Err(format!("Unknown task status: {status}"));
+    }
+    let (vault_path, root) = tasks_root_for(paths, id)?;
+    // Mirror list_tasks/add_task: safe_recording_root is only lexical, so
+    // canonicalize and reject a tasks folder that resolves outside the vault
+    // before writing — keeps the "assert root inside vault before any write"
+    // invariant uniform across all three task commands. (Core also
+    // canonicalizes root + path and requires containment.)
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    }
+    tasks::set_task_status(&root, Path::new(task_path), status)?;
+    // Display title for the announce hook ("Marked 'Buy milk' done…", per the
+    // design spec): the frontmatter `title:` field, same extraction
+    // `tasks::collect_tasks` uses for the list — create_task's filename is
+    // slugified (spaces/case stripped, dated), so it can't stand in for the
+    // title itself. Fall back to the file stem only when the title field is
+    // absent (a hand-authored task) or the file became unreadable right after
+    // the write above — an honest degrade, not the primary source.
+    let stem = Path::new(task_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| task_path.to_string());
+    let title = std::fs::read_to_string(task_path)
+        .ok()
+        .and_then(|content| capture_note::note_field(&content, "title"))
+        .unwrap_or(stem);
+    Ok(title)
+}
+
+/// Number of OPEN tasks (status != "done"; archived already excluded by
+/// list_tasks) in a vault, for the vault-row badge. Unknown vault / unsafe or
+/// missing folder / escape → 0, never an error (mirrors list_tasks). Read-only.
+pub fn count_open_tasks(paths: &ServicePaths, id: &str) -> usize {
+    let Ok((vault_path, root)) = tasks_root_for(paths, id) else {
+        return 0;
+    };
+    if root.exists() {
+        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
+            log::warn!("count_open_tasks: tasks folder resolves outside the vault: {e}");
+            return 0;
+        }
+    }
+    tasks::list_tasks(&root)
+        .into_iter()
+        .filter(|t| t.status != "done")
+        .count()
+}
+
+/// Read-only list of a vault's past recordings for the Recordings view.
+/// Scans the vault's recording roots (custom folder, or both mode defaults)
+/// and reads each recording's companion note for type/duration. An unknown
+/// vault or unreadable roots yield an empty list — never an error (mirrors
+/// discovery's degrade-to-empty rule). Never writes into the vault.
+pub fn list_recordings(paths: &ServicePaths, id: &str) -> Vec<RecordingDto> {
+    let Ok(vault) = find_vault(paths, id) else {
+        return Vec::new();
+    };
+    let cfg = capture_config::vault_config(&app_config(paths), id);
+    // No swallowed error: a rejected (unsafe) folder is skipped WITH a warning,
+    // matching run_recovery/scan_and_enqueue — a silent filter_map would hide it.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for folder in cfg.recording_roots() {
+        let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), folder) else {
+            log::warn!("list_recordings: skipping unsafe recording folder {folder:?}");
+            continue;
+        };
+        roots.push(root);
+    }
+    recordings::list_recordings(&roots)
+        .into_iter()
+        .map(|e| RecordingDto {
+            mp3: e.mp3_path.to_string_lossy().into_owned(),
+            title: e.title,
+            recorded_at: e.recorded_at,
+            duration: e.duration,
+            recording_type: e.recording_type,
+            transcript_status: e.transcript_status.as_dto_str().to_string(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -187,5 +400,53 @@ mod tests {
         assert!(launched.borrow().is_empty(), "must not launch anything");
         open_daily_note(&paths, "deadbeef01234567", date(), true, &launch).unwrap();
         assert!(launched.borrow()[0].starts_with("obsidian://new?"));
+    }
+
+    #[test]
+    fn add_list_and_toggle_tasks_through_the_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        let created = add_task(&paths, "deadbeef01234567", "Buy milk", "2026-07-09").unwrap();
+        assert_eq!(created.title, "Buy milk");
+        assert!(!created.done);
+        assert!(vault.join("Tasks").is_dir());
+        let listed = list_tasks(&paths, "deadbeef01234567");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(count_open_tasks(&paths, "deadbeef01234567"), 1);
+        let title = set_task_status(&paths, "deadbeef01234567", &created.path, "done").unwrap();
+        assert_eq!(title, "Buy milk");
+        assert_eq!(count_open_tasks(&paths, "deadbeef01234567"), 0);
+    }
+
+    #[test]
+    fn task_service_errors_mirror_the_command_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _) = fixture(dir.path(), "MyVault");
+        assert!(add_task(&paths, "deadbeef01234567", "   ", "2026-07-09").is_err());
+        assert!(add_task(&paths, "unknown", "x", "2026-07-09").is_err());
+        assert!(
+            set_task_status(&paths, "deadbeef01234567", "whatever.md", "bogus")
+                .unwrap_err()
+                .contains("Unknown task status")
+        );
+        assert!(list_tasks(&paths, "unknown").is_empty());
+    }
+
+    #[test]
+    fn add_task_refuses_a_missing_vault_dir() {
+        // A stale registry must not resurrect a deleted vault (same guard as
+        // the IPC command).
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        std::fs::remove_dir_all(&vault).unwrap();
+        assert!(add_task(&paths, "deadbeef01234567", "x", "2026-07-09").is_err());
+    }
+
+    #[test]
+    fn list_recordings_degrades_to_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _) = fixture(dir.path(), "MyVault");
+        assert!(list_recordings(&paths, "deadbeef01234567").is_empty());
+        assert!(list_recordings(&paths, "unknown").is_empty());
     }
 }
