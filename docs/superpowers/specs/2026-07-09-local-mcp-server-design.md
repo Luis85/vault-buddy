@@ -32,9 +32,12 @@ Decisions locked during brainstorming:
 - **Reads + the existing sanctioned task writes.** No note-content
   reading — that is a genuinely new vault capability (privacy, size, path
   design) and is out of scope.
-- **One global "Allow task writes" toggle**, default off. Two explicit
-  opt-ins total (enable server, enable writes). Finer grants (per-vault,
-  per-call approval) are future work.
+- **One global write-grant toggle**, default off, labeled **"Allow vault
+  writes"** — it governs everything that can put a file in a vault over
+  MCP: `add_task`, `set_task_status`, and the daily-note create branch
+  (Codex review catch: a "task writes" label would understate the grant).
+  Two explicit opt-ins total (enable server, enable writes). Finer grants
+  (per-vault, per-call approval) are future work.
 - **Official Rust SDK (`rmcp`)** rather than a hand-rolled protocol layer:
   three real clients must interoperate, so protocol corners (version
   negotiation, sessions, JSON-RPC edge cases) belong to the SDK. Version
@@ -150,7 +153,7 @@ App-global (not per-vault), stored in the existing
 - Write tools are **hidden from `tools/list` when `allowWrites` is off**
   (advisory — models shouldn't try) *and* **rejected at call time**
   (authoritative — clients cache tool lists) with a clear error:
-  "Task writes are disabled in Vault Buddy settings."
+  "Vault writes are disabled in Vault Buddy settings."
 - **Audit**: every tool call logs tool name, vault id, outcome, duration
   through the existing log plumbing. Argument *values* are summarized
   (e.g. title length), not logged verbatim — the redaction discipline the
@@ -181,7 +184,7 @@ subtlety (Codex review catch): the daily-note path is open-OR-CREATE —
 `daily_note_uri` deliberately builds `obsidian://new` when today's note
 doesn't exist, which mutates the vault. Over MCP that create branch counts
 as a write: with `allowWrites` off, `open_daily_note` on a missing note
-returns a tool error ("today's daily note doesn't exist; enable task
+returns a tool error ("today's daily note doesn't exist; enable vault
 writes in Vault Buddy settings to let clients create it") instead of
 launching anything. The human UI path is unchanged (always may create). Failures
 return MCP tool errors carrying the same user-facing messages the panel
@@ -213,7 +216,9 @@ live-updates (e.g. a bind failure after enable).
 **`McpSettings.vue`** — a new section in the Buddy-settings view (app-global,
 so it sits with `UpdateSettings`/`DiagnosticsSettings`, not per-vault
 settings), self-contained like `Tasks.vue` (IPC + local state, no new Pinia
-store): enable toggle, port field, "Allow task writes" toggle, token with
+store): enable toggle, port field, an **"Allow vault writes"** toggle whose
+helper text names the full grant ("AI clients may add tasks, update task
+status, and create today's daily note"), token with
 copy + regenerate, live status line, and **copyable client setup snippets**
 rendered from the live port/token for the three target clients — the
 `claude mcp add --transport http` one-liner (with the Authorization
