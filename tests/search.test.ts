@@ -273,6 +273,37 @@ describe("Search", () => {
     expect(wrapper.findAll('[data-testid="hit-icon-file"]')).toHaveLength(1);
   });
 
+  it("Ctrl+Enter and Ctrl+click open the hit without closing the panel", async () => {
+    const { wrapper, calls } = mountSearch();
+    await type(wrapper, "alpha");
+    await wrapper
+      .get('[data-testid="search-input"]')
+      .trigger("keydown", { key: "Enter", ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.filter((c) => c.cmd === "open_search_result")).toHaveLength(1);
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
+    await wrapper
+      .get('[data-testid="search-hit"]')
+      .trigger("click", { ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.filter((c) => c.cmd === "open_search_result")).toHaveLength(2);
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
+  });
+
+  it("hovering a row syncs the keyboard selection", async () => {
+    const { wrapper } = mountSearch({
+      search_vaults: () =>
+        response([hit(), hit({ name: "second", file: "Notes/second" })]),
+    });
+    await type(wrapper, "alpha");
+    await wrapper.findAll('[data-testid="search-hit"]')[1].trigger("mousemove");
+    expect(
+      wrapper
+        .get('[data-testid="search-input"]')
+        .attributes("aria-activedescendant"),
+    ).toBe("search-hit-1");
+  });
+
   it("Escape clears the query first instead of bubbling", async () => {
     const { wrapper } = mountSearch();
     const input = wrapper.get('[data-testid="search-input"]');

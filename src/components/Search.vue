@@ -79,9 +79,9 @@ function onArrow(event: KeyboardEvent, delta: 1 | -1) {
   });
 }
 
-function onEnter() {
+function onEnter(event: KeyboardEvent) {
   const hit = hits.value[selected.value];
-  if (hit) void openHit(hit);
+  if (hit) void openHit(hit, event.ctrlKey || event.metaKey);
 }
 
 watch(query, () => {
@@ -125,14 +125,16 @@ async function runSearch(trimmed: string) {
   }
 }
 
-async function openHit(hit: SearchHit) {
+async function openHit(hit: SearchHit, keepOpen = false) {
   try {
     await invoke("open_search_result", { id: hit.vaultId, file: hit.file });
     // Same acknowledgement pattern as vault/daily-note opens (the panel
     // window is the announcer for opens); a failed open stays silent — the
-    // toast is the feedback there.
+    // toast is the feedback there. Ctrl-open keeps the panel up for a
+    // multi-open workflow; plain open gets out of the way like a vault
+    // launch does.
     announce(noteOpenedMessage(hit.name));
-    void invoke("close_panel").catch(() => {});
+    if (!keepOpen) void invoke("close_panel").catch(() => {});
   } catch (e) {
     notifications.error(String(e));
     logWarning(`open_search_result failed for ${hit.file}: ${String(e)}`);
@@ -228,13 +230,14 @@ onUnmounted(() => {
           data-testid="search-hit"
           role="option"
           :aria-selected="row.i === selected"
-          class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-2 py-1 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
           :class="
             row.i === selected
               ? 'border-violet-400/60 bg-white/10'
               : 'border-white/10 bg-white/5'
           "
-          @click="openHit(row.hit)"
+          @click="openHit(row.hit, $event.ctrlKey || $event.metaKey)"
+          @mousemove="selected = row.i"
         >
           <span class="flex w-full min-w-0 items-center gap-1.5">
             <svg
