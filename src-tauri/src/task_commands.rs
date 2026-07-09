@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_paths, discovery, tasks};
+use vault_buddy_core::{capture_config, capture_note, capture_paths, discovery, tasks, uri};
 
 use crate::capture_commands::ConfigWriteLock;
 
@@ -63,6 +63,8 @@ pub struct TaskDto {
     pub status: String,
     pub created: String,
     pub done: bool,
+    pub due: Option<String>,
+    pub priority: Option<String>,
 }
 
 impl TaskDto {
@@ -73,6 +75,8 @@ impl TaskDto {
             status: t.status,
             created: t.created,
             done: t.done,
+            due: t.due,
+            priority: t.priority,
         }
     }
 }
@@ -89,6 +93,26 @@ fn tasks_root_for(id: &str) -> Result<(PathBuf, PathBuf), String> {
     let cfg = capture_config::vault_config(&capture_config::load_config(), id);
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
     Ok((PathBuf::from(&vault.path), root))
+}
+
+/// Validate an optional due date for a write. Ok(None) when absent.
+fn validated_due(due: Option<String>) -> Result<Option<String>, String> {
+    match due {
+        Some(d) if !tasks::is_valid_due(&d) => {
+            Err(format!("Due date must be YYYY-MM-DD, got: {d}"))
+        }
+        other => Ok(other),
+    }
+}
+
+/// Validate an optional priority for a write. `normal` normalizes to None —
+/// absent means normal, and a `priority: normal` line is never written.
+fn validated_priority(priority: Option<String>) -> Result<Option<String>, String> {
+    match priority.as_deref() {
+        None | Some("normal") => Ok(None),
+        Some("high") | Some("low") => Ok(priority),
+        Some(other) => Err(format!("Unknown task priority: {other}")),
+    }
 }
 
 /// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
@@ -116,11 +140,18 @@ pub fn list_tasks(id: String) -> Vec<TaskDto> {
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it.
 #[tauri::command]
-pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
+pub fn add_task(
+    id: String,
+    title: String,
+    due: Option<String>,
+    priority: Option<String>,
+) -> Result<TaskDto, String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("A task needs a title.".to_string());
     }
+    let due = validated_due(due)?;
+    let priority = validated_priority(priority)?;
     let (vault_path, root) = tasks_root_for(&id)?;
     // The registry can list a vault whose folder was moved/deleted; without
     // this guard the create_dir_all below would RESURRECT the missing vault
@@ -144,7 +175,7 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
         .date_naive()
         .format("%Y-%m-%d")
         .to_string();
-    let path = tasks::create_task(&root, title, &today)
+    let path = tasks::create_task(&root, title, &today, due.as_deref(), priority.as_deref())
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
@@ -152,6 +183,8 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
         status: "new".to_string(),
         created: today,
         done: false,
+        due,
+        priority,
     })
 }
 
@@ -193,4 +226,72 @@ pub fn count_open_tasks(id: String) -> usize {
         .into_iter()
         .filter(|t| t.status != "done")
         .count()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPatchDto {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub due: Option<String>,
+    #[serde(default)]
+    pub clear_due: bool,
+    #[serde(default)]
+    pub priority: Option<String>,
+}
+
+/// Apply an inline-editor patch to a task: rename, set/clear the due date,
+/// set the priority — validated up front, then ONE surgical multi-key
+/// frontmatter write (title quoted here; `priority: normal` and a cleared due
+/// remove their lines). An empty patch is a no-op Ok.
+#[tauri::command]
+pub fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), String> {
+    let mut updates: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(title) = &patch.title {
+        let t = title.trim();
+        if t.is_empty() {
+            return Err("A task needs a title.".to_string());
+        }
+        updates.push(("title", Some(capture_note::yaml_quote(t))));
+    }
+    if patch.clear_due {
+        updates.push(("due", None));
+    } else if patch.due.is_some() {
+        updates.push(("due", validated_due(patch.due.clone())?));
+    }
+    if patch.priority.is_some() {
+        updates.push(("priority", validated_priority(patch.priority.clone())?));
+    }
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let (vault_path, root) = tasks_root_for(&id)?;
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    }
+    let refs: Vec<(&str, Option<&str>)> = updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+    tasks::update_task_fields(&root, Path::new(&path), &refs)
+}
+
+/// Open a task document in Obsidian from its list row. Read-only: canonical
+/// containment inside the vault's tasks root (list_tasks hands out canonical
+/// paths, so the vault-relative part is computed against the CANONICAL vault
+/// path or strip_prefix would fail on Windows' \\?\ form), then an
+/// `obsidian://open` launch, logged by `uri::launch` like every vault open.
+#[tauri::command]
+pub fn open_task(id: String, path: String) -> Result<(), String> {
+    let (vault_path, root) = tasks_root_for(&id)?;
+    let canon_root =
+        std::fs::canonicalize(&root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let canon_path = std::fs::canonicalize(Path::new(&path))
+        .map_err(|e| format!("Cannot resolve task file: {e}"))?;
+    if !canon_path.starts_with(&canon_root) {
+        return Err("Task file is outside the vault's tasks folder".to_string());
+    }
+    let canon_vault = std::fs::canonicalize(&vault_path)
+        .map_err(|e| format!("Cannot resolve vault folder: {e}"))?;
+    let rel = uri::vault_relative_no_ext(&canon_path, &canon_vault)
+        .ok_or_else(|| format!("task is outside its vault: {path}"))?;
+    uri::launch(&uri::open_file_uri(&id, &rel))
 }
