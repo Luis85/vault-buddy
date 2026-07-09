@@ -7,6 +7,7 @@
 use crate::capture_note::note_field;
 use crate::capture_note::yaml_quote;
 use crate::transcript::dir_entries;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Lower-case, collapse every run of non-alphanumeric chars to a single
@@ -98,7 +99,14 @@ pub fn is_task(content: &str) -> bool {
 /// or file degrades silently.
 pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     let mut out = Vec::new();
-    collect_tasks(root, &mut out);
+    // Canonicalize the root so every descended subdirectory can be
+    // containment-checked against it, and track walked dirs so a reparse-point
+    // cycle can't loop forever. A missing/unresolvable root → empty list
+    // (best-effort, unchanged).
+    if let Ok(canon_root) = std::fs::canonicalize(root) {
+        let mut walked = HashSet::new();
+        collect_tasks(&canon_root, &canon_root, &mut walked, &mut out);
+    }
     // Open first; within each group newest created first, then title. Sorting
     // once here (not per directory) orders the whole subtree as one list.
     out.sort_by(|a, b| {
@@ -110,18 +118,39 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     out
 }
 
-/// Recursively collect `type: Task` files under `dir` into `out`, best-effort.
-/// Descends only into REAL subdirectories — `dir_entries` reads file types
-/// without following symlinks, so a symlinked/junction directory reports as a
-/// symlink (not a dir) and is skipped, which keeps the walk inside the tasks
-/// folder (it can never leave via a link). Dot-directories (`.obsidian`,
+/// Recursively collect `type: Task` files under `dir` (a canonical path) into
+/// `out`, best-effort. A subdirectory is descended only after canonicalizing it
+/// and confirming it still resolves under `canon_root` — so a reparse point (a
+/// symlink, or a Windows junction, which `dir_entries`' file type can report as
+/// a plain directory) that leads OUTSIDE the tasks folder is never walked. Each
+/// walked directory is recorded in `walked` so a reparse point pointing back
+/// INSIDE the folder can't recurse forever. Dot-directories (`.obsidian`,
 /// `.trash`, `.git`, …) are skipped so config dirs aren't walked and trashed
-/// tasks aren't surfaced. Unreadable dirs/files degrade silently.
-fn collect_tasks(dir: &Path, out: &mut Vec<TaskItem>) {
+/// tasks aren't surfaced. Unreadable/unresolvable dirs and files degrade
+/// silently.
+fn collect_tasks(
+    dir: &Path,
+    canon_root: &Path,
+    walked: &mut HashSet<PathBuf>,
+    out: &mut Vec<TaskItem>,
+) {
+    if !walked.insert(dir.to_path_buf()) {
+        return; // already walked — guards against a reparse-point cycle
+    }
     for (path, ft, name) in dir_entries(dir) {
         if ft.is_dir() {
-            if !name.starts_with('.') {
-                collect_tasks(&path, out);
+            if name.starts_with('.') {
+                continue;
+            }
+            // Resolve the child through any symlink/junction and require it to
+            // stay inside the tasks folder before descending — the no-follow
+            // dirent file type can't be trusted for a junction on Windows.
+            // Unresolvable or escaping → skip.
+            match std::fs::canonicalize(&path) {
+                Ok(child) if child.starts_with(canon_root) => {
+                    collect_tasks(&child, canon_root, walked, out)
+                }
+                _ => continue,
             }
             continue;
         }
@@ -393,6 +422,26 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
         let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
         assert_eq!(titles, vec!["Inside"]); // Escapee is never followed
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tasks_terminates_on_a_directory_cycle() {
+        // A link pointing back to an ancestor inside the folder must not loop,
+        // and the task must be counted once. Guards the walked-set + canonical
+        // containment (the same guard catches a Windows junction cycle).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-08\n---\n",
+        );
+        // Tasks/sub/loop -> Tasks — a cycle back to an ancestor, still inside root.
+        std::os::unix::fs::symlink(&root, root.join("sub").join("loop")).unwrap();
+        let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["A"]); // terminates; A counted exactly once
     }
 
     #[test]
