@@ -5,6 +5,22 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TaskItem, TaskPatch } from "../types";
 
+// Split a free-text tags field on commas/whitespace, strip leading `#`s,
+// drop empties, dedupe case-insensitively keeping the first casing.
+// Client-side parsing is lenient; the shell strictly validates the charset
+// and errors on a bad token.
+function parseTagsInput(s: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of s.split(/[\s,]+/)) {
+    const t = raw.replace(/^#/, "");
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push(t);
+  }
+  return out;
+}
+
 // A due only counts when it's a plain YYYY-MM-DD — a hand-authored value like
 // "tomorrow" degrades to no-date instead of erroring (defensive read).
 const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -43,6 +59,7 @@ const adding = ref(false);
 const showAddOptions = ref(false);
 const addDue = ref("");
 const addPriority = ref("normal");
+const addTags = ref("");
 // Task paths whose set_task_status write is in flight. A second action on the
 // same row while its write is pending would race the first (on a slow disk the
 // two writes can land out of order, leaving the file disagreeing with the UI),
@@ -154,12 +171,15 @@ async function add() {
     const args: Record<string, unknown> = { id: props.vaultId, title };
     if (addDue.value) args.due = addDue.value;
     if (addPriority.value !== "normal") args.priority = addPriority.value;
+    const tags = parseTagsInput(addTags.value);
+    if (tags.length > 0) args.tags = tags;
     const created = await invoke<TaskItem>("add_task", args);
     tasks.value.unshift(created);
     sortInPlace();
     newTitle.value = "";
     addDue.value = "";
     addPriority.value = "normal";
+    addTags.value = "";
     showAddOptions.value = false;
   } catch (e) {
     notifications.error(String(e));
@@ -230,6 +250,7 @@ const editingPath = ref<string | null>(null);
 const editTitle = ref("");
 const editDue = ref("");
 const editPriority = ref("normal");
+const editTags = ref("");
 
 const normalizedPriority = (t: TaskItem) =>
   t.priority === "high" || t.priority === "low" ? t.priority : "normal";
@@ -239,6 +260,7 @@ function startEdit(task: TaskItem) {
   editTitle.value = task.title;
   editDue.value = dueOf(task) ?? "";
   editPriority.value = normalizedPriority(task);
+  editTags.value = task.tags.join(", ");
 }
 
 function cancelEdit() {
@@ -255,14 +277,17 @@ async function saveEdit(task: TaskItem) {
     else patch.due = editDue.value;
   }
   if (editPriority.value !== normalizedPriority(task)) patch.priority = editPriority.value;
+  const parsedTags = parseTagsInput(editTags.value);
+  if (parsedTags.join(" ") !== task.tags.join(" ")) patch.tags = parsedTags;
   editingPath.value = null;
   if (Object.keys(patch).length === 0) return;
   // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
-  const before = { title: task.title, due: task.due, priority: task.priority };
+  const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
   if (patch.title) task.title = patch.title;
   if (patch.clearDue) task.due = null;
   else if (patch.due) task.due = patch.due;
   if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
+  if (patch.tags !== undefined) task.tags = patch.tags;
   sortInPlace();
   busy.value.add(task.path);
   try {
@@ -383,6 +408,14 @@ async function saveEdit(task: TaskItem) {
           {{ p }}
         </button>
       </div>
+      <input
+        v-model="addTags"
+        data-testid="task-add-tags"
+        type="text"
+        placeholder="#tags"
+        aria-label="Tags"
+        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      />
     </div>
 
     <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
@@ -453,6 +486,14 @@ async function saveEdit(task: TaskItem) {
                   </button>
                 </div>
               </div>
+              <input
+                v-model="editTags"
+                data-testid="task-edit-tags"
+                type="text"
+                placeholder="#tags"
+                aria-label="Tags"
+                class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+              />
               <div class="flex items-center justify-end gap-1">
                 <button
                   type="button"

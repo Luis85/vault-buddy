@@ -36,7 +36,8 @@ function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>>
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
-      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [] };
+      const a = args as { title: string; due?: string; priority?: string; tags?: string[] };
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, priority: a.priority ?? null, tags: a.tags ?? [] };
       list = [created, ...list];
       return created;
     }
@@ -536,6 +537,63 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-filter"]').setValue("Task 1");
     expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
     expect(wrapper.text()).toContain("Task 1");
+  });
+
+  it("adds a task with tags parsed from the options row", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    await wrapper.get('[data-testid="task-add-tags"]').setValue("#work, home/errands");
+    await wrapper.get('[data-testid="task-input"]').setValue("Tagged one");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({
+      cmd: "add_task",
+      args: { id: "v1", title: "Tagged one", tags: ["work", "home/errands"] },
+    });
+  });
+
+  it("edits tags inline: sends the parsed list, empty input clears", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/e.md", title: "T", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    const input = wrapper.get('[data-testid="task-edit-tags"]');
+    expect((input.element as HTMLInputElement).value).toBe("work");
+    await input.setValue("work urgent");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")?.args).toMatchObject({
+      patch: { tags: ["work", "urgent"] },
+    });
+    // Now clear them.
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-tags"]').setValue("");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    const clears = calls.filter((c) => c.cmd === "update_task");
+    expect(clears[clears.length - 1]?.args).toMatchObject({ patch: { tags: [] } });
+  });
+
+  it("editor omits tags from the patch when unchanged", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/e.md", title: "T", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-title"]').setValue("T2");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")?.args).toEqual({
+      id: "v1",
+      path: "C:/v/Tasks/e.md",
+      patch: { title: "T2" },
+    });
   });
 
 });
