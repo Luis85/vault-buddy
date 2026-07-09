@@ -581,7 +581,7 @@ git commit -m "feat(core): services module for vaults + gated daily-note open"
   - `pub struct RecordingDto { pub mp3: String, pub title: String, pub recorded_at: String, pub duration: Option<String>, pub recording_type: Option<String>, pub transcript_status: String }` (`Clone, serde::Serialize`, camelCase, `recording_type` renamed `"type"`)
   - `pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto>`
   - `pub fn add_task(paths: &ServicePaths, id: &str, title: &str, today: &str) -> Result<TaskDto, String>`
-  - `pub fn set_task_status(paths: &ServicePaths, id: &str, task_path: &str, status: &str) -> Result<String, String>` — **returns the task's display title** (file stem of `task_path`), for the announce hook
+  - `pub fn set_task_status(paths: &ServicePaths, id: &str, task_path: &str, status: &str) -> Result<String, String>` — **returns the task's display title**: the frontmatter `title:` of the toggled task, falling back to the file stem only when absent (`create_task` SLUGIFIES file names — "Buy milk" becomes `2026-07-09-buy-milk.md` — so the stem is NOT the human title; implementation correction over an earlier draft of this plan, per the spec's "it already parses the file")
   - `pub fn count_open_tasks(paths: &ServicePaths, id: &str) -> usize`
   - `pub fn list_recordings(paths: &ServicePaths, id: &str) -> Vec<RecordingDto>`
 
@@ -663,16 +663,13 @@ The moved functions keep the existing guard sequences VERBATIM (they are the san
 - `set_task_status` — the `matches!(status, "new" | "done" | "archived")` check (error text `Unknown task status: {status}`), root containment asserts, `tasks::set_task_status(&root, Path::new(task_path), status)`, then on success return the display title:
 
 ```rust
-    // Display title for the announce hook: the file stem. create_task names
-    // files after the title, so this matches for buddy-created tasks and is
-    // an honest fallback for hand-authored ones — without re-parsing
-    // frontmatter on the write path.
-    let title = Path::new(task_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| task_path.to_string());
-    Ok(title)
+    // Display title for the announce hook: the frontmatter `title:` of the
+    // toggled task. The file stem is NOT usable — create_task slugifies
+    // names ("Buy milk" → 2026-07-09-buy-milk.md), so the stem never equals
+    // the human title (this plan's own test pins that). Fall back to the
+    // stem only for a hand-authored task without a title field.
 ```
+(The concrete parsing reuses the same frontmatter read the toggle itself performs — see the implemented `services::set_task_status`.)
 
 - `list_recordings` — move the body of `capture_commands::list_recordings` (the per-folder `safe_recording_root` warn-and-skip loop over `cfg.recording_roots()`, then `recordings::list_recordings(&roots)` mapped to `RecordingDto`); move the `RecordingDto` struct (with its `#[serde(rename = "type")]`) and `TaskDto` into `services.rs`.
 
