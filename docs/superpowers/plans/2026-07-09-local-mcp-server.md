@@ -284,7 +284,7 @@ git commit -m "feat(core): mcp config section with serializer round-trip"
   - `pub fn list_vaults(paths: &ServicePaths) -> Vec<discovery::Vault>`
   - `pub fn find_vault(paths: &ServicePaths, id: &str) -> Result<discovery::Vault, String>`
   - `pub fn open_vault(paths: &ServicePaths, id: &str, launch: &dyn Fn(&str) -> Result<(), String>) -> Result<(), String>`
-  - `pub fn open_daily_note(paths: &ServicePaths, id: &str, date: chrono::NaiveDate, allow_create: bool, launch: &dyn Fn(&str) -> Result<(), String>) -> Result<(), String>`
+  - `pub fn open_daily_note(paths: &ServicePaths, id: &str, date: chrono::NaiveDate, allow_create: bool, launch: &dyn Fn(&str) -> Result<(), String>) -> Result<bool, String>` — the bool reports whether the call CREATED the note (took the `obsidian://new` branch), so callers that announce a create never re-derive existence separately (a pre-call peek can disagree with the branch actually taken under a race — Task 5 review catch). The IPC wrapper maps it away.
   - In `core/src/lib.rs`: `pub fn daily_note_target(vault_path: &Path, date: NaiveDate) -> (String, bool)` (rel path without `.md`, exists)
   - Exact gate message constant: `pub const DAILY_NOTE_CREATE_GATED: &str = "today's daily note doesn't exist; enable vault writes in Vault Buddy settings to let clients create it";`
 
@@ -505,14 +505,18 @@ pub fn open_daily_note(
     date: chrono::NaiveDate,
     allow_create: bool,
     launch: &dyn Fn(&str) -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let vault = find_vault(paths, id)?;
     let vault_path = std::path::Path::new(&vault.path);
     let (rel, exists) = daily_note_target(vault_path, date);
     if exists {
-        launch(&uri::open_file_uri(&vault.id, &rel))
+        launch(&uri::open_file_uri(&vault.id, &rel))?;
+        Ok(false)
     } else if allow_create {
-        launch(&uri::new_file_uri(&vault.id, &rel))
+        launch(&uri::new_file_uri(&vault.id, &rel))?;
+        // Report the branch actually taken — the MCP tool's on_write/created
+        // field must not re-derive existence with a second racy stat.
+        Ok(true)
     } else {
         Err(DAILY_NOTE_CREATE_GATED.to_string())
     }
@@ -540,6 +544,7 @@ pub fn open_vault(id: String) -> Result<(), String> {
 pub fn open_daily_note(id: String) -> Result<(), String> {
     let today = Local::now().date_naive();
     // allow_create: true — the human UI keeps its open-or-create behavior.
+    // The created flag exists for the MCP announce path; IPC discards it.
     services::open_daily_note(
         &services::ServicePaths::real(),
         &id,
@@ -547,6 +552,7 @@ pub fn open_daily_note(id: String) -> Result<(), String> {
         true,
         &|u| uri::launch(u),
     )
+    .map(|_created| ())
 }
 ```
 
@@ -1252,12 +1258,42 @@ impl VaultBuddyMcp {
         )]))
     }
 
-    /// Audit line for every tool call — names + outcome, never argument
-    /// values (title lengths only), per the spec's redaction rule.
-    fn audit(tool: &str, vault_id: &str, outcome: &Result<(), String>) {
+    /// Audit line for every tool call: tool name, vault id, outcome,
+    /// duration — the spec's audit invariant, all four fields. The Err arm
+    /// logs a STATIC outcome label (`outcome_label`), never the raw error:
+    /// service errors interpolate client-provided values ("Unknown task
+    /// status: {status}"), and argument values must not reach the log (the
+    /// full message still goes to the client in the tool result).
+    fn audit(tool: &str, vault_id: &str, outcome: &Result<(), String>, started: std::time::Instant) {
+        let dur_ms = started.elapsed().as_millis();
         match outcome {
-            Ok(()) => log::info!("mcp: tool={tool} vault={vault_id} ok"),
-            Err(e) => log::warn!("mcp: tool={tool} vault={vault_id} failed: {e}"),
+            Ok(()) => log::info!("mcp: tool={tool} vault={vault_id} ok dur_ms={dur_ms}"),
+            Err(e) => {
+                let label = Self::outcome_label(e);
+                log::warn!("mcp: tool={tool} vault={vault_id} failed={label} dur_ms={dur_ms}");
+            }
+        }
+    }
+
+    /// Static log label for a service error — client text never reaches the
+    /// log (spec redaction rule); mappings cover every known error family.
+    fn outcome_label(e: &str) -> &'static str {
+        if e == WRITES_DISABLED {
+            "writes-disabled"
+        } else if e == vault_buddy_core::services::DAILY_NOTE_CREATE_GATED {
+            "create-gated"
+        } else if e.starts_with("Vault not found") {
+            "vault-not-found"
+        } else if e.starts_with("Unknown task status") {
+            "invalid-status"
+        } else if e.starts_with("A task needs a title") {
+            "empty-title"
+        } else if e.starts_with("Vault folder not found") {
+            "vault-dir-missing"
+        } else if e.starts_with("Could not create") {
+            "create-failed"
+        } else {
+            "error"
         }
     }
 
@@ -1265,6 +1301,11 @@ impl VaultBuddyMcp {
         chrono::Local::now().date_naive()
     }
 }
+
+// NOTE: every tool method captures `let started = std::time::Instant::now();`
+// as its first statement and threads it into each `audit` call (the spec's
+// duration field). Remaining 3-arg `Self::audit(...)` forms in the snippets
+// below predate this amendment — the implemented code is authoritative.
 
 #[tool_router(router = read_tools_router, vis = "pub")]
 impl VaultBuddyMcp {
@@ -1326,16 +1367,16 @@ impl VaultBuddyMcp {
     ) -> Result<CallToolResult, McpError> {
         let allow_create = self.writes_allowed();
         let date = Self::today();
-        // Peek at existence first so a create (a vault write) can fire on_write.
         let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
             Ok(v) => v,
             Err(e) => {
-                Self::audit("open_daily_note", &p.vault_id, &Err(e.clone()));
+                Self::audit("open_daily_note", &p.vault_id, &Err(e.clone()), started);
                 return Self::tool_error(e);
             }
         };
-        let (_, existed) =
-            vault_buddy_core::daily_note_target(std::path::Path::new(&vault.path), date);
+        // The service reports whether it actually CREATED the note — no
+        // pre-call existence peek (a second stat can disagree with the branch
+        // taken under a race, mis-firing on_write; Task 5 review catch).
         let outcome = services::open_daily_note(
             &self.deps.paths,
             &p.vault_id,
@@ -1343,17 +1384,22 @@ impl VaultBuddyMcp {
             allow_create,
             &*self.deps.launch,
         );
-        Self::audit("open_daily_note", &p.vault_id, &outcome);
+        Self::audit(
+            "open_daily_note",
+            &p.vault_id,
+            &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
+        );
         match outcome {
-            Ok(()) => {
-                if !existed {
+            Ok(created) => {
+                if created {
                     (self.deps.on_write)(WriteEvent {
                         kind: WriteKind::CreateDailyNote,
                         title: date.format("%Y-%m-%d").to_string(),
                         vault_name: vault.name,
                     });
                 }
-                Self::ok_json(&serde_json::json!({ "opened": true, "created": !existed }))
+                Self::ok_json(&serde_json::json!({ "opened": true, "created": created }))
             }
             Err(e) => Self::tool_error(e),
         }
