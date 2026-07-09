@@ -74,6 +74,27 @@ describe("Tasks", () => {
     expect(call?.args).toMatchObject({ id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", done: true });
   });
 
+  it("ignores a re-toggle while the row's write is still in flight", async () => {
+    // A slow set_task_status: the second change on the same row must not fire a
+    // second concurrent write (which could land out of order vs the first).
+    let resolve: (() => void) | undefined;
+    const { wrapper, calls } = mountView({
+      set_task_status: () => new Promise<null>((r) => {
+        resolve = () => r(null);
+      }),
+    });
+    await flushPromises();
+    const checkbox = wrapper.get('[data-testid="task-checkbox"]');
+    await checkbox.trigger("change"); // first toggle — write pending
+    await checkbox.trigger("change"); // re-toggle while pending — must be ignored
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "set_task_status")).toHaveLength(1);
+    expect((checkbox.element as HTMLInputElement).disabled).toBe(true);
+    resolve?.();
+    await flushPromises();
+    expect((checkbox.element as HTMLInputElement).disabled).toBe(false);
+  });
+
   it("reverts the checkbox and notifies on toggle failure", async () => {
     const notifications = useNotificationsStore();
     const { wrapper } = mountView({

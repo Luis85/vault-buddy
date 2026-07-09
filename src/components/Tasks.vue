@@ -14,6 +14,13 @@ const tasks = ref<TaskItem[]>([]);
 const newTitle = ref("");
 const folder = ref(""); // empty shows the "Tasks" placeholder
 const adding = ref(false);
+// Task paths whose set_task_status write is in flight. A second toggle of the
+// same row while its write is pending would race the first (on a slow disk the
+// two writes can land out of order, leaving the file disagreeing with the UI),
+// so the checkbox is disabled and re-entrant toggles are ignored until it
+// resolves. A reactive Set so the template's :disabled tracks add/delete.
+const toggling = ref(new Set<string>());
+const isToggling = (path: string) => toggling.value.has(path);
 
 function sortInPlace() {
   // Open first, newest created first, then title — mirrors the backend order
@@ -71,11 +78,15 @@ async function add() {
 }
 
 async function toggle(task: TaskItem) {
+  // Ignore a re-toggle while this row's write is still pending — otherwise two
+  // concurrent set_task_status writes for the same task can land out of order.
+  if (toggling.value.has(task.path)) return;
   const done = !task.done;
   // Optimistic: flip locally, revert + notify on failure.
   task.done = done;
   task.status = done ? "done" : "new";
   sortInPlace();
+  toggling.value.add(task.path);
   try {
     await invoke("set_task_status", { id: props.vaultId, path: task.path, done });
   } catch (e) {
@@ -84,6 +95,8 @@ async function toggle(task: TaskItem) {
     sortInPlace();
     notifications.error(String(e));
     logWarning(`set_task_status failed: ${String(e)}`);
+  } finally {
+    toggling.value.delete(task.path);
   }
 }
 
@@ -166,8 +179,9 @@ async function saveFolder() {
           type="checkbox"
           data-testid="task-checkbox"
           :checked="task.done"
+          :disabled="isToggling(task.path)"
           :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
-          class="shrink-0 cursor-pointer accent-violet-500"
+          class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
           @change="toggle(task)"
         />
         <span
