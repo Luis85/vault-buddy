@@ -1,0 +1,36 @@
+[package]
+name = "vault_buddy_mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vault_buddy_core = { path = "../core" }
+rmcp = { version = "2.2", features = [
+    "server",
+    "macros",
+    "transport-streamable-http-server",
+] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt", "net", "macros", "time"] }
+tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Must match rmcp's schemars major — verify with `cargo tree -p rmcp | grep schemars`.
+schemars = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+log = "0.4"
+getrandom = "0.3"
+base64 = "0.22"
+subtle = "2"
+
+[dev-dependencies]
+rmcp = { version = "2.2", features = [
+    "client",
+    "transport-streamable-http-client",
+    "reqwest",
+] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+bytes = "1"
+futures-util = "0.3"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }

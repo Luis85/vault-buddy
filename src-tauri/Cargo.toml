@@ -37,4 +37,4 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"]
 
 [workspace]
 resolver = "2"
-members = ["core", "capture", "transcribe"]
+members = ["core", "capture", "transcribe", "mcp"]
