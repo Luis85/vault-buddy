@@ -300,6 +300,19 @@ pub fn list_recordings(paths: &ServicePaths, id: &str) -> Vec<RecordingDto> {
             log::warn!("list_recordings: skipping unsafe recording folder {folder:?}");
             continue;
         };
+        // Canonicalize before scanning: safe_recording_root is only lexical,
+        // so a recording folder that is a symlink/junction out of the vault
+        // would otherwise be scanned — enumerating capture MP3s and reading
+        // companion-note frontmatter outside the vault. Same read guard as
+        // list_tasks (and recovery asserts the same before its scan): a
+        // merely missing root stays pushed — scanning it yields nothing — an
+        // escape is warned and skipped, never failing the whole call.
+        if root.exists() {
+            if let Err(e) = capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root) {
+                log::warn!("list_recordings: recording folder resolves outside the vault: {e}");
+                continue;
+            }
+        }
         roots.push(root);
     }
     recordings::list_recordings(&roots)
@@ -461,5 +474,31 @@ mod tests {
         let (paths, _) = fixture(dir.path(), "MyVault");
         assert!(list_recordings(&paths, "deadbeef01234567").is_empty());
         assert!(list_recordings(&paths, "unknown").is_empty());
+    }
+
+    // Codex review catch pinned as a test: safe_recording_root is only
+    // lexical, so a recording folder that is a symlink out of the vault would
+    // be scanned — enumerating capture MP3s and reading companion-note
+    // frontmatter OUTSIDE the vault. The read must skip it (warn, degrade to
+    // empty), same guard as list_tasks — and this path is MCP-exposed.
+    #[cfg(unix)]
+    #[test]
+    fn list_recordings_skips_a_symlinked_root_outside_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        // A real capture layout OUTSIDE the vault, reachable only through the
+        // symlinked default folder <vault>/Meetings.
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("2026").join("07")).unwrap();
+        std::fs::write(
+            outside
+                .join("2026")
+                .join("07")
+                .join("2026-07-09 1405 Meeting.mp3"),
+            "mp3",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, vault.join("Meetings")).unwrap();
+        assert!(list_recordings(&paths, "deadbeef01234567").is_empty());
     }
 }
