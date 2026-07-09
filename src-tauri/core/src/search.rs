@@ -6,9 +6,8 @@
 //! docs/superpowers/specs/2026-07-09-vault-search-design.md.
 
 use crate::discovery::Vault;
-use crate::transcript::dir_entries;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use crate::vault_walk::{walk_vault, Flow};
+use std::path::Path;
 
 /// Trimmed CHARS (not bytes) a query needs before anything is scanned — a
 /// 1-char query would match nearly every file in every vault.
@@ -25,39 +24,41 @@ pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024;
 pub const SNIPPET_CHARS: usize = 120;
 
 /// One search hit. `file` is exactly the `obsidian://open` `file` parameter:
-/// vault-relative, `/`-separated, `.md` dropped for notes (Obsidian's
-/// expected form, mirroring `uri::vault_relative_no_ext`) but the extension
-/// KEPT for attachments — without it Obsidian would resolve `report` as
-/// `report.md`.
-#[derive(Debug, Clone, PartialEq)]
+/// vault-relative, `/`-separated, extension dropped ONLY for exactly-`.md`
+/// notes (Obsidian's canonical form, `uri::vault_relative_no_ext`) and KEPT
+/// otherwise — for attachments (else Obsidian resolves `report` as
+/// `report.md`) and for `.MD`-style notes (exact-path open instead of
+/// resolver guessing). Serializes camelCase — the command returns this type
+/// directly (no DTO layer; `discovery::Vault` precedent).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub vault_id: String,
     pub vault_name: String,
-    /// Display name: file stem for `.md` notes, full filename for attachments.
+    /// Display name: file stem for notes, full filename for attachments.
     pub name: String,
     /// Vault-relative parent folder, `/`-separated, "" for the vault root.
     pub folder: String,
     pub file: String,
     /// First matching content line (notes only; None for name-only matches).
     pub snippet: Option<String>,
+    /// Note (any-case `.md`) vs attachment — drives the row icon and the
+    /// kind-suffixed row key in the frontend.
+    pub is_note: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
     pub hits: Vec<SearchHit>,
     pub truncated: bool,
 }
 
-/// A hit plus which class it belongs to: filename matches surface before
-/// content-only matches, and the per-vault sort needs to know.
-struct RawHit {
-    name_matched: bool,
-    hit: SearchHit,
-}
-
-/// Collect at most this many hits per vault. The bound keeps transient memory
-/// small on a pathological query, and the `+ 1` makes "more existed"
-/// observable even when a single vault fills the whole budget.
+/// Collect at most this many hits per class per vault. The bound keeps
+/// transient memory small on a pathological query, and the `+ 1` makes
+/// "more existed" observable even when a single vault fills the whole budget
+/// (a full list always exceeds any budget ≤ MAX_RESULTS, so the merge's
+/// accounting reports it as truncated).
 const PER_VAULT_CAP: usize = MAX_RESULTS + 1;
 
 /// Search every vault, in the given order, until `MAX_RESULTS` hits are
@@ -66,108 +67,146 @@ const PER_VAULT_CAP: usize = MAX_RESULTS + 1;
 /// files degrade silently — scan noise, the same documented exception to the
 /// no-swallow rule as the tasks/recordings walks.
 pub fn search_vaults(vaults: &[Vault], query: &str) -> SearchResponse {
+    search_vaults_with_cancel(vaults, query, &|| false)
+}
+
+/// Cancellable variant: `is_cancelled` is polled once per file — a
+/// superseded scan stops walking instead of running a stale multi-vault
+/// walk to completion. A cancelled scan returns what it has; the caller is
+/// about to discard it. See `scan_vault` for the per-vault contract.
+pub fn search_vaults_with_cancel(
+    vaults: &[Vault],
+    query: &str,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> SearchResponse {
     let trimmed = query.trim();
     if trimmed.chars().count() < MIN_QUERY_CHARS {
         return SearchResponse::default();
     }
     let query_lower = trimmed.to_lowercase();
+    merge_vault_hits(
+        vaults
+            .iter()
+            .map(|v| scan_vault(v, &query_lower, is_cancelled))
+            .collect(),
+    )
+}
+
+/// Vault-order merge with the global budget: filename hits before content
+/// hits per vault, `truncated` when anything is dropped (or the budget is
+/// spent with vaults still unmerged — the flag only drives a "refine your
+/// query" footer).
+fn merge_vault_hits(per_vault: Vec<Option<VaultHits>>) -> SearchResponse {
     let mut hits: Vec<SearchHit> = Vec::new();
     let mut truncated = false;
-    for vault in vaults {
+    for scanned in per_vault {
         let budget = MAX_RESULTS - hits.len();
         if budget == 0 {
-            // Budget spent with vaults still unscanned: report truncation
-            // rather than scanning on just to prove more matches exist — the
-            // flag only drives a "refine your query" footer.
             truncated = true;
             break;
         }
-        // Canonicalize the root so every descended subdirectory can be
-        // containment-checked against it (same as the tasks walk). A vault
-        // whose folder moved/vanished degrades silently.
-        let Ok(canon_root) = std::fs::canonicalize(Path::new(&vault.path)) else {
-            continue;
-        };
-        let mut raw: Vec<RawHit> = Vec::new();
-        let mut walked = HashSet::new();
-        collect_hits(
-            &canon_root,
-            &canon_root,
-            vault,
-            &query_lower,
-            &mut walked,
-            &mut raw,
-        );
-        // Filename matches surface before content-only matches. The sort is
-        // stable, so the deterministic (name-ordered) walk order holds within
-        // each class.
-        raw.sort_by_key(|r| !r.name_matched);
-        if raw.len() > budget {
+        let Some(v) = scanned else { continue };
+        let mut vault_hits = v.name_hits;
+        vault_hits.extend(v.content_hits);
+        if vault_hits.len() > budget {
             truncated = true;
-            raw.truncate(budget);
+            vault_hits.truncate(budget);
         }
-        hits.extend(raw.into_iter().map(|r| r.hit));
+        hits.extend(vault_hits);
     }
     SearchResponse { hits, truncated }
 }
 
-/// Recursively collect matches under `dir` (a canonical path), best-effort,
-/// stopping at `PER_VAULT_CAP`. The walk is the tasks walk's discipline: a
-/// subdirectory is descended only after canonicalizing it and confirming it
-/// still resolves under `canon_root` (a symlink/junction escaping the vault
-/// is never walked — the no-follow dirent type can't be trusted for a
-/// junction), `walked` breaks reparse cycles, and dot-entries are skipped
-/// (`.obsidian`, `.trash`, `.git`; dot-files like `.DS_Store` and our own
-/// `.mp3.part` temps). Entries are processed in name order so the walk — and
-/// therefore which hits survive the cap — is deterministic.
-fn collect_hits(
-    dir: &Path,
-    canon_root: &Path,
+/// A vault's collected matches, split by class (see `scan_vault`).
+struct VaultHits {
+    name_hits: Vec<SearchHit>,
+    content_hits: Vec<SearchHit>,
+}
+
+/// One vault's matches: filename matches then content-only matches, walk
+/// order within each class. Two independently-capped lists make "filename
+/// matches surface before content-only matches" a HARD guarantee: when the
+/// content list fills, the walk stops READING file contents but keeps
+/// checking NAMES to the end of the vault (dirent string ops — cheap), so a
+/// late-walking filename match can never be displaced by earlier content
+/// matches; only a full filename list aborts the walk (its hits alone
+/// already exceed any budget, so nothing later could surface anyway).
+/// `is_cancelled` is polled once per file. `None` = unresolvable vault path
+/// (moved/deleted), skipped silently.
+fn scan_vault(
     vault: &Vault,
     query_lower: &str,
-    walked: &mut HashSet<PathBuf>,
-    out: &mut Vec<RawHit>,
-) {
-    if out.len() >= PER_VAULT_CAP || !walked.insert(dir.to_path_buf()) {
-        return;
-    }
-    let mut entries = dir_entries(dir);
-    entries.sort_by(|a, b| a.2.cmp(&b.2));
-    for (path, ft, name) in entries {
-        if out.len() >= PER_VAULT_CAP {
-            return;
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<VaultHits> {
+    let canon_root = std::fs::canonicalize(Path::new(&vault.path)).ok()?;
+    let mut name_hits: Vec<SearchHit> = Vec::new();
+    let mut content_hits: Vec<SearchHit> = Vec::new();
+    walk_vault(&canon_root, &mut |path, name| {
+        if is_cancelled() {
+            return Flow::Stop;
         }
         if name.starts_with('.') {
-            continue;
+            return Flow::Continue; // dot-files: .DS_Store, our .mp3.part temps
         }
-        if ft.is_dir() {
-            match std::fs::canonicalize(&path) {
-                Ok(child) if child.starts_with(canon_root) => {
-                    collect_hits(&child, canon_root, vault, query_lower, walked, out)
-                }
-                _ => continue,
-            }
-            continue;
-        }
-        if !ft.is_file() {
-            continue; // symlinked files are not followed, same as the tasks walk
-        }
-        if let Some(stem) = name.strip_suffix(".md") {
+        if let Some(stem) = md_stem(name) {
             let name_matched = stem.to_lowercase().contains(query_lower);
-            let snippet = content_snippet(&path, query_lower);
-            if name_matched || snippet.is_some() {
-                if let Some(hit) = make_hit(vault, canon_root, &path, stem, snippet, true) {
-                    out.push(RawHit { name_matched, hit });
+            // Once the content list is full the read is pure waste for
+            // content classification — but a name-matched note still reads
+            // for its display snippet.
+            let snippet = if name_matched || content_hits.len() < PER_VAULT_CAP {
+                content_snippet(path, query_lower)
+            } else {
+                None
+            };
+            if name_matched {
+                if name_hits.len() < PER_VAULT_CAP {
+                    if let Some(hit) = make_hit(vault, &canon_root, path, stem, snippet, true) {
+                        name_hits.push(hit);
+                    }
+                } else {
+                    return Flow::Stop; // neither class can grow further
+                }
+            } else if snippet.is_some() && content_hits.len() < PER_VAULT_CAP {
+                if let Some(hit) = make_hit(vault, &canon_root, path, stem, snippet, true) {
+                    content_hits.push(hit);
                 }
             }
-        } else if name.to_lowercase().contains(query_lower) {
-            if let Some(hit) = make_hit(vault, canon_root, &path, &name, None, false) {
-                out.push(RawHit {
-                    name_matched: true,
-                    hit,
-                });
+        } else {
+            // Attachment: filename match only. Extensionless files are
+            // excluded — Obsidian doesn't index them, so opening would
+            // resolve to the like-named note, and their `file` value
+            // collides with a note's dropped-.md form.
+            if Path::new(name).extension().is_none() {
+                return Flow::Continue;
+            }
+            if name.to_lowercase().contains(query_lower) {
+                if name_hits.len() < PER_VAULT_CAP {
+                    if let Some(hit) = make_hit(vault, &canon_root, path, name, None, false) {
+                        name_hits.push(hit);
+                    }
+                } else {
+                    return Flow::Stop;
+                }
             }
         }
+        Flow::Continue
+    });
+    Some(VaultHits {
+        name_hits,
+        content_hits,
+    })
+}
+
+/// Case-insensitive `.md` note check returning the stem. The suffix is 3
+/// ASCII bytes, so the byte compare can't split a char boundary and
+/// `len - 3` is a valid boundary; `> 3` keeps the stem non-empty (a bare
+/// ".md"/".MD" is a dot-file anyway).
+fn md_stem(name: &str) -> Option<&str> {
+    let b = name.as_bytes();
+    if b.len() > 3 && b[b.len() - 3..].eq_ignore_ascii_case(b".md") {
+        Some(&name[..name.len() - 3])
+    } else {
+        None
     }
 }
 
@@ -180,14 +219,24 @@ fn content_snippet(path: &Path, query_lower: &str) -> Option<String> {
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;
+    // One whole-file lowercase + contains, then a per-line pass only on the
+    // rare matching file — the per-line variant allocated a lowered String
+    // for every line of every file on the live-search hot path. (A query
+    // can only match within a line, so the pre-filter never lies.)
+    if !content.to_lowercase().contains(query_lower) {
+        return None;
+    }
     content
         .lines()
         .find_map(|line| snippet_from_line(line, query_lower))
 }
 
-/// Assemble a hit for `path` (which lives under `canon_root` by
-/// construction). `None` only if the path can't be made vault-relative —
-/// which the walk's containment guarantees against, so it's pure defense.
+/// Assemble a hit for `path` (inside `canon_root` by the walk's containment).
+/// The URI `file` param drops the extension ONLY for exactly-".md" notes
+/// (Obsidian's canonical form); any other name keeps it — `file=Plan.MD`
+/// opens by exact path instead of gambling that the resolver maps the
+/// extensionless form back. `None` only if the path can't be made
+/// vault-relative, which the walk guarantees against (pure defense).
 fn make_hit(
     vault: &Vault,
     canon_root: &Path,
@@ -201,14 +250,11 @@ fn make_hit(
         .parent()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_default();
-    let file = if is_note {
+    let exactly_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+    let file = if is_note && exactly_md {
         crate::uri::vault_relative_no_ext(path, canon_root)?
     } else {
-        let s = rel.to_string_lossy().replace('\\', "/");
-        if s.is_empty() {
-            return None;
-        }
-        s
+        crate::uri::vault_relative(path, canon_root)?
     };
     Some(SearchHit {
         vault_id: vault.id.clone(),
@@ -217,6 +263,7 @@ fn make_hit(
         folder,
         file,
         snippet,
+        is_note,
     })
 }
 
@@ -317,9 +364,6 @@ mod tests {
         assert!(s.ends_with('…'), "got: {s}");
     }
 
-    // `Vault`, `Path` etc. arrive via the module's own imports through the
-    // `use super::*;` above — no extra use lines needed here.
-
     fn vault(id: &str, name: &str, path: &Path) -> Vault {
         Vault {
             id: id.to_string(),
@@ -395,6 +439,84 @@ mod tests {
         assert_eq!(h.folder, "slides");
         assert_eq!(h.file, "slides/Alpha deck.pdf"); // extension KEPT for the URI
         assert_eq!(h.snippet, None); // attachments never get content snippets
+        assert!(!h.is_note);
+    }
+
+    #[test]
+    fn uppercase_md_extension_is_a_note() {
+        // Regression: case-sensitive strip_suffix(".md") classified Plan.MD
+        // as an attachment, so its content was silently never searched
+        // (Windows filesystems are case-insensitive; other tools save .MD).
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "Plan.MD", "project alpha\n");
+        let r = search_vaults(&[vault("v1", "W", dir.path())], "alpha");
+        assert_eq!(r.hits.len(), 1);
+        let h = &r.hits[0];
+        assert_eq!(h.name, "Plan"); // displayed by stem
+        assert!(h.is_note);
+        // The URI keeps the extension unless it is exactly ".md": file=Plan.MD
+        // opens by exact path instead of gambling on resolver guessing.
+        assert_eq!(h.file, "Plan.MD");
+        assert!(h.snippet.as_deref().unwrap().contains("alpha"));
+    }
+
+    #[test]
+    fn filename_match_survives_a_flood_of_content_matches() {
+        // Regression: v1 capped collection in walk order BEFORE the
+        // filename-first sort, so a name-matched file walking after 101
+        // content matches was dropped entirely — the exact-name hit vanished
+        // while content-only hits filled the list.
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..(MAX_RESULTS + 20) {
+            write(dir.path(), &format!("a {i:03}.md"), "contains alpha here\n");
+        }
+        write(dir.path(), "zzz alpha last.md", "no match in body\n");
+        let r = search_vaults(&[vault("v1", "W", dir.path())], "alpha");
+        assert!(r.truncated);
+        assert_eq!(r.hits.len(), MAX_RESULTS);
+        assert_eq!(r.hits[0].name, "zzz alpha last"); // hard guarantee
+    }
+
+    #[test]
+    fn extensionless_files_are_excluded() {
+        // Obsidian doesn't index extensionless files: obsidian://open on one
+        // resolves to the like-named NOTE, and its `file` value collides
+        // with the note's dropped-.md form (duplicate row keys). Never
+        // surfaced.
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "Notes/idea.md", "x\n");
+        write(dir.path(), "Notes/idea", "x\n");
+        let r = search_vaults(&[vault("v1", "W", dir.path())], "idea");
+        assert_eq!(r.hits.len(), 1);
+        assert!(r.hits[0].is_note);
+        assert_eq!(r.hits[0].file, "Notes/idea");
+    }
+
+    #[test]
+    fn search_hit_serializes_camel_case() {
+        // The command returns core types directly (DTO layer deleted) — the
+        // wire names the TS interfaces expect are pinned here.
+        let hit = SearchHit {
+            vault_id: "v".into(),
+            vault_name: "V".into(),
+            name: "n".into(),
+            folder: String::new(),
+            file: "n".into(),
+            snippet: None,
+            is_note: true,
+        };
+        let v = serde_json::to_value(&hit).unwrap();
+        for key in [
+            "vaultId",
+            "vaultName",
+            "isNote",
+            "folder",
+            "file",
+            "snippet",
+            "name",
+        ] {
+            assert!(v.get(key).is_some(), "missing wire key {key}");
+        }
     }
 
     #[test]
