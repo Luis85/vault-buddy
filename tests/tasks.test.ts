@@ -188,7 +188,7 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
   });
 
-  it("opens a task in Obsidian when its title is clicked", async () => {
+  it("opens a task in Obsidian when its title is clicked and closes the panel", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();
     await wrapper.get('[data-testid="task-open"]').trigger("click");
@@ -197,11 +197,14 @@ describe("Tasks", () => {
       cmd: "open_task",
       args: { id: "v1", path: "C:/v/Tasks/2026-07-08-b.md" },
     });
+    // Obsidian takes over — the panel gets out of the way, mirroring the
+    // vault-open and recording-open flows.
+    expect(calls.find((c) => c.cmd === "close_panel")).toBeTruthy();
   });
 
-  it("toasts and keeps the panel state when open_task fails", async () => {
+  it("toasts and keeps the panel open when open_task fails", async () => {
     const notifications = useNotificationsStore();
-    const { wrapper } = mountView({
+    const { wrapper, calls } = mountView({
       open_task: () => {
         throw new Error("no vault");
       },
@@ -210,6 +213,8 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-open"]').trigger("click");
     await flushPromises();
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+    // A failed launch must NOT hide the panel — the error toast is there.
+    expect(calls.find((c) => c.cmd === "close_panel")).toBeUndefined();
   });
 
   it("renders a due chip and priority dot from the task fields", async () => {
@@ -418,6 +423,23 @@ describe("Tasks", () => {
     const { wrapper } = mountView(); // 2 tasks
     await flushPromises();
     expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+  });
+
+  it("ignores stale filter text once the task count drops to five or fewer", async () => {
+    // Archiving tasks below the threshold hides the filter INPUT; the stale
+    // query must stop applying too, or the user is stuck on a narrowed/empty
+    // list with no visible way to clear it.
+    const { wrapper } = mountView({ list_tasks: () => many(6) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-filter"]').setValue("Task 0");
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
+    // Archive the one visible row ("Task 0") — total drops to 5.
+    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+    // All 5 remaining tasks render; the stale "Task 0" query is ignored.
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(5);
+    expect(wrapper.text()).not.toContain("No tasks match");
   });
 
   it("keeps the progress bar counting the unfiltered list", async () => {

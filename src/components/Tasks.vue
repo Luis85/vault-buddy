@@ -63,7 +63,10 @@ const progress = computed(() => {
 const showFilter = computed(() => tasks.value.length > 5);
 const filteredTasks = computed(() => {
   const q = filter.value.trim().toLowerCase();
-  if (!q) return tasks.value;
+  // Gate on showFilter too: archiving below the threshold hides the INPUT,
+  // and a stale query with no visible control would strand the user on a
+  // narrowed/empty list until remount.
+  if (!q || !showFilter.value) return tasks.value;
   return tasks.value.filter((t) => t.title.toLowerCase().includes(q));
 });
 
@@ -198,6 +201,11 @@ async function archive(task: TaskItem) {
 async function openInObsidian(task: TaskItem) {
   try {
     await invoke("open_task", { id: props.vaultId, path: task.path });
+    // Obsidian takes over — get the panel out of the way. Panel visibility is
+    // owned by Rust (close_panel), best-effort, mirroring the vault-open and
+    // recording-open flows. A failed launch falls through to the catch and
+    // keeps the panel up so the error toast is visible.
+    void invoke("close_panel").catch(() => {});
   } catch (e) {
     notifications.error(String(e));
     logWarning(`open_task failed: ${String(e)}`);
