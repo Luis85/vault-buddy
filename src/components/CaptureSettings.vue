@@ -2,7 +2,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
-import type { AudioDevice, AudioDevices, CaptureConfig } from "../types";
+import type {
+  AudioDevice,
+  AudioDevices,
+  CaptureConfig,
+  TasksConfig,
+} from "../types";
 import SelectMenu from "./SelectMenu.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
@@ -140,7 +145,7 @@ onMounted(async () => {
   // Separate invoke (not in the Promise.all above) so a tasks-config failure
   // can't block the capture form from loading — the tasks folder is optional.
   try {
-    const tcfg = await invoke<{ tasksFolder: string | null }>("get_tasks_config", {
+    const tcfg = await invoke<TasksConfig>("get_tasks_config", {
       id: props.vaultId,
     });
     tasksFolder.value = tcfg.tasksFolder ?? "";
