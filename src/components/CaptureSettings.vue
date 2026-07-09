@@ -21,6 +21,10 @@ const saveState = ref<"idle" | "saving" | "saved">("idle");
 const saveError = ref<string | null>(null);
 const folderError = ref<string | null>(null);
 
+// Pass-through only: the "default recording mode" control is gone (the mode
+// is a per-recording choice in the Record view), but the loaded value is
+// still sent back unchanged on save so the IPC contract and config.json
+// schema stay as they are.
 const mode = ref<"meeting" | "voice-note">("meeting");
 const recordingFolder = ref("");
 const createNote = ref(true);
@@ -34,10 +38,11 @@ const transcriptionModel = ref("small");
 const transcriptionLanguage = ref(""); // "" = auto-detect (maps to null on save)
 const transcriptTimestamps = ref(true);
 
-// The per-vault tasks folder lives in the same app-side config but has its own
-// command pair and its own Save — independent of the capture-config save (which
-// already preserves tasks_folder), so a tasks-config failure can't block the
-// capture form and vice versa.
+// The per-vault tasks folder lives in the same app-side config but keeps its
+// own command pair (the capture-config save already preserves tasks_folder).
+// It saves with the form's single Save button, as an independent invoke in
+// save() below — so a tasks-config failure can't block the capture save and
+// vice versa; its errors stay field-level.
 const tasksFolder = ref(""); // "" shows the "Tasks" placeholder / clears to default
 const tasksFolderError = ref<string | null>(null);
 
@@ -56,10 +61,6 @@ const inputOptions = computed(() =>
 );
 const outputOptions = computed(() =>
   withConfigured(devices.value.outputs, outputDevice.value),
-);
-
-const folderPlaceholder = computed(() =>
-  mode.value === "meeting" ? "Meetings" : "Voice Notes",
 );
 
 // Option list for the bitrate SelectMenu dropdown ({ value, label }).
@@ -102,7 +103,6 @@ const transcriptionSettings = computed({
 // no-ops; this only becomes visible after a save set it to "saved".
 watch(
   [
-    mode,
     recordingFolder,
     createNote,
     followUpTemplate,
@@ -113,6 +113,7 @@ watch(
     transcriptionModel,
     transcriptionLanguage,
     transcriptTimestamps,
+    tasksFolder,
   ],
   () => {
     if (saveState.value === "saved") saveState.value = "idle";
@@ -158,7 +159,9 @@ async function save() {
   saveState.value = "saving";
   saveError.value = null;
   folderError.value = null;
+  tasksFolderError.value = null;
   const folder = recordingFolder.value.trim();
+  let failed = false;
   try {
     await invoke("set_capture_config", {
       id: props.vaultId,
@@ -176,9 +179,8 @@ async function save() {
         transcriptTimestamps: transcriptTimestamps.value,
       },
     });
-    saveState.value = "saved";
   } catch (e) {
-    saveState.value = "idle";
+    failed = true;
     // Folder rejections are field-level; everything else is form-level.
     // Form state is preserved either way so the user can correct and retry.
     const message = String(e);
@@ -186,20 +188,23 @@ async function save() {
     else saveError.value = message;
     logWarning(`capture settings save failed (vault ${props.vaultId}): ${message}`);
   }
-}
-
-async function saveTasksFolder() {
-  tasksFolderError.value = null;
-  const value = tasksFolder.value.trim();
+  // The tasks folder saves with the same button but through its own command —
+  // deliberately NOT short-circuited by a capture-config failure above, so
+  // neither config's write can block the other's. Its failure stays a
+  // field-level error under the tasks input.
+  const tasks = tasksFolder.value.trim();
   try {
     await invoke("set_tasks_config", {
       id: props.vaultId,
-      tasksFolder: value === "" ? null : value,
+      tasksFolder: tasks === "" ? null : tasks,
     });
   } catch (e) {
+    failed = true;
     tasksFolderError.value = String(e);
     logWarning(`set_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
   }
+  // "Saved ✓" must mean the WHOLE form landed — either failure withholds it.
+  saveState.value = failed ? "idle" : "saved";
 }
 </script>
 
@@ -210,33 +215,6 @@ async function saveTasksFolder() {
   </p>
   <form v-else class="flex flex-col gap-3" @submit.prevent="save">
     <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Default recording mode
-      </h2>
-      <div class="flex gap-1" role="radiogroup" aria-label="Default recording mode">
-        <button
-          v-for="m in [
-            { key: 'meeting', label: 'Meeting' },
-            { key: 'voice-note', label: 'Voice Note' },
-          ] as const"
-          :key="m.key"
-          type="button"
-          role="radio"
-          class="cursor-pointer rounded-lg border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="
-            mode === m.key
-              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-          "
-          :aria-checked="mode === m.key"
-          :data-testid="`mode-${m.key}`"
-          @click="mode = m.key"
-        >
-          {{ m.label }}
-        </button>
-      </div>
-    </section>
-    <section>
       <label class="mb-1 block text-sm text-slate-200" for="capture-folder">
         Recording folder
         <span class="block text-xs text-slate-500">Inside the vault</span>
@@ -246,7 +224,7 @@ async function saveTasksFolder() {
         v-model="recordingFolder"
         data-testid="folder-input"
         type="text"
-        :placeholder="folderPlaceholder"
+        placeholder="Meetings or Voice Notes"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
       />
       <p
@@ -309,10 +287,10 @@ async function saveTasksFolder() {
         wide
       />
     </section>
-    <section v-if="mode === 'meeting'">
+    <section>
       <label class="mb-1 block text-sm text-slate-200" for="capture-output-device">
         Desktop audio from
-        <span class="block text-xs text-slate-500">Loopback output device</span>
+        <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
       </label>
       <SelectMenu
         id="capture-output-device"
@@ -331,26 +309,15 @@ async function saveTasksFolder() {
         Tasks folder
         <span class="block text-xs text-slate-500">Inside the vault</span>
       </label>
-      <div class="flex items-center gap-1">
-        <input
-          id="tasks-folder"
-          v-model="tasksFolder"
-          data-testid="tasks-folder-input"
-          type="text"
-          placeholder="Tasks"
-          aria-label="Tasks folder"
-          class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-          @keydown.enter.prevent="saveTasksFolder"
-        />
-        <button
-          type="button"
-          data-testid="tasks-folder-save"
-          class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          @click="saveTasksFolder"
-        >
-          Save
-        </button>
-      </div>
+      <input
+        id="tasks-folder"
+        v-model="tasksFolder"
+        data-testid="tasks-folder-input"
+        type="text"
+        placeholder="Tasks"
+        aria-label="Tasks folder"
+        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      />
       <p
         v-if="tasksFolderError"
         data-testid="tasks-folder-error"
