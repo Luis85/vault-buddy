@@ -5,6 +5,31 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TaskItem } from "../types";
 
+// A due only counts when it's a plain YYYY-MM-DD — a hand-authored value like
+// "tomorrow" degrades to no-date instead of erroring (defensive read).
+const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const dueOf = (t: TaskItem): string | null =>
+  t.due && DUE_RE.test(t.due) ? t.due : null;
+
+// LOCAL calendar date — never UTC/ISO slicing, matching add_task's local-date
+// rule; near midnight UTC-derived "today" would mis-bucket by a day.
+function localToday(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Deterministic short label (no locale dependence): "Jul 15".
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function dueLabel(d: string): string {
+  const [, m, day] = d.split("-");
+  return `${MONTHS[Number(m) - 1]} ${Number(day)}`;
+}
+const isOverdue = (t: TaskItem): boolean => {
+  const d = dueOf(t);
+  return d !== null && !t.done && d < localToday();
+};
+
 const props = defineProps<{ vaultId: string }>();
 const notifications = useNotificationsStore();
 
@@ -107,6 +132,15 @@ async function archive(task: TaskItem) {
     busy.value.delete(task.path);
   }
 }
+
+async function openInObsidian(task: TaskItem) {
+  try {
+    await invoke("open_task", { id: props.vaultId, path: task.path });
+  } catch (e) {
+    notifications.error(String(e));
+    logWarning(`open_task failed: ${String(e)}`);
+  }
+}
 </script>
 
 <template>
@@ -174,13 +208,35 @@ async function archive(task: TaskItem) {
           class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
           @change="toggle(task)"
         />
-        <span
-          class="min-w-0 flex-1 truncate text-sm"
-          :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
-          :title="task.title"
+        <button
+          type="button"
+          data-testid="task-open"
+          class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :aria-label="`Open ${task.title} in Obsidian`"
+          :title="`Open ${task.title} in Obsidian`"
+          @click="openInObsidian(task)"
         >
-          {{ task.title }}
-        </span>
+          <span
+            v-if="task.priority === 'high' || task.priority === 'low'"
+            data-testid="task-priority"
+            class="h-1.5 w-1.5 shrink-0 rounded-full"
+            :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
+            :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
+            aria-hidden="true"
+          ></span>
+          <span
+            class="min-w-0 flex-1 truncate text-sm"
+            :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+          >
+            {{ task.title }}
+          </span>
+          <span
+            v-if="dueOf(task)"
+            data-testid="task-due"
+            class="shrink-0 text-[10px] tabular-nums"
+            :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
+          >{{ dueLabel(dueOf(task)!) }}</span>
+        </button>
         <button
           type="button"
           data-testid="task-archive"

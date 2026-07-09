@@ -9,8 +9,8 @@ import type { TaskItem } from "../src/types";
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 const sample: TaskItem[] = [
-  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false },
-  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true },
+  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, priority: null },
+  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null },
 ];
 
 function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>> = {}) {
@@ -24,7 +24,7 @@ function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>>
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
-      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false };
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false, due: null, priority: null };
       list = [created, ...list];
       return created;
     }
@@ -167,6 +167,48 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-input"]').trigger("keydown.enter");
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
+  });
+
+  it("opens a task in Obsidian when its title is clicked", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-open"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "open_task")).toEqual({
+      cmd: "open_task",
+      args: { id: "v1", path: "C:/v/Tasks/2026-07-08-b.md" },
+    });
+  });
+
+  it("toasts and keeps the panel state when open_task fails", async () => {
+    const notifications = useNotificationsStore();
+    const { wrapper } = mountView({
+      open_task: () => {
+        throw new Error("no vault");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-open"]').trigger("click");
+    await flushPromises();
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+  });
+
+  it("renders a due chip and priority dot from the task fields", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/p.md", title: "P", status: "new", created: "2026-07-08", done: false, due: "2026-07-15", priority: "high" },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 15");
+    expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(true);
+  });
+
+  it("shows no due chip or dot for a plain task, and no dot for normal", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-due"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(false);
   });
 
 });

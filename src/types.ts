@@ -126,6 +126,16 @@ export interface TaskItem {
   status: string;
   created: string;
   done: boolean;
+  due: string | null;
+  priority: string | null;
+}
+
+/** Patch for the update_task command; only present fields are written. */
+export interface TaskPatch {
+  title?: string;
+  due?: string;
+  clearDue?: boolean;
+  priority?: string;
 }
 
 export interface TasksConfig {
