@@ -215,6 +215,12 @@ is kept so the install button stays visible for retry, and
 `rearm_crash_detection` turns the run marker back on (the prepare step latched
 it off). The `Update` object is stored with `markRaw()` — a Vue reactive
 proxy breaks its private-field `rid` and every real install would throw.
+A quiet startup check (`useStartupUpdateCheck`, installed by PanelRoot only,
+gated by the `checkUpdatesOnStart` setting, ~15 s settle for login networking)
+runs `checkForUpdatesQuietly`: zero trace when current or failed (phase stays
+`idle`, failures only log); on an available update the buddy announces via
+bubble and `requestViewOnNextOpen("settings")` arms the next panel open to
+land on the install UI without yanking an already-open panel.
 
 ### The vault domain (core crate + `vaults` store)
 
