@@ -1,7 +1,6 @@
 use chrono::Local;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use vault_buddy_core::{daily_note_uri, discovery, process, uri};
+use vault_buddy_core::{services, uri};
 
 /// Last facing emitted to the buddy window, so `emit_buddy_facing` fires the
 /// `buddy-facing` event only when the buddy actually crosses the screen midline
@@ -483,41 +482,23 @@ pub fn show_buddy_menu(
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
-fn find_vault(id: &str) -> Result<discovery::Vault, String> {
-    discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or_else(|| format!("vault not found: {id}"))
-}
-
 #[tauri::command]
-pub fn list_vaults() -> Vec<discovery::Vault> {
-    let mut vaults = discovery::discover_vaults();
-    // obsidian.json keeps `open: true` across a full Obsidian quit (that's
-    // how Obsidian restores vaults on relaunch) — only trust the flags
-    // while an Obsidian process actually exists, or the "Open now" group
-    // shows vaults that were merely open last session.
-    if !process::obsidian_running() {
-        for vault in &mut vaults {
-            vault.open = false;
-        }
-    }
-    vaults
+pub fn list_vaults() -> Vec<vault_buddy_core::discovery::Vault> {
+    services::list_vaults(&services::ServicePaths::real())
 }
 
 #[tauri::command]
 pub fn open_vault(id: String) -> Result<(), String> {
-    let vault = find_vault(&id)?;
-    // Address the vault by ID, not name — names can collide across vaults.
-    uri::launch(&uri::open_vault_uri(&vault.id))
+    services::open_vault(&services::ServicePaths::real(), &id, &|u| uri::launch(u))
 }
 
 #[tauri::command]
 pub fn open_daily_note(id: String) -> Result<(), String> {
-    let vault = find_vault(&id)?;
     let today = Local::now().date_naive();
-    let target = daily_note_uri(&vault.id, Path::new(&vault.path), today);
-    uri::launch(&target)
+    // allow_create: true — the human UI keeps its open-or-create behavior.
+    services::open_daily_note(&services::ServicePaths::real(), &id, today, true, &|u| {
+        uri::launch(u)
+    })
 }
 
 /// Reveal the app log folder (holding `vault-buddy.log` and `crash.log`) in
