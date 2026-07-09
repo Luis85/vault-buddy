@@ -23,6 +23,9 @@ if have_pc webkit2gtk-4.1 `# libwebkit2gtk-4.1-dev` \
   && have_pc openssl `# libssl-dev` \
   && have_pc alsa `# libasound2-dev` \
   && [ -e /usr/include/xdo.h ] `# libxdo-dev (no pkg-config .pc; probe its header)` \
+  && command -v make >/dev/null `# build-essential (make)` \
+  && command -v gcc >/dev/null `# build-essential (gcc)` \
+  && command -v g++ >/dev/null `# build-essential (g++ — whisper.cpp is C++)` \
   && command -v cmake >/dev/null `# cmake` \
   && command -v clang >/dev/null `# clang`; then
   echo "setup-linux-deps: all build deps already present — nothing to do"
