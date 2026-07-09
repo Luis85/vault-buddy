@@ -6,12 +6,15 @@ on:
   pull_request:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # Cancel superseded runs only for pull requests — a new PR push should
-  # abandon its own now-stale run. On main, a burst of merges must NOT cancel
-  # an earlier commit's in-flight run: every commit that lands on main gets
-  # validated, and a run cancelled this way otherwise shows up as a red /
-  # "failed" run on main even though nothing actually broke.
+  # PRs share one group per ref, so a new push to a PR cancels that PR's now
+  # stale run (cancel-in-progress below). main pushes get a UNIQUE group per
+  # commit (the SHA) so a burst of merges never cancels an earlier commit's
+  # run. A shared main group would not be enough even with
+  # cancel-in-progress: false: GitHub keeps only the latest *pending* run in a
+  # group and cancels any earlier pending one, so a third merge while the first
+  # run is still going would drop the middle commit's run — leaving it
+  # unvalidated and shown red, the exact failure mode this avoids.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
