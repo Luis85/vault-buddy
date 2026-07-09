@@ -4,4 +4,7 @@
 //! protocol, tools, and the HTTP guard — all testable on Linux.
 
 pub mod http;
+pub mod service;
 pub mod token;
+
+pub use service::{Deps, VaultBuddyMcp, WriteEvent, WriteKind, WRITES_DISABLED};
