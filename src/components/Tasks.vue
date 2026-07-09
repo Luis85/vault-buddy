@@ -36,6 +36,7 @@ const notifications = useNotificationsStore();
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const tasks = ref<TaskItem[]>([]);
+const filter = ref("");
 const newTitle = ref("");
 const adding = ref(false);
 const showAddOptions = ref(false);
@@ -55,6 +56,14 @@ const progress = computed(() => {
   const total = tasks.value.length;
   const done = tasks.value.filter((t) => t.done).length;
   return { total, done, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
+});
+
+// Same threshold as the vault list: a filter only earns its row above 5.
+const showFilter = computed(() => tasks.value.length > 5);
+const filteredTasks = computed(() => {
+  const q = filter.value.trim().toLowerCase();
+  if (!q) return tasks.value;
+  return tasks.value.filter((t) => t.title.toLowerCase().includes(q));
 });
 
 const PRIORITY_RANK: Record<string, number> = { high: 0, low: 2 };
@@ -86,7 +95,7 @@ type Bucket = { key: string; label: string | null; tasks: TaskItem[] };
 const buckets = computed<Bucket[]>(() => {
   const today = localToday();
   const groups: Record<string, TaskItem[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
-  for (const t of tasks.value) {
+  for (const t of filteredTasks.value) {
     if (t.done) groups.done.push(t);
     else {
       const d = dueOf(t);
@@ -266,6 +275,16 @@ async function saveEdit(task: TaskItem) {
       </span>
     </div>
 
+    <input
+      v-if="showFilter"
+      v-model="filter"
+      data-testid="task-filter"
+      type="search"
+      placeholder="Filter tasks…"
+      aria-label="Filter tasks"
+      class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+    />
+
     <div class="flex items-center gap-1">
       <input
         v-model="newTitle"
@@ -337,6 +356,9 @@ async function saveEdit(task: TaskItem) {
     </p>
     <p v-else-if="tasks.length === 0" class="text-xs text-slate-400">
       No tasks yet.
+    </p>
+    <p v-else-if="filteredTasks.length === 0" class="text-xs text-slate-400">
+      No tasks match "{{ filter }}".
     </p>
     <template v-else>
       <div v-for="bucket in buckets" :key="bucket.key" class="mt-1 first:mt-0">

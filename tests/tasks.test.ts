@@ -8,6 +8,17 @@ import type { TaskItem } from "../src/types";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
+const many = (n: number): TaskItem[] =>
+  Array.from({ length: n }, (_, i) => ({
+    path: `C:/v/Tasks/${i}.md`,
+    title: `Task ${i}`,
+    status: "new",
+    created: "2026-07-08",
+    done: false,
+    due: null,
+    priority: null,
+  }));
+
 const sample: TaskItem[] = [
   { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, priority: null },
   { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null },
@@ -362,6 +373,33 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
     expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(false);
+  });
+
+  it("shows the filter only above 5 tasks and narrows by title", async () => {
+    const { wrapper } = mountView({ list_tasks: () => many(6) });
+    await flushPromises();
+    const input = wrapper.get('[data-testid="task-filter"]');
+    await input.setValue("Task 3");
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("Task 3");
+  });
+
+  it("hides the filter for short lists", async () => {
+    const { wrapper } = mountView(); // 2 tasks
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+  });
+
+  it("keeps the progress bar counting the unfiltered list", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        ...many(6),
+        { path: "C:/v/Tasks/d.md", title: "Done one", status: "done", created: "2026-07-01", done: true, due: null, priority: null },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-filter"]').setValue("Task 3");
+    expect(wrapper.get('[data-testid="task-progress"]').text()).toContain("1 / 7");
   });
 
 });
