@@ -91,12 +91,40 @@ pub fn is_task(content: &str) -> bool {
     has_closed_frontmatter(content) && note_field(content, "type").as_deref() == Some("Task")
 }
 
-/// Every `type: Task` file directly under `root`, best-effort. Open tasks
-/// (status != "done") first, newest `created` first with title as tiebreaker;
-/// completed tasks after. A missing/unreadable root or file degrades silently.
+/// Every `type: Task` file anywhere under `root`, best-effort — the configured
+/// tasks folder is walked recursively so tasks organized into subfolders are
+/// all surfaced. Open tasks (status != "done") first, newest `created` first
+/// with title as tiebreaker; completed tasks after. A missing/unreadable root
+/// or file degrades silently.
 pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     let mut out = Vec::new();
-    for (path, ft, name) in dir_entries(root) {
+    collect_tasks(root, &mut out);
+    // Open first; within each group newest created first, then title. Sorting
+    // once here (not per directory) orders the whole subtree as one list.
+    out.sort_by(|a, b| {
+        a.done
+            .cmp(&b.done)
+            .then(b.created.cmp(&a.created))
+            .then(a.title.cmp(&b.title))
+    });
+    out
+}
+
+/// Recursively collect `type: Task` files under `dir` into `out`, best-effort.
+/// Descends only into REAL subdirectories — `dir_entries` reads file types
+/// without following symlinks, so a symlinked/junction directory reports as a
+/// symlink (not a dir) and is skipped, which keeps the walk inside the tasks
+/// folder (it can never leave via a link). Dot-directories (`.obsidian`,
+/// `.trash`, `.git`, …) are skipped so config dirs aren't walked and trashed
+/// tasks aren't surfaced. Unreadable dirs/files degrade silently.
+fn collect_tasks(dir: &Path, out: &mut Vec<TaskItem>) {
+    for (path, ft, name) in dir_entries(dir) {
+        if ft.is_dir() {
+            if !name.starts_with('.') {
+                collect_tasks(&path, out);
+            }
+            continue;
+        }
         if !ft.is_file() || !name.ends_with(".md") {
             continue;
         }
@@ -119,14 +147,6 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
             done,
         });
     }
-    // Open first; within each group newest created first, then title.
-    out.sort_by(|a, b| {
-        a.done
-            .cmp(&b.done)
-            .then(b.created.cmp(&a.created))
-            .then(a.title.cmp(&b.title))
-    });
-    out
 }
 
 /// Return `content` with the frontmatter `status:` line set to `new_status`,
@@ -304,6 +324,75 @@ mod tests {
         );
         let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
         assert_eq!(titles, vec!["Good"]);
+    }
+
+    #[test]
+    fn list_tasks_walks_subdirectories_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "top.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Top\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            &root.join("work"),
+            "mid.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Mid\"\ncreated: 2026-07-07\n---\n",
+        );
+        write(
+            &root.join("work/q3"),
+            "deep.md",
+            "---\ntype: Task\nstatus: done\ntitle: \"Deep\"\ncreated: 2026-07-06\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        // All three found regardless of depth; open first (newest created), done last.
+        assert_eq!(titles, vec!["Top", "Mid", "Deep"]);
+    }
+
+    #[test]
+    fn list_tasks_skips_dot_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "real.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Real\"\ncreated: 2026-07-08\n---\n",
+        );
+        // A task in a hidden dir (e.g. .trash) must NOT be surfaced by the walk.
+        write(
+            &root.join(".trash"),
+            "gone.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Gone\"\ncreated: 2026-07-08\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["Real"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tasks_does_not_follow_symlinked_subdir() {
+        // A symlinked subdir pointing outside the tasks folder must not be
+        // walked — dir_entries reports it as a symlink (not a dir), so the walk
+        // skips it and can't leave the tasks folder.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        write(
+            &root,
+            "inside.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Inside\"\ncreated: 2026-07-08\n---\n",
+        );
+        // A real dir OUTSIDE the tasks folder, with a task in it, linked in.
+        let outside = dir.path().join("outside");
+        write(
+            &outside,
+            "escapee.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Escapee\"\ncreated: 2026-07-08\n---\n",
+        );
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+        let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["Inside"]); // Escapee is never followed
     }
 
     #[test]
