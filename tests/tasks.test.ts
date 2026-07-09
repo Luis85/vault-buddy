@@ -264,4 +264,31 @@ describe("Tasks", () => {
     }
   });
 
+  it("adds a task with due and priority from the options row", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    await wrapper.get('[data-testid="task-add-due"]').setValue("2026-07-20");
+    await wrapper.get('[data-testid="task-add-priority-high"]').trigger("click");
+    await wrapper.get('[data-testid="task-input"]').setValue("Big one");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({
+      cmd: "add_task",
+      args: { id: "v1", title: "Big one", due: "2026-07-20", priority: "high" },
+    });
+  });
+
+  it("omits due/priority when the options are untouched", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Plain");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({
+      cmd: "add_task",
+      args: { id: "v1", title: "Plain" },
+    });
+  });
+
 });

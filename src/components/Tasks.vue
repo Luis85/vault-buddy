@@ -38,6 +38,9 @@ const loadError = ref<string | null>(null);
 const tasks = ref<TaskItem[]>([]);
 const newTitle = ref("");
 const adding = ref(false);
+const showAddOptions = ref(false);
+const addDue = ref("");
+const addPriority = ref("normal");
 // Task paths whose set_task_status write is in flight. A second action on the
 // same row while its write is pending would race the first (on a slow disk the
 // two writes can land out of order, leaving the file disagreeing with the UI),
@@ -123,10 +126,16 @@ async function add() {
   if (!title || adding.value) return;
   adding.value = true;
   try {
-    const created = await invoke<TaskItem>("add_task", { id: props.vaultId, title });
+    const args: Record<string, unknown> = { id: props.vaultId, title };
+    if (addDue.value) args.due = addDue.value;
+    if (addPriority.value !== "normal") args.priority = addPriority.value;
+    const created = await invoke<TaskItem>("add_task", args);
     tasks.value.unshift(created);
     sortInPlace();
     newTitle.value = "";
+    addDue.value = "";
+    addPriority.value = "normal";
+    showAddOptions.value = false;
   } catch (e) {
     notifications.error(String(e));
     logWarning(`add_task failed: ${String(e)}`);
@@ -216,6 +225,18 @@ async function openInObsidian(task: TaskItem) {
       />
       <button
         type="button"
+        data-testid="task-add-options"
+        :aria-label="showAddOptions ? 'Hide task options' : 'Set due date or priority'"
+        :aria-expanded="showAddOptions"
+        title="Due date / priority"
+        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        :class="showAddOptions ? 'border-violet-400 text-slate-100' : ''"
+        @click="showAddOptions = !showAddOptions"
+      >
+        ⋯
+      </button>
+      <button
+        type="button"
         data-testid="task-add"
         :disabled="adding || newTitle.trim() === ''"
         class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
@@ -223,6 +244,35 @@ async function openInObsidian(task: TaskItem) {
       >
         Add
       </button>
+    </div>
+
+    <div v-if="showAddOptions" class="flex items-center gap-1">
+      <input
+        v-model="addDue"
+        data-testid="task-add-due"
+        type="date"
+        aria-label="Due date"
+        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
+      />
+      <div class="flex gap-0.5" role="radiogroup" aria-label="Priority">
+        <button
+          v-for="p in ['high', 'normal', 'low']"
+          :key="p"
+          type="button"
+          role="radio"
+          :data-testid="`task-add-priority-${p}`"
+          :aria-checked="addPriority === p"
+          class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :class="
+            addPriority === p
+              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
+              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+          "
+          @click="addPriority = p"
+        >
+          {{ p }}
+        </button>
+      </div>
     </div>
 
     <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
