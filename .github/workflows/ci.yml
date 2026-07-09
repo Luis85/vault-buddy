@@ -7,7 +7,12 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs only for pull requests — a new PR push should
+  # abandon its own now-stale run. On main, a burst of merges must NOT cancel
+  # an earlier commit's in-flight run: every commit that lands on main gets
+  # validated, and a run cancelled this way otherwise shows up as a red /
+  # "failed" run on main even though nothing actually broke.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   frontend:
