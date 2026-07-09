@@ -1,11 +1,24 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { CHARACTERS } from "../characters";
-import { useSettingsStore } from "../stores/settings";
+import { useSettingsStore, type MessageDuration } from "../stores/settings";
 import BuddyAvatar from "./BuddyAvatar.vue";
+import SelectMenu from "./SelectMenu.vue";
 import UpdateSettings from "./UpdateSettings.vue";
 import DiagnosticsSettings from "./DiagnosticsSettings.vue";
 
 const settings = useSettingsStore();
+
+const DURATION_OPTIONS = [
+  { value: "short", label: "Short" },
+  { value: "normal", label: "Normal" },
+  { value: "long", label: "Long" },
+] as const;
+
+const messageDuration = computed({
+  get: () => settings.messageDuration,
+  set: (v: string | number) => settings.setMessageDuration(v as MessageDuration),
+});
 </script>
 
 <template>
@@ -44,47 +57,70 @@ const settings = useSettingsStore();
         </button>
       </div>
     </section>
-    <section class="flex items-center justify-between">
-      <label for="animations-toggle" class="text-sm text-slate-200">
-        Animations
-      </label>
-      <input
-        id="animations-toggle"
-        type="checkbox"
-        class="h-4 w-4 accent-violet-500"
-        :checked="settings.animationsEnabled"
-        @change="settings.toggleAnimations()"
-      />
-    </section>
-    <section class="flex items-center justify-between">
-      <label for="dragging-toggle" class="text-sm text-slate-200">
-        Dragging
-        <span class="block text-xs text-slate-500">
-          Off pins the buddy in place
-        </span>
-      </label>
-      <input
-        id="dragging-toggle"
-        type="checkbox"
-        class="h-4 w-4 accent-violet-500"
-        :checked="settings.draggingEnabled"
-        @change="settings.toggleDragging()"
-      />
-    </section>
-    <section class="flex items-center justify-between">
-      <label for="messages-toggle" class="text-sm text-slate-200">
-        Buddy messages
-        <span class="block text-xs text-slate-500">
-          The buddy comments on what you do
-        </span>
-      </label>
-      <input
-        id="messages-toggle"
-        type="checkbox"
-        class="h-4 w-4 accent-violet-500"
-        :checked="settings.buddyMessagesEnabled"
-        @change="settings.toggleBuddyMessages()"
-      />
+    <section>
+      <h2
+        class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+      >
+        Behavior
+      </h2>
+      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
+        <div class="flex items-center justify-between">
+          <label for="animations-toggle" class="text-sm text-slate-200">
+            Animations
+          </label>
+          <input
+            id="animations-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+            :checked="settings.animationsEnabled"
+            @change="settings.toggleAnimations()"
+          />
+        </div>
+        <div class="flex items-center justify-between">
+          <label for="dragging-toggle" class="text-sm text-slate-200">
+            Dragging
+            <span class="block text-xs text-slate-500">
+              Off pins the buddy in place
+            </span>
+          </label>
+          <input
+            id="dragging-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+            :checked="settings.draggingEnabled"
+            @change="settings.toggleDragging()"
+          />
+        </div>
+        <div class="flex items-center justify-between">
+          <label for="messages-toggle" class="text-sm text-slate-200">
+            Buddy messages
+            <span class="block text-xs text-slate-500">
+              The buddy comments on what you do
+            </span>
+          </label>
+          <input
+            id="messages-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+            :checked="settings.buddyMessagesEnabled"
+            @change="settings.toggleBuddyMessages()"
+          />
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <label for="message-duration" class="text-sm text-slate-200">
+            Message duration
+            <span class="block text-xs text-slate-500">
+              How long the buddy's bubbles stay up
+            </span>
+          </label>
+          <SelectMenu
+            id="message-duration"
+            v-model="messageDuration"
+            :options="DURATION_OPTIONS"
+            data-testid="message-duration-select"
+          />
+        </div>
+      </div>
     </section>
     <UpdateSettings />
     <DiagnosticsSettings />

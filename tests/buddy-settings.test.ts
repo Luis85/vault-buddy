@@ -108,6 +108,31 @@ describe("BuddySettings", () => {
     expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
   });
 
+  it("groups the toggles under a Behavior card with a message-duration select", async () => {
+    const wrapper = mount(BuddySettings, { attachTo: document.body });
+    expect(wrapper.text()).toContain("Behavior");
+    expect(wrapper.find('[data-testid="message-duration-select"]').exists()).toBe(true);
+    // the three toggles keep their ids inside the card
+    for (const id of ["#animations-toggle", "#dragging-toggle", "#messages-toggle"]) {
+      expect(wrapper.find(id).exists()).toBe(true);
+    }
+    wrapper.unmount();
+    document.body.innerHTML = "";
+  });
+
+  it("picking a message duration persists it to the store", async () => {
+    const wrapper = mount(BuddySettings, { attachTo: document.body });
+    await wrapper.get('[data-testid="message-duration-select"]').trigger("click");
+    (document.body.querySelector(
+      '[data-testid="message-duration-select-option-long"]',
+    ) as HTMLElement).click();
+    await flush();
+    expect(useSettingsStore().messageDuration).toBe("long");
+    expect(localStorage.getItem("vault-buddy.messageDuration")).toBe("long");
+    wrapper.unmount();
+    document.body.innerHTML = "";
+  });
+
   it("keeps the install button visible for retry after a failure", async () => {
     // the store keeps `available` after a failed download/install exactly
     // so the user can retry — the button must not vanish behind the error
