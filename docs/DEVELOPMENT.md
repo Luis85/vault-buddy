@@ -86,8 +86,30 @@ is the audio engine — device capture via `cpal`, MP3 encoding via LAME
 ALSA's development headers to build: `sudo apt-get install -y
 libasound2-dev`. `src-tauri/` itself is the thin Tauri shell (window, tray,
 command wrappers) and needs platform WebView libraries to compile — on
-Windows that works out of the box; Linux containers can't compile it (no
-webkit2gtk), which is why CI builds the app on a Windows runner.
+Windows that works out of the box; on Linux it needs the WebView/GTK/tray
+system libraries (see the compile-gate section below), which is why the
+*release* build runs on a Windows runner.
+
+### Build the shell on Linux (compile gate for agents/CI)
+
+The shell no longer builds *only* on Windows. Linux can now compile it as a
+fast **compile gate** — enough to catch type errors, IPC signature drift, and
+missing `cfg` gates, though not desktop behavior (transparency, tray, drag).
+This exists mainly so coding agents in cloud containers can verify a shell
+edit without pushing to the Windows CI job.
+
+```bash
+npm run setup:linux    # once per container: installs WebView/GTK/tray system
+                       # libs (scripts/setup-linux-deps.sh) — needs sudo + apt
+npx tauri build --no-bundle   # compile + link the app; no installer produced
+```
+
+The build needs a current stable Rust toolchain (`rustup update stable`) —
+the same one CI uses; some dependencies set a recent minimum. A
+Claude-Code-on-web environment can point its environment setup script at
+`scripts/setup-linux-deps.sh` to pre-provision the container, so agents skip
+the install step. The Linux build is **never released**; the Windows job stays
+the release and desktop-behavior gate.
 
 ## Quality pipeline
 
@@ -98,9 +120,11 @@ CI runs on every push to `main` and every pull request
 | --- | --- | --- |
 | Frontend | Linux | Vitest tests, `vue-tsc` typecheck, production build |
 | Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
+| Linux app | Linux | `tauri build --no-bundle` compile gate (no installer, never released) |
 | Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
 
-The Windows job only runs after the two fast jobs pass. Desktop behavior that
+The Windows and Linux app jobs both run after the two fast jobs pass (in
+parallel with each other). Desktop behavior that
 can't be asserted in CI (transparency, tray, drag, the real Obsidian
 round-trip) is covered by the manual verification checklist in
 [`docs/superpowers/specs/`](superpowers/specs/).
