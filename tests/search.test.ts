@@ -47,6 +47,7 @@ async function type(wrapper: ReturnType<typeof mount>, text: string) {
 
 describe("Search", () => {
   beforeEach(() => {
+    localStorage.clear(); // recents persist per happy-dom context — isolate tests
     setActivePinia(createPinia());
     vi.useFakeTimers();
   });
@@ -373,6 +374,38 @@ describe("Search", () => {
     await type(onlyNotes, "alpha");
     await onlyNotes.get('[data-testid="search-filter-files"]').trigger("click");
     expect(onlyNotes.text()).toContain("Nothing matches this filter.");
+  });
+
+  it("records successful searches and offers them as recent chips", async () => {
+    const { wrapper, calls } = mountSearch();
+    await type(wrapper, "alpha");
+    await wrapper.get('[data-testid="search-input"]').setValue(""); // back to hint state
+    const chip = wrapper.get('[data-testid="recent-chip"]');
+    expect(chip.text()).toBe("alpha");
+    await chip.trigger("click");
+    await vi.advanceTimersByTimeAsync(300);
+    const searches = calls.filter((c) => c.cmd === "search_vaults");
+    expect(searches).toHaveLength(2);
+    expect(searches[1].args).toEqual({ query: "alpha" });
+  });
+
+  it("a failed search records no recent and Clear empties the list", async () => {
+    let fail = true;
+    const { wrapper } = mountSearch({
+      search_vaults: () => {
+        if (fail) throw new Error("boom");
+        return response([hit()]);
+      },
+    });
+    await type(wrapper, "broken");
+    await wrapper.get('[data-testid="search-input"]').setValue("");
+    expect(wrapper.find('[data-testid="recent-chip"]').exists()).toBe(false); // failure recorded nothing
+    fail = false;
+    await type(wrapper, "works");
+    await wrapper.get('[data-testid="search-input"]').setValue("");
+    expect(wrapper.get('[data-testid="recent-chip"]').text()).toBe("works");
+    await wrapper.get('[data-testid="recent-clear"]').trigger("click");
+    expect(wrapper.find('[data-testid="recent-chip"]').exists()).toBe(false);
   });
 
   it("Escape clears the query first instead of bubbling", async () => {

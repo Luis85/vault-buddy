@@ -6,6 +6,11 @@ import { announce } from "../announce";
 import { noteOpenedMessage } from "../buddyMessages";
 import { useNotificationsStore } from "../stores/notifications";
 import HighlightText from "./HighlightText.vue";
+import {
+  clearRecentSearches,
+  loadRecentSearches,
+  pushRecentSearch,
+} from "../utils/recentSearches";
 import type { SearchHit, SearchResponse } from "../types";
 
 const notifications = useNotificationsStore();
@@ -170,6 +175,8 @@ async function runSearch(trimmed: string) {
       truncated: response.truncated,
     };
     error.value = null;
+    // Only queries that actually produced a response are worth re-offering.
+    recents.value = pushRecentSearch(trimmed);
   } catch (e) {
     if (mine !== ticket) return;
     // Keep the previous results up — a live refinement that errors must not
@@ -196,6 +203,19 @@ async function openHit(hit: SearchHit, keepOpen = false) {
     notifications.error(String(e));
     logWarning(`open_search_result failed for ${hit.file}: ${String(e)}`);
   }
+}
+
+// Recent successful queries as chips under the hint state — a panel reopen
+// shouldn't mean retyping. localStorage-backed (settings precedent).
+const recents = ref<string[]>(loadRecentSearches());
+
+function useRecent(q: string) {
+  query.value = q; // the watcher debounces + runs the search normally
+}
+
+function onClearRecents() {
+  clearRecentSearches();
+  recents.value = [];
 }
 
 function onEscape(event: KeyboardEvent) {
@@ -249,6 +269,38 @@ onUnmounted(() => {
     <p v-if="tooShort" class="text-xs text-slate-400">
       Type at least {{ MIN_QUERY_CHARS }} characters to search.
     </p>
+    <div
+      v-if="tooShort && recents.length > 0"
+      data-testid="recent-section"
+      class="flex flex-col gap-1"
+    >
+      <div class="flex items-center justify-between">
+        <span
+          class="text-xs font-semibold uppercase tracking-wide text-slate-400"
+          >Recent</span
+        >
+        <button
+          type="button"
+          data-testid="recent-clear"
+          class="cursor-pointer rounded px-1 text-[10px] text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          @click="onClearRecents"
+        >
+          Clear
+        </button>
+      </div>
+      <div class="flex flex-wrap gap-1">
+        <button
+          v-for="q in recents"
+          :key="q"
+          type="button"
+          data-testid="recent-chip"
+          class="max-w-full cursor-pointer truncate rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          @click="useRecent(q)"
+        >
+          {{ q }}
+        </button>
+      </div>
+    </div>
     <p v-else-if="searching && hits.length === 0" class="text-xs text-slate-400">
       Searching…
     </p>
