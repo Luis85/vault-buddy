@@ -12,6 +12,12 @@ This PRD is underpinned by two foundational vision documents:
 - [The Knowledge Lifecycle](prds/knowledge-lifecycle.md) — what happens to knowledge as it moves through Vault Buddy.
 - [AI Platform & Agent Runtime](prds/ai-platform.md) — how humans, workflows and AI agents access those capabilities.
 
+Product-wide quality attributes and platform mechanics that apply
+regardless of capability domain — performance, reliability, security and
+accessibility targets, self-updating, crash diagnostics — live in
+[Platform & Cross-Cutting Capabilities](prds/platform-and-cross-cutting.md)
+rather than in this document's own Non-Functional Requirements.
+
 Every concrete use case implied by this PRD — with its actual shipping
 status, verified against the codebase — is tracked in
 [docs/use-cases/](use-cases/README.md).
@@ -485,38 +491,13 @@ See the [Task Management capability PRD](prds/task-management.md) for the detail
 
 ## 15. Non Functional Requirements
 
-### Performance
-
-- Startup < 2 seconds
-- Command latency < 500 ms
-- Memory usage < 250 MB
-- Idle CPU < 1%
-
-### Reliability
-
-- Offline capable
-- Automatic recovery
-- Graceful failures
-- Crash reporting (optional)
-
-### Security
-
-- Local-first
-- Encrypted configuration
-- Permission model
-- Command allowlists
-- Confirmation dialogs
-- Audit log
-- Read-only mode
-- Secrets management
-
-### Accessibility
-
-- Keyboard navigation
-- Screen reader compatibility
-- High contrast
-- Configurable scaling
-- Reduced motion mode
+Moved to the [Platform & Cross-Cutting Capabilities
+PRD](prds/platform-and-cross-cutting.md) — Performance, Reliability,
+Security and Accessibility targets apply uniformly across every capability
+domain, so they're specified once there rather than restated here. A
+capability PRD may still declare a stricter, domain-specific target on top
+of that floor (e.g. Knowledge Intake's recording-startup budget, Task
+Management's modal-open budget).
 
 ---
 
