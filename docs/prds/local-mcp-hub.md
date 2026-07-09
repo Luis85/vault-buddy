@@ -5,6 +5,10 @@
 - **Parent Product:** Vault Buddy
 - **Related PRD:** [AI Platform & Agent Runtime](ai-platform.md)
 
+Tracked as [Local MCP Hub Assistant](../use-cases/local-mcp-hub-assistant.md)
+in [docs/use-cases/](../use-cases/README.md) — not started as of this
+writing; see that note for how it relates to the AI Platform PRD's runtime.
+
 ---
 
 ## Executive Summary

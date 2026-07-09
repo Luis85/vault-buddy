@@ -4,6 +4,12 @@
 - **Version:** 1.0
 - **Parent Product:** Vault Buddy
 
+The concrete use cases behind each lifecycle stage — with actual shipping
+status — are tracked in [docs/use-cases/](../use-cases/README.md), notably
+[Knowledge Search & Retrieval](../use-cases/knowledge-search-and-retrieval.md)
+(Stage 5) and [Workflow Automation
+Engine](../use-cases/workflow-automation-engine.md) (Stage 6).
+
 Together with [AI Platform & Agent Runtime](ai-platform.md), this document forms one of the two foundational pillars of Vault Buddy: the Knowledge Lifecycle answers *what happens to knowledge*, while the AI Platform & Agent Runtime answers *how humans, workflows and agents access those capabilities*.
 
 ---

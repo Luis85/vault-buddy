@@ -6,6 +6,19 @@
 - **Version:** 1.1
 - **Parent Product:** [Vault Buddy](PRD%20-%20Product%20Vision.md)
 
+Use cases extracted from this PRD, with shipping status: [Meeting
+Recording](../use-cases/meeting-recording.md), [Voice Note
+Recording](../use-cases/voice-note-recording.md), [Local Speech-to-Text
+Transcription](../use-cases/local-transcription.md), [Companion Note &
+Follow-up Template](../use-cases/companion-note-and-follow-up-template.md),
+[Recordings Browser](../use-cases/recordings-browser.md),
+[Re-transcription](../use-cases/re-transcription.md), [Rename
+Recording](../use-cases/rename-recording.md) (shipped, undocumented until
+now), [AI-Enriched Meeting Notes](../use-cases/ai-enriched-meeting-notes.md)
+and [Additional Capture
+Providers](../use-cases/additional-capture-providers.md) (planned). See
+[docs/use-cases/](../use-cases/README.md) for the full catalog.
+
 ---
 
 ## Vision

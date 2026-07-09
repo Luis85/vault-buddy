@@ -12,6 +12,10 @@ This PRD is underpinned by two foundational vision documents:
 - [The Knowledge Lifecycle](prds/knowledge-lifecycle.md) — what happens to knowledge as it moves through Vault Buddy.
 - [AI Platform & Agent Runtime](prds/ai-platform.md) — how humans, workflows and AI agents access those capabilities.
 
+Every concrete use case implied by this PRD — with its actual shipping
+status, verified against the codebase — is tracked in
+[docs/use-cases/](use-cases/README.md).
+
 ---
 
 ## 1. Executive Summary

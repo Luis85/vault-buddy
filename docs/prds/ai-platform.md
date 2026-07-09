@@ -4,6 +4,11 @@
 - **Version:** 1.0
 - **Parent Product:** Vault Buddy
 
+Tracked as [Vault Buddy Runtime & Embedded MCP
+Server](../use-cases/mcp-server-and-runtime.md) and [Plugin Platform &
+Specialized AI Agents](../use-cases/plugin-and-agent-platform.md) in
+[docs/use-cases/](../use-cases/README.md) — not started as of this writing.
+
 ---
 
 ## Executive Summary
