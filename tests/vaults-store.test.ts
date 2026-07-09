@@ -272,6 +272,20 @@ describe("vaults store", () => {
     expect(store.view).toBe("list"); // request was one-shot
   });
 
+  it("requestViewOnNextOpen arms the next open without flipping the live view", async () => {
+    // the startup update check asks via the NEXT panel open — an already-open
+    // panel must not be yanked to settings mid-task (unlike requestView, which
+    // flips the live view for the failed-install reopen).
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestViewOnNextOpen("settings");
+    expect(store.view).toBe("list"); // live view untouched
+    await store.refresh(); // the next panel-shown refresh
+    expect(store.view).toBe("settings"); // consumed once
+    await store.refresh();
+    expect(store.view).toBe("list"); // one-shot
+  });
+
   it("requestView can target the capture settings of a specific vault", async () => {
     mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();

@@ -111,6 +111,14 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = view;
       this.captureSettingsVaultId = captureVaultId;
     },
+    // The gentle variant: arm the NEXT open only, without flipping the live
+    // view — the startup update check must not yank an already-open panel to
+    // settings mid-task (requestView's immediate flip exists for the
+    // failed-install reopen, where the panel is known hidden).
+    requestViewOnNextOpen(view: "list" | "settings" | "captureSettings") {
+      this.pendingView = view;
+      this.pendingCaptureVaultId = null;
+    },
     async runAction(
       command: "open_vault" | "open_daily_note",
       vaultId: string,
