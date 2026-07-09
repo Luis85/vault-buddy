@@ -54,16 +54,59 @@ const progress = computed(() => {
   return { total, done, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
 });
 
+const PRIORITY_RANK: Record<string, number> = { high: 0, low: 2 };
+const rank = (t: TaskItem) => PRIORITY_RANK[t.priority ?? ""] ?? 1;
+// "0<date>" < "1" makes valid dues sort ascending ahead of undated.
+const dueKey = (t: TaskItem) => {
+  const d = dueOf(t);
+  return d ? `0${d}` : "1";
+};
+
 function sortInPlace() {
-  // Open first, newest created first, then title — mirrors the backend order
-  // so an optimistic insert lands where a refetch would put it.
+  // Mirrors core::tasks::list_tasks so an optimistic insert/edit lands where
+  // a refetch would put it: open first (due asc → priority → newest created
+  // → title); done by newest created → title.
   tasks.value.sort(
     (a, b) =>
       Number(a.done) - Number(b.done) ||
-      b.created.localeCompare(a.created) ||
-      a.title.localeCompare(b.title),
+      (a.done
+        ? b.created.localeCompare(a.created) || a.title.localeCompare(b.title)
+        : dueKey(a).localeCompare(dueKey(b)) ||
+          rank(a) - rank(b) ||
+          b.created.localeCompare(a.created) ||
+          a.title.localeCompare(b.title)),
   );
 }
+
+type Bucket = { key: string; label: string | null; tasks: TaskItem[] };
+
+const buckets = computed<Bucket[]>(() => {
+  const today = localToday();
+  const groups: Record<string, TaskItem[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
+  for (const t of tasks.value) {
+    if (t.done) groups.done.push(t);
+    else {
+      const d = dueOf(t);
+      if (!d) groups.nodate.push(t);
+      else if (d < today) groups.overdue.push(t);
+      else if (d === today) groups.today.push(t);
+      else groups.upcoming.push(t);
+    }
+  }
+  // Headers only once a dated open task exists — a vault that never uses due
+  // dates keeps the flat list it had before this feature.
+  const showHeaders =
+    groups.overdue.length + groups.today.length + groups.upcoming.length > 0;
+  return [
+    { key: "overdue", label: "Overdue" },
+    { key: "today", label: "Today" },
+    { key: "upcoming", label: "Upcoming" },
+    { key: "nodate", label: "No date" },
+    { key: "done", label: "Done" },
+  ]
+    .map(({ key, label }) => ({ key, label: showHeaders ? label : null, tasks: groups[key] }))
+    .filter((b) => b.tasks.length > 0);
+});
 
 onMounted(async () => {
   try {
@@ -192,76 +235,88 @@ async function openInObsidian(task: TaskItem) {
     <p v-else-if="tasks.length === 0" class="text-xs text-slate-400">
       No tasks yet.
     </p>
-    <ul v-else class="flex flex-col gap-1">
-      <li
-        v-for="task in tasks"
-        :key="task.path"
-        data-testid="task-row"
-        class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
-      >
-        <input
-          type="checkbox"
-          data-testid="task-checkbox"
-          :checked="task.done"
-          :disabled="isBusy(task.path)"
-          :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
-          class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
-          @change="toggle(task)"
-        />
-        <button
-          type="button"
-          data-testid="task-open"
-          class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :aria-label="`Open ${task.title} in Obsidian`"
-          :title="`Open ${task.title} in Obsidian`"
-          @click="openInObsidian(task)"
+    <template v-else>
+      <div v-for="bucket in buckets" :key="bucket.key" class="mt-1 first:mt-0">
+        <h3
+          v-if="bucket.label"
+          data-testid="task-bucket-header"
+          class="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider"
+          :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-slate-500'"
         >
-          <span
-            v-if="task.priority === 'high' || task.priority === 'low'"
-            data-testid="task-priority"
-            class="h-1.5 w-1.5 shrink-0 rounded-full"
-            :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
-            :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
-            aria-hidden="true"
-          ></span>
-          <span
-            class="min-w-0 flex-1 truncate text-sm"
-            :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+          {{ bucket.label }}
+        </h3>
+        <ul class="flex flex-col gap-1">
+          <li
+            v-for="task in bucket.tasks"
+            :key="task.path"
+            data-testid="task-row"
+            class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
           >
-            {{ task.title }}
-          </span>
-          <span
-            v-if="dueOf(task)"
-            data-testid="task-due"
-            class="shrink-0 text-[10px] tabular-nums"
-            :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
-          >{{ dueLabel(dueOf(task)!) }}</span>
-        </button>
-        <button
-          type="button"
-          data-testid="task-archive"
-          :disabled="isBusy(task.path)"
-          :aria-label="`Archive ${task.title}`"
-          title="Archive"
-          class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-          @click="archive(task)"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <rect x="3" y="4" width="18" height="4" rx="1" />
-            <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
-          </svg>
-        </button>
-      </li>
-    </ul>
+            <input
+              type="checkbox"
+              data-testid="task-checkbox"
+              :checked="task.done"
+              :disabled="isBusy(task.path)"
+              :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
+              class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
+              @change="toggle(task)"
+            />
+            <button
+              type="button"
+              data-testid="task-open"
+              class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              :aria-label="`Open ${task.title} in Obsidian`"
+              :title="`Open ${task.title} in Obsidian`"
+              @click="openInObsidian(task)"
+            >
+              <span
+                v-if="task.priority === 'high' || task.priority === 'low'"
+                data-testid="task-priority"
+                class="h-1.5 w-1.5 shrink-0 rounded-full"
+                :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
+                :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
+                aria-hidden="true"
+              ></span>
+              <span
+                class="min-w-0 flex-1 truncate text-sm"
+                :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+              >
+                {{ task.title }}
+              </span>
+              <span
+                v-if="dueOf(task)"
+                data-testid="task-due"
+                class="shrink-0 text-[10px] tabular-nums"
+                :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
+              >{{ dueLabel(dueOf(task)!) }}</span>
+            </button>
+            <button
+              type="button"
+              data-testid="task-archive"
+              :disabled="isBusy(task.path)"
+              :aria-label="`Archive ${task.title}`"
+              title="Archive"
+              class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+              @click="archive(task)"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="4" rx="1" />
+                <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+              </svg>
+            </button>
+          </li>
+        </ul>
+      </div>
+    </template>
   </div>
 </template>

@@ -118,6 +118,10 @@ describe("Tasks", () => {
   it("ignores a re-toggle while the row's write is still in flight", async () => {
     // A slow set_task_status: the second change on the same row must not fire a
     // second concurrent write (which could land out of order vs the first).
+    // Re-query the checkbox by row content (not a held reference): once
+    // toggled optimistically the row relocates from the open/no-date bucket
+    // into the Done bucket's own <ul>, so Vue mounts a fresh node there
+    // rather than reusing the one from the old bucket's list.
     let resolve: (() => void) | undefined;
     const { wrapper, calls } = mountView({
       set_task_status: () => new Promise<null>((r) => {
@@ -125,15 +129,19 @@ describe("Tasks", () => {
       }),
     });
     await flushPromises();
-    const checkbox = wrapper.get('[data-testid="task-checkbox"]');
-    await checkbox.trigger("change"); // first toggle — write pending
-    await checkbox.trigger("change"); // re-toggle while pending — must be ignored
+    const rowCheckbox = () =>
+      wrapper
+        .findAll('[data-testid="task-row"]')
+        .find((r) => r.text().includes("B open"))!
+        .get('[data-testid="task-checkbox"]');
+    await rowCheckbox().trigger("change"); // first toggle — write pending
+    await rowCheckbox().trigger("change"); // re-toggle while pending — must be ignored
     await flushPromises();
     expect(calls.filter((c) => c.cmd === "set_task_status")).toHaveLength(1);
-    expect((checkbox.element as HTMLInputElement).disabled).toBe(true);
+    expect((rowCheckbox().element as HTMLInputElement).disabled).toBe(true);
     resolve?.();
     await flushPromises();
-    expect((checkbox.element as HTMLInputElement).disabled).toBe(false);
+    expect((rowCheckbox().element as HTMLInputElement).disabled).toBe(false);
   });
 
   it("reverts the checkbox and notifies on toggle failure", async () => {
@@ -209,6 +217,51 @@ describe("Tasks", () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="task-due"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(false);
+  });
+
+  it("groups tasks into date buckets with headers", async () => {
+    vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] }); // 2026-07-09 local
+    try {
+      const { wrapper } = mountView({
+        list_tasks: () => [
+          { path: "C:/v/Tasks/o.md", title: "Old", status: "new", created: "2026-07-01", done: false, due: "2026-07-08", priority: null },
+          { path: "C:/v/Tasks/t.md", title: "Now", status: "new", created: "2026-07-01", done: false, due: "2026-07-09", priority: null },
+          { path: "C:/v/Tasks/u.md", title: "Soon", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null },
+          { path: "C:/v/Tasks/n.md", title: "Someday", status: "new", created: "2026-07-01", done: false, due: null, priority: null },
+          { path: "C:/v/Tasks/d.md", title: "Finished", status: "done", created: "2026-07-01", done: true, due: null, priority: null },
+        ],
+      });
+      await flushPromises();
+      const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+      expect(headers).toEqual(["Overdue", "Today", "Upcoming", "No date", "Done"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no bucket headers when no open task has a parseable due date", async () => {
+    // The pre-due-date flat list must stay visually unchanged — headers appear
+    // only once dated open tasks exist.
+    const { wrapper } = mountView(); // sample: one undated open + one done
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
+  });
+
+  it("buckets an unparseable hand-authored due under No date", async () => {
+    vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] });
+    try {
+      const { wrapper } = mountView({
+        list_tasks: () => [
+          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", priority: null },
+          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null },
+        ],
+      });
+      await flushPromises();
+      const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+      expect(headers).toEqual(["Upcoming", "No date"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 });
