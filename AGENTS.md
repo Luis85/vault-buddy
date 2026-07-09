@@ -70,7 +70,8 @@ launched the app on the CI runner and never exited.
 surface: `list_recordings`, `open_recording`, `open_transcript`,
 `retranscribe`, `transcribe_recording_now`, and the tasks surface:
 `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
-`set_task_status` — commands live in `src-tauri/src/commands.rs`,
+`set_task_status`, `count_open_tasks`, `open_task`, `update_task` —
+commands live in `src-tauri/src/commands.rs`,
 `src-tauri/src/capture_commands.rs`, and `src-tauri/src/task_commands.rs`.
 Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
 are handled in `lib.rs`.
@@ -231,8 +232,11 @@ only `pending`/`failed` sidecars are ours to replace, so a completed
 transcript or a user's hand edit is never overwritten; see
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`.
 The tasks domain (below) adds two more sanctioned writes under the same rules —
-creating a task document (collision-safe) and the surgical `status:` toggle —
-see `docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`.
+creating a task document (collision-safe) and a surgical multi-key frontmatter
+field write (status toggle, rename, due/priority edit — all one generalized
+writer) — see
+`docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`
+and `docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md`.
 Any other code touching vault contents directly is a design change, not a
 patch.
 
@@ -381,51 +385,92 @@ type: Task
 status: new
 title: "Buy milk"
 created: 2026-07-08
+due: 2026-07-15
+priority: high
 ---
 ```
 
 `type: Task` is the identity (so hand-authored task files count too), and the
-checkbox is binary against `status: done`. Per-vault config adds one field,
-`tasks_folder` (default `Tasks`), alongside the capture config in the same
-app-side `config.json` (`tasks_root()` resolves the default). All logic lives
-in the pure `core::tasks` crate (unit-tested on Linux); the shell
-(`task_commands.rs`) resolves a vault + tasks root and delegates.
+checkbox is binary against `status: done`. `due` (`YYYY-MM-DD`) and `priority`
+(`high|normal|low`) are optional widened fields (v0.5.2, the tasks-todo-list
+increment): both lines are written only when present — absent `due` means no
+due date and clearing it on edit **removes the line**; absent `priority` means
+normal and `priority: normal` is **never written** (keeps hand-authored files
+minimal and round-trip stable). Reads degrade gracefully: an unparseable `due`
+(anything not plain `YYYY-MM-DD`, checked by `is_valid_due` — no calendar
+validity, so `2026-02-31` is accepted like Obsidian's own date picker tolerates
+it) sorts/buckets as no-date, and an unknown `priority` value sorts/renders as
+normal — same defensive-read posture as the rest of the vault domain. Per-vault
+config adds one field, `tasks_folder` (default `Tasks`), alongside the capture
+config in the same app-side `config.json` (`tasks_root()` resolves the
+default). All logic lives in the pure `core::tasks` crate (unit-tested on
+Linux); the shell (`task_commands.rs`) resolves a vault + tasks root and
+delegates.
 
 - **Two sanctioned vault writes, same discipline as capture/transcript.**
-  *Create* (`create_task`) reuses the collision-safe atomic note writer
-  (exclusive-create temp + `rename_noreplace`, ` (N)` suffix on collision —
-  never clobbers). *Toggle* (`set_status` → `set_task_status`) is a surgical
-  read-modify-write that changes ONLY the frontmatter `status:` line, preserving
-  every other field and the body byte-for-byte (CRLF included), via the shared
-  `capture_note::write_atomic_replacing` (temp + fsync + REPLACING rename). It
-  inserts a `status:` line for a hand-authored task that lacks one, always
-  terminated so it can't corrupt the closing fence; a file that is not
-  `type: Task` (or whose frontmatter never closes) is refused.
-- **`is_task` requires a CLOSED frontmatter fence** so the list and the toggle
-  agree on what is a task — the list must never surface a row the toggle would
+  *Create* (`create_task`, now threading through optional `due`/`priority`)
+  reuses the collision-safe atomic note writer (exclusive-create temp +
+  `rename_noreplace`, ` (N)` suffix on collision — never clobbers). *Field
+  write* is `set_fields(content, updates: &[(&str, Option<&str>)])`, the
+  generalized multi-key surgical rewriter behind both the status toggle and
+  the inline editor: for each `(key, value)`, `Some(v)` rewrites the existing
+  `key:` line in place or inserts one at the closing fence, `None` removes the
+  line, and everything else (CRLF, unknown keys, key order, body) is preserved
+  byte-for-byte; it refuses a non-`type: Task` document or an unclosed
+  frontmatter fence (`None`). `set_status` is now a thin one-entry wrapper over
+  `set_fields` so the list/toggle agreement invariants stay on one
+  implementation. On disk, `update_task_fields(root, path, updates)` is the
+  shared write path (canonicalize root+path + containment + read + atomic
+  `capture_note::write_atomic_replacing` — temp + fsync + REPLACING rename);
+  `set_task_status` and the shell's `update_task` command both delegate to it,
+  so a rename/due/priority edit and a status flip go through the exact same
+  containment and atomicity guarantees.
+- **`is_task` requires a CLOSED frontmatter fence** so the list and the writer
+  agree on what is a task — the list must never surface a row a write would
   reject.
 - **Path safety.** `safe_recording_root` (lexical) + `assert_path_inside_vault`
   (canonicalizes the nearest existing ancestor, catching a symlink/junction
   even when the leaf doesn't exist yet) gate the save/create paths;
-  `assert_root_inside_vault` gates the read; `set_task_status` canonicalizes
-  root+path and requires containment. `add_task` also rejects a missing vault
-  dir (`!is_dir()`) before creating, so a stale registry can't resurrect a
-  deleted vault. `set_capture_config` preserves `tasks_folder` (read under
-  `ConfigWriteLock`) so saving capture settings can't reset it.
+  `assert_root_inside_vault` gates the read; `update_task_fields` (and
+  `open_task`, separately) canonicalize root+path and require containment.
+  `add_task` also rejects a missing vault dir (`!is_dir()`) before creating, so
+  a stale registry can't resurrect a deleted vault. `set_capture_config`
+  preserves `tasks_folder` (read under `ConfigWriteLock`) so saving capture
+  settings can't reset it.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
   tasks organized into subfolders are all surfaced. `collect_tasks` descends
   only after canonicalizing each child directory and confirming it stays under
   the canonical tasks root (a symlink/junction escaping the folder is skipped;
   a reparse cycle is bounded by a walked-set), and skips dot-directories
-  (`.obsidian`/`.trash`/`.git`). Output is one flat sorted list — open first
-  (`status != "done"`), newest `created`, then title — across the whole subtree.
+  (`.obsidian`/`.trash`/`.git`). The sort stays clock-free: open tasks
+  (`status != "done"`) first, then due ascending (no/unparseable due sorts
+  last), then priority tier (high < normal < low), then newest `created`, then
+  title; done tasks ignore due and sort by newest `created` then title.
+  "Overdue"/"Today" need a clock, so date-bucket grouping is deliberately the
+  frontend's job, not the sort's.
+- **`open_task(id, path)`** is a read-only Obsidian handoff for the row's
+  title click, mirroring `open_recording`: canonicalize + require containment
+  inside the vault's tasks root, compute the vault-relative path against the
+  **canonical** vault path (a lexical relative path would fail `strip_prefix`
+  against `list_tasks`' canonical paths, notably Windows' `\\?\` form), then
+  `uri::launch(uri::open_file_uri(...))` — logged like every other vault open,
+  never writes.
 - **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
   store): a `tasks` panel view reached from a per-row Tasks button; a folder
-  setting, an add-task input, and a checkbox list. Toggles are optimistic
-  (revert + toast on failure) and **serialized per row** (a reactive in-flight
-  Set disables the checkbox until its write resolves, so two concurrent writes
-  for one task can't land out of order). `TaskItem`/`TaskDto` fields match
-  camelCase across Rust↔TS.
+  setting, an add-task input with an optional due/priority row, and a
+  date-bucketed list (Overdue / Today / Upcoming / No date / Done — bucket
+  headers render only once a dated open task exists, so a vault that never
+  uses due dates keeps the flat list it always had). A task's title is a click
+  target that calls `open_task`; a pencil opens an inline editor (title, due,
+  priority) with one row editable at a time, Save sending only the changed
+  fields (`clearDue: true` for an emptied date) in a single `update_task` call.
+  Toggle/archive/edit are all optimistic (revert + toast on failure) and
+  **serialized per row** (a reactive in-flight Set disables the row's controls
+  until its write resolves, so two concurrent writes for one task can't land
+  out of order — the editor shares this guard with toggle/archive). A title
+  filter appears above 5 tasks, same threshold as the vault list.
+  `TaskItem`/`TaskDto` fields (now including `due`/`priority`) match camelCase
+  across Rust↔TS.
 
 ### Diagnostics invariants
 

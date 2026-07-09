@@ -151,9 +151,10 @@ fn due_key(t: &TaskItem) -> (bool, &str) {
 
 /// Every `type: Task` file anywhere under `root`, best-effort — the configured
 /// tasks folder is walked recursively so tasks organized into subfolders are
-/// all surfaced. Open tasks (status != "done") first, newest `created` first
-/// with title as tiebreaker; completed tasks after. A missing/unreadable root
-/// or file degrades silently.
+/// all surfaced. Open tasks (status != "done") first — sorted by due
+/// ascending (no/unparseable due last), then priority tier, then newest
+/// `created`, then title; completed tasks after, sorted by newest `created`
+/// then title. A missing/unreadable root or file degrades silently.
 pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     let mut out = Vec::new();
     // Canonicalize the root so every descended subdirectory can be
