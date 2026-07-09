@@ -62,6 +62,33 @@ describe("ActionPanel", () => {
     ]);
   });
 
+  it("shows the search icon beside the cog on the list view and opens the search view", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="search-toggle"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="search-toggle"]').trigger("click");
+    expect(store.view).toBe("search");
+    expect(wrapper.text()).toContain("Search");
+    expect(wrapper.find('[data-testid="search-input"]').exists()).toBe(true);
+    // Off the list view the header swaps to the back button — no search icon.
+    expect(wrapper.find('[data-testid="search-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+  });
+
+  it("back from the search view returns to the vault list", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    await wrapper.get('[data-testid="search-toggle"]').trigger("click");
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("list");
+    expect(wrapper.text()).toContain("Personal");
+  });
+
   it("hides the filter for short lists", () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;

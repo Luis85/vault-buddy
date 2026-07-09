@@ -13,6 +13,7 @@ import RecordMode from "./RecordMode.vue";
 import Recordings from "./Recordings.vue";
 import Transcriptions from "./Transcriptions.vue";
 import Tasks from "./Tasks.vue";
+import Search from "./Search.vue";
 import NotificationHost from "./NotificationHost.vue";
 
 const store = useVaultsStore();
@@ -82,7 +83,9 @@ watch(
                     ? "Transcriptions"
                     : view === "tasks"
                       ? "Tasks"
-                      : "Vaults"
+                      : view === "search"
+                        ? "Search"
+                        : "Vaults"
         }}
       </h1>
       <div class="flex items-center gap-2">
@@ -92,6 +95,30 @@ watch(
         >
           {{ store.vaults.length }}
         </span>
+        <button
+          v-if="view === 'list'"
+          type="button"
+          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          aria-label="Search vaults"
+          title="Search vaults"
+          data-testid="search-toggle"
+          @click="store.openSearch()"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+        </button>
         <button
           v-if="view === 'list'"
           type="button"
@@ -225,6 +252,12 @@ watch(
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <Tasks :key="store.tasksVaultId" :vault-id="store.tasksVaultId" />
+    </div>
+    <div
+      v-else-if="view === 'search'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Search />
     </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <VaultList
