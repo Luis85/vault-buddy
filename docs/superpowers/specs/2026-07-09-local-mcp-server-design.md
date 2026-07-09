@@ -62,7 +62,9 @@ The **shell crate owns only lifecycle and settings**: a managed
 enabled, start/stop/restart from the settings commands, and the
 announce-on-write callback. The server runs on **one named thread
 (`"mcp-server"`)** hosting a small tokio runtime; axum shuts down via a
-oneshot when the user disables the feature or changes port/token (restart).
+cancellation token when the user disables the feature or changes any
+contract-bearing setting (port/token/allow-writes — restart with a
+bounded drain, below).
 App quit needs no special handling — the OS releases the listener; the
 thread touches no window state, so none of the main-thread window
 invariants are in play. rmcp's default session management (`Mcp-Session-Id`)
@@ -135,9 +137,15 @@ App-global (not per-vault), stored in the existing
   Obsidian Local REST API plugin takes.
 - All config writes stay shell-side under the existing `ConfigWriteLock`
   read-modify-write discipline.
-- A live `allowWrites` flip reaches the running server through shared
-  state (an `Arc`/atomic the settings command updates) — no restart.
-  `enabled`/`port`/`token` changes restart the listener.
+- Every settings change that alters the client contract restarts the
+  listener: `enabled`, `port`, `token`, and — Codex review catch —
+  `allowWrites` too. Streamable-HTTP clients re-initialize when they
+  reconnect and fetch a fresh `tools/list`, so a newly granted (or
+  revoked) write toolset becomes discoverable without relying on
+  `listChanged` push notifications (out of scope). The grant is ALSO
+  mirrored into shared state (an `Arc`/atomic) that write tools re-check
+  on every call — the authority during drain windows and for any session
+  that outlives the flip.
 
 ## Security model
 
@@ -153,7 +161,10 @@ App-global (not per-vault), stored in the existing
 - Write tools are **hidden from `tools/list` when `allowWrites` is off**
   (advisory — models shouldn't try) *and* **rejected at call time**
   (authoritative — clients cache tool lists) with a clear error:
-  "Vault writes are disabled in Vault Buddy settings."
+  "Vault writes are disabled in Vault Buddy settings." Because clients
+  cache tool lists per session, flipping the grant restarts the listener —
+  sessions end, clients reconnect and re-list — so a newly granted write
+  toolset actually appears everywhere (Codex review catch).
 - **Audit**: every tool call logs tool name, vault id, outcome, duration
   through the existing log plumbing. Argument *values* are summarized
   (e.g. title length), not logged verbatim — the redaction discipline the
@@ -254,9 +265,18 @@ Nothing in this feature may hurt the core app:
 - Malformed `mcp` config: per-field defaults, never a startup failure.
 - Tool failures are MCP tool errors, logged, never fatal; slow filesystem
   work only ever delays MCP responses.
-- Disabling stops the listener gracefully (oneshot → axum graceful
-  shutdown → thread join with timeout; a hung join is logged and abandoned,
-  never blocks the UI thread).
+- Disabling (or any restart) must **prove the listener is closed** before
+  reporting success — Codex review catch: an abandoned shutdown wait could
+  leave the old endpoint alive and honoring the old token while the UI
+  says "stopped". The server thread races graceful shutdown against a
+  bounded drain: cancel sessions via the cancellation token, give
+  in-flight requests ~3 s, then drop the serve future — which hard-closes
+  the listener and every connection by construction (a client pinning an
+  SSE stream open cannot keep the socket alive). The join is therefore
+  bounded, `stop()` returns only after the thread — and thus the socket —
+  is gone, and the async settings command awaits it off the main thread.
+  A thread that panicked instead of exiting surfaces as `error` status,
+  never a false "stopped".
 - Regenerating the token restarts the listener; old clients get `401`.
 
 ## Testing
