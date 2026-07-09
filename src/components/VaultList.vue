@@ -9,6 +9,8 @@ const props = defineProps<{
   captureDisabled: boolean;
   recordingVaultId: string | null;
   transcribingVaultId: string | null;
+  // Open-task count per vault id; a missing entry (or 0) hides the badge.
+  taskCounts: Record<string, number>;
 }>();
 defineEmits<{
   (e: "open-vault", id: string): void;
@@ -159,12 +161,18 @@ const groups = computed(() => {
         <button
           type="button"
           data-testid="open-tasks"
-          class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+          class="relative mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
           :disabled="busyVaultId !== null"
-          :aria-label="`Tasks in ${accessibleName(vault)}`"
+          :aria-label="`Tasks in ${accessibleName(vault)}${(taskCounts?.[vault.id] ?? 0) > 0 ? ` (${taskCounts[vault.id]} open)` : ''}`"
           title="Tasks"
           @click="$emit('open-tasks', vault.id)"
         >
+          <span
+            v-if="(taskCounts?.[vault.id] ?? 0) > 0"
+            data-testid="task-count"
+            class="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-violet-500 px-1 text-center text-[9px] font-semibold leading-[14px] text-white"
+            >{{ taskCounts[vault.id] }}</span
+          >
           <svg
             width="16"
             height="16"

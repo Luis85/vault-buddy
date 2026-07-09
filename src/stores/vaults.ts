@@ -42,6 +42,9 @@ export const useVaultsStore = defineStore("vaults", {
     busyVaultId: null as string | null,
     busyCommand: null as "open_vault" | "open_daily_note" | null,
     error: null as string | null,
+    // Open-task count per vault id (status new; done/archived excluded), for
+    // the vault-row Tasks badge. Refreshed on every panel open.
+    taskCounts: {} as Record<string, number>,
   }),
   actions: {
     async loadVaults() {
@@ -72,6 +75,28 @@ export const useVaultsStore = defineStore("vaults", {
       }
       this.shownNonce++;
       await this.loadVaults();
+      await this.loadTaskCounts();
+    },
+    async loadTaskCounts() {
+      // Best-effort, in parallel; a failed/absent count is treated as 0. Replace
+      // the map wholesale so a removed vault's stale count can't linger.
+      const entries = await Promise.all(
+        this.vaults.map(async (v) => {
+          try {
+            return [
+              v.id,
+              await invoke<number>("count_open_tasks", { id: v.id }),
+            ] as const;
+          } catch (e) {
+            // Degrade the badge to 0, but never swallow the error silently — a
+            // broken counter must be distinguishable from a vault with no open
+            // tasks (Diagnostics invariant: caught errors go through logging).
+            logWarning(`count_open_tasks failed for vault ${v.id}: ${String(e)}`);
+            return [v.id, 0] as const;
+          }
+        }),
+      );
+      this.taskCounts = Object.fromEntries(entries);
     },
     // Ask the next panel open to land on `view` instead of the vault list.
     // Reflected immediately (a still-open panel updates now) and stored as

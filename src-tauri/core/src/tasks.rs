@@ -7,6 +7,7 @@
 use crate::capture_note::note_field;
 use crate::capture_note::yaml_quote;
 use crate::transcript::dir_entries;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Lower-case, collapse every run of non-alphanumeric chars to a single
@@ -91,12 +92,68 @@ pub fn is_task(content: &str) -> bool {
     has_closed_frontmatter(content) && note_field(content, "type").as_deref() == Some("Task")
 }
 
-/// Every `type: Task` file directly under `root`, best-effort. Open tasks
-/// (status != "done") first, newest `created` first with title as tiebreaker;
-/// completed tasks after. A missing/unreadable root or file degrades silently.
+/// Every `type: Task` file anywhere under `root`, best-effort — the configured
+/// tasks folder is walked recursively so tasks organized into subfolders are
+/// all surfaced. Open tasks (status != "done") first, newest `created` first
+/// with title as tiebreaker; completed tasks after. A missing/unreadable root
+/// or file degrades silently.
 pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     let mut out = Vec::new();
-    for (path, ft, name) in dir_entries(root) {
+    // Canonicalize the root so every descended subdirectory can be
+    // containment-checked against it, and track walked dirs so a reparse-point
+    // cycle can't loop forever. A missing/unresolvable root → empty list
+    // (best-effort, unchanged).
+    if let Ok(canon_root) = std::fs::canonicalize(root) {
+        let mut walked = HashSet::new();
+        collect_tasks(&canon_root, &canon_root, &mut walked, &mut out);
+    }
+    // Open first; within each group newest created first, then title. Sorting
+    // once here (not per directory) orders the whole subtree as one list.
+    out.sort_by(|a, b| {
+        a.done
+            .cmp(&b.done)
+            .then(b.created.cmp(&a.created))
+            .then(a.title.cmp(&b.title))
+    });
+    out
+}
+
+/// Recursively collect `type: Task` files under `dir` (a canonical path) into
+/// `out`, best-effort. A subdirectory is descended only after canonicalizing it
+/// and confirming it still resolves under `canon_root` — so a reparse point (a
+/// symlink, or a Windows junction, which `dir_entries`' file type can report as
+/// a plain directory) that leads OUTSIDE the tasks folder is never walked. Each
+/// walked directory is recorded in `walked` so a reparse point pointing back
+/// INSIDE the folder can't recurse forever. Dot-directories (`.obsidian`,
+/// `.trash`, `.git`, …) are skipped so config dirs aren't walked and trashed
+/// tasks aren't surfaced. Unreadable/unresolvable dirs and files degrade
+/// silently.
+fn collect_tasks(
+    dir: &Path,
+    canon_root: &Path,
+    walked: &mut HashSet<PathBuf>,
+    out: &mut Vec<TaskItem>,
+) {
+    if !walked.insert(dir.to_path_buf()) {
+        return; // already walked — guards against a reparse-point cycle
+    }
+    for (path, ft, name) in dir_entries(dir) {
+        if ft.is_dir() {
+            if name.starts_with('.') {
+                continue;
+            }
+            // Resolve the child through any symlink/junction and require it to
+            // stay inside the tasks folder before descending — the no-follow
+            // dirent file type can't be trusted for a junction on Windows.
+            // Unresolvable or escaping → skip.
+            match std::fs::canonicalize(&path) {
+                Ok(child) if child.starts_with(canon_root) => {
+                    collect_tasks(&child, canon_root, walked, out)
+                }
+                _ => continue,
+            }
+            continue;
+        }
         if !ft.is_file() || !name.ends_with(".md") {
             continue;
         }
@@ -109,6 +166,10 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
         let stem = name.strip_suffix(".md").unwrap_or(&name).to_string();
         let title = note_field(&content, "title").unwrap_or(stem);
         let status = note_field(&content, "status").unwrap_or_else(|| "new".to_string());
+        // Archived tasks are removed from view — never surfaced in the list.
+        if status == "archived" {
+            continue;
+        }
         let created = note_field(&content, "created").unwrap_or_default();
         let done = status == "done";
         out.push(TaskItem {
@@ -119,14 +180,6 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
             done,
         });
     }
-    // Open first; within each group newest created first, then title.
-    out.sort_by(|a, b| {
-        a.done
-            .cmp(&b.done)
-            .then(b.created.cmp(&a.created))
-            .then(a.title.cmp(&b.title))
-    });
-    out
 }
 
 /// Return `content` with the frontmatter `status:` line set to `new_status`,
@@ -190,13 +243,13 @@ pub fn set_status(content: &str, new_status: &str) -> Option<String> {
     done.then_some(out)
 }
 
-/// Flip a task's completion status on disk. Canonicalizes `root` and `path`
+/// Set a task's `status:` frontmatter on disk. Canonicalizes `root` and `path`
 /// and requires containment — a lexical check can't see through a symlink at
 /// the file or folder — then reads, applies `set_status`, and writes atomically
 /// (hidden `create_new` temp + fsync + REPLACING rename). Replacing is correct
 /// here: the target is the `type: Task` file we just read and are editing in
 /// place, and we touch only its status line (see the spec's surgical-write rule).
-pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), String> {
+pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
     // Canonical containment: resolve both and require the file under the root.
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -207,7 +260,7 @@ pub fn set_task_status(root: &Path, path: &Path, done: bool) -> Result<(), Strin
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    let updated = set_status(&content, if done { "done" } else { "new" }).ok_or(
+    let updated = set_status(&content, new_status).ok_or(
         "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
     )?;
     // The REPLACING atomic write (temp + fsync + rename) is shared with the
@@ -266,6 +319,48 @@ mod tests {
     }
 
     #[test]
+    fn list_tasks_excludes_archived() {
+        // Archived tasks are removed from view — the list surfaces only open +
+        // done, never archived (no show-archived surface this slice).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "open.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Open\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            root,
+            "done.md",
+            "---\ntype: Task\nstatus: done\ntitle: \"Done\"\ncreated: 2026-07-07\n---\n",
+        );
+        write(
+            root,
+            "arch.md",
+            "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\ncreated: 2026-07-06\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["Open", "Done"]); // archived is not surfaced
+    }
+
+    #[test]
+    fn set_task_status_writes_an_arbitrary_status() {
+        // set_task_status now takes a status string, so it can write archived
+        // (and still new/done), not just a done bool.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
+        set_task_status(&root, &p, "archived").unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("status: archived\n"));
+        set_task_status(&root, &p, "done").unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("status: done\n"));
+    }
+
+    #[test]
     fn list_tasks_missing_root_is_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert!(list_tasks(&dir.path().join("nope")).is_empty());
@@ -304,6 +399,95 @@ mod tests {
         );
         let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
         assert_eq!(titles, vec!["Good"]);
+    }
+
+    #[test]
+    fn list_tasks_walks_subdirectories_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "top.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Top\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            &root.join("work"),
+            "mid.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Mid\"\ncreated: 2026-07-07\n---\n",
+        );
+        write(
+            &root.join("work/q3"),
+            "deep.md",
+            "---\ntype: Task\nstatus: done\ntitle: \"Deep\"\ncreated: 2026-07-06\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        // All three found regardless of depth; open first (newest created), done last.
+        assert_eq!(titles, vec!["Top", "Mid", "Deep"]);
+    }
+
+    #[test]
+    fn list_tasks_skips_dot_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "real.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Real\"\ncreated: 2026-07-08\n---\n",
+        );
+        // A task in a hidden dir (e.g. .trash) must NOT be surfaced by the walk.
+        write(
+            &root.join(".trash"),
+            "gone.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Gone\"\ncreated: 2026-07-08\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["Real"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tasks_does_not_follow_symlinked_subdir() {
+        // A symlinked subdir pointing outside the tasks folder must not be
+        // walked — dir_entries reports it as a symlink (not a dir), so the walk
+        // skips it and can't leave the tasks folder.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        write(
+            &root,
+            "inside.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Inside\"\ncreated: 2026-07-08\n---\n",
+        );
+        // A real dir OUTSIDE the tasks folder, with a task in it, linked in.
+        let outside = dir.path().join("outside");
+        write(
+            &outside,
+            "escapee.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Escapee\"\ncreated: 2026-07-08\n---\n",
+        );
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+        let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["Inside"]); // Escapee is never followed
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tasks_terminates_on_a_directory_cycle() {
+        // A link pointing back to an ancestor inside the folder must not loop,
+        // and the task must be counted once. Guards the walked-set + canonical
+        // containment (the same guard catches a Windows junction cycle).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-08\n---\n",
+        );
+        // Tasks/sub/loop -> Tasks — a cycle back to an ancestor, still inside root.
+        std::os::unix::fs::symlink(&root, root.join("sub").join("loop")).unwrap();
+        let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
+        assert_eq!(titles, vec!["A"]); // terminates; A counted exactly once
     }
 
     #[test]
@@ -485,11 +669,11 @@ mod tests {
         let root = dir.path().join("Tasks");
         let p = create_task(&root, "Buy milk", "2026-07-08").unwrap();
 
-        set_task_status(&root, &p, true).unwrap();
+        set_task_status(&root, &p, "done").unwrap();
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("status: done\n"));
-        set_task_status(&root, &p, false).unwrap();
+        set_task_status(&root, &p, "new").unwrap();
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("status: new\n"));
@@ -497,7 +681,7 @@ mod tests {
         // A path outside the root is refused.
         let outside = dir.path().join("outside.md");
         std::fs::write(&outside, "---\ntype: Task\nstatus: new\n---\n").unwrap();
-        assert!(set_task_status(&root, &outside, true).is_err());
+        assert!(set_task_status(&root, &outside, "done").is_err());
     }
 
     #[cfg(unix)]
@@ -513,6 +697,6 @@ mod tests {
         std::fs::write(&real, "---\ntype: Task\nstatus: new\n---\n").unwrap();
         let link = root.join("2026-07-08-linked.md");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(set_task_status(&root, &link, true).is_err());
+        assert!(set_task_status(&root, &link, "done").is_err());
     }
 }

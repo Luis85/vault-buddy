@@ -281,6 +281,34 @@ describe("vaults store", () => {
     expect(store.captureSettingsVaultId).toBe("v1");
   });
 
+  it("refresh populates taskCounts from count_open_tasks", async () => {
+    mockIPC((cmd, args) => {
+      if (cmd === "list_vaults")
+        return [{ id: "v1", name: "A", path: "/a", open: false }];
+      if (cmd === "count_open_tasks")
+        return (args as { id: string }).id === "v1" ? 3 : 0;
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.taskCounts).toEqual({ v1: 3 });
+  });
+
+  it("logs a warning and falls back to 0 when count_open_tasks fails", async () => {
+    // A broken counter must be distinguishable from a vault with no open tasks
+    // — the failure is logged, not silently swallowed (Diagnostics invariant).
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults")
+        return [{ id: "v1", name: "A", path: "/a", open: false }];
+      if (cmd === "count_open_tasks") throw "ipc unavailable";
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.taskCounts).toEqual({ v1: 0 });
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("count_open_tasks failed for vault v1"),
+    );
+  });
+
   it("refresh bumps shownNonce so the panel can reset transient UI on open", async () => {
     mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();

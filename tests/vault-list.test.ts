@@ -11,6 +11,7 @@ const mountList = (
   captureDisabled = false,
   recordingVaultId: string | null = null,
   transcribingVaultId: string | null = null,
+  taskCounts: Record<string, number> = {},
 ) =>
   mount(VaultList, {
     props: {
@@ -20,6 +21,7 @@ const mountList = (
       captureDisabled,
       recordingVaultId,
       transcribingVaultId,
+      taskCounts,
     },
   });
 
@@ -175,5 +177,31 @@ describe("VaultList", () => {
     ]);
     await wrapper.get('[data-testid="open-tasks"]').trigger("click");
     expect(wrapper.emitted("open-tasks")?.[0]).toEqual(["v1"]);
+  });
+
+  it("shows the open-task badge when the count is > 0", () => {
+    const wrapper = mountList(
+      [{ id: "v1", name: "Test", path: "C:\\vaults\\Test", open: false }],
+      null,
+      null,
+      false,
+      null,
+      null,
+      { v1: 4 },
+    );
+    expect(wrapper.get('[data-testid="task-count"]').text()).toBe("4");
+  });
+
+  it("hides the badge when the open-task count is 0 or missing", () => {
+    const wrapper = mountList(
+      [{ id: "v1", name: "Test", path: "C:\\vaults\\Test", open: false }],
+      null,
+      null,
+      false,
+      null,
+      null,
+      {},
+    );
+    expect(wrapper.find('[data-testid="task-count"]').exists()).toBe(false);
   });
 });

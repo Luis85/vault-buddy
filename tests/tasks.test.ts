@@ -22,7 +22,6 @@ function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>>
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
-    if (cmd === "get_tasks_config") return { tasksFolder: null };
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
       const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false };
@@ -30,7 +29,6 @@ function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>>
       return created;
     }
     if (cmd === "set_task_status") return null;
-    if (cmd === "set_tasks_config") return null;
   });
   const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
   return { wrapper, calls };
@@ -40,11 +38,13 @@ describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
   afterEach(() => clearMocks());
 
-  it("loads config and tasks for the vault on mount", async () => {
+  it("loads tasks for the vault on mount", async () => {
     const { calls } = mountView();
     await flushPromises();
     expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({ cmd: "list_tasks", args: { id: "v1" } });
-    expect(calls.find((c) => c.cmd === "get_tasks_config")).toBeTruthy();
+    // The folder setting moved to Vault settings — the Tasks view no longer
+    // reads the tasks config.
+    expect(calls.find((c) => c.cmd === "get_tasks_config")).toBeUndefined();
   });
 
   it("renders open tasks before done ones", async () => {
@@ -65,13 +65,54 @@ describe("Tasks", () => {
     expect(wrapper.text()).toContain("Ship it");
   });
 
-  it("toggles a task via set_task_status", async () => {
+  it("toggles a task via set_task_status with a status string", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();
     await wrapper.get('[data-testid="task-checkbox"]').trigger("change");
     await flushPromises();
     const call = calls.find((c) => c.cmd === "set_task_status");
-    expect(call?.args).toMatchObject({ id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", done: true });
+    expect(call?.args).toMatchObject({ id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", status: "done" });
+  });
+
+  it("archives a task: sends status archived and removes the row", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-archive"]').trigger("click"); // first row = "B open"
+    await flushPromises();
+    const call = calls.find((c) => c.cmd === "set_task_status");
+    expect(call?.args).toMatchObject({ id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", status: "archived" });
+    expect(wrapper.text()).not.toContain("B open");
+  });
+
+  it("re-inserts the row and notifies when archive fails", async () => {
+    const notifications = useNotificationsStore();
+    const { wrapper } = mountView({
+      set_task_status: () => {
+        throw new Error("disk full");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("B open"); // restored
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+  });
+
+  it("shows a progress bar of done/total and hides it at zero", async () => {
+    const { wrapper } = mountView(); // sample = 1 open + 1 done → 1/2
+    await flushPromises();
+    const bar = wrapper.get('[data-testid="task-progress"]');
+    expect(bar.text()).toContain("1 / 2");
+    // Empty vault → no bar.
+    const empty = mountView({ list_tasks: () => [] });
+    await flushPromises();
+    expect(empty.wrapper.find('[data-testid="task-progress"]').exists()).toBe(false);
+  });
+
+  it("no longer renders the tasks-folder input", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tasks-folder-input"]').exists()).toBe(false);
   });
 
   it("ignores a re-toggle while the row's write is still in flight", async () => {
@@ -128,15 +169,4 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
   });
 
-  it("saves a new tasks folder", async () => {
-    const { wrapper, calls } = mountView();
-    await flushPromises();
-    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Inbox/Tasks");
-    await wrapper.get('[data-testid="tasks-folder-save"]').trigger("click");
-    await flushPromises();
-    expect(calls.find((c) => c.cmd === "set_tasks_config")).toEqual({
-      cmd: "set_tasks_config",
-      args: { id: "v1", tasksFolder: "Inbox/Tasks" },
-    });
-  });
 });
