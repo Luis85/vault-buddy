@@ -41,14 +41,12 @@ pub fn set_tasks_config(
         .map(str::to_string);
     if let Some(folder) = &folder {
         let root = capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
-        // Reject a folder that ALREADY exists as a symlink/junction resolving
-        // outside the vault, up front — the lexical check above can't see
-        // through it. Otherwise the setting saves but list_tasks then returns
-        // empty and add/toggle error, i.e. the UI persists an unusable folder.
-        // A not-yet-created folder is fine: add_task create-then-asserts it.
-        if root.exists() {
-            capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root)?;
-        }
+        // Reject up front a folder that resolves outside the vault via a
+        // symlink/junction at any existing ancestor — even when the leaf
+        // doesn't exist yet. The lexical check above can't see through a link;
+        // without this the setting would save but list_tasks then returns empty
+        // and add/toggle error, i.e. the UI persists an unusable folder.
+        capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
     }
     let _guard = lock_ignoring_poison(&lock.0);
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
@@ -130,13 +128,13 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
     if !vault_path.is_dir() {
         return Err(format!("Vault folder not found: {}", vault_path.display()));
     }
-    // Create the folder, THEN canonicalize-verify it stays inside the vault
-    // before any task file is written — the exact create-then-assert order the
-    // capture recording folder uses (capture_commands.rs). No vault DATA is
-    // written before the assert passes; a symlinked folder can at worst create
-    // a stray empty dir, then this errors out (create_task never runs).
+    // Validate the folder resolves inside the vault BEFORE creating it: this
+    // canonicalizes the nearest existing ancestor, so a symlink/junction at any
+    // ancestor is caught even when the leaf doesn't exist yet — create_dir_all
+    // then can't create a directory (or write a task) outside the vault. The
+    // lexical safe_recording_root already rejected `..`/absolute components.
+    capture_paths::assert_path_inside_vault(&vault_path, &root)?;
     std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
-    capture_paths::assert_root_inside_vault(&vault_path, &root)?;
     // Local calendar date (YYYY-MM-DD), matching every other date-sensitive
     // path in the app (capture uses chrono::Local::now().date_naive()). A UTC
     // date would name a task with tomorrow's/yesterday's date near local
