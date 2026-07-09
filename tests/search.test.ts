@@ -143,7 +143,7 @@ describe("Search", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(calls.find((c) => c.cmd === "open_search_result")).toEqual({
       cmd: "open_search_result",
-      args: { id: "v1", file: "Notes/idea" },
+      args: { id: "v1", file: "Notes/idea", keepOpen: false },
     });
     expect(calls.find((c) => c.cmd === "announce")).toEqual({
       cmd: "announce",
@@ -217,7 +217,7 @@ describe("Search", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(calls.find((c) => c.cmd === "open_search_result")).toEqual({
       cmd: "open_search_result",
-      args: { id: "v1", file: "Notes/second" },
+      args: { id: "v1", file: "Notes/second", keepOpen: false },
     });
   });
 
@@ -281,7 +281,12 @@ describe("Search", () => {
       .get('[data-testid="search-input"]')
       .trigger("keydown", { key: "Enter", ctrlKey: true });
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls.filter((c) => c.cmd === "open_search_result")).toHaveLength(1);
+    const opens = calls.filter((c) => c.cmd === "open_search_result");
+    expect(opens).toHaveLength(1);
+    // keepOpen must reach Rust: skipping close_panel alone is not enough —
+    // the panel's focus-out check would hide it when Obsidian grabs focus,
+    // so the backend pins the panel open for the grab window.
+    expect(opens[0].args).toMatchObject({ keepOpen: true });
     expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
     await wrapper
       .get('[data-testid="search-hit"]')

@@ -35,7 +35,15 @@ eliminated).
   `event.ctrlKey || event.metaKey`; row click passes the same from the
   MouseEvent. Plain Enter/click keep today's open-and-close behavior. The
   buddy announce fires per open (already gated by the Buddy-messages
-  setting).
+  setting). **Amendment (Codex review finding, confirmed):** skipping
+  `close_panel` alone is not enough — Obsidian grabs foreground focus while
+  handling the `obsidian://` URI, and the panel's focus-out check would hide
+  the panel moments later. `keepOpen` therefore travels to Rust
+  (`open_search_result(id, file, keep_open)`), which stamps a ~3 s
+  **panel pin** (`PANEL_PIN_UNTIL` in `lib.rs`) that the focus-out check
+  consults before hiding; the check remains only-ever-hides (a pin declines
+  a hide, never shows), so the toggle_panel invariants stand. This is the
+  one Rust change in this otherwise frontend-only increment.
 - **Hover syncs the keyboard selection.** Rows set `selected` to their
   visible index on **`mousemove`** — deliberately not `mouseenter`, which
   fires when arrow-key scrolling slides rows under a stationary cursor and

@@ -48,8 +48,19 @@ pub async fn search_vaults(query: String) -> Result<search::SearchResponse, Stri
 /// anything else: kept) — Obsidian resolves it inside the vault, so this
 /// performs no filesystem access and never writes. Addressed by vault ID,
 /// never name.
+///
+/// `keep_open` is the Ctrl-open multi-open flow: skipping the frontend's
+/// `close_panel` is not enough on its own, because Obsidian grabs foreground
+/// focus while handling the URI and the panel's focus-out check would hide
+/// the panel moments later — so the command pins the panel open across that
+/// grab (see `lib.rs::pin_panel_open`). Sync command → main thread, where
+/// the pin's writer is expected to run.
 #[tauri::command]
-pub fn open_search_result(id: String, file: String) -> Result<(), String> {
+pub fn open_search_result(id: String, file: String, keep_open: bool) -> Result<(), String> {
     let vault = crate::commands::find_vault(&id)?;
-    uri::launch(&uri::open_file_uri(&vault.id, &file))
+    uri::launch(&uri::open_file_uri(&vault.id, &file))?;
+    if keep_open {
+        crate::pin_panel_open();
+    }
+    Ok(())
 }

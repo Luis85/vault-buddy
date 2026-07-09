@@ -163,7 +163,14 @@ bubble to the buddy's pre-restore default corner. Invariants:
   thread, where a panic aborts across the WebView2 FFI boundary). The check
   only ever HIDES, never shows, so it can never fight `toggle_panel` into a
   reopen: a buddy click that closed the panel leaves the deferred check a
-  no-op.
+  no-op. One sanctioned exception to the hide: a **Ctrl-open pin**
+  (`PANEL_PIN_UNTIL`, stamped by `open_search_result` with `keep_open`)
+  makes the check decline the hide for ~3 s — Obsidian grabs foreground
+  focus while handling the launched `obsidian://` URI, and that grab IS the
+  blur being sampled; without the pin the multi-open flow the user
+  explicitly requested would collapse after the first result. The pin
+  expires on its own and never shows anything, so the only-hide invariant
+  stands.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -467,8 +474,10 @@ note/attachment icons, `HighlightText` (index-based, never a RegExp from
 user input), and keyboard navigation over the **visible** rows only
 (collapsed groups and kind-filtered hits are skipped; arrows move a clamped
 selection wired to `aria-activedescendant`, Enter opens it, Ctrl+Enter /
-Ctrl+click keep the panel open for multi-open, hover syncs the selection
-via mousemove — not mouseenter, which would fight arrow-key scrolling).
+Ctrl+click keep the panel open for multi-open — `keep_open` travels to Rust,
+which pins the panel through Obsidian's focus grab (see the focus-out check
+above) — hover syncs the selection via mousemove, not mouseenter, which
+would fight arrow-key scrolling).
 `/` or Ctrl+F on the vault list jump into search (`ActionPanel`'s
 window-keydown, gated on the list view and off text inputs). The view also
 renders an aria-live match summary ("N matches in M vaults", `100+` when

@@ -191,7 +191,15 @@ async function runSearch(trimmed: string) {
 
 async function openHit(hit: SearchHit, keepOpen = false) {
   try {
-    await invoke("open_search_result", { id: hit.vaultId, file: hit.file });
+    // keepOpen travels to Rust: skipping close_panel below is not enough on
+    // its own — Obsidian grabs focus when it handles the URI, and the
+    // panel's focus-out check would hide the panel moments later. The
+    // command pins the panel open across that grab.
+    await invoke("open_search_result", {
+      id: hit.vaultId,
+      file: hit.file,
+      keepOpen,
+    });
     // Same acknowledgement pattern as vault/daily-note opens (the panel
     // window is the announcer for opens); a failed open stays silent — the
     // toast is the feedback there. Ctrl-open keeps the panel up for a
