@@ -121,7 +121,12 @@ mount, then flips on a `buddy-facing` event that Rust emits (deduped, from the
 `Moved` handler + startup poll) only when the buddy crosses the screen midline
 — so the character always looks toward the center. A `BUBBLE_TUCK_FRAC` overlap
 (a fraction of the buddy width, so it scales with DPI) pulls the bubble into
-the buddy window's transparent padding so it sits snug against the character. While the greeting is up, the
+the buddy window's transparent padding so it sits snug against the character.
+`show_bubble` refuses to reveal while the buddy (`main`) is hidden and returns
+whether it showed — hidden-to-tray hides ALL windows, so every announcer
+(startup update check, transcription progress, the greeting's post-settle
+show) is silenced at this one reveal chokepoint, and `announce` skips its
+`bubble-message` emit when suppressed. While the greeting is up, the
 buddy's `Moved` handler re-runs `place_beside_buddy` for the bubble
 (`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
 bubble being visible) and re-emits the anchor, so the bubble *follows* a drag
