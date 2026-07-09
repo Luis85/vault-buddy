@@ -68,10 +68,13 @@ launched the app on the CI runner and never exited.
 `resume_capture`, `get_capture_config`, `set_capture_config`,
 `list_audio_devices`, `rename_capture`, the recordings/transcription
 surface: `list_recordings`, `open_recording`, `open_transcript`,
-`retranscribe`, `transcribe_recording_now`, and the tasks surface:
+`retranscribe`, `transcribe_recording_now`, the tasks surface:
 `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
-`set_task_status` — commands live in `src-tauri/src/commands.rs`,
-`src-tauri/src/capture_commands.rs`, and `src-tauri/src/task_commands.rs`.
+`set_task_status`, and the search surface: `search_vaults` (**async** on
+purpose — the scan must not run on the main thread) + `open_search_result`
+— commands live in `src-tauri/src/commands.rs`,
+`src-tauri/src/capture_commands.rs`, `src-tauri/src/task_commands.rs`, and
+`src-tauri/src/search_commands.rs`.
 Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
 are handled in `lib.rs`.
 
@@ -427,6 +430,26 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
   for one task can't land out of order). `TaskItem`/`TaskDto` fields match
   camelCase across Rust↔TS.
 
+### The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
+
+Cross-vault, read-only, on-demand search (no index): `core::search::search_vaults`
+walks every registered vault with the tasks-walk discipline (canonical
+containment, cycle set, dot-entry skips, deterministic name-ordered walk),
+matching case-insensitive substrings against note stems + note content
+(≤ 1 MiB, UTF-8 — larger/binary files match by name only) and attachment
+filenames. Hard caps: 2-char minimum query, 100 hits globally (`truncated`
+flag → "refine your query" footer), filename matches surface before
+content-only matches. Each hit carries the ready-made `obsidian://open`
+`file` parameter (`.md` dropped for notes, extension kept for attachments);
+`open_search_result` launches it via `uri::launch` — search never writes.
+`search_vaults` is deliberately **async** (sync commands run on the main
+thread; a content scan there would freeze window show/hide and drags) and
+wraps the walk in `spawn_blocking`; it touches no window APIs and no locks.
+The panel's `search` view (parent: the vault list) is a self-contained
+`Search.vue` — 300 ms debounce, monotonic request ticket against stale
+responses, vault-grouped rows, index-based highlighting (never a RegExp from
+user input).
+
 ### Diagnostics invariants
 
 - Every spawned thread is named (`std::thread::Builder`) — crash records
@@ -470,15 +493,16 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks`, with `captureSettingsVaultId` / `recordingsVaultId` /
-`recordModeVaultId` / `tasksVaultId`) because that must survive the panel window
-being hidden. Views form a fixed one-parent-per-view tree (no history stack):
-the vault-row capture button `openRecordMode`s (Meeting / Voice Note / Browse
-recordings), `openRecordings` opens the read-only list, the vault-row Tasks
-button `openTasks` opens the per-vault todo view, and `back()` returns to the
-immediate parent (`recordings` → record view, everything else → the list) — the
-header renders the cog (buddy settings) on the list and a ← back button on every
-other view.
+transcriptions | tasks | search`, with `captureSettingsVaultId` /
+`recordingsVaultId` / `recordModeVaultId` / `tasksVaultId`) because that must
+survive the panel window being hidden. Views form a fixed one-parent-per-view
+tree (no history stack): the vault-row capture button `openRecordMode`s
+(Meeting / Voice Note / Browse recordings), `openRecordings` opens the
+read-only list, the vault-row Tasks button `openTasks` opens the per-vault
+todo view, the header's magnifier `openSearch`es the cross-vault search view,
+and `back()` returns to the immediate parent (`recordings` → record view,
+everything else → the list) — the header renders the magnifier + cog (buddy
+settings) on the list and a ← back button on every other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
