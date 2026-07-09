@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { CHARACTERS } from "../characters";
 import { useSettingsStore, type MessageDuration } from "../stores/settings";
+import { logWarning } from "../logging";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import SelectMenu from "./SelectMenu.vue";
 import UpdateSettings from "./UpdateSettings.vue";
@@ -25,6 +27,41 @@ const messageDuration = computed({
 // also silences previews (BuddyAvatar's .still would freeze them anyway; the
 // gate keeps the semantics honest).
 const previewId = ref<string | null>(null);
+
+// OS-owned state (the registry on Windows): read fresh on mount, never
+// stored in localStorage/the settings store. null = unknown (read pending
+// or failed) — the toggle stays disabled so it can't write blind.
+const autostart = ref<boolean | null>(null);
+const autostartBusy = ref(false);
+const autostartError = ref<string | null>(null);
+
+onMounted(async () => {
+  try {
+    autostart.value = await invoke<boolean>("get_autostart");
+  } catch (e) {
+    autostartError.value = String(e);
+    logWarning(`get_autostart failed: ${String(e)}`);
+  }
+});
+
+async function toggleAutostart(event: Event) {
+  const enabled = (event.target as HTMLInputElement).checked;
+  const previous = autostart.value;
+  // Optimistic with revert-on-failure (the Tasks-toggle pattern); busy
+  // disables the checkbox so two writes can't race.
+  autostart.value = enabled;
+  autostartBusy.value = true;
+  autostartError.value = null;
+  try {
+    await invoke("set_autostart", { enabled });
+  } catch (e) {
+    autostart.value = previous;
+    autostartError.value = String(e);
+    logWarning(`set_autostart failed: ${String(e)}`);
+  } finally {
+    autostartBusy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -138,6 +175,39 @@ const previewId = ref<string | null>(null);
             data-testid="message-duration-select"
           />
         </div>
+      </div>
+    </section>
+    <section>
+      <h2
+        class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+      >
+        System
+      </h2>
+      <div class="rounded-xl border border-white/10 bg-white/5 p-2">
+        <div class="flex items-center justify-between">
+          <label for="autostart-toggle" class="text-sm text-slate-200">
+            Start with Windows
+            <span class="block text-xs text-slate-500">
+              Launch the buddy when you log in
+            </span>
+          </label>
+          <input
+            id="autostart-toggle"
+            data-testid="autostart-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+            :checked="autostart === true"
+            :disabled="autostart === null || autostartBusy"
+            @change="toggleAutostart"
+          />
+        </div>
+        <p
+          v-if="autostartError"
+          data-testid="autostart-error"
+          class="mt-1.5 text-xs text-red-300"
+        >
+          {{ autostartError }}
+        </p>
       </div>
     </section>
     <UpdateSettings />

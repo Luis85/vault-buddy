@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 const updaterMocks = vi.hoisted(() => ({
   getVersion: vi.fn(),
@@ -13,6 +14,10 @@ vi.mock("@tauri-apps/api/app", () => ({
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: updaterMocks.check }));
 vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: updaterMocks.relaunch,
+}));
+vi.mock("../src/logging", () => ({
+  logWarning: vi.fn(),
+  logBreadcrumb: vi.fn(),
 }));
 
 import BuddySettings from "../src/components/BuddySettings.vue";
@@ -119,6 +124,66 @@ describe("BuddySettings", () => {
     expect((toggle.element as HTMLInputElement).checked).toBe(true);
     await toggle.setValue(false);
     expect(useSettingsStore().buddyMessagesEnabled).toBe(false);
+  });
+
+  it("loads the OS autostart state into the System card", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_autostart") return true;
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    expect(wrapper.text()).toContain("System");
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="autostart-toggle"]');
+    expect(toggle.element.checked).toBe(true);
+    expect(toggle.element.disabled).toBe(false);
+    clearMocks();
+  });
+
+  it("disables the autostart toggle and shows the error when the read fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_autostart") throw new Error("registry unavailable");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="autostart-toggle"]');
+    expect(toggle.element.disabled).toBe(true);
+    expect(wrapper.get('[data-testid="autostart-error"]').text()).toContain(
+      "registry unavailable",
+    );
+    clearMocks();
+  });
+
+  it("toggling autostart invokes set_autostart", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_autostart") return false;
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    await wrapper.get('[data-testid="autostart-toggle"]').setValue(true);
+    await flush();
+    expect(calls.find((c) => c.cmd === "set_autostart")?.args).toEqual({
+      enabled: true,
+    });
+    clearMocks();
+  });
+
+  it("reverts the autostart toggle and shows the error when the write fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_autostart") return false;
+      if (cmd === "set_autostart") throw new Error("access denied");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="autostart-toggle"]');
+    await wrapper.get('[data-testid="autostart-toggle"]').setValue(true);
+    await flush();
+    expect(toggle.element.checked).toBe(false); // reverted
+    expect(wrapper.get('[data-testid="autostart-error"]').text()).toContain(
+      "access denied",
+    );
+    clearMocks();
   });
 
   it("shows the Updates section with the current version", async () => {
