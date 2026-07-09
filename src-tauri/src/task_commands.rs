@@ -65,6 +65,7 @@ pub struct TaskDto {
     pub done: bool,
     pub due: Option<String>,
     pub priority: Option<String>,
+    pub tags: Vec<String>,
 }
 
 impl TaskDto {
@@ -77,6 +78,7 @@ impl TaskDto {
             done: t.done,
             due: t.due,
             priority: t.priority,
+            tags: t.tags,
         }
     }
 }
@@ -115,6 +117,31 @@ fn validated_priority(priority: Option<String>) -> Result<Option<String>, String
     }
 }
 
+/// Validate tags for a write: trim, strip a leading `#`, drop empties,
+/// dedupe case-insensitively (first casing wins). Write validation is
+/// STRICT where the read side is lenient — an invalid tag is an inline
+/// error naming the token, so bad input can't silently vanish on save.
+fn validated_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for raw in tags {
+        let t = raw.trim();
+        let t = t.strip_prefix('#').unwrap_or(t);
+        if t.is_empty() {
+            continue;
+        }
+        if !tasks::is_valid_tag(t) {
+            return Err(format!(
+                "Invalid tag (letters, digits, -, _ and / only; not all digits): {raw}"
+            ));
+        }
+        if seen.insert(t.to_lowercase()) {
+            out.push(t.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
 /// folder → empty list, never an error (mirrors list_recordings). Never writes.
 #[tauri::command]
@@ -145,6 +172,7 @@ pub fn add_task(
     title: String,
     due: Option<String>,
     priority: Option<String>,
+    tags: Option<Vec<String>>,
 ) -> Result<TaskDto, String> {
     let title = title.trim();
     if title.is_empty() {
@@ -152,6 +180,7 @@ pub fn add_task(
     }
     let due = validated_due(due)?;
     let priority = validated_priority(priority)?;
+    let tags = validated_tags(tags.unwrap_or_default())?;
     let (vault_path, root) = tasks_root_for(&id)?;
     // The registry can list a vault whose folder was moved/deleted; without
     // this guard the create_dir_all below would RESURRECT the missing vault
@@ -175,8 +204,15 @@ pub fn add_task(
         .date_naive()
         .format("%Y-%m-%d")
         .to_string();
-    let path = tasks::create_task(&root, title, &today, due.as_deref(), priority.as_deref())
-        .map_err(|e| format!("Could not create task: {e}"))?;
+    let path = tasks::create_task(
+        &root,
+        title,
+        &today,
+        due.as_deref(),
+        priority.as_deref(),
+        &tags,
+    )
+    .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
         title: title.to_string(),
@@ -185,6 +221,7 @@ pub fn add_task(
         done: false,
         due,
         priority,
+        tags,
     })
 }
 
@@ -239,6 +276,8 @@ pub struct TaskPatchDto {
     pub clear_due: bool,
     #[serde(default)]
     pub priority: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
@@ -262,6 +301,15 @@ pub fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), 
     }
     if patch.priority.is_some() {
         updates.push(("priority", validated_priority(patch.priority.clone())?));
+    }
+    if let Some(tags) = patch.tags {
+        let tags = validated_tags(tags)?;
+        if tags.is_empty() {
+            // Explicit empty list clears — removes the line (or block).
+            updates.push(("tags", None));
+        } else {
+            updates.push(("tags", Some(format!("[{}]", tags.join(", ")))));
+        }
     }
     if updates.is_empty() {
         return Ok(());
