@@ -407,6 +407,25 @@ default). All logic lives in the pure `core::tasks` crate (unit-tested on
 Linux); the shell (`task_commands.rs`) resolves a vault + tasks root and
 delegates.
 
+**Tags (v0.5.3, task-tags increment).** `tags: Vec<String>` (empty when none)
+is the third widened field, `note_tags` (beside `note_field`) reading
+Obsidian's frontmatter `tags:` property in every form it accepts — flow
+`[work, home/errands]`, block `- item` list, legacy comma/space string — plus
+the singular `tag:` alias, read only when `tags:` is absent (`tags:` always
+wins, even present-but-empty). Read normalization is lenient, matching the
+rest of the vault domain's defensive-read posture: strip an optional leading
+`#`, unquote, validate against `is_valid_tag`'s charset (letters/digits/`-`/
+`_`/`/`, at least one non-digit — rejects all-numeric and anything with a
+space) and silently drop invalid entries, dedupe case-insensitively keeping
+the first-seen casing. Writes are the opposite posture — strict and
+canonical: always single-line flow style (`tags: [work, home/errands]`),
+written only when non-empty, and the shell's `validated_tags` runs every tag
+through the same `is_valid_tag` charset check but turns a failure into an
+inline error naming the offending token instead of dropping it, so a bad tag
+can never silently vanish on save. `Some([])` from the editor/patch clears —
+removes the line (or block) entirely, same "absent means gone" semantics as
+`due`.
+
 - **Two sanctioned vault writes, same discipline as capture/transcript.**
   *Create* (`create_task`, now threading through optional `due`/`priority`)
   reuses the collision-safe atomic note writer (exclusive-create temp +
@@ -424,7 +443,17 @@ delegates.
   `capture_note::write_atomic_replacing` — temp + fsync + REPLACING rename);
   `set_task_status` and the shell's `update_task` command both delegate to it,
   so a rename/due/priority edit and a status flip go through the exact same
-  containment and atomicity guarantees.
+  containment and atomicity guarantees. **Block-list consumption** is the one
+  writer change tags needed: when a matched key's line has an EMPTY value
+  (nothing but whitespace after the colon) and is followed by YAML list-item
+  lines (`- item`, indented or not, including a mapping item's indented
+  continuation lines), a rewrite or removal of that key consumes those list
+  lines too — a rewrite drops the key line + items and emits the single new
+  flow line, a removal drops them all; keys with an inline value are
+  unaffected. This is what lets a hand-authored block-style `tags:` list
+  round-trip to one canonical flow line on the next save instead of leaving
+  orphaned `- item` lines behind — the round-trip stays surgical, same as
+  every other field.
 - **`is_task` requires a CLOSED frontmatter fence** so the list and the writer
   agree on what is a task — the list must never surface a row a write would
   reject.
@@ -465,17 +494,41 @@ delegates.
   target that calls `open_task` — a successful launch closes the panel
   (best-effort `close_panel`, same as every other Obsidian handoff), a failed
   one keeps it open for the error toast. A pencil opens an inline editor
-  (title, due, priority) with one row editable at a time, Save sending only
-  the changed fields (`clearDue: true` for an emptied date) in a single
-  `update_task` call. Toggle/archive/edit are all optimistic (revert + toast
-  on failure) and **serialized per row** (a reactive in-flight Set disables
-  the row's controls until its write resolves, so two concurrent writes for
-  one task can't land out of order — the editor shares this guard with
+  (title, due, priority, tags) with one row editable at a time, Save sending
+  only the changed fields (`clearDue: true` for an emptied date; tags follows
+  the same changed-fields rule below) in a single `update_task` call.
+  Toggle/archive/edit are all optimistic (revert + toast on failure) and
+  **serialized per row** (a reactive in-flight Set disables the row's
+  controls until its write resolves, so two concurrent writes for one task
+  can't land out of order — the editor shares this guard with
   toggle/archive). A title filter appears above 5 tasks, same threshold as
   the vault list; its query applies only while the input is shown, so
   archiving below the threshold can't strand a stale, invisible filter.
-  `TaskItem`/`TaskDto` fields (now including `due`/`priority`) match camelCase
-  across Rust↔TS.
+  `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
+  camelCase across Rust↔TS.
+- **Tags (v0.5.3): chips, filter, inputs, and a grouping toggle.** Each row
+  renders all of its tags as chips between the title and the due chip; a chip
+  click activates a single component-local tag filter (no multi-tag filter
+  this slice) that ANDs with the title filter (both feed `filteredTasks`,
+  case-insensitive exact match — no nested-tag prefix matching) and renders
+  as a dismissible chip with an always-visible ✕, independent of the >5
+  title-filter threshold so it can never strand the user once activated. The
+  add-options row and the inline editor each get a free-text tags input
+  (comma/space separated, leading `#` optional per token, split/trimmed
+  client-side into an array); the editor sends `tags` in the patch only when
+  the parsed array differs from the task's current tags, and an emptied input
+  sends `tags: []` (clear) — same changed-fields/optimistic-revert discipline
+  as the other fields. A `Dates | Tags` segmented toggle (component-local
+  state, resets to `dates` on remount) switches the SAME filtered,
+  globally-sorted list from date buckets to tag sections: one alphabetical
+  section per distinct tag with the task repeated under EACH of its tags,
+  then "No tags" (open, untagged), then "Done" (all done tasks) — headers
+  always render in tag mode. Because a task can render more than once, the
+  row `:key` and the inline editor's open-row state are section-scoped
+  (`` `${section}:${task.path}` ``, `editingKey`/`rowKey`), so opening the
+  editor on one duplicate never expands the others, while the per-path
+  `busy` guard still serializes writes for the underlying task across all its
+  rendered rows.
 
 ### Diagnostics invariants
 

@@ -281,9 +281,10 @@ pub struct TaskPatchDto {
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
-/// set the priority — validated up front, then ONE surgical multi-key
-/// frontmatter write (title quoted here; `priority: normal` and a cleared due
-/// remove their lines). An empty patch is a no-op Ok.
+/// set the priority, set/clear tags — validated up front, then ONE surgical
+/// multi-key frontmatter write (title quoted here; `priority: normal` and a
+/// cleared due remove their lines; an empty tags list clears the
+/// line/block). An empty patch is a no-op Ok.
 #[tauri::command]
 pub fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), String> {
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
