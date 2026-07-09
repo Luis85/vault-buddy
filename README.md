@@ -80,11 +80,14 @@ Vault Buddy is careful with your vault. Browsing, searching, and opening
 notes never write anything — opening stays delegated to Obsidian via
 `obsidian://` URIs, and every launched URI is logged. **Recording and tasks
 are the two features that write into a vault**, and only where you use
-them: recording saves the audio, an optional companion note, and (if
-enabled) a transcript sidecar into a dated folder you choose; tasks create
-small `type: Task` files and flip their `status:` line in place. Neither
-ever overwrites or edits files you already have. Everything stays on your
-machine — no account, nothing uploaded.
+them. Recording saves the audio, an optional companion note, and (if
+enabled) a transcript sidecar into a dated folder you choose — always under
+fresh names, never replacing a file you already have. Tasks create new
+`type: Task` files the same collision-safe way; the one edit they make to
+an existing file is flipping the `status:` line of a task you check off or
+archive — and only in files whose frontmatter says `type: Task`, which
+includes task files you wrote by hand. Nothing else in your vault is ever
+modified. Everything stays on your machine — no account, nothing uploaded.
 
 ## Contributing
 
