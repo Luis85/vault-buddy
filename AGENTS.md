@@ -66,10 +66,12 @@ launched the app on the CI runner and never exited.
 `open_logs_folder`, `rearm_crash_detection`, plus the capture surface:
 `capture_status`, `start_capture`, `stop_capture`, `pause_capture`,
 `resume_capture`, `get_capture_config`, `set_capture_config`,
-`list_audio_devices`, `rename_capture`, and the recordings/transcription
+`list_audio_devices`, `rename_capture`, the recordings/transcription
 surface: `list_recordings`, `open_recording`, `open_transcript`,
-`retranscribe`, `transcribe_recording_now` — commands live in
-`src-tauri/src/commands.rs` and `src-tauri/src/capture_commands.rs`.
+`retranscribe`, `transcribe_recording_now`, and the tasks surface:
+`get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
+`set_task_status` — commands live in `src-tauri/src/commands.rs`,
+`src-tauri/src/capture_commands.rs`, and `src-tauri/src/task_commands.rs`.
 Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
 are handled in `lib.rs`.
 
@@ -228,6 +230,9 @@ a `vault-buddy-transcript: pending/failed/complete` frontmatter marker means
 only `pending`/`failed` sidecars are ours to replace, so a completed
 transcript or a user's hand edit is never overwritten; see
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`.
+The tasks domain (below) adds two more sanctioned writes under the same rules —
+creating a task document (collision-safe) and the surgical `status:` toggle —
+see `docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`.
 Any other code touching vault contents directly is a design change, not a
 patch.
 
@@ -364,6 +369,64 @@ by type. Opening a row hands off to Obsidian via `open_recording` /
 `open_transcript` (`obsidian://`, read-only, `uri::launch`-logged) — it never
 writes.
 
+### The tasks domain (`core/src/tasks.rs` + `task_commands.rs` + `Tasks.vue`)
+
+A per-vault todo list over `type: Task` markdown documents (v0.5.0). A Task is
+its own document — Obsidian-Properties/Dataview-compatible frontmatter, not an
+inline checklist:
+
+```
+---
+type: Task
+status: new
+title: "Buy milk"
+created: 2026-07-08
+---
+```
+
+`type: Task` is the identity (so hand-authored task files count too), and the
+checkbox is binary against `status: done`. Per-vault config adds one field,
+`tasks_folder` (default `Tasks`), alongside the capture config in the same
+app-side `config.json` (`tasks_root()` resolves the default). All logic lives
+in the pure `core::tasks` crate (unit-tested on Linux); the shell
+(`task_commands.rs`) resolves a vault + tasks root and delegates.
+
+- **Two sanctioned vault writes, same discipline as capture/transcript.**
+  *Create* (`create_task`) reuses the collision-safe atomic note writer
+  (exclusive-create temp + `rename_noreplace`, ` (N)` suffix on collision —
+  never clobbers). *Toggle* (`set_status` → `set_task_status`) is a surgical
+  read-modify-write that changes ONLY the frontmatter `status:` line, preserving
+  every other field and the body byte-for-byte (CRLF included), via the shared
+  `capture_note::write_atomic_replacing` (temp + fsync + REPLACING rename). It
+  inserts a `status:` line for a hand-authored task that lacks one, always
+  terminated so it can't corrupt the closing fence; a file that is not
+  `type: Task` (or whose frontmatter never closes) is refused.
+- **`is_task` requires a CLOSED frontmatter fence** so the list and the toggle
+  agree on what is a task — the list must never surface a row the toggle would
+  reject.
+- **Path safety.** `safe_recording_root` (lexical) + `assert_path_inside_vault`
+  (canonicalizes the nearest existing ancestor, catching a symlink/junction
+  even when the leaf doesn't exist yet) gate the save/create paths;
+  `assert_root_inside_vault` gates the read; `set_task_status` canonicalizes
+  root+path and requires containment. `add_task` also rejects a missing vault
+  dir (`!is_dir()`) before creating, so a stale registry can't resurrect a
+  deleted vault. `set_capture_config` preserves `tasks_folder` (read under
+  `ConfigWriteLock`) so saving capture settings can't reset it.
+- **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
+  tasks organized into subfolders are all surfaced. `collect_tasks` descends
+  only after canonicalizing each child directory and confirming it stays under
+  the canonical tasks root (a symlink/junction escaping the folder is skipped;
+  a reparse cycle is bounded by a walked-set), and skips dot-directories
+  (`.obsidian`/`.trash`/`.git`). Output is one flat sorted list — open first
+  (`status != "done"`), newest `created`, then title — across the whole subtree.
+- **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
+  store): a `tasks` panel view reached from a per-row Tasks button; a folder
+  setting, an add-task input, and a checkbox list. Toggles are optimistic
+  (revert + toast on failure) and **serialized per row** (a reactive in-flight
+  Set disables the checkbox until its write resolves, so two concurrent writes
+  for one task can't land out of order). `TaskItem`/`TaskDto` fields match
+  camelCase across Rust↔TS.
+
 ### Diagnostics invariants
 
 - Every spawned thread is named (`std::thread::Builder`) — crash records
@@ -406,14 +469,16 @@ the list. It also bumps `shownNonce`; because the panel window is only
 hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
-state (`view: list | settings | captureSettings | recordings | recordMode`,
-with `captureSettingsVaultId` / `recordingsVaultId` / `recordModeVaultId`)
-because that must survive the panel window being hidden. Views form a fixed
-one-parent-per-view tree (no history stack): the vault-row capture button
-`openRecordMode`s (Meeting / Voice Note / Browse recordings), `openRecordings`
-opens the read-only list, and `back()` returns to the immediate parent
-(`recordings` → record view, everything else → the list) — the header renders
-the cog (buddy settings) on the list and a ← back button on every other view.
+state (`view: list | settings | captureSettings | recordings | recordMode |
+transcriptions | tasks`, with `captureSettingsVaultId` / `recordingsVaultId` /
+`recordModeVaultId` / `tasksVaultId`) because that must survive the panel window
+being hidden. Views form a fixed one-parent-per-view tree (no history stack):
+the vault-row capture button `openRecordMode`s (Meeting / Voice Note / Browse
+recordings), `openRecordings` opens the read-only list, the vault-row Tasks
+button `openTasks` opens the per-vault todo view, and `back()` returns to the
+immediate parent (`recordings` → record view, everything else → the list) — the
+header renders the cog (buddy settings) on the list and a ← back button on every
+other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
