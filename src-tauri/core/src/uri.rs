@@ -35,6 +35,15 @@ pub fn launch(uri: &str) -> Result<(), String> {
     open::that_detached(uri).map_err(|e| format!("failed to launch {uri}: {e}"))
 }
 
+/// `file`'s location under `vault_root` in the `obsidian://open?file=` form
+/// with the extension KEPT: vault-relative, `/`-separated. Used for
+/// attachments (and non-lowercase-`.md` notes), where dropping the extension
+/// would make Obsidian resolve the name as `<name>.md`. `None` when `file`
+/// is not inside `vault_root`.
+pub fn vault_relative(file: &std::path::Path, vault_root: &std::path::Path) -> Option<String> {
+    rel_to_uri_form(file.strip_prefix(vault_root).ok()?)
+}
+
 /// The `file` value for an `obsidian://open?file=` URI: `file`'s location
 /// under `vault_root`, `/`-separated, with the final extension dropped —
 /// Obsidian resolves `2026/07/Meeting` to `Meeting.md`, and a sidecar
@@ -45,7 +54,12 @@ pub fn vault_relative_no_ext(
     vault_root: &std::path::Path,
 ) -> Option<String> {
     let rel = file.strip_prefix(vault_root).ok()?;
-    let rel = rel.with_extension("");
+    rel_to_uri_form(&rel.with_extension(""))
+}
+
+/// Shared tail of the URI path form — one place derives it: `/`-separated,
+/// empty (the vault root itself) → None.
+fn rel_to_uri_form(rel: &std::path::Path) -> Option<String> {
     let s = rel.to_string_lossy().replace('\\', "/");
     if s.is_empty() {
         None
@@ -79,6 +93,19 @@ mod tests {
             new_file_uri("a1b2c3", "2026-07-03"),
             "obsidian://new?vault=a1b2c3&file=2026%2D07%2D03"
         );
+    }
+
+    #[test]
+    fn vault_relative_keeps_the_extension() {
+        use std::path::Path;
+        let root = Path::new("/vault");
+        assert_eq!(
+            vault_relative(Path::new("/vault/slides/Alpha deck.pdf"), root).as_deref(),
+            Some("slides/Alpha deck.pdf")
+        );
+        // outside the vault → None; the root itself → None
+        assert_eq!(vault_relative(Path::new("/elsewhere/x.pdf"), root), None);
+        assert_eq!(vault_relative(Path::new("/vault"), root), None);
     }
 
     #[test]
