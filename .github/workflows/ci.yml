@@ -47,8 +47,12 @@ jobs:
         working-directory: src-tauri
       - name: Install ALSA headers (cpal build dependency on Linux)
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: clippy (core + capture + transcribe crates)
-        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --all-targets -- -D warnings
+      # mcp is listed explicitly like the others: it is NOT (yet) a dependency
+      # of the app crate, so neither the tauri-build jobs nor an app-crate
+      # clippy would compile it — without this line a broken tool/auth change
+      # in the MCP server could merge unnoticed.
+      - name: clippy (core + capture + transcribe + mcp crates)
+        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
         working-directory: src-tauri
       # `whisper` isn't a default feature (the real engine only builds where
       # whisper.cpp does), so the plain invocation above never compiles
@@ -63,8 +67,8 @@ jobs:
       - name: clippy (transcribe crate, whisper feature)
         run: cargo clippy -p vault_buddy_transcribe --all-targets --features whisper -- -D warnings
         working-directory: src-tauri
-      - name: tests (core + capture + transcribe crates)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
+      - name: tests (core + capture + transcribe + mcp crates)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature)
         run: cargo test -p vault_buddy_transcribe --features whisper
