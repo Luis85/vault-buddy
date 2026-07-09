@@ -155,10 +155,14 @@ pub fn add_task(id: String, title: String) -> Result<TaskDto, String> {
     })
 }
 
-/// Flip a task's completion status. The path (from list_tasks) is re-validated
-/// inside the vault's tasks root by `tasks::set_task_status`.
+/// Set a task's status. `status` must be one of new/done/archived. The path
+/// (from list_tasks) is re-validated inside the vault's tasks root by
+/// `tasks::set_task_status`.
 #[tauri::command]
-pub fn set_task_status(id: String, path: String, done: bool) -> Result<(), String> {
+pub fn set_task_status(id: String, path: String, status: String) -> Result<(), String> {
+    if !matches!(status.as_str(), "new" | "done" | "archived") {
+        return Err(format!("Unknown task status: {status}"));
+    }
     let (vault_path, root) = tasks_root_for(&id)?;
     // Mirror list_tasks/add_task: safe_recording_root is only lexical, so
     // canonicalize and reject a tasks folder that resolves outside the vault
@@ -168,5 +172,25 @@ pub fn set_task_status(id: String, path: String, done: bool) -> Result<(), Strin
     if root.exists() {
         capture_paths::assert_root_inside_vault(&vault_path, &root)?;
     }
-    tasks::set_task_status(&root, Path::new(&path), done)
+    tasks::set_task_status(&root, Path::new(&path), &status)
+}
+
+/// Number of OPEN tasks (status != "done"; archived already excluded by
+/// list_tasks) in a vault, for the vault-row badge. Unknown vault / unsafe or
+/// missing folder / escape → 0, never an error (mirrors list_tasks). Read-only.
+#[tauri::command]
+pub fn count_open_tasks(id: String) -> usize {
+    let Ok((vault_path, root)) = tasks_root_for(&id) else {
+        return 0;
+    };
+    if root.exists() {
+        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
+            log::warn!("count_open_tasks: tasks folder resolves outside the vault: {e}");
+            return 0;
+        }
+    }
+    tasks::list_tasks(&root)
+        .into_iter()
+        .filter(|t| t.status != "done")
+        .count()
 }
