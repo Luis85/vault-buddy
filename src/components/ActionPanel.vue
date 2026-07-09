@@ -23,6 +23,18 @@ const capture = useCaptureStore();
 // panel directly on the settings view
 const { view } = storeToRefs(store);
 
+// One line per view; the fallback is the vault list's title.
+const VIEW_TITLES: Record<string, string> = {
+  settings: "Buddy settings",
+  captureSettings: "Vault settings",
+  recordings: "Recordings",
+  recordMode: "Record",
+  transcriptions: "Transcriptions",
+  tasks: "Tasks",
+  search: "Search",
+};
+const title = computed(() => VIEW_TITLES[view.value] ?? "Vaults");
+
 const filter = ref("");
 // A short list is scannable at a glance; only offer filtering when the
 // list is long enough that scanning stops working.
@@ -69,25 +81,7 @@ watch(
     class="relative flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
   >
     <div class="mb-2 flex items-center justify-between">
-      <h1 class="text-sm font-bold text-slate-100">
-        {{
-          view === "settings"
-            ? "Buddy settings"
-            : view === "captureSettings"
-              ? "Vault settings"
-              : view === "recordings"
-                ? "Recordings"
-                : view === "recordMode"
-                  ? "Record"
-                  : view === "transcriptions"
-                    ? "Transcriptions"
-                    : view === "tasks"
-                      ? "Tasks"
-                      : view === "search"
-                        ? "Search"
-                        : "Vaults"
-        }}
-      </h1>
+      <h1 class="text-sm font-bold text-slate-100">{{ title }}</h1>
       <div class="flex items-center gap-2">
         <span
           v-if="view === 'list' && store.vaults.length > 0"

@@ -196,6 +196,83 @@ describe("Search", () => {
     expect(wrapper.text()).toContain('No matches for "zzz"');
   });
 
+  it("ArrowDown/ArrowUp move the selection, clamped, and Enter opens the selected hit", async () => {
+    const { wrapper, calls } = mountSearch({
+      search_vaults: () =>
+        response([hit(), hit({ name: "second", file: "Notes/second" })]),
+    });
+    await type(wrapper, "alpha");
+    const input = wrapper.get('[data-testid="search-input"]');
+    expect(input.attributes("aria-activedescendant")).toBe("search-hit-0");
+    await input.trigger("keydown", { key: "ArrowDown" });
+    expect(input.attributes("aria-activedescendant")).toBe("search-hit-1");
+    await input.trigger("keydown", { key: "ArrowDown" }); // clamped at the end
+    expect(input.attributes("aria-activedescendant")).toBe("search-hit-1");
+    await input.trigger("keydown", { key: "ArrowUp" });
+    await input.trigger("keydown", { key: "ArrowUp" }); // clamped at the top
+    expect(input.attributes("aria-activedescendant")).toBe("search-hit-0");
+    await input.trigger("keydown", { key: "ArrowDown" });
+    await input.trigger("keydown", { key: "Enter" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.find((c) => c.cmd === "open_search_result")).toEqual({
+      cmd: "open_search_result",
+      args: { id: "v1", file: "Notes/second" },
+    });
+  });
+
+  it("Enter with no results is a no-op and selection resets on a new result set", async () => {
+    const { wrapper, calls } = mountSearch({
+      search_vaults: (args) =>
+        (args as { query: string }).query === "zzz"
+          ? response([])
+          : response([hit(), hit({ name: "second", file: "Notes/second" })]),
+    });
+    await type(wrapper, "zzz");
+    await wrapper
+      .get('[data-testid="search-input"]')
+      .trigger("keydown", { key: "Enter" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.some((c) => c.cmd === "open_search_result")).toBe(false);
+    await type(wrapper, "alpha");
+    const input = wrapper.get('[data-testid="search-input"]');
+    await input.trigger("keydown", { key: "ArrowDown" });
+    await type(wrapper, "alphab"); // new result set → selection back to 0
+    expect(input.attributes("aria-activedescendant")).toBe("search-hit-0");
+  });
+
+  it("shows the refinement indicator only while refining with results up", async () => {
+    const pending: Array<{ resolve: (r: SearchResponse) => void }> = [];
+    const { wrapper } = mountSearch({
+      search_vaults: () =>
+        new Promise<SearchResponse>((resolve) => pending.push({ resolve })),
+    });
+    await type(wrapper, "alpha"); // first search: no results up yet
+    expect(wrapper.find('[data-testid="search-refreshing"]').exists()).toBe(false);
+    pending[0].resolve(response([hit()]));
+    await vi.advanceTimersByTimeAsync(0);
+    await nextTick();
+    await type(wrapper, "alphab"); // refinement: results up + in flight
+    expect(wrapper.find('[data-testid="search-refreshing"]').exists()).toBe(true);
+    pending[1].resolve(response([hit()]));
+    await vi.advanceTimersByTimeAsync(0);
+    await nextTick();
+    expect(wrapper.find('[data-testid="search-refreshing"]').exists()).toBe(false);
+  });
+
+  it("group headers show a hit count and rows show a kind icon", async () => {
+    const { wrapper } = mountSearch({
+      search_vaults: () =>
+        response([
+          hit(),
+          hit({ name: "deck.pdf", file: "deck.pdf", isNote: false, snippet: null }),
+        ]),
+    });
+    await type(wrapper, "alpha");
+    expect(wrapper.get('[data-testid="group-count"]').text()).toBe("2");
+    expect(wrapper.findAll('[data-testid="hit-icon-note"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-testid="hit-icon-file"]')).toHaveLength(1);
+  });
+
   it("Escape clears the query first instead of bubbling", async () => {
     const { wrapper } = mountSearch();
     const input = wrapper.get('[data-testid="search-input"]');

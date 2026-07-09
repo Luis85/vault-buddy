@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import { announce } from "../announce";
@@ -55,6 +55,34 @@ const groups = computed(() => {
   });
   return [...map.entries()].map(([vaultId, g]) => ({ vaultId, ...g }));
 });
+
+// Keyboard selection: a flat index into `hits`, moved by the arrow keys on
+// the input, opened by Enter. Reset to the top hit on every new result set.
+const selected = ref(0);
+const hitId = (i: number) => `search-hit-${i}`;
+
+watch(results, () => {
+  selected.value = 0;
+});
+
+function onArrow(event: KeyboardEvent, delta: 1 | -1) {
+  if (hits.value.length === 0) return;
+  event.preventDefault(); // the list owns arrows; keep the caret still
+  selected.value = Math.min(
+    Math.max(selected.value + delta, 0),
+    hits.value.length - 1,
+  );
+  void nextTick(() => {
+    document
+      .getElementById(hitId(selected.value))
+      ?.scrollIntoView({ block: "nearest" });
+  });
+}
+
+function onEnter() {
+  const hit = hits.value[selected.value];
+  if (hit) void openHit(hit);
+}
 
 watch(query, () => {
   if (timer) clearTimeout(timer);
@@ -128,16 +156,31 @@ onUnmounted(() => {
 
 <template>
   <div class="flex flex-col gap-2">
-    <input
-      ref="inputEl"
-      v-model="query"
-      data-testid="search-input"
-      type="search"
-      placeholder="Search all vaults…"
-      aria-label="Search all vaults"
-      class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-      @keydown.escape="onEscape"
-    />
+    <div class="relative">
+      <input
+        ref="inputEl"
+        v-model="query"
+        data-testid="search-input"
+        type="search"
+        placeholder="Search all vaults…"
+        aria-label="Search all vaults"
+        role="combobox"
+        aria-expanded="true"
+        aria-controls="search-results"
+        :aria-activedescendant="hits.length ? hitId(selected) : undefined"
+        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        @keydown.escape="onEscape"
+        @keydown.down="onArrow($event, 1)"
+        @keydown.up="onArrow($event, -1)"
+        @keydown.enter="onEnter"
+      />
+      <span
+        v-if="searching && hits.length > 0"
+        data-testid="search-refreshing"
+        class="absolute right-2 top-1/2 h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-violet-400"
+        aria-hidden="true"
+      ></span>
+    </div>
     <p
       v-if="error"
       class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
@@ -157,34 +200,93 @@ onUnmounted(() => {
       No matches for "{{ resultsQuery }}".
     </p>
     <div
-      v-for="group in groups"
-      :key="group.vaultId"
-      class="flex flex-col gap-1"
+      id="search-results"
+      role="listbox"
+      aria-label="Search results"
+      class="flex flex-col gap-2"
     >
-      <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-        {{ group.vaultName }}
-      </h2>
-      <button
-        v-for="row in group.rows"
-        :key="row.hit.file + (row.hit.isNote ? ':n' : ':a')"
-        type="button"
-        data-testid="search-hit"
-        class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        @click="openHit(row.hit)"
+      <div
+        v-for="group in groups"
+        :key="group.vaultId"
+        class="flex flex-col gap-1"
       >
-        <span
-          class="w-full truncate text-sm text-slate-100"
-          :title="row.hit.name"
+        <h2
+          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"
         >
-          <HighlightText :text="row.hit.name" :query="resultsQuery" />
-        </span>
-        <span v-if="row.hit.folder" class="w-full truncate text-xs text-slate-500">
-          {{ row.hit.folder }}
-        </span>
-        <span v-if="row.hit.snippet" class="w-full truncate text-xs text-slate-400">
-          <HighlightText :text="row.hit.snippet" :query="resultsQuery" />
-        </span>
-      </button>
+          {{ group.vaultName }}
+          <span
+            data-testid="group-count"
+            class="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-slate-400"
+            >{{ group.rows.length }}</span
+          >
+        </h2>
+        <button
+          v-for="row in group.rows"
+          :id="hitId(row.i)"
+          :key="row.hit.file + (row.hit.isNote ? ':n' : ':a')"
+          type="button"
+          data-testid="search-hit"
+          role="option"
+          :aria-selected="row.i === selected"
+          class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :class="
+            row.i === selected
+              ? 'border-violet-400/60 bg-white/10'
+              : 'border-white/10 bg-white/5'
+          "
+          @click="openHit(row.hit)"
+        >
+          <span class="flex w-full min-w-0 items-center gap-1.5">
+            <svg
+              v-if="row.hit.isNote"
+              data-testid="hit-icon-note"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              class="shrink-0 text-slate-400"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+            </svg>
+            <svg
+              v-else
+              data-testid="hit-icon-file"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              class="shrink-0 text-slate-400"
+            >
+              <path
+                d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+              />
+            </svg>
+            <span
+              class="min-w-0 flex-1 truncate text-sm text-slate-100"
+              :title="row.hit.name"
+            >
+              <HighlightText :text="row.hit.name" :query="resultsQuery" />
+            </span>
+          </span>
+          <span v-if="row.hit.folder" class="w-full truncate text-xs text-slate-500">
+            {{ row.hit.folder }}
+          </span>
+          <span v-if="row.hit.snippet" class="w-full truncate text-xs text-slate-400">
+            <HighlightText :text="row.hit.snippet" :query="resultsQuery" />
+          </span>
+        </button>
+      </div>
     </div>
     <p
       v-if="truncated"
