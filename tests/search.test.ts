@@ -304,6 +304,77 @@ describe("Search", () => {
     ).toBe("search-hit-1");
   });
 
+  it("shows an aria-live summary of matches across vaults", async () => {
+    const { wrapper } = mountSearch({
+      search_vaults: () =>
+        response([
+          hit(),
+          hit({ vaultId: "v2", vaultName: "P", name: "b", file: "b" }),
+        ]),
+    });
+    await type(wrapper, "alpha");
+    const summary = wrapper.get('[data-testid="search-summary"]');
+    expect(summary.text()).toBe("2 matches in 2 vaults");
+    expect(summary.attributes("role")).toBe("status");
+    expect(summary.attributes("aria-live")).toBe("polite");
+  });
+
+  it("marks the summary with a plus when results were truncated", async () => {
+    const { wrapper } = mountSearch({
+      search_vaults: () => response([hit()], true),
+    });
+    await type(wrapper, "alpha");
+    expect(wrapper.get('[data-testid="search-summary"]').text()).toBe(
+      "1+ matches in 1 vault",
+    );
+  });
+
+  it("collapsing a group hides its rows and keyboard navigation skips them", async () => {
+    const { wrapper } = mountSearch({
+      search_vaults: () =>
+        response([
+          hit(),
+          hit({ vaultId: "v2", vaultName: "P", name: "other", file: "other" }),
+        ]),
+    });
+    await type(wrapper, "alpha");
+    await wrapper.findAll('[data-testid="group-toggle"]')[0].trigger("click");
+    const rows = wrapper.findAll('[data-testid="search-hit"]');
+    expect(rows).toHaveLength(1); // first vault's row hidden
+    expect(rows[0].text()).toContain("other");
+    // the flat visible list re-indexes: the remaining row is search-hit-0
+    expect(
+      wrapper
+        .get('[data-testid="search-input"]')
+        .attributes("aria-activedescendant"),
+    ).toBe("search-hit-0");
+    // count chip stays visible on the collapsed header
+    expect(wrapper.findAll('[data-testid="group-count"]')[0].text()).toBe("1");
+  });
+
+  it("kind chips filter rows and show the filtered-empty line", async () => {
+    const { wrapper } = mountSearch({
+      search_vaults: () =>
+        response([
+          hit(),
+          hit({ name: "deck.pdf", file: "deck.pdf", isNote: false, snippet: null }),
+        ]),
+    });
+    await type(wrapper, "alpha");
+    await wrapper.get('[data-testid="search-filter-notes"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="search-hit"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-testid="hit-icon-note"]')).toHaveLength(1);
+    await wrapper.get('[data-testid="search-filter-files"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="hit-icon-file"]')).toHaveLength(1);
+    // a filter that empties a non-empty response gets its own line
+    const { wrapper: onlyNotes } = mountSearch({
+      search_vaults: () => response([hit()]),
+    });
+    await type(onlyNotes, "alpha");
+    await onlyNotes.get('[data-testid="search-filter-files"]').trigger("click");
+    expect(onlyNotes.text()).toContain("Nothing matches this filter.");
+  });
+
   it("Escape clears the query first instead of bubbling", async () => {
     const { wrapper } = mountSearch();
     const input = wrapper.get('[data-testid="search-input"]');

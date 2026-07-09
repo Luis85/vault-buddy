@@ -41,20 +41,69 @@ const hits = computed(() => results.value?.hits ?? []);
 const resultsQuery = computed(() => results.value?.query ?? "");
 const truncated = computed(() => results.value?.truncated ?? false);
 
-// Flat hits → per-vault groups, preserving the backend's vault order. Rows
-// carry their flat index so keyboard selection can address them.
-const groups = computed(() => {
+// Kind filter + per-vault collapse feed ONE computed that yields the group
+// list AND the flat list of VISIBLE rows the keyboard navigates — built in
+// the same pass so arrows can never select a hidden row. Both survive
+// refinements while the view lives (the component unmounts on view exit).
+const kindFilter = ref<"all" | "notes" | "files">("all");
+const collapsed = ref(new Set<string>());
+
+const kindFiltered = computed(() => {
+  const all = hits.value;
+  if (kindFilter.value === "notes") return all.filter((h) => h.isNote);
+  if (kindFilter.value === "files") return all.filter((h) => !h.isNote);
+  return all;
+});
+
+const resultView = computed(() => {
   const map = new Map<
     string,
-    { vaultName: string; rows: { hit: SearchHit; i: number }[] }
+    {
+      vaultName: string;
+      collapsed: boolean;
+      count: number;
+      rows: { hit: SearchHit; i: number }[];
+    }
   >();
-  hits.value.forEach((hit, i) => {
-    const group = map.get(hit.vaultId);
-    if (group) group.rows.push({ hit, i });
-    else map.set(hit.vaultId, { vaultName: hit.vaultName, rows: [{ hit, i }] });
-  });
-  return [...map.entries()].map(([vaultId, g]) => ({ vaultId, ...g }));
+  const flat: SearchHit[] = [];
+  for (const hit of kindFiltered.value) {
+    let group = map.get(hit.vaultId);
+    if (!group) {
+      group = {
+        vaultName: hit.vaultName,
+        collapsed: collapsed.value.has(hit.vaultId),
+        count: 0,
+        rows: [],
+      };
+      map.set(hit.vaultId, group);
+    }
+    group.count++;
+    if (!group.collapsed) {
+      group.rows.push({ hit, i: flat.length });
+      flat.push(hit);
+    }
+  }
+  return {
+    groups: [...map.entries()].map(([vaultId, g]) => ({ vaultId, ...g })),
+    flat,
+  };
 });
+const visibleHits = computed(() => resultView.value.flat);
+
+// `N matches in M vaults` over the FULL response (pre-filter); `100+` when
+// truncated. Rendered aria-live so screen readers hear result updates.
+const summary = computed(() => {
+  const all = hits.value;
+  if (all.length === 0) return null;
+  const vaults = new Set(all.map((h) => h.vaultId)).size;
+  const n = truncated.value ? `${all.length}+` : `${all.length}`;
+  return `${n} ${all.length === 1 && !truncated.value ? "match" : "matches"} in ${vaults} ${vaults === 1 ? "vault" : "vaults"}`;
+});
+
+function toggleGroup(vaultId: string) {
+  if (collapsed.value.has(vaultId)) collapsed.value.delete(vaultId);
+  else collapsed.value.add(vaultId);
+}
 
 // Keyboard selection: a flat index into `hits`, moved by the arrow keys on
 // the input, opened by Enter. Reset to the top hit on every new result set.
@@ -65,12 +114,20 @@ watch(results, () => {
   selected.value = 0;
 });
 
+// Collapsing/filtering can shrink the visible list under the selection —
+// clamp (new results still reset to 0 via the results watcher above).
+watch(visibleHits, (list) => {
+  if (selected.value >= list.length) {
+    selected.value = Math.max(0, list.length - 1);
+  }
+});
+
 function onArrow(event: KeyboardEvent, delta: 1 | -1) {
-  if (hits.value.length === 0) return;
+  if (visibleHits.value.length === 0) return;
   event.preventDefault(); // the list owns arrows; keep the caret still
   selected.value = Math.min(
     Math.max(selected.value + delta, 0),
-    hits.value.length - 1,
+    visibleHits.value.length - 1,
   );
   void nextTick(() => {
     document
@@ -80,7 +137,7 @@ function onArrow(event: KeyboardEvent, delta: 1 | -1) {
 }
 
 function onEnter(event: KeyboardEvent) {
-  const hit = hits.value[selected.value];
+  const hit = visibleHits.value[selected.value];
   if (hit) void openHit(hit, event.ctrlKey || event.metaKey);
 }
 
@@ -169,7 +226,7 @@ onUnmounted(() => {
         role="combobox"
         aria-expanded="true"
         aria-controls="search-results"
-        :aria-activedescendant="hits.length ? hitId(selected) : undefined"
+        :aria-activedescendant="visibleHits.length ? hitId(selected) : undefined"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
         @keydown.escape="onEscape"
         @keydown.down="onArrow($event, 1)"
@@ -201,6 +258,44 @@ onUnmounted(() => {
     >
       No matches for "{{ resultsQuery }}".
     </p>
+    <p
+      v-if="summary"
+      data-testid="search-summary"
+      role="status"
+      aria-live="polite"
+      class="text-xs text-slate-400"
+    >
+      {{ summary }}
+    </p>
+    <div
+      v-if="hits.length > 0"
+      role="group"
+      aria-label="Filter results by kind"
+      class="flex items-center gap-1"
+    >
+      <button
+        v-for="k in ['all', 'notes', 'files'] as const"
+        :key="k"
+        type="button"
+        :data-testid="`search-filter-${k}`"
+        :aria-pressed="kindFilter === k"
+        class="cursor-pointer rounded-full px-2 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        :class="
+          kindFilter === k
+            ? 'bg-violet-500/30 text-slate-100'
+            : 'bg-white/5 text-slate-400 hover:bg-white/10'
+        "
+        @click="kindFilter = k"
+      >
+        {{ k === "all" ? "All" : k === "notes" ? "Notes" : "Files" }}
+      </button>
+    </div>
+    <p
+      v-if="hits.length > 0 && kindFiltered.length === 0"
+      class="text-xs text-slate-400"
+    >
+      Nothing matches this filter.
+    </p>
     <div
       id="search-results"
       role="listbox"
@@ -208,20 +303,51 @@ onUnmounted(() => {
       class="flex flex-col gap-2"
     >
       <div
-        v-for="group in groups"
+        v-for="group in resultView.groups"
         :key="group.vaultId"
         class="flex flex-col gap-1"
       >
-        <h2
-          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"
-        >
-          {{ group.vaultName }}
-          <span
-            data-testid="group-count"
-            class="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-slate-400"
-            >{{ group.rows.length }}</span
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            data-testid="group-toggle"
+            :aria-expanded="!group.collapsed"
+            :aria-controls="`search-group-${group.vaultId}`"
+            :aria-label="`${group.collapsed ? 'Expand' : 'Collapse'} ${group.vaultName}`"
+            class="cursor-pointer rounded p-0.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            @click="toggleGroup(group.vaultId)"
           >
-        </h2>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              class="transition-transform"
+              :class="group.collapsed ? '-rotate-90' : ''"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+          <h2
+            class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"
+          >
+            {{ group.vaultName }}
+            <span
+              data-testid="group-count"
+              class="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-slate-400"
+              >{{ group.count }}</span
+            >
+          </h2>
+        </div>
+        <div
+          :id="`search-group-${group.vaultId}`"
+          class="flex flex-col gap-1"
+        >
         <button
           v-for="row in group.rows"
           :id="hitId(row.i)"
@@ -289,6 +415,7 @@ onUnmounted(() => {
             <HighlightText :text="row.hit.snippet" :query="resultsQuery" />
           </span>
         </button>
+        </div>
       </div>
     </div>
     <p
