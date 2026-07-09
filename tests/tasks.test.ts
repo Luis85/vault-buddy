@@ -17,11 +17,12 @@ const many = (n: number): TaskItem[] =>
     done: false,
     due: null,
     priority: null,
+    tags: [],
   }));
 
 const sample: TaskItem[] = [
-  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, priority: null },
-  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null },
+  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [] },
+  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null, tags: [] },
 ];
 
 function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>> = {}) {
@@ -35,7 +36,7 @@ function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>>
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
-      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false, due: null, priority: null };
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: (args as { title: string }).title, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [] };
       list = [created, ...list];
       return created;
     }
@@ -220,7 +221,7 @@ describe("Tasks", () => {
   it("renders a due chip and priority dot from the task fields", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/p.md", title: "P", status: "new", created: "2026-07-08", done: false, due: "2026-07-15", priority: "high" },
+        { path: "C:/v/Tasks/p.md", title: "P", status: "new", created: "2026-07-08", done: false, due: "2026-07-15", priority: "high", tags: [] },
       ],
     });
     await flushPromises();
@@ -238,7 +239,7 @@ describe("Tasks", () => {
   it("falls back to the raw due string for an out-of-range month", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/x.md", title: "Bad month", status: "new", created: "2026-07-08", done: false, due: "2026-13-05", priority: null },
+        { path: "C:/v/Tasks/x.md", title: "Bad month", status: "new", created: "2026-07-08", done: false, due: "2026-13-05", priority: null, tags: [] },
       ],
     });
     await flushPromises();
@@ -248,7 +249,7 @@ describe("Tasks", () => {
   it("renders a due chip with no leading zero on the day", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/x.md", title: "Single digit day", status: "new", created: "2026-07-08", done: false, due: "2026-07-05", priority: null },
+        { path: "C:/v/Tasks/x.md", title: "Single digit day", status: "new", created: "2026-07-08", done: false, due: "2026-07-05", priority: null, tags: [] },
       ],
     });
     await flushPromises();
@@ -260,11 +261,11 @@ describe("Tasks", () => {
     try {
       const { wrapper } = mountView({
         list_tasks: () => [
-          { path: "C:/v/Tasks/o.md", title: "Old", status: "new", created: "2026-07-01", done: false, due: "2026-07-08", priority: null },
-          { path: "C:/v/Tasks/t.md", title: "Now", status: "new", created: "2026-07-01", done: false, due: "2026-07-09", priority: null },
-          { path: "C:/v/Tasks/u.md", title: "Soon", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null },
-          { path: "C:/v/Tasks/n.md", title: "Someday", status: "new", created: "2026-07-01", done: false, due: null, priority: null },
-          { path: "C:/v/Tasks/d.md", title: "Finished", status: "done", created: "2026-07-01", done: true, due: null, priority: null },
+          { path: "C:/v/Tasks/o.md", title: "Old", status: "new", created: "2026-07-01", done: false, due: "2026-07-08", priority: null, tags: [] },
+          { path: "C:/v/Tasks/t.md", title: "Now", status: "new", created: "2026-07-01", done: false, due: "2026-07-09", priority: null, tags: [] },
+          { path: "C:/v/Tasks/u.md", title: "Soon", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null, tags: [] },
+          { path: "C:/v/Tasks/n.md", title: "Someday", status: "new", created: "2026-07-01", done: false, due: null, priority: null, tags: [] },
+          { path: "C:/v/Tasks/d.md", title: "Finished", status: "done", created: "2026-07-01", done: true, due: null, priority: null, tags: [] },
         ],
       });
       await flushPromises();
@@ -288,8 +289,8 @@ describe("Tasks", () => {
     try {
       const { wrapper } = mountView({
         list_tasks: () => [
-          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", priority: null },
-          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null },
+          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", priority: null, tags: [] },
+          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null, tags: [] },
         ],
       });
       await flushPromises();
@@ -330,7 +331,7 @@ describe("Tasks", () => {
   it("edits a task inline: sends only the changed fields", async () => {
     const { wrapper, calls } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/e.md", title: "Old name", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null },
+        { path: "C:/v/Tasks/e.md", title: "Old name", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null, tags: [] },
       ],
     });
     await flushPromises();
@@ -349,7 +350,7 @@ describe("Tasks", () => {
   it("clearing the due date sends clearDue", async () => {
     const { wrapper, calls } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/e.md", title: "T", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null },
+        { path: "C:/v/Tasks/e.md", title: "T", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null, tags: [] },
       ],
     });
     await flushPromises();
@@ -366,7 +367,7 @@ describe("Tasks", () => {
     const notifications = useNotificationsStore();
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null },
+        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null, tags: [] },
       ],
       update_task: () => {
         throw new Error("disk full");
@@ -446,7 +447,7 @@ describe("Tasks", () => {
     const { wrapper } = mountView({
       list_tasks: () => [
         ...many(6),
-        { path: "C:/v/Tasks/d.md", title: "Done one", status: "done", created: "2026-07-01", done: true, due: null, priority: null },
+        { path: "C:/v/Tasks/d.md", title: "Done one", status: "done", created: "2026-07-01", done: true, due: null, priority: null, tags: [] },
       ],
     });
     await flushPromises();
@@ -477,6 +478,64 @@ describe("Tasks", () => {
     const rows = wrapper.findAll('[data-testid="task-row"]');
     expect(rows).toHaveLength(1);
     expect(rows[0].text()).toContain("Task 3");
+  });
+
+  it("renders tag chips and filters by tag on chip click", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work", "home/errands"] },
+        { path: "C:/v/Tasks/b.md", title: "Plain", status: "new", created: "2026-07-07", done: false, due: null, priority: null, tags: [] },
+      ],
+    });
+    await flushPromises();
+    const chips = wrapper.findAll('[data-testid="task-tag"]');
+    expect(chips.map((c) => c.text())).toEqual(["#work", "#home/errands"]);
+    await chips[0].trigger("click");
+    await flushPromises();
+    // Chip click filters (no open_task fired) and shows the dismiss chip.
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("Tagged");
+    expect(wrapper.text()).not.toContain("Plain");
+    expect(wrapper.get('[data-testid="task-tag-filter"]').text()).toContain("#work");
+  });
+
+  it("a chip click does not open the task in Obsidian", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-tag"]').trigger("click");
+    expect(calls.find((c) => c.cmd === "open_task")).toBeUndefined();
+  });
+
+  it("clearing the tag filter restores the full list", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+        { path: "C:/v/Tasks/b.md", title: "Plain", status: "new", created: "2026-07-07", done: false, due: null, priority: null, tags: [] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-tag"]').trigger("click");
+    await wrapper.get('[data-testid="task-tag-filter-clear"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(2);
+  });
+
+  it("tag and title filters combine (AND)", async () => {
+    const tagged = (n: number, tags: string[]): TaskItem => ({
+      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags,
+    });
+    const { wrapper } = mountView({
+      list_tasks: () => [tagged(0, ["work"]), tagged(1, ["work"]), tagged(2, []), tagged(3, []), tagged(4, []), tagged(5, [])],
+    });
+    await flushPromises();
+    await wrapper.findAll('[data-testid="task-tag"]')[0].trigger("click"); // tag=work → 0,1
+    await wrapper.get('[data-testid="task-filter"]').setValue("Task 1");
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("Task 1");
   });
 
 });

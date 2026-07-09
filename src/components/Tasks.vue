@@ -61,13 +61,25 @@ const progress = computed(() => {
 
 // Same threshold as the vault list: a filter only earns its row above 5.
 const showFilter = computed(() => tasks.value.length > 5);
+
+// One active tag filter at a time, set by clicking a row chip. Matching is
+// case-insensitive and exact per tag (nested tags are distinct strings).
+// Independent of the >5 title-filter threshold: it can only be activated by
+// clicking an existing chip, and its dismiss chip is always visible while
+// active, so it can never strand the user.
+const tagFilter = ref<string | null>(null);
+
 const filteredTasks = computed(() => {
   const q = filter.value.trim().toLowerCase();
-  // Gate on showFilter too: archiving below the threshold hides the INPUT,
-  // and a stale query with no visible control would strand the user on a
-  // narrowed/empty list until remount.
-  if (!q || !showFilter.value) return tasks.value;
-  return tasks.value.filter((t) => t.title.toLowerCase().includes(q));
+  const tag = tagFilter.value?.toLowerCase() ?? null;
+  return tasks.value.filter((t) => {
+    if (tag && !t.tags.some((x) => x.toLowerCase() === tag)) return false;
+    // Gate the title query on showFilter too: archiving below the threshold
+    // hides the INPUT, and a stale query with no visible control would
+    // strand the user on a narrowed/empty list until remount.
+    if (q && showFilter.value && !t.title.toLowerCase().includes(q)) return false;
+    return true;
+  });
 });
 
 const PRIORITY_RANK: Record<string, number> = { high: 0, low: 2 };
@@ -294,6 +306,23 @@ async function saveEdit(task: TaskItem) {
       class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
     />
 
+    <div
+      v-if="tagFilter"
+      data-testid="task-tag-filter"
+      class="flex items-center gap-1 self-start rounded-full bg-violet-500/20 py-0.5 pl-2 pr-1 text-xs text-violet-200"
+    >
+      <span>#{{ tagFilter }}</span>
+      <button
+        type="button"
+        data-testid="task-tag-filter-clear"
+        aria-label="Clear tag filter"
+        class="cursor-pointer rounded-full px-1 text-violet-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        @click="tagFilter = null"
+      >
+        ✕
+      </button>
+    </div>
+
     <div class="flex items-center gap-1">
       <input
         v-model="newTitle"
@@ -367,7 +396,7 @@ async function saveEdit(task: TaskItem) {
       No tasks yet.
     </p>
     <p v-else-if="filteredTasks.length === 0" class="text-xs text-slate-400">
-      No tasks match "{{ filter }}".
+      No tasks match{{ tagFilter ? ` #${tagFilter}` : "" }}{{ showFilter && filter ? ` "${filter}"` : "" }}.
     </p>
     <template v-else>
       <div v-for="bucket in buckets" :key="bucket.key" class="mt-1 first:mt-0">
@@ -476,6 +505,17 @@ async function saveEdit(task: TaskItem) {
                 >
                   {{ task.title }}
                 </span>
+                <span
+                  v-for="tag in task.tags"
+                  :key="tag"
+                  data-testid="task-tag"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="`Filter by tag ${tag}`"
+                  class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-[10px] text-violet-200 transition-colors hover:bg-violet-500/30"
+                  @click.stop="tagFilter = tag"
+                  @keydown.enter.stop.prevent="tagFilter = tag"
+                >#{{ tag }}</span>
                 <span
                   v-if="dueOf(task)"
                   data-testid="task-due"
