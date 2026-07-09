@@ -64,6 +64,15 @@
         assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT);
         assert_eq!(cfg.mcp.token, "");
         assert!(cfg.mcp.allow_writes);
+        // Out-of-range ports (hand-edited) fall back too: the parser enforces
+        // the same 1024–65535 range the settings command does, or startup
+        // would bind port 0 (ephemeral!) while the snippets say otherwise.
+        for bad in ["0", "80", "1023", "70000"] {
+            let cfg = parse_config(&format!(r#"{{ "mcp": {{ "port": {bad} }} }}"#));
+            assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT, "port {bad} must default");
+        }
+        let cfg = parse_config(r#"{ "mcp": { "port": 1024 } }"#);
+        assert_eq!(cfg.mcp.port, 1024);
     }
 
     #[test]
@@ -185,6 +194,10 @@ fn mcp_entry(entry: &serde_json::Value) -> McpConfig {
             .get("port")
             .and_then(|v| v.as_u64())
             .and_then(|v| u16::try_from(v).ok())
+            // Same range the settings command enforces (1024–65535). A
+            // hand-edited 0 would bind an ephemeral port while the persisted
+            // config and client snippets still say 0 — default it instead.
+            .filter(|p| *p >= 1024)
             .unwrap_or(defaults.port),
         token: entry
             .get("token")
@@ -723,7 +736,8 @@ git commit -m "feat(core): move task and recording command bodies into services"
   - `pub fn token::generate_token() -> String` (43-char base64url, no padding)
   - `pub fn http::origin_ok(origin: Option<&str>) -> bool`
   - `pub fn http::auth_ok(header: Option<&str>, token: &str) -> bool`
-  - `pub fn http::length_ok(content_length: Option<&str>) -> bool` (limit 1 MiB)
+  - `pub enum http::BodyBound { Ok, MissingLength, TooLarge }`
+  - `pub fn http::body_bound(method: &str, content_length: Option<&str>) -> BodyBound` (limit 1 MiB; POST requires a parseable in-cap Content-Length)
   - `pub const http::MAX_BODY_BYTES: u64 = 1_048_576;`
 
 - [ ] **Step 1: Create the crate and write the failing tests**
@@ -764,7 +778,9 @@ rmcp = { version = "2.2", features = [
     "transport-streamable-http-client",
     "reqwest",
 ] }
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+bytes = "1"
+futures-util = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 ```
@@ -836,11 +852,22 @@ mod tests {
     }
 
     #[test]
-    fn length_cap_is_one_mebibyte() {
-        assert!(length_ok(None)); // no header → let the request through
-        assert!(length_ok(Some("1048576")));
-        assert!(!length_ok(Some("1048577")));
-        assert!(!length_ok(Some("not-a-number"))); // unparseable → reject
+    fn post_bodies_must_carry_a_parseable_in_cap_content_length() {
+        // A chunked POST (no Content-Length) must NOT bypass the cap.
+        assert!(matches!(body_bound("POST", None), BodyBound::MissingLength));
+        assert!(matches!(body_bound("post", None), BodyBound::MissingLength));
+        assert!(matches!(body_bound("POST", Some("1048576")), BodyBound::Ok));
+        assert!(matches!(
+            body_bound("POST", Some("1048577")),
+            BodyBound::TooLarge
+        ));
+        assert!(matches!(
+            body_bound("POST", Some("not-a-number")),
+            BodyBound::TooLarge
+        ));
+        // GET (the SSE stream) and DELETE carry no body — no length required.
+        assert!(matches!(body_bound("GET", None), BodyBound::Ok));
+        assert!(matches!(body_bound("DELETE", None), BodyBound::Ok));
     }
 }
 ```
@@ -877,11 +904,32 @@ pub fn generate_token() -> String {
 use subtle::ConstantTimeEq;
 
 /// Hard cap on request bodies (1 MiB): tool calls are small JSON; anything
-/// bigger is a misbehaving client. Enforced via Content-Length — the endpoint
-/// is localhost + bearer-token'd, so a chunked-encoding attacker is outside
-/// the threat model; the cap exists to keep an honest client's mistake from
-/// ballooning memory.
+/// bigger is a misbehaving client.
 pub const MAX_BODY_BYTES: u64 = 1_048_576;
+
+/// Verdict for a request's body bound. POST is the only body-carrying MCP
+/// method, so it must present a parseable Content-Length within the cap —
+/// otherwise a chunked body (no Content-Length) would bypass the limit
+/// entirely. GET/DELETE carry no body and pass without a header.
+pub enum BodyBound {
+    Ok,
+    /// Body-carrying method without a Content-Length → 411.
+    MissingLength,
+    /// Oversize or unparseable Content-Length → 413.
+    TooLarge,
+}
+
+pub fn body_bound(method: &str, content_length: Option<&str>) -> BodyBound {
+    let needs_bound = method.eq_ignore_ascii_case("POST");
+    match content_length {
+        None if needs_bound => BodyBound::MissingLength,
+        None => BodyBound::Ok,
+        Some(v) => match v.parse::<u64>() {
+            Ok(n) if n <= MAX_BODY_BYTES => BodyBound::Ok,
+            _ => BodyBound::TooLarge,
+        },
+    }
+}
 
 /// MCP-spec DNS-rebinding defense: no Origin (CLI clients) or a localhost
 /// origin passes; any web origin is rejected before auth work.
@@ -918,12 +966,6 @@ pub fn auth_ok(header: Option<&str>, token: &str) -> bool {
     presented.as_bytes().ct_eq(token.as_bytes()).into()
 }
 
-pub fn length_ok(content_length: Option<&str>) -> bool {
-    match content_length {
-        None => true,
-        Some(v) => v.parse::<u64>().map(|n| n <= MAX_BODY_BYTES).unwrap_or(false),
-    }
-}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1585,6 +1627,19 @@ async fn requests_without_the_token_or_with_an_evil_origin_are_rejected() {
         .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
 
+    // A chunked POST (no Content-Length) must not bypass the body cap.
+    let chunks: Vec<Result<bytes::Bytes, std::io::Error>> =
+        vec![Ok(bytes::Bytes::from_static(b"{}"))];
+    let resp = plain
+        .post(&url)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .header("Content-Type", "application/json")
+        .body(reqwest::Body::wrap_stream(futures_util::stream::iter(chunks)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::LENGTH_REQUIRED);
+
     server.stop();
 }
 
@@ -1670,8 +1725,13 @@ async fn guard(
     if !auth_ok(header_str(headers, header::AUTHORIZATION), &g.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    if !length_ok(header_str(headers, header::CONTENT_LENGTH)) {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    match body_bound(
+        req.method().as_str(),
+        header_str(headers, header::CONTENT_LENGTH),
+    ) {
+        BodyBound::Ok => {}
+        BodyBound::MissingLength => return Err(StatusCode::LENGTH_REQUIRED),
+        BodyBound::TooLarge => return Err(StatusCode::PAYLOAD_TOO_LARGE),
     }
     Ok(next.run(req).await)
 }

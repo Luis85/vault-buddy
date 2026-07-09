@@ -122,8 +122,12 @@ App-global (not per-vault), stored in the existing
 ```
 
 - Parsed with the same **per-field defensive** style as the vault entries:
-  a malformed port falls back to 22082, a malformed flag to `false` — one
-  bad value never fails startup or flips other fields.
+  a malformed **or out-of-range** port falls back to 22082 (anything
+  outside 1024–65535, including a hand-edited `0` — Codex review catch:
+  the parser must enforce the same range the settings command does, or
+  startup could bind an ephemeral port while the config and client
+  snippets say something else), a malformed flag to `false` — one bad
+  value never fails startup or flips other fields.
 - `AppConfig` gains the `mcp` field and — the critical part —
   **`serialize_config` round-trips it**. Today the serializer writes only
   the `vaults` section, so any capture/tasks settings save would silently
@@ -156,8 +160,12 @@ App-global (not per-vault), stored in the existing
   with no `Origin` header (CLI clients) pass; an `Origin` of a localhost
   form (`http(s)://localhost[:p]`, `127.0.0.1`, `[::1]`) passes; anything
   else is `403` — checked before auth work.
-- Request body size capped (1 MiB) so a misbehaving client can't balloon
-  memory.
+- Request bodies are bounded to 1 MiB. POST — the only body-carrying MCP
+  method — must present a parseable `Content-Length` within the cap: a
+  missing or unparseable length is rejected (`411`), an oversize one
+  (`413`), so a chunked body cannot bypass the bound by omitting the
+  header (Codex review catch). GETs (the SSE notification stream) carry
+  no body and pass.
 - Write tools are **hidden from `tools/list` when `allowWrites` is off**
   (advisory — models shouldn't try) *and* **rejected at call time**
   (authoritative — clients cache tool lists) with a clear error:
