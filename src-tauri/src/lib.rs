@@ -188,6 +188,12 @@ pub fn run() {
         // relaunch after install.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Launch-at-login registration, surfaced in Buddy settings via the
+        // get_autostart/set_autostart commands (registry-backed on Windows).
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(capture_commands::CaptureState::default())
         .manage(transcription::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
@@ -269,6 +275,8 @@ pub fn run() {
             commands::show_buddy_menu,
             commands::open_logs_folder,
             commands::rearm_crash_detection,
+            commands::get_autostart,
+            commands::set_autostart,
             capture_commands::start_capture,
             capture_commands::stop_capture,
             capture_commands::capture_status,

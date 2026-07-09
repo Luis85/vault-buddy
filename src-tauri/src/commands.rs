@@ -535,3 +535,32 @@ pub fn rearm_crash_detection() {
     log::warn!("update install failed after shutdown prep — re-arming crash detection");
     crate::diagnostics::rearm_running_marker();
 }
+
+/// Whether the app is registered to start at login. OS-owned state (the
+/// registry on Windows) — read fresh by the settings view on mount, never
+/// cached app-side, so the UI always reflects what the OS will actually do.
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Register/unregister launch-at-login. Logged like every other
+/// user-initiated config change (audit trail).
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let launcher = app.autolaunch();
+    let result = if enabled {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    };
+    match result {
+        Ok(()) => {
+            log::info!("autostart {}", if enabled { "enabled" } else { "disabled" });
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
