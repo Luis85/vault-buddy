@@ -83,4 +83,45 @@ describe("settings store", () => {
     store.syncFromStorage();
     expect(store.buddyMessagesEnabled).toBe(false);
   });
+
+  it("defaults message duration to normal", () => {
+    expect(useSettingsStore().messageDuration).toBe("normal");
+  });
+
+  it("persists the message duration across store instances", () => {
+    useSettingsStore().setMessageDuration("long");
+    setActivePinia(createPinia());
+    expect(useSettingsStore().messageDuration).toBe("long");
+    expect(localStorage.getItem("vault-buddy.messageDuration")).toBe("long");
+  });
+
+  it("falls back to normal for an unknown stored duration", () => {
+    localStorage.setItem("vault-buddy.messageDuration", "eternal");
+    expect(useSettingsStore().messageDuration).toBe("normal");
+  });
+
+  it("re-reads the message duration when another window changes it", () => {
+    const store = useSettingsStore();
+    localStorage.setItem("vault-buddy.messageDuration", "short");
+    store.syncFromStorage();
+    expect(store.messageDuration).toBe("short");
+  });
+
+  it("checks for updates on start by default", () => {
+    expect(useSettingsStore().checkUpdatesOnStart).toBe(true);
+  });
+
+  it("persists the check-on-start toggle across store instances", () => {
+    useSettingsStore().toggleCheckUpdatesOnStart();
+    setActivePinia(createPinia());
+    expect(useSettingsStore().checkUpdatesOnStart).toBe(false);
+    expect(localStorage.getItem("vault-buddy.checkUpdatesOnStart")).toBe("off");
+  });
+
+  it("re-reads the check-on-start toggle when another window changes it", () => {
+    const store = useSettingsStore();
+    localStorage.setItem("vault-buddy.checkUpdatesOnStart", "off");
+    store.syncFromStorage();
+    expect(store.checkUpdatesOnStart).toBe(false);
+  });
 });

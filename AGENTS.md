@@ -63,7 +63,9 @@ launched the app on the CI runner and never exited.
 `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
 `toggle_panel`, `close_panel`, `close_bubble`, `get_buddy_facing`,
 `get_bubble_anchor`, `announce`, `start_buddy_drag`, `show_buddy_menu`,
-`open_logs_folder`, `rearm_crash_detection`, plus the capture surface:
+`open_logs_folder`, `rearm_crash_detection`, `get_autostart`,
+`set_autostart` (launch-at-login, OS-owned state behind
+`tauri-plugin-autostart`), plus the capture surface:
 `capture_status`, `start_capture`, `stop_capture`, `pause_capture`,
 `resume_capture`, `get_capture_config`, `set_capture_config`,
 `list_audio_devices`, `rename_capture`, the recordings/transcription
@@ -119,7 +121,12 @@ mount, then flips on a `buddy-facing` event that Rust emits (deduped, from the
 `Moved` handler + startup poll) only when the buddy crosses the screen midline
 — so the character always looks toward the center. A `BUBBLE_TUCK_FRAC` overlap
 (a fraction of the buddy width, so it scales with DPI) pulls the bubble into
-the buddy window's transparent padding so it sits snug against the character. While the greeting is up, the
+the buddy window's transparent padding so it sits snug against the character.
+`show_bubble` refuses to reveal while the buddy (`main`) is hidden and returns
+whether it showed — hidden-to-tray hides ALL windows, so every announcer
+(startup update check, transcription progress, the greeting's post-settle
+show) is silenced at this one reveal chokepoint, and `announce` skips its
+`bubble-message` emit when suppressed. While the greeting is up, the
 buddy's `Moved` handler re-runs `place_beside_buddy` for the bubble
 (`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
 bubble being visible) and re-emits the anchor, so the bubble *follows* a drag
@@ -213,6 +220,12 @@ is kept so the install button stays visible for retry, and
 `rearm_crash_detection` turns the run marker back on (the prepare step latched
 it off). The `Update` object is stored with `markRaw()` — a Vue reactive
 proxy breaks its private-field `rid` and every real install would throw.
+A quiet startup check (`useStartupUpdateCheck`, installed by PanelRoot only,
+gated by the `checkUpdatesOnStart` setting, ~15 s settle for login networking)
+runs `checkForUpdatesQuietly`: zero trace when current or failed (phase stays
+`idle`, failures only log); on an available update the buddy announces via
+bubble and `requestViewOnNextOpen("settings")` arms the next panel open to
+land on the install UI without yanking an already-open panel.
 
 ### The vault domain (core crate + `vaults` store)
 
@@ -482,7 +495,7 @@ other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
-character/animation, persisted to localStorage), and `capture` (recording
+character/animation/message duration, persisted to localStorage), and `capture` (recording
 state mirrored from Rust: `paused`, `pausedTotalMs`, `pausedSinceMs`, `level`,
 `vaultId`, `lastSaved`, plus transcription state `transcribing` /
 `transcribingVaultId` driven by
@@ -492,8 +505,9 @@ Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture
 level/state; `panel-shown`), and localStorage `storage` events — a settings
 change in one window fires `settings.syncFromStorage()` in the others (via the
-shared `useSettingsStorageSync` composable, installed by the buddy and panel
-roots that read settings) so they re-read character/animation without an IPC
+shared `useSettingsStorageSync` composable, installed by the buddy, panel, and
+bubble roots that read settings — the bubble resolves `messageDuration` at
+show time) so they re-read character/animation/duration without an IPC
 round-trip.
 
 ## Testing conventions

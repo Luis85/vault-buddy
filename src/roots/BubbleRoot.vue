@@ -3,14 +3,23 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import SpeechBubble from "../components/SpeechBubble.vue";
-import { useBuddyBubble, ACK_MS } from "../composables/useBuddyBubble";
+import { useBuddyBubble, BUBBLE_MS } from "../composables/useBuddyBubble";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
+import { useSettingsStore } from "../stores/settings";
+import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 
 // The bubble window is shown by Rust (startup greeting, or `announce` for an
 // acknowledgement); useBuddyBubble owns the current text + auto-dismiss timer.
 // When it dismisses, hide the window.
 const { visible, text, show, dismiss } = useBuddyBubble();
 useSuppressContextMenu();
+
+// Duration changes are made in the panel window; this webview only hears
+// about them via the storage event, so it must install the sync like every
+// other settings-reading root — and resolve the tier at each show, never at
+// listener-registration time.
+const settings = useSettingsStore();
+useSettingsStorageSync();
 
 // Which side of the buddy the bubble sits on and how its tail aligns — Rust
 // decides this when it places the window (side derived from the buddy's screen
@@ -57,7 +66,7 @@ onMounted(async () => {
     // emitted the text here. Latest-wins replaces any lingering message.
     unlistenMessage = await listen<{ text: string }>(
       "bubble-message",
-      (event) => show(event.payload.text, ACK_MS),
+      (event) => show(event.payload.text, BUBBLE_MS[settings.messageDuration].ack),
     );
     // The panel opens beside the buddy, over the bubble's spot — dismiss a
     // lingering bubble so the two never overlap.

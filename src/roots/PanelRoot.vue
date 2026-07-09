@@ -7,11 +7,15 @@ import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
+import { useStartupUpdateCheck } from "../composables/useStartupUpdateCheck";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
 useSuppressContextMenu();
 useSettingsStorageSync();
+// Quiet startup update check (panel window only — mounts once, hidden, and
+// owns the updates store the settings view reads).
+useStartupUpdateCheck();
 
 function closePanel() {
   void invoke("close_panel").catch(() => {});

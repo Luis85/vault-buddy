@@ -9,6 +9,7 @@ import {
   transcribingMessage,
   transcribedMessage,
   failureMessage,
+  updateAvailableMessage,
 } from "../src/buddyMessages";
 
 describe("buddyMessages", () => {
@@ -38,6 +39,19 @@ describe("buddyMessages", () => {
     // each moment reads differently, so the buddy never repeats itself across
     // two different events
     expect(new Set(lines).size).toBe(lines.length);
+  });
+
+  describe("updateAvailableMessage", () => {
+    it("names the version", () => {
+      expect(updateAvailableMessage("0.6.0")).toContain("0.6.0");
+    });
+
+    it("falls back to a generic line when the version is blank", () => {
+      // no dangling "Update v is ready" with a hole where the version goes
+      const msg = updateAvailableMessage("");
+      expect(msg).not.toMatch(/v\s/);
+      expect(msg.toLowerCase()).toContain("update");
+    });
   });
 
   describe("failureMessage", () => {
