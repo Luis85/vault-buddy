@@ -17,6 +17,7 @@ const hit = (over: Partial<SearchHit> = {}): SearchHit => ({
   folder: "Notes",
   file: "Notes/idea",
   snippet: "Project Alpha kickoff",
+  isNote: true,
   ...over,
 });
 
@@ -74,6 +75,15 @@ describe("Search", () => {
     expect(wrapper.text()).toContain("Type at least 2 characters");
   });
 
+  it("shows the too-short hint for a single emoji instead of searching", async () => {
+    // Regression: '😀'.length === 2 (UTF-16) passed the old gate while the
+    // backend counts chars and refused it — the UI then claimed "No matches".
+    const { wrapper, calls } = mountSearch();
+    await type(wrapper, "😀");
+    expect(calls.filter((c) => c.cmd === "search_vaults")).toHaveLength(0);
+    expect(wrapper.text()).toContain("Type at least 2 characters");
+  });
+
   it("renders hits grouped under their vault name with the snippet", async () => {
     const { wrapper } = mountSearch({
       search_vaults: () =>
@@ -86,6 +96,7 @@ describe("Search", () => {
             folder: "",
             file: "alpha deck.pdf",
             snippet: null,
+            isNote: false,
           }),
         ]),
     });

@@ -5,25 +5,30 @@ import { logWarning } from "../logging";
 import { announce } from "../announce";
 import { noteOpenedMessage } from "../buddyMessages";
 import { useNotificationsStore } from "../stores/notifications";
-import { highlightParts } from "../utils/highlight";
+import HighlightText from "./HighlightText.vue";
 import type { SearchHit, SearchResponse } from "../types";
 
 const notifications = useNotificationsStore();
 
-// Mirrors core::search::MIN_QUERY_CHARS — the backend refuses shorter
-// queries anyway; gating here saves the IPC round-trip and drives the hint.
+// Mirrors core::search::MIN_QUERY_CHARS. Counted in Unicode code points
+// (matching Rust's chars().count()) — String.length counts UTF-16 units and
+// let a single emoji through to a backend refusal, which then rendered a
+// false "No matches".
 const MIN_QUERY_CHARS = 2;
 const DEBOUNCE_MS = 300;
+const charCount = (s: string) => [...s].length;
 
 const query = ref("");
-const hits = ref<SearchHit[]>([]);
-const truncated = ref(false);
+// The last response and the query it answers — one value, so highlights,
+// the empty state and the truncation footer can never disagree with the
+// hits they describe.
+const results = ref<{
+  query: string;
+  hits: SearchHit[];
+  truncated: boolean;
+} | null>(null);
 const searching = ref(false);
 const error = ref<string | null>(null);
-// The query the current results answer — drives highlights and the empty
-// state; the live input may already be ahead of it while a search is in
-// flight.
-const resultsQuery = ref("");
 const inputEl = ref<HTMLInputElement | null>(null);
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -31,31 +36,36 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 // dropped, so a slow older response can never overwrite newer results.
 let ticket = 0;
 
-const tooShort = computed(() => query.value.trim().length < MIN_QUERY_CHARS);
+const tooShort = computed(() => charCount(query.value.trim()) < MIN_QUERY_CHARS);
+const hits = computed(() => results.value?.hits ?? []);
+const resultsQuery = computed(() => results.value?.query ?? "");
+const truncated = computed(() => results.value?.truncated ?? false);
 
-// Flat hits → per-vault groups, preserving the backend's vault order.
+// Flat hits → per-vault groups, preserving the backend's vault order. Rows
+// carry their flat index so keyboard selection can address them.
 const groups = computed(() => {
-  const map = new Map<string, { vaultName: string; hits: SearchHit[] }>();
-  for (const h of hits.value) {
-    const group = map.get(h.vaultId);
-    if (group) group.hits.push(h);
-    else map.set(h.vaultId, { vaultName: h.vaultName, hits: [h] });
-  }
+  const map = new Map<
+    string,
+    { vaultName: string; rows: { hit: SearchHit; i: number }[] }
+  >();
+  hits.value.forEach((hit, i) => {
+    const group = map.get(hit.vaultId);
+    if (group) group.rows.push({ hit, i });
+    else map.set(hit.vaultId, { vaultName: hit.vaultName, rows: [{ hit, i }] });
+  });
   return [...map.entries()].map(([vaultId, g]) => ({ vaultId, ...g }));
 });
 
 watch(query, () => {
   if (timer) clearTimeout(timer);
   const trimmed = query.value.trim();
-  if (trimmed.length < MIN_QUERY_CHARS) {
+  if (charCount(trimmed) < MIN_QUERY_CHARS) {
     // Invalidate any in-flight response too — its results answer a query
     // that no longer exists.
     ticket++;
     searching.value = false;
-    hits.value = [];
-    truncated.value = false;
+    results.value = null;
     error.value = null;
-    resultsQuery.value = "";
     return;
   }
   timer = setTimeout(() => void runSearch(trimmed), DEBOUNCE_MS);
@@ -69,14 +79,17 @@ async function runSearch(trimmed: string) {
       query: trimmed,
     });
     if (mine !== ticket) return; // stale — a newer search superseded this one
-    hits.value = response.hits;
-    truncated.value = response.truncated;
-    resultsQuery.value = trimmed;
+    results.value = {
+      query: trimmed,
+      hits: response.hits,
+      truncated: response.truncated,
+    };
     error.value = null;
   } catch (e) {
     if (mine !== ticket) return;
     // Keep the previous results up — a live refinement that errors must not
-    // blank a working list (mirrors the vaults store's refresh behavior).
+    // blank a working list (the backend rejects on infrastructure failures
+    // precisely so this branch handles them).
     error.value = String(e);
     logWarning(`search_vaults failed: ${String(e)}`);
   } finally {
@@ -152,36 +165,24 @@ onUnmounted(() => {
         {{ group.vaultName }}
       </h2>
       <button
-        v-for="hitItem in group.hits"
-        :key="hitItem.file"
+        v-for="row in group.rows"
+        :key="row.hit.file + (row.hit.isNote ? ':n' : ':a')"
         type="button"
         data-testid="search-hit"
         class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        @click="openHit(hitItem)"
+        @click="openHit(row.hit)"
       >
         <span
           class="w-full truncate text-sm text-slate-100"
-          :title="hitItem.name"
+          :title="row.hit.name"
         >
-          <template
-            v-for="(part, i) in highlightParts(hitItem.name, resultsQuery)"
-            :key="i"
-          >
-            <mark v-if="part.match" class="rounded bg-violet-500/40 text-inherit">{{ part.text }}</mark>
-            <template v-else>{{ part.text }}</template>
-          </template>
+          <HighlightText :text="row.hit.name" :query="resultsQuery" />
         </span>
-        <span v-if="hitItem.folder" class="w-full truncate text-xs text-slate-500">
-          {{ hitItem.folder }}
+        <span v-if="row.hit.folder" class="w-full truncate text-xs text-slate-500">
+          {{ row.hit.folder }}
         </span>
-        <span v-if="hitItem.snippet" class="w-full truncate text-xs text-slate-400">
-          <template
-            v-for="(part, i) in highlightParts(hitItem.snippet, resultsQuery)"
-            :key="i"
-          >
-            <mark v-if="part.match" class="rounded bg-violet-500/40 text-inherit">{{ part.text }}</mark>
-            <template v-else>{{ part.text }}</template>
-          </template>
+        <span v-if="row.hit.snippet" class="w-full truncate text-xs text-slate-400">
+          <HighlightText :text="row.hit.snippet" :query="resultsQuery" />
         </span>
       </button>
     </div>

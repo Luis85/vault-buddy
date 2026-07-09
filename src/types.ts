@@ -144,6 +144,8 @@ export interface SearchHit {
   file: string;
   /** First matching content line; null for filename-only matches. */
   snippet: string | null;
+  /** Note (any-case .md) vs attachment — drives the row icon and key. */
+  isNote: boolean;
 }
 
 export interface SearchResponse {
