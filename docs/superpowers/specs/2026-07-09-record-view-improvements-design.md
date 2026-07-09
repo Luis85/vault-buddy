@@ -72,6 +72,15 @@ loading/`loaded` gate is unchanged.
   A tasks-folder failure surfaces inline under the field
   (`tasks-folder-error`, as today) and suppresses "Saved ✓"; `tasksFolder`
   joins the watch list that invalidates a shown "Saved ✓".
+- **The tasks write is gated on loaded-or-edited** (found in review): the form
+  is submittable before the `get_tasks_config` read resolves (that read runs
+  after the capture `loading` gate on purpose) and stays usable after a failed
+  read — an unconditional write would send the default-seeded `""` (→ `null`)
+  and clear a configured folder the form never saw. So `save()` writes the
+  tasks config only once its value has loaded, or after an explicit user edit
+  (typed input is explicit intent even when the read failed) — and a
+  late-resolving read never clobbers a field the user already edited. This is
+  `RecordMode.vue`'s `loaded` persist gate, applied to the second config.
 
 ## Rust
 

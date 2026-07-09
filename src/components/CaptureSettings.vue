@@ -45,6 +45,16 @@ const transcriptTimestamps = ref(true);
 // vice versa; its errors stay field-level.
 const tasksFolder = ref(""); // "" shows the "Tasks" placeholder / clears to default
 const tasksFolderError = ref<string | null>(null);
+// Gate for save()'s tasks write. The form is submittable BEFORE the
+// get_tasks_config read below resolves (it runs after the capture `loading`
+// gate flips, so the form never blocks on it) — and stays usable after a
+// failed read. Writing unconditionally would send the default-seeded ""
+// (→ null) and clear a configured folder this mount never saw. So the write
+// requires the value to have actually loaded, or an explicit user edit
+// (typed input is explicit intent, even when the read failed). Mirrors
+// RecordMode.vue's `loaded` persist gate.
+const tasksFolderLoaded = ref(false);
+const tasksFolderEdited = ref(false);
 
 // A configured device that is not currently connected must stay
 // selectable (unplugging a headset must not silently rewrite the
@@ -149,7 +159,11 @@ onMounted(async () => {
     const tcfg = await invoke<TasksConfig>("get_tasks_config", {
       id: props.vaultId,
     });
-    tasksFolder.value = tcfg.tasksFolder ?? "";
+    // A user who started typing before this read landed owns the field —
+    // the resolved value must not clobber their edit (the same rule as
+    // RecordMode's pre-load toggle guard).
+    if (!tasksFolderEdited.value) tasksFolder.value = tcfg.tasksFolder ?? "";
+    tasksFolderLoaded.value = true;
   } catch (e) {
     logWarning(`get_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
   }
@@ -191,17 +205,21 @@ async function save() {
   // The tasks folder saves with the same button but through its own command —
   // deliberately NOT short-circuited by a capture-config failure above, so
   // neither config's write can block the other's. Its failure stays a
-  // field-level error under the tasks input.
-  const tasks = tasksFolder.value.trim();
-  try {
-    await invoke("set_tasks_config", {
-      id: props.vaultId,
-      tasksFolder: tasks === "" ? null : tasks,
-    });
-  } catch (e) {
-    failed = true;
-    tasksFolderError.value = String(e);
-    logWarning(`set_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
+  // field-level error under the tasks input. Gated on loaded-or-edited (see
+  // the refs above): a value that is neither is the default seed, and writing
+  // it would clear the vault's real folder.
+  if (tasksFolderLoaded.value || tasksFolderEdited.value) {
+    const tasks = tasksFolder.value.trim();
+    try {
+      await invoke("set_tasks_config", {
+        id: props.vaultId,
+        tasksFolder: tasks === "" ? null : tasks,
+      });
+    } catch (e) {
+      failed = true;
+      tasksFolderError.value = String(e);
+      logWarning(`set_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
+    }
   }
   // "Saved ✓" must mean the WHOLE form landed — either failure withholds it.
   saveState.value = failed ? "idle" : "saved";
@@ -317,6 +335,7 @@ async function save() {
         placeholder="Tasks"
         aria-label="Tasks folder"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        @input="tasksFolderEdited = true"
       />
       <p
         v-if="tasksFolderError"

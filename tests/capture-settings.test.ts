@@ -40,6 +40,7 @@ const mountLoaded = async (
     devices?: typeof devices;
     onSet?: (args: unknown) => unknown;
     tasksFolder?: string | null;
+    onGetTasks?: () => unknown;
     onSetTasks?: (args: unknown) => unknown;
   } = {},
 ) => {
@@ -50,7 +51,9 @@ const mountLoaded = async (
     if (cmd === "list_audio_devices") return overrides.devices ?? devices;
     if (cmd === "set_capture_config") return overrides.onSet?.(args);
     if (cmd === "get_tasks_config")
-      return { tasksFolder: overrides.tasksFolder ?? null };
+      return overrides.onGetTasks
+        ? overrides.onGetTasks()
+        : { tasksFolder: overrides.tasksFolder ?? null };
     if (cmd === "set_tasks_config") return overrides.onSetTasks?.(args) ?? null;
   });
   // attachTo document.body so the SelectMenu's Teleported popups land in a
@@ -353,5 +356,74 @@ describe("CaptureSettings", () => {
     expect(wrapper.text()).toContain("Saved ✓");
     await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Elsewhere");
     expect(wrapper.text()).not.toContain("Saved ✓");
+  });
+
+  it("does not write the tasks config while its read is still in flight", async () => {
+    // Regression (Codex review on #42): the form is submittable before
+    // get_tasks_config resolves (its read deliberately runs after the
+    // capture-config `loading` gate flips). An unconditional set_tasks_config
+    // in save() would send the default-seeded "" (→ null) and CLEAR a
+    // configured tasks folder the form never got to see.
+    const { wrapper, calls } = await mountLoaded({
+      onGetTasks: () => new Promise(() => {}), // never resolves
+    });
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(true);
+    expect(calls.some((c) => c.cmd === "set_tasks_config")).toBe(false);
+    // The capture config alone saved — the confirmation still shows.
+    expect(wrapper.text()).toContain("Saved ✓");
+  });
+
+  it("does not write the tasks config after its read failed and the field is untouched", async () => {
+    const { wrapper, calls } = await mountLoaded({
+      onGetTasks: () => {
+        throw "config unreadable";
+      },
+    });
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(true);
+    expect(calls.some((c) => c.cmd === "set_tasks_config")).toBe(false);
+  });
+
+  it("saves a tasks folder the user typed even though its read failed", async () => {
+    // An explicit edit is explicit intent — a failed read must not silently
+    // discard what the user typed into the visible field.
+    const { wrapper, calls } = await mountLoaded({
+      onGetTasks: () => {
+        throw "config unreadable";
+      },
+    });
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Mine");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_tasks_config")).toEqual({
+      cmd: "set_tasks_config",
+      args: { id: "v1", tasksFolder: "Mine" },
+    });
+  });
+
+  it("keeps a user edit made while the tasks-config read was still in flight", async () => {
+    // Mirrors RecordMode's pre-load-toggle guard: the resolving read must not
+    // clobber a field the user already owns.
+    let resolveTasks!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetTasks: () =>
+        new Promise((resolve) => {
+          resolveTasks = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Mine");
+    resolveTasks({ tasksFolder: "Stored/Elsewhere" });
+    await flushPromises();
+    const input = wrapper.get<HTMLInputElement>('[data-testid="tasks-folder-input"]');
+    expect(input.element.value).toBe("Mine");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_tasks_config")).toEqual({
+      cmd: "set_tasks_config",
+      args: { id: "v1", tasksFolder: "Mine" },
+    });
   });
 });
