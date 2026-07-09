@@ -1,6 +1,7 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+mod search_commands;
 mod task_commands;
 mod transcription;
 mod tray;
@@ -291,6 +292,8 @@ pub fn run() {
             task_commands::add_task,
             task_commands::set_task_status,
             task_commands::count_open_tasks,
+            search_commands::search_vaults,
+            search_commands::open_search_result,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

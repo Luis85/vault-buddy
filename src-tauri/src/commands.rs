@@ -483,7 +483,7 @@ pub fn show_buddy_menu(
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
-fn find_vault(id: &str) -> Result<discovery::Vault, String> {
+pub(crate) fn find_vault(id: &str) -> Result<discovery::Vault, String> {
     discovery::discover_vaults()
         .into_iter()
         .find(|v| v.id == id)
