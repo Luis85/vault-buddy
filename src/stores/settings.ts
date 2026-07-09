@@ -6,6 +6,7 @@ const CHARACTER_KEY = "vault-buddy.character";
 const DRAGGING_KEY = "vault-buddy.dragging";
 const MESSAGES_KEY = "vault-buddy.messages";
 const MESSAGE_DURATION_KEY = "vault-buddy.messageDuration";
+const CHECK_UPDATES_ON_START_KEY = "vault-buddy.checkUpdatesOnStart";
 
 /** How long the buddy's speech bubbles stay up (the ms tiers live in
  * useBuddyBubble's BUBBLE_MS map). */
@@ -35,6 +36,10 @@ export const useSettingsStore = defineStore("settings", {
     messageDuration: normalizeDuration(
       localStorage.getItem(MESSAGE_DURATION_KEY),
     ),
+    // quiet update check at startup (metadata-only; installing always asks);
+    // on by default — the toggle is the opt-out
+    checkUpdatesOnStart:
+      localStorage.getItem(CHECK_UPDATES_ON_START_KEY) !== "off",
   }),
   actions: {
     toggleAnimations() {
@@ -63,6 +68,13 @@ export const useSettingsStore = defineStore("settings", {
       this.messageDuration = normalizeDuration(duration);
       localStorage.setItem(MESSAGE_DURATION_KEY, this.messageDuration);
     },
+    toggleCheckUpdatesOnStart() {
+      this.checkUpdatesOnStart = !this.checkUpdatesOnStart;
+      localStorage.setItem(
+        CHECK_UPDATES_ON_START_KEY,
+        this.checkUpdatesOnStart ? "on" : "off",
+      );
+    },
     // re-reads the same keys the state initializer uses, so the buddy
     // window picks up settings changed in the panel window's settings view
     // (separate webviews sharing localStorage — see the `storage` listener
@@ -77,6 +89,8 @@ export const useSettingsStore = defineStore("settings", {
       this.messageDuration = normalizeDuration(
         localStorage.getItem(MESSAGE_DURATION_KEY),
       );
+      this.checkUpdatesOnStart =
+        localStorage.getItem(CHECK_UPDATES_ON_START_KEY) !== "off";
     },
   },
 });

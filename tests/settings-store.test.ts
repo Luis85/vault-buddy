@@ -106,4 +106,22 @@ describe("settings store", () => {
     store.syncFromStorage();
     expect(store.messageDuration).toBe("short");
   });
+
+  it("checks for updates on start by default", () => {
+    expect(useSettingsStore().checkUpdatesOnStart).toBe(true);
+  });
+
+  it("persists the check-on-start toggle across store instances", () => {
+    useSettingsStore().toggleCheckUpdatesOnStart();
+    setActivePinia(createPinia());
+    expect(useSettingsStore().checkUpdatesOnStart).toBe(false);
+    expect(localStorage.getItem("vault-buddy.checkUpdatesOnStart")).toBe("off");
+  });
+
+  it("re-reads the check-on-start toggle when another window changes it", () => {
+    const store = useSettingsStore();
+    localStorage.setItem("vault-buddy.checkUpdatesOnStart", "off");
+    store.syncFromStorage();
+    expect(store.checkUpdatesOnStart).toBe(false);
+  });
 });

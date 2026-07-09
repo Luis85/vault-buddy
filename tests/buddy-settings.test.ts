@@ -186,6 +186,18 @@ describe("BuddySettings", () => {
     clearMocks();
   });
 
+  it("mirrors and persists the check-on-startup toggle in the Updates card", async () => {
+    const wrapper = mount(BuddySettings);
+    await flush();
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="update-on-start-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(true); // on by default
+    await toggle.setValue(false);
+    expect(useSettingsStore().checkUpdatesOnStart).toBe(false);
+    expect(localStorage.getItem("vault-buddy.checkUpdatesOnStart")).toBe("off");
+  });
+
   it("shows the Updates section with the current version", async () => {
     const wrapper = mount(BuddySettings);
     await flush();

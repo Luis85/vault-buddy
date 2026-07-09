@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useUpdatesStore } from "../stores/updates";
+import { useSettingsStore } from "../stores/settings";
 
 const updates = useUpdatesStore();
+const settings = useSettingsStore();
 
 // a failed download/install keeps `available` for retry — the install
 // button must stay visible alongside the error, not vanish behind it
@@ -80,6 +82,22 @@ onMounted(() => {
       >
         {{ updates.error }}
       </p>
+      <div class="mt-1.5 flex items-center justify-between border-t border-white/10 pt-1.5">
+        <label for="update-on-start-toggle" class="text-sm text-slate-200">
+          Check on startup
+          <span class="block text-xs text-slate-500">
+            Asks before installing · silent when up to date
+          </span>
+        </label>
+        <input
+          id="update-on-start-toggle"
+          data-testid="update-on-start-toggle"
+          type="checkbox"
+          class="h-4 w-4 accent-violet-500"
+          :checked="settings.checkUpdatesOnStart"
+          @change="settings.toggleCheckUpdatesOnStart()"
+        />
+      </div>
     </div>
   </section>
 </template>
