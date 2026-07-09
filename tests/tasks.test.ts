@@ -291,4 +291,77 @@ describe("Tasks", () => {
     });
   });
 
+  it("edits a task inline: sends only the changed fields", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/e.md", title: "Old name", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-title"]').setValue("New name");
+    await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")).toEqual({
+      cmd: "update_task",
+      args: { id: "v1", path: "C:/v/Tasks/e.md", patch: { title: "New name", priority: "high" } },
+    });
+    expect(wrapper.text()).toContain("New name"); // optimistic
+  });
+
+  it("clearing the due date sends clearDue", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/e.md", title: "T", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-due"]').setValue("");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")?.args).toMatchObject({
+      patch: { clearDue: true },
+    });
+  });
+
+  it("reverts the row and notifies when the edit save fails", async () => {
+    const notifications = useNotificationsStore();
+    const { wrapper } = mountView({
+      update_task: () => {
+        throw new Error("disk full");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-title"]').setValue("Broken");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("B open"); // reverted
+    expect(wrapper.text()).not.toContain("Broken");
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+  });
+
+  it("cancel closes the editor without a write", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-title"]').setValue("Nope");
+    await wrapper.get('[data-testid="task-edit-cancel"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
+    expect(wrapper.text()).toContain("B open");
+  });
+
+  it("saving with nothing changed is a no-op close", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
+    expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(false);
+  });
+
 });

@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
-import type { TaskItem } from "../types";
+import type { TaskItem, TaskPatch } from "../types";
 
 // A due only counts when it's a plain YYYY-MM-DD — a hand-authored value like
 // "tomorrow" degrades to no-date instead of erroring (defensive read).
@@ -193,6 +193,59 @@ async function openInObsidian(task: TaskItem) {
     logWarning(`open_task failed: ${String(e)}`);
   }
 }
+
+// Inline editor: one row at a time; opening another row discards unsaved
+// edits in the first (the file is the source of truth, edits are cheap).
+const editingPath = ref<string | null>(null);
+const editTitle = ref("");
+const editDue = ref("");
+const editPriority = ref("normal");
+
+const normalizedPriority = (t: TaskItem) =>
+  t.priority === "high" || t.priority === "low" ? t.priority : "normal";
+
+function startEdit(task: TaskItem) {
+  editingPath.value = task.path;
+  editTitle.value = task.title;
+  editDue.value = dueOf(task) ?? "";
+  editPriority.value = normalizedPriority(task);
+}
+
+function cancelEdit() {
+  editingPath.value = null;
+}
+
+async function saveEdit(task: TaskItem) {
+  if (busy.value.has(task.path)) return;
+  const patch: TaskPatch = {};
+  const title = editTitle.value.trim();
+  if (title && title !== task.title) patch.title = title;
+  if (editDue.value !== (dueOf(task) ?? "")) {
+    if (editDue.value === "") patch.clearDue = true;
+    else patch.due = editDue.value;
+  }
+  if (editPriority.value !== normalizedPriority(task)) patch.priority = editPriority.value;
+  editingPath.value = null;
+  if (Object.keys(patch).length === 0) return;
+  // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
+  const before = { title: task.title, due: task.due, priority: task.priority };
+  if (patch.title) task.title = patch.title;
+  if (patch.clearDue) task.due = null;
+  else if (patch.due) task.due = patch.due;
+  if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
+  sortInPlace();
+  busy.value.add(task.path);
+  try {
+    await invoke("update_task", { id: props.vaultId, path: task.path, patch });
+  } catch (e) {
+    Object.assign(task, before);
+    sortInPlace();
+    notifications.error(String(e));
+    logWarning(`update_task failed: ${String(e)}`);
+  } finally {
+    busy.value.delete(task.path);
+  }
+}
 </script>
 
 <template>
@@ -302,68 +355,141 @@ async function openInObsidian(task: TaskItem) {
             data-testid="task-row"
             class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
           >
-            <input
-              type="checkbox"
-              data-testid="task-checkbox"
-              :checked="task.done"
-              :disabled="isBusy(task.path)"
-              :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
-              class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
-              @change="toggle(task)"
-            />
-            <button
-              type="button"
-              data-testid="task-open"
-              class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-              :aria-label="`Open ${task.title} in Obsidian`"
-              :title="`Open ${task.title} in Obsidian`"
-              @click="openInObsidian(task)"
-            >
-              <span
-                v-if="task.priority === 'high' || task.priority === 'low'"
-                data-testid="task-priority"
-                class="h-1.5 w-1.5 shrink-0 rounded-full"
-                :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
-                :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
-                aria-hidden="true"
-              ></span>
-              <span
-                class="min-w-0 flex-1 truncate text-sm"
-                :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+            <div v-if="editingPath === task.path" class="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
+              <input
+                v-model="editTitle"
+                data-testid="task-edit-title"
+                type="text"
+                aria-label="Task title"
+                class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
+                @keydown.enter.prevent="saveEdit(task)"
+                @keydown.esc="cancelEdit"
+              />
+              <div class="flex items-center gap-1">
+                <input
+                  v-model="editDue"
+                  data-testid="task-edit-due"
+                  type="date"
+                  aria-label="Due date"
+                  class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
+                />
+                <div class="flex gap-0.5" role="radiogroup" aria-label="Priority">
+                  <button
+                    v-for="p in ['high', 'normal', 'low']"
+                    :key="p"
+                    type="button"
+                    role="radio"
+                    :data-testid="`task-edit-priority-${p}`"
+                    :aria-checked="editPriority === p"
+                    class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                    :class="
+                      editPriority === p
+                        ? 'border-violet-400 bg-violet-500/20 text-slate-100'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                    "
+                    @click="editPriority = p"
+                  >
+                    {{ p }}
+                  </button>
+                </div>
+              </div>
+              <div class="flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  data-testid="task-edit-cancel"
+                  class="cursor-pointer rounded-lg px-2 py-0.5 text-xs text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                  @click="cancelEdit"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="task-edit-save"
+                  :disabled="isBusy(task.path)"
+                  class="cursor-pointer rounded-lg bg-violet-600/80 px-2 py-0.5 text-xs font-semibold text-white hover:bg-violet-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+                  @click="saveEdit(task)"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+            <template v-else>
+              <input
+                type="checkbox"
+                data-testid="task-checkbox"
+                :checked="task.done"
+                :disabled="isBusy(task.path)"
+                :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
+                class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
+                @change="toggle(task)"
+              />
+              <button
+                type="button"
+                data-testid="task-open"
+                class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                :aria-label="`Open ${task.title} in Obsidian`"
+                :title="`Open ${task.title} in Obsidian`"
+                @click="openInObsidian(task)"
               >
-                {{ task.title }}
-              </span>
-              <span
-                v-if="dueOf(task)"
-                data-testid="task-due"
-                class="shrink-0 text-[10px] tabular-nums"
-                :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
-              >{{ dueLabel(dueOf(task)!) }}</span>
-            </button>
-            <button
-              type="button"
-              data-testid="task-archive"
-              :disabled="isBusy(task.path)"
-              :aria-label="`Archive ${task.title}`"
-              title="Archive"
-              class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-              @click="archive(task)"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
+                <span
+                  v-if="task.priority === 'high' || task.priority === 'low'"
+                  data-testid="task-priority"
+                  class="h-1.5 w-1.5 shrink-0 rounded-full"
+                  :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
+                  :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  class="min-w-0 flex-1 truncate text-sm"
+                  :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+                >
+                  {{ task.title }}
+                </span>
+                <span
+                  v-if="dueOf(task)"
+                  data-testid="task-due"
+                  class="shrink-0 text-[10px] tabular-nums"
+                  :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
+                >{{ dueLabel(dueOf(task)!) }}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="task-edit"
+                :disabled="isBusy(task.path)"
+                :aria-label="`Edit ${task.title}`"
+                title="Edit"
+                class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+                @click="startEdit(task)"
               >
-                <rect x="3" y="4" width="18" height="4" rx="1" />
-                <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
-              </svg>
-            </button>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-testid="task-archive"
+                :disabled="isBusy(task.path)"
+                :aria-label="`Archive ${task.title}`"
+                title="Archive"
+                class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+                @click="archive(task)"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="4" width="18" height="4" rx="1" />
+                  <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+                </svg>
+              </button>
+            </template>
           </li>
         </ul>
       </div>
