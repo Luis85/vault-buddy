@@ -381,15 +381,19 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
     let mut closed = false;
     // True while consuming the `- item` lines of a block-style value whose
     // key was just rewritten/removed — the items belong to the replaced
-    // value, so they are dropped with it. Cleared by the first non-item line
-    // (including the closing fence), so body bullets are never at risk: the
-    // fence always clears the flag before the body starts.
+    // value, so they are dropped with it. Also consumes indented continuation
+    // lines (nested-mapping items), since YAML block items can span multiple
+    // lines when they are mappings. Cleared by the first non-item,
+    // non-indented line (including the closing fence), so body bullets are
+    // never at risk: the fence always clears the flag before the body starts,
+    // and top-level frontmatter keys and the fence are never indented.
     let mut skip_list_items = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if skip_list_items {
-            if trimmed.trim_start().starts_with("- ") {
-                continue; // part of the consumed block list
+            let starts_indented = line.starts_with([' ', '\t']);
+            if starts_indented || trimmed.trim_start().starts_with("- ") {
+                continue; // item or its indented continuation — part of the consumed value
             }
             skip_list_items = false;
         }
@@ -1156,5 +1160,31 @@ mod tests {
         let out = set_fields(doc, &[("due", None)]).unwrap();
         assert!(out.contains("- a body bullet\n"));
         assert!(!out.contains("due:"));
+    }
+
+    #[test]
+    fn set_fields_consumes_nested_mapping_items_without_orphans() {
+        // Regression: a block item that is a mapping has indented continuation
+        // lines ("  role: owner") that don't start with "- " — the consumption
+        // must take them too or the removal leaves orphaned lines that corrupt
+        // the frontmatter structure.
+        let doc = "---\ntype: Task\nstatus: new\ntags:\n- name: Alice\n  role: owner\n- name: Bob\ntitle: \"A\"\n---\n";
+        let out = set_fields(doc, &[("tags", None)]).unwrap();
+        assert!(!out.contains("Alice"));
+        assert!(!out.contains("role: owner"));
+        assert!(!out.contains("Bob"));
+        assert!(out.contains("title: \"A\"\n")); // next top-level key survives
+        assert!(out.contains("status: new\n"));
+    }
+
+    #[test]
+    fn set_fields_consumed_block_still_lets_a_later_key_be_rewritten() {
+        // A key matched AFTER a consumed block must still be rewritable in the
+        // same call (the flag must not swallow or skip it).
+        let doc = "---\ntype: Task\nstatus: new\ntags:\n- work\ndue: 2026-07-10\n---\n";
+        let out = set_fields(doc, &[("tags", None), ("due", Some("2026-08-01"))]).unwrap();
+        assert!(!out.contains("- work"));
+        assert!(!out.contains("tags"));
+        assert!(out.contains("due: 2026-08-01\n"));
     }
 }
