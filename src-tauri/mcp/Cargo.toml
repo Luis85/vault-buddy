@@ -24,12 +24,26 @@ base64 = "0.22"
 subtle = "2"
 
 [dev-dependencies]
+# "reqwest" alone only pulls rmcp's optional reqwest dep + a TLS backend
+# (rmcp-2.2.0/Cargo.toml: reqwest = ["__reqwest", "reqwest?/rustls"]); the
+# `impl StreamableHttpClient for reqwest::Client` used by
+# StreamableHttpClientTransport::with_client lives in a module gated
+# separately behind "transport-streamable-http-client-reqwest"
+# (rmcp-2.2.0/src/transport/common/reqwest.rs). Without it, `with_client`
+# fails to compile with "the trait StreamableHttpClient is not implemented
+# for reqwest::Client" even though reqwest itself builds fine.
 rmcp = { version = "2.2", features = [
     "client",
     "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
     "reqwest",
 ] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+# Must match the reqwest major rmcp's own "reqwest" feature pulls in (see
+# rmcp-2.2.0/Cargo.toml [dependencies.reqwest]) — the client transport's
+# `with_client` requires our reqwest::Client to be the SAME type rmcp's
+# StreamableHttpClient impl targets; a mismatched major here type-errors as
+# a trait-not-satisfied on with_client, not a version warning.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 bytes = "1"
 futures-util = "0.3"
 tempfile = "3"

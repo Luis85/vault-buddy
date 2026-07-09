@@ -7,4 +7,5 @@ pub mod http;
 pub mod service;
 pub mod token;
 
+pub use http::{start, RunningServer};
 pub use service::{Deps, VaultBuddyMcp, WriteEvent, WriteKind, WRITES_DISABLED};
