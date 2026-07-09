@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useVaultsStore } from "../stores/vaults";
 import { useCaptureStore } from "../stores/capture";
@@ -34,6 +34,33 @@ const VIEW_TITLES: Record<string, string> = {
   search: "Search",
 };
 const title = computed(() => VIEW_TITLES[view.value] ?? "Vaults");
+
+// `/` jumps to search from the vault list — unless the keystroke is going
+// into a text field (the vault filter must keep receiving "/"). Ctrl/Cmd+F
+// does the same regardless of focus and suppresses the WebView find bar.
+// Gated on the list view so the search input, settings forms, and the task
+// composer never lose keystrokes to a global handler.
+function onPanelKeydown(event: KeyboardEvent) {
+  if (view.value !== "list") return;
+  const inText =
+    event.target instanceof HTMLInputElement ||
+    event.target instanceof HTMLTextAreaElement;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    store.openSearch();
+  } else if (
+    event.key === "/" &&
+    !inText &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  ) {
+    event.preventDefault();
+    store.openSearch();
+  }
+}
+onMounted(() => window.addEventListener("keydown", onPanelKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onPanelKeydown));
 
 const filter = ref("");
 // A short list is scannable at a glance; only offer filtering when the

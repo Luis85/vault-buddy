@@ -78,6 +78,38 @@ describe("ActionPanel", () => {
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
   });
 
+  it("slash on the list view opens search, but not while typing in the filter", async () => {
+    const store = useVaultsStore();
+    store.vaults = manyVaults; // > threshold so the filter input renders
+    store.loaded = true;
+    const wrapper = mount(ActionPanel, { attachTo: document.body });
+    // typing "/" into the filter must keep typing, not switch views
+    await wrapper.get('input[type="search"]').trigger("keydown", { key: "/" });
+    expect(store.view).toBe("list");
+    // "/" anywhere else on the list view jumps to search
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(store.view).toBe("search");
+    wrapper.unmount();
+  });
+
+  it("Ctrl+F opens search from the list view and is inert elsewhere", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel, { attachTo: document.body });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(store.view).toBe("search");
+    // on a non-list view the shortcut must not fire (search's own input owns keys)
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(store.view).toBe("search"); // unchanged, no re-trigger side effects
+    wrapper.unmount();
+  });
+
   it("back from the search view returns to the vault list", async () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;
