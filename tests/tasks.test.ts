@@ -596,4 +596,54 @@ describe("Tasks", () => {
     });
   });
 
+  it("groups by tag with repeats, No tags and Done sections", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Both", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["Work", "home"] },
+        { path: "C:/v/Tasks/b.md", title: "Untagged", status: "new", created: "2026-07-07", done: false, due: null, priority: null, tags: [] },
+        { path: "C:/v/Tasks/c.md", title: "Finished", status: "done", created: "2026-07-06", done: true, due: null, priority: null, tags: ["work"] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-tags"]').trigger("click");
+    const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+    // Alphabetical case-insensitive tag sections, then No tags, then Done.
+    expect(headers).toEqual(["#home", "#Work", "No tags", "Done"]);
+    // "Both" repeats under each of its tags.
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    expect(rows.filter((r) => r.text().includes("Both"))).toHaveLength(2);
+    // Done tasks land in Done, not under their tags.
+    expect(rows.filter((r) => r.text().includes("Finished"))).toHaveLength(1);
+  });
+
+  it("the editor opens on only the clicked duplicate row in tag view", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Both", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work", "home"] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-tags"]').trigger("click");
+    const pencils = wrapper.findAll('[data-testid="task-edit"]');
+    expect(pencils).toHaveLength(2);
+    await pencils[0].trigger("click");
+    // One editor, not two — the clicked row only.
+    expect(wrapper.findAll('[data-testid="task-edit-title"]')).toHaveLength(1);
+  });
+
+  it("grouping defaults to dates and the toggle switches back", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+      ],
+    });
+    await flushPromises();
+    // Dates mode by default: an undated list shows no headers.
+    expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
+    await wrapper.get('[data-testid="task-grouping-tags"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="task-bucket-header"]').length).toBeGreaterThan(0);
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
+  });
+
 });

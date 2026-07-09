@@ -125,7 +125,42 @@ function sortInPlace() {
 
 type Bucket = { key: string; label: string | null; tasks: TaskItem[] };
 
+// Component-local; every panel visit starts back on dates (YAGNI: no
+// persistence this slice).
+const grouping = ref<"dates" | "tags">("dates");
+
 const buckets = computed<Bucket[]>(() => {
+  if (grouping.value === "tags") {
+    // One section per tag (alphabetical, case-insensitive), a task under
+    // EACH of its tags — Obsidian tag-pane semantics; then No tags, then
+    // Done. Headers always render in tag mode. Order within sections is
+    // the global sort, untouched.
+    const byTag = new Map<string, { label: string; tasks: TaskItem[] }>();
+    const notags: TaskItem[] = [];
+    const done: TaskItem[] = [];
+    for (const t of filteredTasks.value) {
+      if (t.done) {
+        done.push(t);
+        continue;
+      }
+      if (t.tags.length === 0) {
+        notags.push(t);
+        continue;
+      }
+      for (const tag of t.tags) {
+        const key = tag.toLowerCase();
+        const entry = byTag.get(key) ?? { label: tag, tasks: [] };
+        entry.tasks.push(t);
+        byTag.set(key, entry);
+      }
+    }
+    const sections: Bucket[] = [...byTag.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, { label, tasks }]) => ({ key: `tag:${key}`, label: `#${label}`, tasks }));
+    if (notags.length > 0) sections.push({ key: "notags", label: "No tags", tasks: notags });
+    if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });
+    return sections;
+  }
   const today = localToday();
   const groups: Record<string, TaskItem[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
   for (const t of filteredTasks.value) {
@@ -246,7 +281,10 @@ async function openInObsidian(task: TaskItem) {
 
 // Inline editor: one row at a time; opening another row discards unsaved
 // edits in the first (the file is the source of truth, edits are cheap).
-const editingPath = ref<string | null>(null);
+// Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
+// two tag sections (Task 7) opens its editor on only the clicked row.
+const editingKey = ref<string | null>(null);
+const rowKey = (bucketKey: string, task: TaskItem) => `${bucketKey}:${task.path}`;
 const editTitle = ref("");
 const editDue = ref("");
 const editPriority = ref("normal");
@@ -255,8 +293,8 @@ const editTags = ref("");
 const normalizedPriority = (t: TaskItem) =>
   t.priority === "high" || t.priority === "low" ? t.priority : "normal";
 
-function startEdit(task: TaskItem) {
-  editingPath.value = task.path;
+function startEdit(task: TaskItem, bucketKey: string) {
+  editingKey.value = rowKey(bucketKey, task);
   editTitle.value = task.title;
   editDue.value = dueOf(task) ?? "";
   editPriority.value = normalizedPriority(task);
@@ -264,7 +302,7 @@ function startEdit(task: TaskItem) {
 }
 
 function cancelEdit() {
-  editingPath.value = null;
+  editingKey.value = null;
 }
 
 async function saveEdit(task: TaskItem) {
@@ -279,7 +317,7 @@ async function saveEdit(task: TaskItem) {
   if (editPriority.value !== normalizedPriority(task)) patch.priority = editPriority.value;
   const parsedTags = parseTagsInput(editTags.value);
   if (parsedTags.join(" ") !== task.tags.join(" ")) patch.tags = parsedTags;
-  editingPath.value = null;
+  editingKey.value = null;
   if (Object.keys(patch).length === 0) return;
   // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
   const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
@@ -418,6 +456,34 @@ async function saveEdit(task: TaskItem) {
       />
     </div>
 
+    <div
+      v-if="!loading && !loadError && tasks.length > 0"
+      class="flex gap-0.5 self-start"
+      role="radiogroup"
+      aria-label="Group tasks by"
+    >
+      <button
+        v-for="g in [
+          { key: 'dates', label: 'Dates' },
+          { key: 'tags', label: 'Tags' },
+        ] as const"
+        :key="g.key"
+        type="button"
+        role="radio"
+        :data-testid="`task-grouping-${g.key}`"
+        :aria-checked="grouping === g.key"
+        class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        :class="
+          grouping === g.key
+            ? 'border-violet-400 bg-violet-500/20 text-slate-100'
+            : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+        "
+        @click="grouping = g.key"
+      >
+        {{ g.label }}
+      </button>
+    </div>
+
     <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
     <p
       v-else-if="loadError"
@@ -444,11 +510,11 @@ async function saveEdit(task: TaskItem) {
         <ul class="flex flex-col gap-1">
           <li
             v-for="task in bucket.tasks"
-            :key="task.path"
+            :key="rowKey(bucket.key, task)"
             data-testid="task-row"
             class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
           >
-            <div v-if="editingPath === task.path" class="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
+            <div v-if="editingKey === rowKey(bucket.key, task)" class="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
               <input
                 v-model="editTitle"
                 data-testid="task-edit-title"
@@ -571,7 +637,7 @@ async function saveEdit(task: TaskItem) {
                 :aria-label="`Edit ${task.title}`"
                 title="Edit"
                 class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-                @click="startEdit(task)"
+                @click="startEdit(task, bucket.key)"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
