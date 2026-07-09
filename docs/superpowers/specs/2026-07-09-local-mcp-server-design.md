@@ -82,8 +82,11 @@ PRD's "service layer":
   task's title (it already parses the file), for the announce hook.
 - `list_recordings(vault_id)` — the recordings-list command body over
   `core::recordings`.
-- `open_vault(vault_id)`, `open_daily_note(vault_id, today)` — URI build +
-  launch. The **launcher is injectable** (defaults to `uri::launch`) so
+- `open_vault(vault_id)`, `open_daily_note(vault_id, today, allow_create)`
+  — URI build + launch. `allow_create: false` refuses to build the
+  `obsidian://new` branch for a missing daily note (the MCP caller passes
+  the live `allowWrites`; the IPC command passes `true`, preserving UI
+  behavior). The **launcher is injectable** (defaults to `uri::launch`) so
   tests assert the built URI without launching anything.
 
 Core stays clock-free: `today` is always passed in (callers use
@@ -167,13 +170,20 @@ structs (camelCase), so MCP responses match IPC responses field-for-field.
 | `list_tasks` | read | `{ vaultId }` → the vault's tasks, archived excluded (same as UI) |
 | `list_recordings` | read | `{ vaultId }` → recording rows (type, title, transcript status) — metadata only |
 | `open_vault` | open | `{ vaultId }` → launches `obsidian://open` |
-| `open_daily_note` | open | `{ vaultId }` → existing open-or-create-via-Obsidian logic |
+| `open_daily_note` | open (write-gated create) | `{ vaultId }` → opens today's note; a **missing** note is only created (via `obsidian://new`) when `allowWrites` is on — off → tool error, nothing launched |
 | `add_task` | write | `{ vaultId, title }` → collision-safe task create; returns the created task |
 | `set_task_status` | write | `{ vaultId, path, status: new\|done\|archived }` → surgical status toggle |
 
 Classes: **read** and **open** tools are available whenever the server is
 enabled — opening Obsidian is the buddy's core benign action and writes
-nothing. **write** tools are governed by `allowWrites` as above. Failures
+nothing. **write** tools are governed by `allowWrites` as above. One
+subtlety (Codex review catch): the daily-note path is open-OR-CREATE —
+`daily_note_uri` deliberately builds `obsidian://new` when today's note
+doesn't exist, which mutates the vault. Over MCP that create branch counts
+as a write: with `allowWrites` off, `open_daily_note` on a missing note
+returns a tool error ("today's daily note doesn't exist; enable task
+writes in Vault Buddy settings to let clients create it") instead of
+launching anything. The human UI path is unchanged (always may create). Failures
 return MCP tool errors carrying the same user-facing messages the panel
 shows (vault gone, path escape, bad status) — never a panic.
 
@@ -252,7 +262,9 @@ All Linux-runnable except the last item:
   validation (absent / localhost / evil), body cap, write gating (hidden
   from list when off, rejected at call when off, allowed when on), config
   parse defaults, token shape, open-tool URI assertions via the injected
-  launcher.
+  launcher — including the daily-note create gate (missing note +
+  `allowWrites` off → tool error, launcher never invoked; on → the
+  `obsidian://new` URI).
 - **mcp crate round-trip integration test**: start the real server on an
   ephemeral port against a temp-dir `ServicePaths` (fake `obsidian.json`,
   fake vault dir), drive `initialize` → `tools/list` → `tools/call` over
