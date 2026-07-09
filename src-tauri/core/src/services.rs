@@ -81,21 +81,28 @@ pub const DAILY_NOTE_CREATE_GATED: &str =
 /// note) mutates the vault, so it is write-gated: `allow_create: false`
 /// refuses it BEFORE any URI is built or launched. The human UI path passes
 /// `true` (unchanged behavior); the MCP tool passes the live allow-writes
-/// grant.
+/// grant. Returns whether the note was CREATED (`true` only when the
+/// `obsidian://new` branch actually launched) — reported from the branch
+/// taken, not from a separate existence probe, so a caller that treats a
+/// create as a vault write (the MCP tool's on_write hook and `created`
+/// flag) can never disagree with this function's own exists check under a
+/// race. Callers that don't care (the IPC command) map the bool away.
 pub fn open_daily_note(
     paths: &ServicePaths,
     id: &str,
     date: chrono::NaiveDate,
     allow_create: bool,
     launch: &dyn Fn(&str) -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let vault = find_vault(paths, id)?;
     let vault_path = std::path::Path::new(&vault.path);
     let (rel, exists) = daily_note_target(vault_path, date);
     if exists {
-        launch(&uri::open_file_uri(&vault.id, &rel))
+        launch(&uri::open_file_uri(&vault.id, &rel))?;
+        Ok(false)
     } else if allow_create {
-        launch(&uri::new_file_uri(&vault.id, &rel))
+        launch(&uri::new_file_uri(&vault.id, &rel))?;
+        Ok(true)
     } else {
         Err(DAILY_NOTE_CREATE_GATED.to_string())
     }
@@ -400,7 +407,8 @@ mod tests {
             launched.borrow_mut().push(u.to_string());
             Ok(())
         };
-        open_daily_note(&paths, "deadbeef01234567", date(), false, &launch).unwrap();
+        let created = open_daily_note(&paths, "deadbeef01234567", date(), false, &launch).unwrap();
+        assert!(!created, "opening an existing note is not a create");
         assert!(launched.borrow()[0].starts_with("obsidian://open?"));
     }
 
@@ -418,7 +426,8 @@ mod tests {
         let err = open_daily_note(&paths, "deadbeef01234567", date(), false, &launch).unwrap_err();
         assert_eq!(err, DAILY_NOTE_CREATE_GATED);
         assert!(launched.borrow().is_empty(), "must not launch anything");
-        open_daily_note(&paths, "deadbeef01234567", date(), true, &launch).unwrap();
+        let created = open_daily_note(&paths, "deadbeef01234567", date(), true, &launch).unwrap();
+        assert!(created, "the create branch must report created=true");
         assert!(launched.borrow()[0].starts_with("obsidian://new?"));
     }
 

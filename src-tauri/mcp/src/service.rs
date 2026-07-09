@@ -5,6 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -83,6 +84,32 @@ pub struct SetTaskStatusParams {
     pub status: String,
 }
 
+/// Static audit-log label for a service error. The audit line must never
+/// carry the raw error string: service errors interpolate client-provided
+/// text (a bogus `status`, a vault id, an OS error wrapping a client path),
+/// and the spec's redaction rule is that argument VALUES are summarized,
+/// never logged verbatim — so the log gets one fixed label per failure
+/// class and the full message goes only to the client in the tool result.
+fn outcome_label(e: &str) -> &'static str {
+    if e == WRITES_DISABLED {
+        "writes-disabled"
+    } else if e == services::DAILY_NOTE_CREATE_GATED {
+        "create-gated"
+    } else if e.starts_with("Vault not found") {
+        "vault-not-found"
+    } else if e.starts_with("Unknown task status") {
+        "invalid-status"
+    } else if e.starts_with("A task needs a title") {
+        "empty-title"
+    } else if e.starts_with("Vault folder not found") {
+        "vault-dir-missing"
+    } else if e.starts_with("Could not create") {
+        "create-failed"
+    } else {
+        "error"
+    }
+}
+
 #[derive(Clone)]
 pub struct VaultBuddyMcp {
     deps: Deps,
@@ -124,12 +151,20 @@ impl VaultBuddyMcp {
         )]))
     }
 
-    /// Audit line for every tool call — names + outcome, never argument
-    /// values (title lengths only), per the spec's redaction rule.
-    fn audit(tool: &str, vault_id: &str, outcome: &Result<(), String>) {
+    /// Audit line for every tool call — tool name, vault id, outcome,
+    /// duration (the spec's audit invariant). The failure arm logs a STATIC
+    /// class label from `outcome_label`, never the raw error: service error
+    /// strings interpolate client-provided text, which must not reach the
+    /// logs verbatim (the client still receives the full message in the
+    /// tool result).
+    fn audit(tool: &str, vault_id: &str, outcome: &Result<(), String>, started: Instant) {
+        let dur_ms = started.elapsed().as_millis();
         match outcome {
-            Ok(()) => log::info!("mcp: tool={tool} vault={vault_id} ok"),
-            Err(e) => log::warn!("mcp: tool={tool} vault={vault_id} failed: {e}"),
+            Ok(()) => log::info!("mcp: tool={tool} vault={vault_id} ok dur_ms={dur_ms}"),
+            Err(e) => {
+                let label = outcome_label(e);
+                log::warn!("mcp: tool={tool} vault={vault_id} failed={label} dur_ms={dur_ms}");
+            }
         }
     }
 
@@ -145,8 +180,9 @@ impl VaultBuddyMcp {
         annotations(read_only_hint = true)
     )]
     pub async fn list_vaults(&self) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let vaults = services::list_vaults(&self.deps.paths);
-        Self::audit("list_vaults", "-", &Ok(()));
+        Self::audit("list_vaults", "-", &Ok(()), started);
         Self::ok_json(&vaults)
     }
 
@@ -158,8 +194,9 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let tasks = services::list_tasks(&self.deps.paths, &p.vault_id);
-        Self::audit("list_tasks", &p.vault_id, &Ok(()));
+        Self::audit("list_tasks", &p.vault_id, &Ok(()), started);
         Self::ok_json(&tasks)
     }
 
@@ -171,8 +208,9 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let recordings = services::list_recordings(&self.deps.paths, &p.vault_id);
-        Self::audit("list_recordings", &p.vault_id, &Ok(()));
+        Self::audit("list_recordings", &p.vault_id, &Ok(()), started);
         Self::ok_json(&recordings)
     }
 
@@ -181,8 +219,9 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let outcome = services::open_vault(&self.deps.paths, &p.vault_id, &*self.deps.launch);
-        Self::audit("open_vault", &p.vault_id, &outcome);
+        Self::audit("open_vault", &p.vault_id, &outcome, started);
         match outcome {
             Ok(()) => Self::ok_json(&serde_json::json!({ "opened": true })),
             Err(e) => Self::tool_error(e),
@@ -196,18 +235,22 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let allow_create = self.writes_allowed();
         let date = Self::today();
-        // Peek at existence first so a create (a vault write) can fire on_write.
+        // Looked up only for the vault NAME (the on_write payload); the
+        // service does its own lookup for the launch.
         let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
             Ok(v) => v,
             Err(e) => {
-                Self::audit("open_daily_note", &p.vault_id, &Err(e.clone()));
+                Self::audit("open_daily_note", &p.vault_id, &Err(e.clone()), started);
                 return Self::tool_error(e);
             }
         };
-        let (_, existed) =
-            vault_buddy_core::daily_note_target(std::path::Path::new(&vault.path), date);
+        // The service reports whether it CREATED the note (took the
+        // obsidian://new branch) — a separate pre-call existence peek could
+        // disagree with the service's own exists check under a race and
+        // mis-fire on_write / the `created` flag.
         let outcome = services::open_daily_note(
             &self.deps.paths,
             &p.vault_id,
@@ -215,17 +258,22 @@ impl VaultBuddyMcp {
             allow_create,
             &*self.deps.launch,
         );
-        Self::audit("open_daily_note", &p.vault_id, &outcome);
+        Self::audit(
+            "open_daily_note",
+            &p.vault_id,
+            &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
+        );
         match outcome {
-            Ok(()) => {
-                if !existed {
+            Ok(created) => {
+                if created {
                     (self.deps.on_write)(WriteEvent {
                         kind: WriteKind::CreateDailyNote,
                         title: date.format("%Y-%m-%d").to_string(),
                         vault_name: vault.name,
                     });
                 }
-                Self::ok_json(&serde_json::json!({ "opened": true, "created": !existed }))
+                Self::ok_json(&serde_json::json!({ "opened": true, "created": created }))
             }
             Err(e) => Self::tool_error(e),
         }
@@ -241,18 +289,24 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<AddTaskParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         // Denied attempts are audited too (Codex review catch): the spec says
         // EVERY tool call logs its outcome, and the revoked-grant path — a
         // session that cached the write tools before the user flipped the
         // toggle off — is exactly where the log matters most.
         if !self.writes_allowed() {
-            Self::audit("add_task", &p.vault_id, &Err(WRITES_DISABLED.to_string()));
+            Self::audit(
+                "add_task",
+                &p.vault_id,
+                &Err(WRITES_DISABLED.to_string()),
+                started,
+            );
             return Self::tool_error(WRITES_DISABLED);
         }
         let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
             Ok(v) => v,
             Err(e) => {
-                Self::audit("add_task", &p.vault_id, &Err(e.clone()));
+                Self::audit("add_task", &p.vault_id, &Err(e.clone()), started);
                 return Self::tool_error(e);
             }
         };
@@ -262,6 +316,7 @@ impl VaultBuddyMcp {
             "add_task",
             &p.vault_id,
             &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
         );
         match outcome {
             Ok(task) => {
@@ -283,6 +338,7 @@ impl VaultBuddyMcp {
         &self,
         Parameters(p): Parameters<SetTaskStatusParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         // Same audit-before-deny rule as add_task: a gate denial or a
         // failed vault lookup is still a tool-call outcome.
         if !self.writes_allowed() {
@@ -290,13 +346,14 @@ impl VaultBuddyMcp {
                 "set_task_status",
                 &p.vault_id,
                 &Err(WRITES_DISABLED.to_string()),
+                started,
             );
             return Self::tool_error(WRITES_DISABLED);
         }
         let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
             Ok(v) => v,
             Err(e) => {
-                Self::audit("set_task_status", &p.vault_id, &Err(e.clone()));
+                Self::audit("set_task_status", &p.vault_id, &Err(e.clone()), started);
                 return Self::tool_error(e);
             }
         };
@@ -305,6 +362,7 @@ impl VaultBuddyMcp {
             "set_task_status",
             &p.vault_id,
             &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
         );
         match outcome {
             Ok(title) => {
@@ -492,5 +550,40 @@ mod tests {
         let result = svc.list_vaults().await.unwrap();
         let text = text_of(&result);
         assert!(text.contains("deadbeef01234567") && text.contains("MyVault"));
+    }
+
+    // Redaction (Codex review catch): the audit log must carry a STATIC
+    // label per failure class, never the raw error string — service errors
+    // interpolate client-provided text (a bogus `status`, a vault id) that
+    // must not reach the logs verbatim.
+    #[test]
+    fn outcome_labels_are_static_and_cover_the_known_failures() {
+        assert_eq!(outcome_label(WRITES_DISABLED), "writes-disabled");
+        assert_eq!(
+            outcome_label(vault_buddy_core::services::DAILY_NOTE_CREATE_GATED),
+            "create-gated"
+        );
+        assert_eq!(
+            outcome_label("Vault not found — was it removed from Obsidian? (id: nope)"),
+            "vault-not-found"
+        );
+        assert_eq!(
+            outcome_label("Unknown task status: <arbitrary client text>"),
+            "invalid-status"
+        );
+        assert_eq!(outcome_label("A task needs a title."), "empty-title");
+        assert_eq!(
+            outcome_label("Vault folder not found: C:\\gone\\MyVault"),
+            "vault-dir-missing"
+        );
+        assert_eq!(
+            outcome_label("Could not create tasks folder: denied"),
+            "create-failed"
+        );
+        assert_eq!(
+            outcome_label("Could not create task: denied"),
+            "create-failed"
+        );
+        assert_eq!(outcome_label("anything else entirely"), "error");
     }
 }

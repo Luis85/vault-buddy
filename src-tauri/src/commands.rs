@@ -496,9 +496,12 @@ pub fn open_vault(id: String) -> Result<(), String> {
 pub fn open_daily_note(id: String) -> Result<(), String> {
     let today = Local::now().date_naive();
     // allow_create: true — the human UI keeps its open-or-create behavior.
+    // The created-vs-opened bool exists for the MCP tool's on_write hook;
+    // the IPC contract stays Result<(), String>.
     services::open_daily_note(&services::ServicePaths::real(), &id, today, true, &|u| {
         uri::launch(u)
     })
+    .map(|_created| ())
 }
 
 /// Reveal the app log folder (holding `vault-buddy.log` and `crash.log`) in
