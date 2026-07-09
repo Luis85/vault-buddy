@@ -40,7 +40,15 @@ pub fn set_tasks_config(
         .filter(|f| !f.is_empty())
         .map(str::to_string);
     if let Some(folder) = &folder {
-        capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
+        let root = capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
+        // Reject a folder that ALREADY exists as a symlink/junction resolving
+        // outside the vault, up front — the lexical check above can't see
+        // through it. Otherwise the setting saves but list_tasks then returns
+        // empty and add/toggle error, i.e. the UI persists an unusable folder.
+        // A not-yet-created folder is fine: add_task create-then-asserts it.
+        if root.exists() {
+            capture_paths::assert_root_inside_vault(Path::new(&vault.path), &root)?;
+        }
     }
     let _guard = lock_ignoring_poison(&lock.0);
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
