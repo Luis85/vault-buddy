@@ -1,20 +1,34 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import RecordMode from "../src/components/RecordMode.vue";
-import { useVaultsStore } from "../src/stores/vaults";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useVaultsStore } from "../src/stores/vaults";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 import { logWarning } from "../src/logging";
 
-const mountView = async (mode: "meeting" | "voice-note" = "meeting") => {
+const recordingRow = (mp3: string) => ({
+  mp3,
+  title: mp3,
+  recordedAt: "2026-07-09 10:00",
+  duration: null,
+  type: "Meeting",
+  transcriptStatus: "none",
+});
+
+const mountView = async (
+  options: { mode?: "meeting" | "voice-note"; recordings?: unknown[] } = {},
+) => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
-    if (cmd === "get_capture_config") return { mode /* other fields unused here */ };
+    if (cmd === "get_capture_config")
+      return { mode: options.mode ?? "meeting" /* other fields unused here */ };
+    if (cmd === "list_recordings") return options.recordings ?? [];
     if (cmd === "start_capture") return { recording: true, vaultId: "v1", startedAtMs: 1, paused: false, pausedTotalMs: 0, pausedSinceMs: null };
   });
   const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
@@ -26,14 +40,66 @@ describe("RecordMode", () => {
   beforeEach(() => setActivePinia(createPinia()));
   afterEach(() => clearMocks());
 
-  it("highlights the vault's default mode", async () => {
-    const { wrapper } = await mountView("voice-note");
-    expect(wrapper.get('[data-testid="mode-voice-note"]').classes()).toContain("border-violet-400");
+  it("no longer pre-highlights the vault's stored default mode", async () => {
+    // The "default recording mode" setting is gone: the mode is a per-recording
+    // choice, so neither card gets the selected treatment any more.
+    const { wrapper } = await mountView({ mode: "voice-note" });
+    expect(wrapper.get('[data-testid="mode-voice-note"]').classes()).not.toContain("border-violet-400");
     expect(wrapper.get('[data-testid="mode-meeting"]').classes()).not.toContain("border-violet-400");
   });
 
+  it("renders the recording actions first and the transcription settings last", async () => {
+    const { wrapper } = await mountView();
+    const html = wrapper.html();
+    const meeting = html.indexOf('data-testid="mode-meeting"');
+    const voiceNote = html.indexOf('data-testid="mode-voice-note"');
+    const browse = html.indexOf('data-testid="mode-browse"');
+    const transcribe = html.indexOf('data-testid="transcribe-toggle"');
+    expect(meeting).toBeGreaterThan(-1);
+    expect(voiceNote).toBeGreaterThan(meeting);
+    expect(browse).toBeGreaterThan(voiceNote);
+    expect(transcribe).toBeGreaterThan(browse);
+  });
+
+  it("styles Browse recordings as a card like the recording options", async () => {
+    const { wrapper } = await mountView();
+    const browse = wrapper.get('[data-testid="mode-browse"]');
+    for (const cls of ["rounded-lg", "border-white/10", "bg-white/5", "px-3", "py-2"]) {
+      expect(browse.classes()).toContain(cls);
+    }
+  });
+
+  it("shows the vault's recording count on the Browse card", async () => {
+    const { wrapper } = await mountView({
+      recordings: [recordingRow("a.mp3"), recordingRow("b.mp3"), recordingRow("c.mp3")],
+    });
+    expect(wrapper.get('[data-testid="recording-count"]').text()).toBe("3");
+    expect(
+      wrapper.get('[data-testid="mode-browse"]').attributes("aria-label"),
+    ).toContain("3");
+  });
+
+  it("shows a zero recording count (an empty vault is worth knowing before clicking)", async () => {
+    const { wrapper } = await mountView({ recordings: [] });
+    expect(wrapper.get('[data-testid="recording-count"]').text()).toBe("0");
+  });
+
+  it("hides the count and warns when list_recordings fails", async () => {
+    vi.mocked(logWarning).mockClear();
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config") return { mode: "meeting" };
+      if (cmd === "list_recordings") throw new Error("scan failed");
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="recording-count"]').exists()).toBe(false);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("list_recordings"),
+    );
+  });
+
   it("starts a recording and returns to the list", async () => {
-    const { wrapper, calls } = await mountView("meeting");
+    const { wrapper, calls } = await mountView();
     const store = useVaultsStore();
     store.openRecordMode("v1");
     await wrapper.get('[data-testid="mode-voice-note"]').trigger("click");
@@ -43,21 +109,27 @@ describe("RecordMode", () => {
   });
 
   it("navigates to recordings on Browse", async () => {
-    const { wrapper } = await mountView("meeting");
+    const { wrapper } = await mountView();
     const store = useVaultsStore();
     await wrapper.get('[data-testid="mode-browse"]').trigger("click");
     expect(store.view).toBe("recordings");
     expect(store.recordingsVaultId).toBe("v1");
   });
 
-  it("falls back to meeting when the config read fails", async () => {
+  it("still renders every action when the config read fails", async () => {
     clearMocks();
     mockIPC((cmd) => {
       if (cmd === "get_capture_config") throw new Error("nope");
+      if (cmd === "list_recordings") return [];
     });
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
     await flushPromises();
-    expect(wrapper.get('[data-testid="mode-meeting"]').classes()).toContain("border-violet-400");
+    // A config failure must never block recording — all three cards and the
+    // transcription controls stay usable against the defaults.
+    expect(wrapper.find('[data-testid="mode-meeting"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="mode-voice-note"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="mode-browse"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="transcribe-toggle"]').exists()).toBe(true);
   });
 
   it("saves a changed transcription setting to the vault config, preserving the rest", async () => {
@@ -78,6 +150,7 @@ describe("RecordMode", () => {
     mockIPC((cmd, args) => {
       calls.push({ cmd, args });
       if (cmd === "get_capture_config") return cfg;
+      if (cmd === "list_recordings") return [];
     });
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
     await flushPromises();
@@ -111,6 +184,7 @@ describe("RecordMode", () => {
     };
     mockIPC((cmd) => {
       if (cmd === "get_capture_config") return cfg;
+      if (cmd === "list_recordings") return [];
       if (cmd === "set_capture_config") throw new Error("disk full");
     });
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
@@ -166,6 +240,7 @@ describe("RecordMode", () => {
           resolveConfig = resolve;
         });
       }
+      if (cmd === "list_recordings") return [];
     });
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
     await flushPromises();
@@ -182,11 +257,7 @@ describe("RecordMode", () => {
     // The resolved read must never itself trigger a save either.
     expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
     // The real config replaced the default-seeded state — the pre-resolve
-    // toggle is superseded by the resolved cfg (transcribe: false), and the
-    // vault's real default mode (voice-note) is now reflected.
-    expect(wrapper.get('[data-testid="mode-voice-note"]').classes()).toContain(
-      "border-violet-400",
-    );
+    // toggle is superseded by the resolved cfg (transcribe: false).
     expect(
       wrapper.get<HTMLInputElement>('[data-testid="transcribe-toggle"]').element.checked,
     ).toBe(false);

@@ -1,0 +1,56 @@
+# cargo-deny policy — the Rust dependency audit gate (CI: rust-core job;
+# locally: `cargo deny check` from src-tauri/). Policy mirrors the repo's
+# severity-staging rule: everything here is either allowed with a reason or
+# fails the build; loosening an entry is a reviewed decision.
+
+[graph]
+# Include the whisper feature's dependency tree (whisper-rs) — it ships in
+# every real build even though it's not a default cargo feature.
+all-features = true
+
+[advisories]
+# Transitive unmaintained advisories are dominated by tauri's Linux GTK3
+# webview stack (gtk-rs bindings, RUSTSEC-2024-041x) — upstream tauri owns
+# that migration and the Linux build is a compile gate, never released.
+# Direct workspace dependencies still fail on unmaintained.
+unmaintained = "workspace"
+ignore = [
+    # slice-ring-buffer double-frees, pulled in solely by minimp3 — a
+    # DEV-ONLY decoder used by vault_buddy_capture's tests to verify
+    # encoded MP3s. Never compiled into a shipped binary. Tracked in
+    # docs/Gaps.md (replace minimp3 in tests to clear this).
+    { id = "RUSTSEC-2025-0044", reason = "dev-only test decoder (minimp3), not shipped" },
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    # LAME MP3 encoder bindings (mp3lame-encoder / mp3lame-sys) — the one
+    # copyleft production dependency, a deliberate choice for the capture
+    # domain. See docs/Gaps.md for the LGPL static-linking compliance note.
+    "LGPL-3.0",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# Our own unpublished workspace crates carry no license metadata; they are
+# marked publish = false and skipped here.
+private = { ignore = true }
+
+[bans]
+# Duplicate major versions are common in the tauri tree; informational only.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

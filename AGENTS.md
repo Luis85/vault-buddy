@@ -1,17 +1,120 @@
 # AGENTS.md
 
-Operating guide for coding agents working in this repository. The
-human-facing equivalents are [README.md](README.md) (what the product does),
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (contributor setup, CI, releases)
-and [docs/PRD.md](PRD%20-%20Product%20Vision.md) (vision, principles, roadmap). Design specs
-live in [docs/superpowers/specs/](docs/superpowers/specs/).
+Operating guide for coding agents working in this repository: what the app
+is, how the pieces fit together, where everything lives, the invariants you
+must not break, and the conventions the repo runs on. Read the sections
+relevant to the area you're changing before touching it — most of the prose
+here documents a failure mode somebody already hit.
 
-Vault Buddy is a Windows desktop companion for Obsidian: a Tauri v2 shell
-(Rust) hosting a Vue 3 + Pinia + Tailwind 4 frontend. A tiny always-on-top
-transparent window shows an animated buddy; clicking it expands a panel that
-lists Obsidian vaults and opens them via `obsidian://` URIs. Browsing never
-writes into a vault; the opt-in capture and transcription paths are the only
-writers (recordings, companion notes, transcript sidecars).
+## Table of contents
+
+- [What Vault Buddy is](#what-vault-buddy-is)
+- [Documentation map](#documentation-map)
+- [Repository map](#repository-map)
+- [What compiles where (read this first)](#what-compiles-where-read-this-first)
+- [Commands](#commands)
+- [Architecture overview](#architecture-overview)
+  - [The IPC surface](#the-ipc-surface)
+  - [Events (Rust → webviews)](#events-rust--webviews)
+  - [Key data flows](#key-data-flows)
+  - [Where state lives on disk](#where-state-lives-on-disk)
+- [The window system (most invariant-heavy area)](#the-window-system-most-invariant-heavy-area)
+- [The vault domain](#the-vault-domain-core-crate--vaults-store)
+- [The capture domain](#the-capture-domain-src-tauricapture--capture_commandsrs--capture-store)
+- [The transcription & recordings domains](#the-transcription--recordings-domains-src-tauritranscribe--coresrctranscriptrecordingsrs--transcriptionrs)
+- [The tasks domain](#the-tasks-domain-coresrctasksrs--task_commandsrs--tasksvue)
+- [The search domain](#the-search-domain-coresrcsearchrs--search_commandsrs--searchvue)
+- [Updater flow](#updater-flow-srcstoresupdatests-updatesettingsvue)
+- [Diagnostics invariants](#diagnostics-invariants)
+- [Frontend state](#frontend-state)
+- [Testing conventions](#testing-conventions)
+- [Conventions](#conventions)
+- [CI](#ci)
+- [Releases](#releases)
+- [Known gaps](#known-gaps)
+
+## What Vault Buddy is
+
+Vault Buddy is a **Windows desktop companion for Obsidian**: a Tauri v2
+shell (Rust) hosting a Vue 3 + Pinia + Tailwind 4 frontend. A tiny
+always-on-top transparent window shows an animated buddy character;
+clicking it opens a panel that lists the user's Obsidian vaults and opens
+them (or today's daily note) via `obsidian://` URIs. On top of that base
+the app has grown four vertical domains:
+
+- **Capture** — one-click meeting/voice-note recording (cpal + WASAPI
+  loopback → streaming LAME MP3) saved into a vault folder with an optional
+  companion note.
+- **Transcription** — opt-in, fully local speech-to-text (whisper.cpp via
+  `whisper-rs`) run after a recording, writing a transcript sidecar the
+  note embeds; plus a read-only recordings browser.
+- **Tasks** — a per-vault todo list over `type: Task` markdown documents.
+- **Search** — cross-vault, read-only, on-demand filename + content search.
+
+The product principles that shape the code: **local-first** (no accounts,
+no cloud; models download once and inference is offline), **the vault is
+sacred** (browsing never writes; the few sanctioned write paths are listed
+per-domain below and defend themselves with never-clobber discipline), and
+**human in control** (updates and transcription are user-initiated or
+opt-in; every launched URI is logged as an audit trail). The long-term
+vision (knowledge lifecycle, MCP hub, plugins) lives in the PRD — the code
+here is deliberately only the shipped increments.
+
+## Documentation map
+
+| Document | What it holds |
+| --- | --- |
+| [README.md](README.md) | What the product does, install, usage — user-facing |
+| [AGENTS.md](AGENTS.md) (this file) | Agent operating guide — keep it (not CLAUDE.md) up to date when the repo changes |
+| [CLAUDE.md](CLAUDE.md) | Thin pointer at this file for Claude Code |
+| [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Contributor setup, build prerequisites, CI/release pipelines, logs & crash reporting, capture config reference |
+| [docs/PRD - Product Vision.md](docs/PRD%20-%20Product%20Vision.md) | Vision, principles, capability roadmap |
+| [docs/prds/](docs/prds/) | Per-domain PRDs (knowledge intake, task management, …) |
+| [docs/use-cases/](docs/use-cases/) | One file per use case, reconciled against reality on each release |
+| [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
+| [docs/superpowers/plans/](docs/superpowers/plans/) | Dated implementation plans that executed those specs |
+| [docs/Gaps.md](docs/Gaps.md) | The audited backlog of known issues, weaknesses, tech debt, and untested paths — check it before "discovering" a known problem, extend it when you find a new one |
+
+## Repository map
+
+```
+vault-buddy/
+├── AGENTS.md / CLAUDE.md / CONTEXT.md / README.md
+├── index.html                  # single HTML entry — all three windows load it
+├── package.json / vite.config.ts / tsconfig.json
+├── .github/workflows/          # ci.yml, release.yml, bump-version.yml
+├── .claude/                    # vendored superpowers skills + SessionStart hook
+├── docs/                       # see the documentation map above
+├── scripts/                    # bump-version.mjs, setup-linux-deps.sh, make-icon.mjs
+├── src/                        # Vue 3 frontend — ONE bundle, three window roots
+│   ├── main.ts                 # mounts rootFor(window label)
+│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot + rootFor() map
+│   ├── components/             # panel views + buddy character (ActionPanel is the shell)
+│   ├── stores/                 # Pinia: vaults, capture, updates, settings, notifications
+│   ├── composables/            # settings sync, startup update check, bubble, announcements
+│   └── utils/                  # highlight, recentSearches, formatDuration
+├── src-tauri/                  # Rust workspace: root shell crate + 3 member crates
+│   ├── tauri.conf.json         # the 3 windows, updater endpoint, version
+│   ├── capabilities/           # single default capability (all 3 windows)
+│   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
+│   │                           #   capture_commands.rs, transcription.rs, task_commands.rs,
+│   │                           #   search_commands.rs, tray.rs, diagnostics.rs, main.rs
+│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, tasks,
+│   │                           #   transcript, recordings, capture_{config,note,paths},
+│   │                           #   companion_placement, checkpoint, app_diagnostics,
+│   │                           #   vault_walk, crash, throttle, sync_util
+│   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
+│   │                           #   recovery, rename
+│   └── transcribe/src/         # STT: decode (Symphonia), model (download+verify),
+│                               #   engine (whisper-rs FFI), lib (orchestration)
+└── tests/                      # Vitest suite (happy-dom + mockIPC, no Tauri runtime)
+```
+
+Rule of thumb for where logic goes: **anything that doesn't need Tauri
+types belongs in `core`** (testable everywhere), audio-engine mechanics in
+`capture`, STT mechanics in `transcribe`, and the shell only wires domains
+to windows, threads, and IPC.
 
 ## What compiles where (read this first)
 
@@ -19,13 +122,14 @@ The Rust code is deliberately split so agents can work outside Windows:
 
 | Path | What it is | Compiles on |
 | --- | --- | --- |
-| `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection. No GUI deps. | Anywhere — test and lint locally |
-| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere with default features (no whisper.cpp); the `whisper` feature + real engine build on **Windows** (CI gate). |
-| `src-tauri/` (root crate) | Tauri shell: window, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
+| `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection, placement math, all vault-write logic. No GUI deps. | Anywhere — test and lint locally |
+| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows |
+| `src-tauri/capture/` | Audio engine (cpal, LAME). | Anywhere (Linux needs `libasound2-dev`); the WASAPI loopback block is Windows-only, compile-gated |
+| `src-tauri/` (root crate) | Tauri shell: windows, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
-When you change the shell crate (`src-tauri/src/*.rs`), you *can* now compile
-it in a Linux container as a compile gate: run `npm run setup:linux` once (it
+When you change the shell crate (`src-tauri/src/*.rs`), compile it in a
+Linux container as a compile gate: run `npm run setup:linux` once (it
 installs the WebView/GTK/tray system libs — the single source of truth is
 `scripts/setup-linux-deps.sh`), then `npx tauri build --no-bundle`. This
 catches type errors, IPC signature drift, and missing `cfg` gates locally
@@ -46,41 +150,152 @@ npm run dev                         # Vite dev server only
 npm run test-build                  # `tauri dev` — full app, Windows only
 npx tauri build                     # real installer build (Windows only)
 
+# Frontend quality gates — CI runs these in this order; check:quality must
+# run with NO coverage/ dir present, so test:coverage goes last (see
+# docs/DEVELOPMENT.md § Quality pipeline for the gate + ratchet policy)
+npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage
+
 cd src-tauri && cargo fmt --check   # rustfmt gate (whole workspace)
 cd src-tauri/core && cargo clippy --all-targets -- -D warnings
 cd src-tauri/core && cargo test
+# capture and transcribe test the same way (capture needs libasound2-dev
+# on Linux); transcribe's whisper tests: cargo test --features whisper
+
+# Rust quality gates (CI: machete/coverage/deny in rust-core; workspace
+# clippy + shell tests in linux-app — the shell needs `npm run setup:linux`
+# and a built ../dist first; see docs/DEVELOPMENT.md § Rust quality gates)
+cd src-tauri && cargo machete .
+cd src-tauri && cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+cd src-tauri && cargo deny check
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
+cd src-tauri && cargo test -p vault-buddy --lib
 ```
+
+Gate mechanics in brief: ESLint severity is staged (backlogged rules sit at
+`warn`, promoted to `error` at zero — never blanket-disabled); the LOC
+guard (`scripts/loc-baseline.json`) and fallow quality ratchet
+(`scripts/quality-baseline.json`) are shrink-only baselines — when your
+change improves a metric, re-run the gate with `--update` and commit the
+baseline in the same PR; coverage floors in `vite.config.ts` rise the same
+way. Loosening any baseline is a reviewed decision that needs a
+justification in the PR.
 
 Gotcha: in anything automated, invoke the tauri CLI as `npx tauri <cmd>`,
 never through npm script indirection — a past `tauri` script aliased
 `tauri dev`, and `npm run tauri build` expanded to `tauri dev build`, which
 launched the app on the CI runner and never exited.
 
-## Architecture
+## Architecture overview
 
-### IPC surface (Rust commands, registered in `src-tauri/src/lib.rs`)
+Three OS windows, one frontend bundle, one Rust process:
 
-`list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`,
-`toggle_panel`, `close_panel`, `close_bubble`, `get_buddy_facing`,
-`get_bubble_anchor`, `announce`, `start_buddy_drag`, `show_buddy_menu`,
-`open_logs_folder`, `rearm_crash_detection`, plus the capture surface:
-`capture_status`, `start_capture`, `stop_capture`, `pause_capture`,
-`resume_capture`, `get_capture_config`, `set_capture_config`,
-`list_audio_devices`, `rename_capture`, the recordings/transcription
-surface: `list_recordings`, `open_recording`, `open_transcript`,
-`retranscribe`, `transcribe_recording_now`, and the tasks surface:
-`get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
-`set_task_status`, `count_open_tasks`, `open_task`, `update_task` —
-commands live in `src-tauri/src/commands.rs`,
-`src-tauri/src/capture_commands.rs`, and `src-tauri/src/task_commands.rs`.
-Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
-are handled in `lib.rs`.
+```
+   ┌───────────────────────────── Rust shell (src-tauri/src) ─────────────────────────────┐
+   │  lib.rs: builder, plugins (single-instance FIRST), window events, 1 s metronome,     │
+   │          setup (crash handler → marker → restore → tray → recovery → transcriber)    │
+   │  commands.rs ── window placement/toggle, drag, vault open, updater prep, autostart   │
+   │  capture_commands.rs ── recording lifecycle + device/monitor/janitor threads         │
+   │  transcription.rs ── single-worker transcription queue + model download              │
+   │  task_commands.rs / search_commands.rs ── thin gates over core::tasks / core::search │
+   │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
+   └──────┬───────────────────────────┬───────────────────────────┬───────────────────────┘
+          │ IPC commands + events     │                           │
+   ┌──────┴──────┐             ┌──────┴──────┐             ┌──────┴──────┐
+   │ main (88²)  │             │ panel       │             │ bubble      │
+   │ BuddyRoot   │             │ PanelRoot   │             │ BubbleRoot  │
+   │ character,  │             │ ActionPanel │             │ greeting /  │
+   │ drag, dots  │             │ all views   │             │ announce    │
+   └─────────────┘             └─────────────┘             └─────────────┘
+      each webview = own Pinia; cross-window sync = Tauri events + localStorage `storage`
 
-The app is single-instance (`tauri-plugin-single-instance`, registered
-FIRST in the builder — keep it first): a second launch exits immediately
-and the surviving instance reveals the buddy instead.
+   pure logic lives below the shell:
+   core (vault domain, placement, writers)   capture (audio)   transcribe (STT)
+```
 
-### The window system (most invariant-heavy area)
+- The **frontend never touches the filesystem or windows directly** — every
+  effect goes through an IPC command; every state change Rust owns comes
+  back as an event.
+- **Sync commands run on the main thread** (that is why window-touching
+  commands are sync and `search_vaults` is async — see the window system
+  section).
+- The app is **single-instance** (`tauri-plugin-single-instance`, registered
+  FIRST in the builder — keep it first): a second launch exits immediately
+  and the surviving instance reveals the buddy instead.
+
+### The IPC surface
+
+All 40 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+Keep this table in sync when adding/removing commands.
+
+| Defined in | Commands |
+| --- | --- |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, `get_autostart`, `set_autostart` |
+| `capture_commands.rs` | `start_capture`, `stop_capture`, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings`, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` |
+| `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks` |
+| `search_commands.rs` | `search_vaults` (**the only async command** — deliberate, see search), `open_search_result` |
+
+`get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
+`tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
+item events are handled in `lib.rs`.
+
+### Events (Rust → webviews)
+
+All emitted app-wide (`app.emit`); listeners noted are the windows that
+actually subscribe.
+
+| Event | Meaning | Listened to by |
+| --- | --- | --- |
+| `panel-shown` | Panel window just opened (the precise "opened" signal) | PanelRoot (refresh), BubbleRoot (dismiss) |
+| `buddy-facing` | Buddy crossed the screen midline (deduped) | BuddyRoot |
+| `bubble-anchor` | `{side, valign}` for the bubble tail | BubbleRoot |
+| `bubble-message` | Text for the bubble to show | BubbleRoot |
+| `buddy-toggle-animation` / `buddy-toggle-dragging` | Context-menu toggles | BuddyRoot |
+| `capture:started/paused/resumed/saved/failed/warning` | Recording lifecycle | capture store (init in BuddyRoot **and** PanelRoot) |
+| `capture:level` | Mic level ~5 Hz, 0–1, advisory & lossy | capture store |
+| `capture:transcribing/transcribeProgress/transcribed/transcribeSkipped/transcribeFailed/transcribeCancelled` | Transcription job lifecycle (each carries the `mp3`) | capture store |
+| `capture:modelDownload` / `capture:modelReady` | Whisper model download progress / ready | capture store |
+
+### Key data flows
+
+- **Vault open**: `VaultList.vue` → `vaults` store `runAction` →
+  `invoke("open_vault", {id})` → `commands.rs::open_vault` → `core::uri`
+  (by ID, never name; percent-encoded; `uri::launch` logs) → OS → Obsidian.
+  Success closes the panel; failure keeps it open with the error banner.
+- **Recording**: `RecordMode.vue` → capture store `start()` →
+  `start_capture` (reserves names under the `CaptureState` mutex, spawns
+  the named `capture-device` worker) → `capture::session` streams MP3 into
+  an exclusive-created `.mp3.part` → stop finalizes via `rename_noreplace`
+  + collision retry → companion note written atomically → the monitor
+  thread enqueues transcription if the vault opted in.
+- **Transcription**: `transcription.rs` single `transcribe-worker` thread
+  pops `TranscriptionJob { mp3, vault_id, force }` one at a time →
+  `ensure_model` (download + SHA-256 verify on first use) →
+  `transcribe::transcribe_recording` (Symphonia decode → whisper) →
+  sidecar written via `core::transcript` marker rules.
+- **Search**: `Search.vue` (300 ms debounce + monotonic ticket) → async
+  `search_vaults` → `spawn_blocking` → `core::search` parallel per-vault
+  scoped threads → merged, capped results → `open_search_result`
+  (optionally pinning the panel open for Ctrl-multi-open).
+- **Task toggle**: `Tasks.vue` optimistic flip (per-row in-flight set) →
+  `set_task_status` → containment gates → `core::tasks::set_status`
+  surgical frontmatter edit → atomic replacing write.
+- **Update**: see [Updater flow](#updater-flow-srcstoresupdatests-updatesettingsvue).
+
+### Where state lives on disk
+
+| State | Location |
+| --- | --- |
+| Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
+| Per-vault capture/tasks settings | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse) |
+| Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` (pinned Hugging Face URLs + SHA-256) |
+| Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
+| Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
+| Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
+| Recent searches | localStorage `vault-buddy:recent-searches` (cap 5) |
+| Updater feed | `https://github.com/Luis85/vault-buddy/releases/latest/download/latest.json` |
+
+## The window system (most invariant-heavy area)
 
 Three separate always-on-top transparent windows, so the buddy window never
 resizes. The old design was one window that grew from 88×88 to hold the
@@ -120,7 +335,12 @@ mount, then flips on a `buddy-facing` event that Rust emits (deduped, from the
 `Moved` handler + startup poll) only when the buddy crosses the screen midline
 — so the character always looks toward the center. A `BUBBLE_TUCK_FRAC` overlap
 (a fraction of the buddy width, so it scales with DPI) pulls the bubble into
-the buddy window's transparent padding so it sits snug against the character. While the greeting is up, the
+the buddy window's transparent padding so it sits snug against the character.
+`show_bubble` refuses to reveal while the buddy (`main`) is hidden and returns
+whether it showed — hidden-to-tray hides ALL windows, so every announcer
+(startup update check, transcription progress, the greeting's post-settle
+show) is silenced at this one reveal chokepoint, and `announce` skips its
+`bubble-message` emit when suppressed. While the greeting is up, the
 buddy's `Moved` handler re-runs `place_beside_buddy` for the bubble
 (`reposition_bubble_if_visible`, keyed on the `main` window and gated on the
 bubble being visible) and re-emits the anchor, so the bubble *follows* a drag
@@ -128,10 +348,12 @@ and its tail flips live when the buddy crosses the midline or an edge — a
 main-thread, lock-free `set_position` that touches no window-state cache lock,
 so it cannot recreate the off-main save-vs-`Moved` deadlock. The
 greeting is shown via `schedule_show_bubble`
-(a ~250 ms worker-thread settle, then a main-thread `show_bubble`), not
+(a short worker-thread settle, then a main-thread `show_bubble`), not
 synchronously in `setup`: the window-state plugin restores the buddy's parked
 position slightly after setup, and a synchronous placement would anchor the
-bubble to the buddy's pre-restore default corner. Invariants:
+bubble to the buddy's pre-restore default corner.
+
+Invariants:
 
 - **Window show/hide and the placement getters run on the MAIN thread only.**
   `toggle_panel`, `close_panel`, `close_bubble` are *synchronous* commands
@@ -143,7 +365,9 @@ bubble to the buddy's pre-restore default corner. Invariants:
   precise "opened" signal — `PanelRoot` re-runs discovery and picks its view on
   it (window focus is a leaky proxy that also fires on a mere refocus). Every
   exit path and the updater reuse these commands — there is no offset/shift to
-  undo, because the buddy never moves to make room.
+  undo, because the buddy never moves to make room. The flip side: **a sync
+  command must never block** — long work belongs on a worker thread or in an
+  async command (see docs/Gaps.md for the current violations).
 - **The panel closes itself when focus really leaves the app.**
   `schedule_focus_out_check` is fired only from the **panel** window's
   `WindowEvent::Focused(false)` (keyed on `window.label() == "panel"`): only
@@ -161,7 +385,14 @@ bubble to the buddy's pre-restore default corner. Invariants:
   thread, where a panic aborts across the WebView2 FFI boundary). The check
   only ever HIDES, never shows, so it can never fight `toggle_panel` into a
   reopen: a buddy click that closed the panel leaves the deferred check a
-  no-op.
+  no-op. One sanctioned exception to the hide: a **Ctrl-open pin**
+  (`PANEL_PIN_UNTIL`, stamped by `open_search_result` with `keep_open`)
+  makes the check decline the hide for ~3 s — Obsidian grabs foreground
+  focus while handling the launched `obsidian://` URI, and that grab IS the
+  blur being sampled; without the pin the multi-open flow the user
+  explicitly requested would collapse after the first result. The pin
+  expires on its own and never shows anything, so the only-hide invariant
+  stands.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -172,9 +403,10 @@ bubble to the buddy's pre-restore default corner. Invariants:
   webview but need not surface as `WM_LBUTTONDOWN`), so the frontend passes
   the pointer type. The command returns whether the drag actually started, and
   the frontend refuses to start one from a pointermove whose button is already
-  up. Dragging the buddy closes the panel (`BuddyRoot` invokes `close_panel`
-  on drag-start): the panel is its own window now, so it simply hides instead
-  of riding the buddy along.
+  up. (The `GetKeyState` re-check is Windows-only; the Linux compile-gate
+  build skips it.) Dragging the buddy closes the panel (`BuddyRoot` invokes
+  `close_panel` on drag-start): the panel is its own window now, so it
+  simply hides instead of riding the buddy along.
 - **Window-state saves and window getters run on the MAIN thread only.**
   `save_window_state` takes the plugin's cache lock and then reads window
   geometry; the plugin's Moved listener takes the same lock on the main
@@ -203,42 +435,30 @@ bubble to the buddy's pre-restore default corner. Invariants:
   `tray::hide_buddy`, which hides all three windows (`panel`, `bubble`,
   `main`) and no-ops mid-recording (the buddy is the recording indicator).
 
-### Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
-
-Check → download (panel stays open so spinner/errors are visible) →
-`close_panel` (hide the panel window) → `prepare_update_install` (Rust saves
-the buddy position and stamps a clean shutdown) → `install()` → `relaunch()`.
-The buddy window never shifts, so there is no home position to restore. On
-failure the panel reopens on the settings view via `toggle_panel`, `available`
-is kept so the install button stays visible for retry, and
-`rearm_crash_detection` turns the run marker back on (the prepare step latched
-it off). The `Update` object is stored with `markRaw()` — a Vue reactive
-proxy breaks its private-field `rid` and every real install would throw.
-
-### The vault domain (core crate + `vaults` store)
+## The vault domain (core crate + `vaults` store)
 
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. Two sanctioned write paths exist,
-both below: the capture domain, which stores recordings and their companion
-notes under strict safety rules; see
-`docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`.
-The transcription worker (increment 3) adds a second sanctioned write, a
-`<base>.transcript.md` sidecar the note embeds, extending the same write
-path rather than inventing a new one — same never-clobber/atomic rules, and
-a `vault-buddy-transcript: pending/failed/complete` frontmatter marker means
-only `pending`/`failed` sidecars are ours to replace, so a completed
-transcript or a user's hand edit is never overwritten; see
-`docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`.
-The tasks domain (below) adds two more sanctioned writes under the same rules —
-creating a task document (collision-safe) and a surgical multi-key frontmatter
-field write (status toggle, rename, due/priority edit — all one generalized
-writer) — see
-`docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`
-and `docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md`.
-Any other code touching vault contents directly is a design change, not a
-patch.
+logged (`uri::launch`) as the audit trail. Four sanctioned write paths
+exist, each documented in its own domain section below:
+
+1. the **capture** domain — recordings and companion notes;
+2. the **transcription** domain — the `<base>.transcript.md` sidecar;
+3. the **tasks** domain — creating a task document (collision-safe);
+4. the **tasks** domain — the surgical multi-key frontmatter field write
+   (status toggle, rename, due/priority/tags edit — one generalized writer).
+
+All four ride the same never-clobber/atomic machinery in
+`core::capture_note` / `core::capture_paths` (exclusive-create temps,
+`rename_noreplace`, suffix retry). Any other code touching vault contents
+directly is a design change, not a patch. Design specs:
+`docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`,
+`docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`,
+`docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`,
+`docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md`,
+`docs/superpowers/specs/2026-07-09-task-tags-design.md`,
+`docs/superpowers/specs/2026-07-10-task-aggregation-design.md`.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
 `list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
@@ -277,7 +497,7 @@ Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
   now" header (flat list when nothing is open); the name/path filter only
   appears above 5 vaults.
 
-### The capture domain (`src-tauri/capture/` + `capture_commands.rs` + `capture` store)
+## The capture domain (`src-tauri/capture/` + `capture_commands.rs` + `capture` store)
 
 One-click meeting/voice recording into the vault (Knowledge Intake,
 increment 2). `vault_buddy_capture` owns the audio engine: cpal devices
@@ -322,18 +542,27 @@ found the failure it prevents:
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
 
-### The transcription & recordings domains (`src-tauri/transcribe/` + `core/src/{transcript,recordings}.rs` + `capture_commands.rs`)
+## The transcription & recordings domains (`src-tauri/transcribe/` + `core/src/{transcript,recordings}.rs` + `transcription.rs`)
 
 Local speech-to-text runs *after* a recording, never live. `vault_buddy_transcribe`
 owns the pipeline: MP3→16 kHz mono PCM (Symphonia) → whisper.cpp via `whisper-rs`
-(behind the `whisper` feature — the real engine is Windows-only, CI-gated) → a
-rendered transcript. The shell (`capture_commands.rs`) drives it through a single
-worker queue — `enqueue_transcription` / `process_transcription`, one
+(behind the `whisper` feature — the shipped engine is Windows-built; the FFI
+regression tests run in the Linux `rust-core` CI job) → a rendered transcript.
+The shell (`transcription.rs`) drives it through a single worker queue —
+`enqueue_transcription` / `process_transcription`, one
 `TranscriptionJob { mp3, vault_id, force }` at a time — so jobs never run
-concurrently and the model loads once per tier. The model downloads on demand
-(`ensure_model` → `download_model`, progress via `capture:modelDownload`); tier +
-language come from the vault config. State is surfaced as `capture:transcribing` /
-`capture:transcribed` / `capture:transcribeFailed` (each carries the `mp3`).
+concurrently and the model loads once per tier. The queue dedups, supports
+force/rerun and cancellation (`cancel_transcription`), and is observable via
+`transcription_queue_status`; the worker yields while a recording is active.
+The model downloads on demand (`ensure_model` → `download_model`, pinned
+Hugging Face URL + pinned SHA-256 + size floor, progress via
+`capture:modelDownload`, cancellable, `.part`-then-rename); tier + language
+come from the vault config. State is surfaced as `capture:transcribing` /
+`transcribeProgress` / `transcribed` / `transcribeSkipped` /
+`transcribeFailed` / `transcribeCancelled` (each carries the `mp3`).
+`whisper-rs` is pinned at 0.16 deliberately — `transcribe/src/engine.rs`
+hand-wires abort/progress callbacks around upstream bugs; treat an upgrade
+as its own tracked change (see docs/DEVELOPMENT.md).
 
 The transcript is the second sanctioned vault write — a `<base>.transcript.md`
 sidecar the note embeds, under the same never-clobber discipline as the audio
@@ -354,7 +583,8 @@ note (`core::transcript`):
   the final write, so it regenerates even a `complete` transcript — but the
   up-front "transcribing…" placeholder is skipped when the sidecar is already
   `Complete`, so a forced job that fails mid-flight leaves the original intact
-  (the UI confirms before replacing a finished transcript).
+  (the UI confirms before replacing a finished transcript). (Note: the panel
+  currently routes all retries through `retranscribe`; see docs/Gaps.md.)
 - **Recovery backfill.** `pending_transcriptions` scans the dated `YYYY/MM`
   capture layout for capture-named MP3s whose sidecar is missing, or a `pending`
   placeholder from an attempt that didn't get to finish (e.g. a crash
@@ -373,11 +603,11 @@ by type. Opening a row hands off to Obsidian via `open_recording` /
 `open_transcript` (`obsidian://`, read-only, `uri::launch`-logged) — it never
 writes.
 
-### The tasks domain (`core/src/tasks.rs` + `task_commands.rs` + `Tasks.vue`)
+## The tasks domain (`core/src/tasks.rs` + `task_commands.rs` + `Tasks.vue`)
 
 A per-vault todo list over `type: Task` markdown documents (v0.5.0). A Task is
 its own document — Obsidian-Properties/Dataview-compatible frontmatter, not an
-inline checklist:
+inline checklist (see CONTEXT.md for the Task / Task Tag / Todo distinction):
 
 ```
 ---
@@ -467,16 +697,17 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   preserves `tasks_folder` (read under `ConfigWriteLock`) so saving capture
   settings can't reset it.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
-  tasks organized into subfolders are all surfaced. `collect_tasks` descends
-  only after canonicalizing each child directory and confirming it stays under
-  the canonical tasks root (a symlink/junction escaping the folder is skipped;
-  a reparse cycle is bounded by a walked-set), and skips dot-directories
-  (`.obsidian`/`.trash`/`.git`). The sort stays clock-free: open tasks
-  (`status != "done"`) first, then due ascending (no/unparseable due sorts
-  last), then priority tier (high < normal < low), then newest `created`, then
-  title; done tasks ignore due and sort by newest `created` then title.
-  "Overdue"/"Today" need a clock, so date-bucket grouping is deliberately the
-  frontend's job, not the sort's.
+  tasks organized into subfolders are all surfaced. The recursive walk is the
+  shared `core::vault_walk` helper — canonical containment (a
+  symlink/junction escaping the folder is skipped), a walked-set bounding
+  reparse cycles, dot-directory skips (`.obsidian`/`.trash`/`.git`) — with
+  the per-file `type: Task` filter in `tasks.rs`. The sort stays clock-free:
+  open tasks (`status != "done"`) first, then due ascending (no/unparseable
+  due sorts last), then priority tier (high < normal < low), then newest
+  `created`, then title; done tasks ignore due and sort by newest `created`
+  then title. "Overdue"/"Today" need a clock, so date-bucket grouping is
+  deliberately the frontend's job, not the sort's. `count_open_tasks` powers
+  the vault-row badge.
 - **`open_task(id, path)`** is a read-only Obsidian handoff for the row's
   title click, mirroring `open_recording`: canonicalize + require containment
   inside the vault's tasks root, compute the vault-relative path against the
@@ -551,7 +782,73 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `busy` guard still serializes writes for the underlying task across all its
   rendered rows.
 
-### Diagnostics invariants
+## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
+
+Cross-vault, read-only, on-demand search (no index): `core::search::search_vaults`
+walks every registered vault via the shared `core::vault_walk` helper
+(canonical containment, cycle set, dot-dir skips, deterministic name-ordered
+walk — single-sourced with the tasks scan), matching case-insensitive
+substrings against note stems + note content (notes are **any-case** `.md`;
+content ≤ 1 MiB UTF-8 with one whole-file-lowercase early-out — larger/binary
+files match by name only) and attachment filenames. **Extensionless files
+are excluded** (Obsidian doesn't index them; opening one would resolve to
+the like-named note). Hard caps: 2-char minimum query (code points — the
+frontend gate counts the same way), 100 hits globally (`truncated` flag →
+"refine your query" footer). "Filename matches surface before content-only
+matches" is a **hard guarantee**: per vault, two independently-capped class
+lists; a full content list stops content *reads* but names are checked to
+the vault's end. Each hit carries `is_note` and the ready-made
+`obsidian://open` `file` parameter (extension dropped only for exactly-`.md`
+notes, kept otherwise — a `.MD` note opens by exact path);
+`open_search_result` launches it via `uri::launch` — search never writes.
+`search_vaults` (command) is deliberately **async** (sync commands run on
+the main thread; a content scan there would freeze window show/hide and
+drags), wraps the walk in `spawn_blocking`, touches no window APIs and no
+locks, and returns `Result` — an infrastructure failure rejects so the
+panel keeps its previous results instead of blanking. Each call bumps a
+scan-generation atomic that the core walk polls per file
+(`search_vaults_with_cancel`), so superseded scans abort; per-vault scans
+run in parallel on **named** scoped threads and merge in vault order
+(serial-identical output). Core search types derive camelCase `Serialize`
+and cross the IPC boundary directly (no DTO layer — `discovery::Vault`
+precedent). The panel's `search` view (parent: the vault list) is a
+self-contained `Search.vue` — 300 ms debounce, monotonic request ticket
+against stale responses, vault-grouped rows with count chips and
+note/attachment icons, `HighlightText` (index-based, never a RegExp from
+user input), and keyboard navigation over the **visible** rows only
+(collapsed groups and kind-filtered hits are skipped; arrows move a clamped
+selection wired to `aria-activedescendant`, Enter opens it, Ctrl+Enter /
+Ctrl+click keep the panel open for multi-open — `keep_open` travels to Rust,
+which pins the panel through Obsidian's focus grab (see the focus-out check
+above) — hover syncs the selection via mousemove, not mouseenter, which
+would fight arrow-key scrolling).
+`/` or Ctrl+F on the vault list jump into search (`ActionPanel`'s
+window-keydown, gated on the list view and off text inputs). The view also
+renders an aria-live match summary ("N matches in M vaults", `100+` when
+truncated), per-vault collapse chevrons, All/Notes/Files filter chips
+(client-side over the returned hits), and recent-search chips backed by
+localStorage (`src/utils/recentSearches.ts`, capped at 5, recorded only on
+successful responses).
+
+## Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
+
+Check → download (panel stays open so spinner/errors are visible) →
+`close_panel` (hide the panel window) → `prepare_update_install` (Rust saves
+the buddy position and stamps a clean shutdown) → `install()` → `relaunch()`.
+The buddy window never shifts, so there is no home position to restore. On
+failure the panel reopens on the settings view via `toggle_panel`, `available`
+is kept so the install button stays visible for retry, and
+`rearm_crash_detection` turns the run marker back on (the prepare step latched
+it off). The `Update` object is stored with `markRaw()` — a Vue reactive
+proxy breaks its private-field `rid` and every real install would throw.
+A quiet startup check (`useStartupUpdateCheck`, installed by PanelRoot only,
+gated by the `checkUpdatesOnStart` setting, ~15 s settle for login networking)
+runs `checkForUpdatesQuietly`: zero trace when current or failed (phase stays
+`idle`, failures only log); on an available update the buddy announces via
+bubble and `requestViewOnNextOpen("settings")` arms the next panel open to
+land on the install UI without yanking an already-open panel.
+
+## Diagnostics invariants
 
 - Every spawned thread is named (`std::thread::Builder`) — crash records
   must identify the dying thread.
@@ -566,7 +863,11 @@ removes the line (or block) entirely, same "absent means gone" semantics as
 - The panic hook + native crash handler are installed before the
   builder — nothing may be moved ahead of them.
 
-### Frontend state
+Where the artifacts land (log files, crash records, the run marker, and
+what an unclean-shutdown notification means) is documented for humans in
+docs/DEVELOPMENT.md § Logs & crash reporting.
+
+## Frontend state
 
 Each window loads the same bundle and mounts a different root by its label:
 `main.ts` reads `getCurrentWindow().label` and `rootFor(label)`
@@ -594,30 +895,32 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks`, with `captureSettingsVaultId` / `recordingsVaultId` /
-`recordModeVaultId` / `tasksVaultId`) because that must survive the panel window
-being hidden. Views form a fixed one-parent-per-view tree (no history stack):
-the vault-row capture button `openRecordMode`s (Meeting / Voice Note / Browse
-recordings), `openRecordings` opens the read-only list, the vault-row Tasks
-button `openTasks` opens the per-vault todo view, and `back()` returns to the
-immediate parent (`recordings` → record view, everything else → the list) — the
-header renders the cog (buddy settings) on the list and a ← back button on every
-other view.
+transcriptions | tasks | search`, with `captureSettingsVaultId` /
+`recordingsVaultId` / `recordModeVaultId` / `tasksVaultId`) because that must
+survive the panel window being hidden. Views form a fixed one-parent-per-view
+tree (no history stack): the vault-row capture button `openRecordMode`s
+(Meeting / Voice Note / Browse recordings), `openRecordings` opens the
+read-only list, the vault-row Tasks button `openTasks` opens the per-vault
+todo view, the header's magnifier `openSearch`es the cross-vault search view,
+and `back()` returns to the immediate parent (`recordings` → record view,
+everything else → the list) — the header renders the magnifier + cog (buddy
+settings) on the list and a ← back button on every other view.
 
 Other Pinia stores: `updates` (phase machine:
 idle/checking/upToDate/available/installing/error), `settings` (buddy
-character/animation, persisted to localStorage), and `capture` (recording
-state mirrored from Rust: `paused`, `pausedTotalMs`, `pausedSinceMs`, `level`,
-`vaultId`, `lastSaved`, plus transcription state `transcribing` /
-`transcribingVaultId` driven by
-`capture:transcribing`/`transcribed`/`transcribeFailed`).
+character/animation/message duration, persisted to localStorage), `capture`
+(recording state mirrored from Rust: `paused`, `pausedTotalMs`,
+`pausedSinceMs`, `level`, `vaultId`, `lastSaved`, plus the transcription
+job map and active/queued state driven by the `capture:transcribe*` events),
+and `notifications` (the toast queue rendered by `NotificationHost`).
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture
 level/state; `panel-shown`), and localStorage `storage` events — a settings
 change in one window fires `settings.syncFromStorage()` in the others (via the
-shared `useSettingsStorageSync` composable, installed by the buddy and panel
-roots that read settings) so they re-read character/animation without an IPC
+shared `useSettingsStorageSync` composable, installed by the buddy, panel, and
+bubble roots that read settings — the bubble resolves `messageDuration` at
+show time) so they re-read character/animation/duration without an IPC
 round-trip.
 
 ## Testing conventions
@@ -626,10 +929,14 @@ round-trip.
   Tauri IPC is mocked with `mockIPC` from `@tauri-apps/api/mocks`; plugin
   modules are mocked with `vi.mock` + `vi.hoisted`. Tests must never require
   a real Tauri runtime.
-- Rust unit tests sit next to the code in `src-tauri/core/` and
-  `src-tauri/capture/`; keep new logic in the core crate whenever it doesn't
-  need Tauri types, precisely so it's testable everywhere. (`capture` needs
-  `libasound2-dev` on Linux for cpal — CI installs it.)
+- Rust unit tests sit next to the code in `src-tauri/core/`,
+  `src-tauri/capture/`, `src-tauri/transcribe/`, and the shell
+  (`src-tauri/src/transcription.rs` carries the queue's tests); keep new
+  logic in the core crate whenever it doesn't need Tauri types, precisely
+  so it's testable everywhere. (`capture` needs `libasound2-dev` on Linux
+  for cpal — CI installs it.) The member crates' tests run in the
+  `rust-core` CI job; the shell crate's own tests run in `linux-app` (they
+  need the GUI libs and a built `dist/`).
 - This repo practices TDD via the vendored superpowers skills
   (`.claude/skills/`, injected by a SessionStart hook): failing test first,
   then the fix. Regression tests name the failure mode in a comment.
@@ -643,10 +950,26 @@ round-trip.
 - **Comments:** explain constraints the code can't show (race windows,
   platform quirks, why an ordering matters) — not what the next line does.
   Match the existing density; this codebase comments invariants heavily.
+- **Terminology:** use the CONTEXT.md ubiquitous language (a Task is a
+  document; a Todo is a checklist line; a Capture is not necessarily
+  audio) in code, UI copy, and docs.
 - **PRs:** every PR gets an automated Codex review (chatgpt-codex-connector
-  bot) plus GitGuardian secret scanning. CI = frontend job + rust-core job,
-  then the Windows build. Treat bot findings as real leads: verify against
-  the code, fix what's confirmed, resolve the thread.
+  bot) plus GitGuardian secret scanning. CI = the four jobs below. Treat
+  bot findings as real leads: verify against the code, fix what's
+  confirmed, resolve the thread.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every PR:
+
+| Job | Runner | Gates |
+| --- | --- | --- |
+| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
+| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over the member crates, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`) |
+| `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
+| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; skips updater signing when secrets are absent (forks) |
+
+Not covered by CI (see docs/Gaps.md): any `cargo test` on Windows.
 
 ## Releases
 
@@ -667,3 +990,12 @@ the GitHub release itself either way. The workflow signs updater artifacts
 installed apps poll from Settings → Updates. CI builds without updater
 artifacts when the signing secrets are absent (forked PRs) instead of
 failing.
+
+## Known gaps
+
+The audited backlog — correctness bugs, invariant weaknesses, security and
+CI gaps, untested paths, and tech debt, each with file references and
+failure scenarios — lives in [docs/Gaps.md](docs/Gaps.md). Consult it
+before starting work in an area (your "new" bug may be catalogued, and its
+entry names the constraint a fix must respect), and update it when you fix
+an entry or find a new gap.

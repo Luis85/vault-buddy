@@ -1,9 +1,10 @@
-import { markRaw } from "vue";
-import { defineStore } from "pinia";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { defineStore } from "pinia";
+import { markRaw } from "vue";
+
 import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 
@@ -48,6 +49,27 @@ export const useUpdatesStore = defineStore("updates", {
         this.error = String(e);
         this.phase = "error";
         logWarning(`update check failed: ${String(e)}`);
+      }
+    },
+    /**
+     * The startup check: same happy path as checkForUpdates, but with zero
+     * user-visible trace unless an update actually exists. Up-to-date leaves
+     * the phase `idle` ("You're up to date." is a response to a user click,
+     * not something to find hours later), and a failure is logged but never
+     * surfaced — the user asked for silence, the log keeps the breadcrumb.
+     * Guarded to `idle` so it can never fight a manual check or an install.
+     */
+    async checkForUpdatesQuietly() {
+      if (this.phase !== "idle") return;
+      try {
+        const update = await check();
+        if (update) {
+          // same markRaw rule as checkForUpdates — see above
+          this.available = markRaw(update);
+          this.phase = "available";
+        }
+      } catch (e) {
+        logWarning(`quiet update check failed: ${String(e)}`);
       }
     },
     async installUpdate() {

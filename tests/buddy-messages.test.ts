@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
+
 import {
-  vaultOpenedMessage,
   dailyNoteOpenedMessage,
-  recordingStartedMessage,
+  failureMessage,
+  noteOpenedMessage,
   recordingPausedMessage,
   recordingResumedMessage,
   recordingSavedMessage,
-  transcribingMessage,
+  recordingStartedMessage,
   transcribedMessage,
-  failureMessage,
+  transcribingMessage,
+  updateAvailableMessage,
+  vaultOpenedMessage,
 } from "../src/buddyMessages";
 
 describe("buddyMessages", () => {
@@ -20,6 +23,11 @@ describe("buddyMessages", () => {
     // no dangling "Opening  ✨" with a hole where the name should be
     expect(vaultOpenedMessage("")).not.toMatch(/Opening\s{2,}/);
     expect(vaultOpenedMessage("   ").trim().length).toBeGreaterThan(0);
+  });
+
+  it("noteOpenedMessage names the note and falls back when blank", () => {
+    expect(noteOpenedMessage("Meeting notes")).toBe("Opening Meeting notes 📄");
+    expect(noteOpenedMessage("   ")).toBe("Opening your note 📄");
   });
 
   it("has a distinct, non-empty line for each moment", () => {
@@ -38,6 +46,19 @@ describe("buddyMessages", () => {
     // each moment reads differently, so the buddy never repeats itself across
     // two different events
     expect(new Set(lines).size).toBe(lines.length);
+  });
+
+  describe("updateAvailableMessage", () => {
+    it("names the version", () => {
+      expect(updateAvailableMessage("0.6.0")).toContain("0.6.0");
+    });
+
+    it("falls back to a generic line when the version is blank", () => {
+      // no dangling "Update v is ready" with a hole where the version goes
+      const msg = updateAvailableMessage("");
+      expect(msg).not.toMatch(/v\s/);
+      expect(msg.toLowerCase()).toContain("update");
+    });
   });
 
   describe("failureMessage", () => {

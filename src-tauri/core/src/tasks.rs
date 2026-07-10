@@ -6,7 +6,6 @@
 
 use crate::capture_note::note_field;
 use crate::capture_note::yaml_quote;
-use crate::transcript::dir_entries;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -303,13 +302,14 @@ fn due_key(t: &TaskItem) -> (bool, &str) {
 /// then title. A missing/unreadable root or file degrades silently.
 pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     let mut out = Vec::new();
-    // Canonicalize the root so every descended subdirectory can be
-    // containment-checked against it, and track walked dirs so a reparse-point
-    // cycle can't loop forever. A missing/unresolvable root → empty list
-    // (best-effort, unchanged).
+    // The walk discipline (canonical containment, cycle set, dot-dir skip)
+    // lives in vault_walk, single-sourced with the search scan. A missing/
+    // unresolvable root → empty list (best-effort, unchanged).
     if let Ok(canon_root) = std::fs::canonicalize(root) {
-        let mut walked = HashSet::new();
-        collect_tasks(&canon_root, &canon_root, &mut walked, &mut out);
+        crate::vault_walk::walk_vault(&canon_root, &mut |path, name| {
+            collect_task_file(path, name, &mut out);
+            crate::vault_walk::Flow::Continue
+        });
     }
     // Open first. Open tasks: due ascending (no/invalid due last), then
     // priority tier, then newest created, then title. Done tasks ignore due —
@@ -336,74 +336,40 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     out
 }
 
-/// Recursively collect `type: Task` files under `dir` (a canonical path) into
-/// `out`, best-effort. A subdirectory is descended only after canonicalizing it
-/// and confirming it still resolves under `canon_root` — so a reparse point (a
-/// symlink, or a Windows junction, which `dir_entries`' file type can report as
-/// a plain directory) that leads OUTSIDE the tasks folder is never walked. Each
-/// walked directory is recorded in `walked` so a reparse point pointing back
-/// INSIDE the folder can't recurse forever. Dot-directories (`.obsidian`,
-/// `.trash`, `.git`, …) are skipped so config dirs aren't walked and trashed
-/// tasks aren't surfaced. Unreadable/unresolvable dirs and files degrade
-/// silently.
-fn collect_tasks(
-    dir: &Path,
-    canon_root: &Path,
-    walked: &mut HashSet<PathBuf>,
-    out: &mut Vec<TaskItem>,
-) {
-    if !walked.insert(dir.to_path_buf()) {
-        return; // already walked — guards against a reparse-point cycle
+/// The per-file half of the old recursive collector: read, keep `type: Task`
+/// files, map to a TaskItem. Unreadable files and non-tasks degrade silently.
+fn collect_task_file(path: &Path, name: &str, out: &mut Vec<TaskItem>) {
+    if !name.ends_with(".md") {
+        return;
     }
-    for (path, ft, name) in dir_entries(dir) {
-        if ft.is_dir() {
-            if name.starts_with('.') {
-                continue;
-            }
-            // Resolve the child through any symlink/junction and require it to
-            // stay inside the tasks folder before descending — the no-follow
-            // dirent file type can't be trusted for a junction on Windows.
-            // Unresolvable or escaping → skip.
-            match std::fs::canonicalize(&path) {
-                Ok(child) if child.starts_with(canon_root) => {
-                    collect_tasks(&child, canon_root, walked, out)
-                }
-                _ => continue,
-            }
-            continue;
-        }
-        if !ft.is_file() || !name.ends_with(".md") {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if !is_task(&content) {
-            continue;
-        }
-        let stem = name.strip_suffix(".md").unwrap_or(&name).to_string();
-        let title = note_field(&content, "title").unwrap_or(stem);
-        let status = note_field(&content, "status").unwrap_or_else(|| "new".to_string());
-        // Archived tasks are removed from view — never surfaced in the list.
-        if status == "archived" {
-            continue;
-        }
-        let created = note_field(&content, "created").unwrap_or_default();
-        let due = note_field(&content, "due");
-        let priority = note_field(&content, "priority");
-        let tags = note_tags(&content);
-        let done = status == "done";
-        out.push(TaskItem {
-            path,
-            title,
-            status,
-            created,
-            done,
-            due,
-            priority,
-            tags,
-        });
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if !is_task(&content) {
+        return;
     }
+    let stem = name.strip_suffix(".md").unwrap_or(name).to_string();
+    let title = note_field(&content, "title").unwrap_or(stem);
+    let status = note_field(&content, "status").unwrap_or_else(|| "new".to_string());
+    // Archived tasks are removed from view — never surfaced in the list.
+    if status == "archived" {
+        return;
+    }
+    let created = note_field(&content, "created").unwrap_or_default();
+    let due = note_field(&content, "due");
+    let priority = note_field(&content, "priority");
+    let tags = note_tags(&content);
+    let done = status == "done";
+    out.push(TaskItem {
+        path: path.to_path_buf(),
+        title,
+        status,
+        created,
+        done,
+        due,
+        priority,
+        tags,
+    });
 }
 
 /// Return `content` with the named frontmatter lines updated, preserving every

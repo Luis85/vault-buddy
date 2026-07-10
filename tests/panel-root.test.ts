@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
-import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { flushPromises,mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import PanelRoot from "../src/roots/PanelRoot.vue";
-import { useVaultsStore } from "../src/stores/vaults";
 import { useSettingsStore } from "../src/stores/settings";
+import { useVaultsStore } from "../src/stores/vaults";
 
 vi.mock("@tauri-apps/plugin-log", () => ({
   info: vi.fn(),

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+
 import { getCharacter } from "../characters";
 
 const props = withDefaults(
@@ -151,9 +152,27 @@ onUnmounted(() => {
     @pointerenter="hovered = true"
     @pointerleave="clearHover"
   >
-    <ellipse cx="48" cy="52" rx="34" ry="32" fill="#7c5cff" />
-    <circle class="eye" cx="38" cy="46" r="5" fill="#fff" />
-    <circle class="eye" cx="58" cy="46" r="5" fill="#fff" />
+    <ellipse
+      cx="48"
+      cy="52"
+      rx="34"
+      ry="32"
+      fill="#7c5cff"
+    />
+    <circle
+      class="eye"
+      cx="38"
+      cy="46"
+      r="5"
+      fill="#fff"
+    />
+    <circle
+      class="eye"
+      cx="58"
+      cy="46"
+      r="5"
+      fill="#fff"
+    />
     <path
       d="M40 62 Q48 70 56 62"
       stroke="#fff"

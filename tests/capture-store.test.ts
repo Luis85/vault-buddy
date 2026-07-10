@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises } from "@vue/test-utils";
-import { setActivePinia, createPinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { flushPromises } from "@vue/test-utils";
+import { createPinia,setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   eventHandlers: {} as Record<string, (event: { payload: unknown }) => void>,

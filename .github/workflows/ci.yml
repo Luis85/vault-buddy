@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (typecheck, tests, build)
+    name: Frontend (lint, quality gates, typecheck, tests, build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +28,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run test
+      # Quality gates (docs/DEVELOPMENT.md § Quality pipeline). Ordering
+      # matters: check:quality must run while no coverage/ directory exists —
+      # a stray coverage report flips fallow's complexity weighting from
+      # static estimation to coverage-weighted CRAP — so test:coverage
+      # (which creates coverage/) runs last.
+      - run: npm run lint
+      - run: npm run check:loc
+      - run: npm run check:quality
+      # The five version files must agree (package.json, tauri.conf.json,
+      # Cargo.toml + both lockfiles) — drift used to surface only at the
+      # next bump attempt (docs/Gaps.md GAP-44).
+      - run: node scripts/bump-version.mjs --check
       - run: npm run build
+      - run: npm run test:coverage
 
   rust-core:
     name: Rust core (fmt, clippy, tests)
@@ -68,6 +80,30 @@ jobs:
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature)
         run: cargo test -p vault_buddy_transcribe --features whisper
+        working-directory: src-tauri
+      - name: Install Rust quality tools (machete + llvm-cov + deny, prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete,cargo-llvm-cov,cargo-deny
+      - name: unused dependencies (cargo-machete)
+        run: cargo machete src-tauri
+      # Coverage floor over the pure member crates (default features — the
+      # whisper FFI path is exercised by the dedicated test step above).
+      # Rise-only ratchet, same policy as the frontend floors in
+      # vite.config.ts: when coverage rises, raise the floor in the same PR;
+      # lowering it is a reviewed decision. Floored from the 2026-07-10
+      # adoption run (see docs/DEVELOPMENT.md § Quality pipeline).
+      - name: coverage floor (core + capture + transcribe, cargo-llvm-cov)
+        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+        working-directory: src-tauri
+      # RustSec advisories + license/source policy (src-tauri/deny.toml).
+      # Runs from src-tauri so the config is found by the same path as the
+      # documented local invocation — no reliance on cargo-deny's implicit
+      # config resolution from a manifest-path. The advisories DB is fetched
+      # at run time, so a newly published CVE can fail this step on an
+      # unchanged tree — that is the point of the gate.
+      - name: dependency audit (cargo-deny)
+        run: cargo deny check
         working-directory: src-tauri
 
   windows-app:
@@ -141,3 +177,15 @@ jobs:
       # and in parallel with Windows. The Linux build is never released.
       - name: Compile the Tauri shell (no bundle)
         run: npx tauri build --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # The shell's own quality gates live here, not in rust-core: the shell
+      # crate needs the WebView/GTK system libs installed above, and
+      # generate_context! embeds ../dist, which the tauri build step just
+      # produced. Before this, the shell's 11 unit tests (including the
+      # catch_job_survives_a_panicking_job regression test) ran in NO CI job
+      # and clippy never saw the shell (docs/Gaps.md GAP-40/GAP-43).
+      - name: clippy (whole workspace, incl. shell)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: tests (shell crate)
+        run: cargo test -p vault-buddy --lib
+        working-directory: src-tauri

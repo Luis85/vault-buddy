@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+
 import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
 
@@ -75,5 +76,7 @@ const hasSomethingToShow = computed(() => summaryLabel.value !== null);
     @click="vaults.openTranscriptions()"
     @keydown.enter="vaults.openTranscriptions()"
     @keydown.space.prevent="vaults.openTranscriptions()"
-  >{{ summaryLabel }}</div>
+  >
+    {{ summaryLabel }}
+  </div>
 </template>

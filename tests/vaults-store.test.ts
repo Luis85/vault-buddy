@@ -1,18 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/logging", () => ({
   logWarning: vi.fn(),
 }));
 
-import { logWarning } from "../src/logging";
-import { useVaultsStore } from "../src/stores/vaults";
-import { useSettingsStore } from "../src/stores/settings";
 import {
   dailyNoteOpenedMessage,
   vaultOpenedMessage,
 } from "../src/buddyMessages";
+import { logWarning } from "../src/logging";
+import { useSettingsStore } from "../src/stores/settings";
+import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },
@@ -272,6 +272,20 @@ describe("vaults store", () => {
     expect(store.view).toBe("list"); // request was one-shot
   });
 
+  it("requestViewOnNextOpen arms the next open without flipping the live view", async () => {
+    // the startup update check asks via the NEXT panel open — an already-open
+    // panel must not be yanked to settings mid-task (unlike requestView, which
+    // flips the live view for the failed-install reopen).
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestViewOnNextOpen("settings");
+    expect(store.view).toBe("list"); // live view untouched
+    await store.refresh(); // the next panel-shown refresh
+    expect(store.view).toBe("settings"); // consumed once
+    await store.refresh();
+    expect(store.view).toBe("list"); // one-shot
+  });
+
   it("requestView can target the capture settings of a specific vault", async () => {
     mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
     const store = useVaultsStore();
@@ -345,6 +359,14 @@ describe("vaults store", () => {
     store.openAllTasks();
     expect(store.view).toBe("tasks");
     expect(store.tasksVaultId).toBeNull();
+    store.back();
+    expect(store.view).toBe("list");
+  });
+
+  it("opens the search view and back returns to the list", () => {
+    const store = useVaultsStore();
+    store.openSearch();
+    expect(store.view).toBe("search");
     store.back();
     expect(store.view).toBe("list");
   });

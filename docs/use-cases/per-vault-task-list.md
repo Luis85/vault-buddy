@@ -31,6 +31,13 @@ covers the complete **single-vault** experience; aggregation across vaults,
 lists, and the dashboard remain with
 [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md).
 
+## ~~⚠ PRD status is stale~~ — resolved
+
+The staleness this note originally flagged has been fixed since: the Task
+Management PRD's status line now narrates what shipped and what remains
+unbuilt, and `AGENTS.md` documents the `task_commands::*` surface. Kept as a
+struck-through record per this catalog's convention.
+
 ## Status: Shipped (v0.5.0, extended through v0.5.3)
 
 - **v0.5.0** — the vertical slice: configure a per-vault tasks folder, list

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "src/main.ts"
+  ],
+  "ignorePatterns": [
+    "**/docs/**",
+    "**/scripts/**",
+    "**/src-tauri/**",
+    "**/.claude/**",
+    "**/.fallow/**",
+    "**/coverage/**",
+    "**/dist/**"
+  ],
+  "ignoreDependencies": [
+    "@tauri-apps/cli",
+    "tailwindcss",
+    "@tailwindcss/vite",
+    "typescript",
+    "vue-tsc"
+  ],
+  "duplicates": {
+    "minOccurrences": 2,
+    "ignore": [
+      "**/tests/**"
+    ]
+  }
+}

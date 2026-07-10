@@ -1,10 +1,17 @@
-import { onMounted, onUnmounted, ref, type Ref } from "vue";
-import { greetingFor } from "../greeting";
+import { onMounted, onUnmounted, type Ref,ref } from "vue";
 
-// How long a message stays before auto-dismissing. The launch greeting lingers;
-// action acknowledgements are quicker so a burst of them never piles up.
-export const GREETING_MS = 5000;
-export const ACK_MS = 3200;
+import { greetingFor } from "../greeting";
+import { type MessageDuration,useSettingsStore } from "../stores/settings";
+
+// How long a message stays before auto-dismissing, per the user's
+// messageDuration setting. The launch greeting lingers; action
+// acknowledgements are quicker so a burst of them never piles up. `normal`
+// is the pre-setting behavior and must stay byte-identical to it.
+export const BUBBLE_MS: Record<MessageDuration, { ack: number; greeting: number }> = {
+  short: { ack: 2000, greeting: 3000 },
+  normal: { ack: 3200, greeting: 5000 },
+  long: { ack: 6000, greeting: 9000 },
+};
 
 /**
  * The buddy's single speech-bubble channel: one current message + one
@@ -20,6 +27,7 @@ export function useBuddyBubble(): {
   show: (message: string, durationMs: number) => void;
   dismiss: () => void;
 } {
+  const settings = useSettingsStore();
   const visible = ref(false);
   const text = ref("");
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,7 +45,9 @@ export function useBuddyBubble(): {
     timer = setTimeout(dismiss, durationMs);
   }
 
-  onMounted(() => show(greetingFor(new Date()), GREETING_MS));
+  onMounted(() =>
+    show(greetingFor(new Date()), BUBBLE_MS[settings.messageDuration].greeting),
+  );
   onUnmounted(() => clearTimeout(timer));
 
   return { visible, text, show, dismiss };

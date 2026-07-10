@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+
 import { formatDuration } from "../utils/formatDuration";
 
 const props = defineProps<{
@@ -58,7 +59,7 @@ const meterWidth = computed(
         class="h-2.5 w-2.5 shrink-0 rounded-full"
         :class="paused ? 'bg-amber-400' : 'animate-pulse bg-red-500'"
         aria-hidden="true"
-      ></span>
+      />
       <span
         class="flex-1 text-sm font-medium"
         :class="paused ? 'text-amber-100' : 'text-red-100'"
@@ -105,8 +106,13 @@ const meterWidth = computed(
         data-testid="level-meter"
         class="h-full rounded-full bg-emerald-400 transition-[width] duration-100"
         :style="{ width: meterWidth }"
-      ></div>
+      />
     </div>
-    <p v-if="warning" class="mt-1 text-xs text-amber-200">{{ warning }}</p>
+    <p
+      v-if="warning"
+      class="mt-1 text-xs text-amber-200"
+    >
+      {{ warning }}
+    </p>
   </div>
 </template>

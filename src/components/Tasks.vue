@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { computed, onMounted, ref } from "vue";
+
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TaskItem, TaskPatch, Vault } from "../types";
@@ -411,7 +412,7 @@ async function saveEdit(task: AggTask) {
         <div
           class="h-full rounded-full bg-violet-500 transition-all"
           :style="{ width: `${progress.pct}%` }"
-        ></div>
+        />
       </div>
       <span class="shrink-0 text-xs tabular-nums text-slate-400">
         {{ progress.done }} / {{ progress.total }}
@@ -426,7 +427,7 @@ async function saveEdit(task: AggTask) {
       placeholder="Filter tasks…"
       aria-label="Filter tasks"
       class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-    />
+    >
 
     <div
       v-if="tagFilter"
@@ -461,7 +462,7 @@ async function saveEdit(task: AggTask) {
         aria-label="New task title"
         class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
         @keydown.enter="add"
-      />
+      >
       <button
         type="button"
         data-testid="task-add-options"
@@ -485,15 +486,22 @@ async function saveEdit(task: AggTask) {
       </button>
     </div>
 
-    <div v-if="showAddOptions" class="flex items-center gap-1">
+    <div
+      v-if="showAddOptions"
+      class="flex items-center gap-1"
+    >
       <input
         v-model="addDue"
         data-testid="task-add-due"
         type="date"
         aria-label="Due date"
         class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
-      />
-      <div class="flex gap-0.5" role="radiogroup" aria-label="Priority">
+      >
+      <div
+        class="flex gap-0.5"
+        role="radiogroup"
+        aria-label="Priority"
+      >
         <button
           v-for="p in ['high', 'normal', 'low']"
           :key="p"
@@ -519,7 +527,7 @@ async function saveEdit(task: AggTask) {
         placeholder="#tags"
         aria-label="Tags"
         class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-      />
+      >
     </div>
 
     <div
@@ -550,21 +558,36 @@ async function saveEdit(task: AggTask) {
       </button>
     </div>
 
-    <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
+    <p
+      v-if="loading"
+      class="text-xs text-slate-400"
+    >
+      Loading…
+    </p>
     <p
       v-else-if="loadError"
       class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ loadError }}
     </p>
-    <p v-else-if="tasks.length === 0" class="text-xs text-slate-400">
+    <p
+      v-else-if="tasks.length === 0"
+      class="text-xs text-slate-400"
+    >
       No tasks yet.
     </p>
-    <p v-else-if="filteredTasks.length === 0" class="text-xs text-slate-400">
+    <p
+      v-else-if="filteredTasks.length === 0"
+      class="text-xs text-slate-400"
+    >
       No tasks match{{ tagFilter ? ` #${tagFilter}` : "" }}{{ showFilter && filter ? ` "${filter}"` : "" }}.
     </p>
     <template v-else>
-      <div v-for="bucket in buckets" :key="bucket.key" class="mt-1 first:mt-0">
+      <div
+        v-for="bucket in buckets"
+        :key="bucket.key"
+        class="mt-1 first:mt-0"
+      >
         <h3
           v-if="bucket.label"
           data-testid="task-bucket-header"
@@ -580,7 +603,10 @@ async function saveEdit(task: AggTask) {
             data-testid="task-row"
             class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
           >
-            <div v-if="editingKey === rowKey(bucket.key, task)" class="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
+            <div
+              v-if="editingKey === rowKey(bucket.key, task)"
+              class="flex min-w-0 flex-1 flex-col gap-1 py-0.5"
+            >
               <input
                 v-model="editTitle"
                 data-testid="task-edit-title"
@@ -589,7 +615,7 @@ async function saveEdit(task: AggTask) {
                 class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
                 @keydown.enter.prevent="saveEdit(task)"
                 @keydown.esc="cancelEdit"
-              />
+              >
               <div class="flex items-center gap-1">
                 <input
                   v-model="editDue"
@@ -597,8 +623,12 @@ async function saveEdit(task: AggTask) {
                   type="date"
                   aria-label="Due date"
                   class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
-                />
-                <div class="flex gap-0.5" role="radiogroup" aria-label="Priority">
+                >
+                <div
+                  class="flex gap-0.5"
+                  role="radiogroup"
+                  aria-label="Priority"
+                >
                   <button
                     v-for="p in ['high', 'normal', 'low']"
                     :key="p"
@@ -625,7 +655,7 @@ async function saveEdit(task: AggTask) {
                 placeholder="#tags"
                 aria-label="Tags"
                 class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-              />
+              >
               <div class="flex items-center justify-end gap-1">
                 <button
                   type="button"
@@ -655,7 +685,7 @@ async function saveEdit(task: AggTask) {
                 :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
                 class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
                 @change="toggle(task)"
-              />
+              >
               <button
                 type="button"
                 data-testid="task-open"
@@ -677,7 +707,7 @@ async function saveEdit(task: AggTask) {
                   :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
                   :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
                   aria-hidden="true"
-                ></span>
+                />
                 <span
                   class="min-w-0 flex-1 truncate text-sm"
                   :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
@@ -712,7 +742,17 @@ async function saveEdit(task: AggTask) {
                 class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
                 @click="startEdit(task, bucket.key)"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                 </svg>
               </button>
@@ -736,7 +776,13 @@ async function saveEdit(task: AggTask) {
                   stroke-linejoin="round"
                   aria-hidden="true"
                 >
-                  <rect x="3" y="4" width="18" height="4" rx="1" />
+                  <rect
+                    x="3"
+                    y="4"
+                    width="18"
+                    height="4"
+                    rx="1"
+                  />
                   <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
                 </svg>
               </button>

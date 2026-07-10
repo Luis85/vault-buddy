@@ -1,0 +1,29 @@
+{
+  "caps": {
+    "frontend": 500,
+    "rust": 800
+  },
+  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
+  "allowlist": {
+    "src-tauri/src/capture_commands.rs": {
+      "loc": 952,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
+    },
+    "src-tauri/src/transcription.rs": {
+      "loc": 948,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
+    },
+    "src-tauri/capture/src/session.rs": {
+      "loc": 856,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
+    },
+    "src-tauri/transcribe/src/model.rs": {
+      "loc": 846,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
+    },
+    "src/stores/capture.ts": {
+      "loc": 596,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
+    }
+  }
+}

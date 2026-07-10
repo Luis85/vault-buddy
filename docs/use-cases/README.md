@@ -67,7 +67,8 @@ main PRD's former Non-Functional Requirements section.
 | [Re-transcription](re-transcription.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Rename Recording](rename-recording.md) ⚠ not in PRD text | Knowledge Intake | v0.4.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Per-Vault Task List](per-vault-task-list.md) | Task Management | v0.5.0 (extended through v0.5.3: due/priority/buckets/editor/open/filter/tags) | [Task Management](../prds/task-management.md) |
-| [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md) | Task Management | v0.5.4 (aggregated view; lists/modal/bulk/search remain planned) | [Task Management](../prds/task-management.md) |
+| [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md) ⚠ aggregated view only | Task Management | v0.5.4 (lists/modal/bulk/search remain planned) | [Task Management](../prds/task-management.md) |
+| [Knowledge Search & Retrieval](knowledge-search-and-retrieval.md) ⚠ keyword slice | Knowledge Retrieval | main (unreleased) | [PRD](../PRD%20-%20Product%20Vision.md) |
 
 ## Planned (named in a PRD roadmap, not yet built)
 
@@ -77,7 +78,6 @@ main PRD's former Non-Functional Requirements section.
 | [Additional Capture Providers](additional-capture-providers.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Task Tags & Todos](task-tags-and-todos.md) | Task Management | [Task Management](../prds/task-management.md) |
 | [AI-Assisted Task Management](ai-assisted-task-management.md) | Task Management | [Task Management](../prds/task-management.md) |
-| [Knowledge Search & Retrieval](knowledge-search-and-retrieval.md) | Knowledge Retrieval | [PRD](../PRD%20-%20Product%20Vision.md) |
 | [Workflow Automation Engine](workflow-automation-engine.md) | Workflow Engine | [PRD](../PRD%20-%20Product%20Vision.md) |
 | [Natural Language Interface](natural-language-interface.md) | NL Interface | [PRD](../PRD%20-%20Product%20Vision.md) |
 
@@ -104,7 +104,10 @@ main PRD's former Non-Functional Requirements section.
 ## Known documentation gaps found during this extraction
 
 1. ~~**Software Auto-Update has no PRD at all**~~ — **fixed**: now covered by the [Platform & Cross-Cutting Capabilities PRD](../prds/platform-and-cross-cutting.md).
-2. ~~**Task Management PRD status is stale**~~ — **fixed**: the PRD's status line and Version 1 roadmap now track what shipped (per-vault list through v0.5.3), and `AGENTS.md`'s IPC inventory lists all eight `task_commands::*` entries.
+2. ~~**Task Management PRD status is stale**~~ — **fixed**: the PRD's status
+   line and Version 1 roadmap now track what shipped (per-vault list through
+   v0.5.3), and `AGENTS.md` documents the `task_commands::*` (and
+   `search_commands::*`) surfaces.
 3. **Rename Recording is unshipped-by-omission in the PRD's prose** — the feature exists and is safety-critical, but the Knowledge Intake PRD never narrates it as a use case or MVP feature.
 4. **Desktop Audio / Custom recording modes** are named in the Knowledge Intake PRD's Recording Modes table but were never built — only Meeting and Voice Note modes ship.
 5. ~~**Diagnostics & Crash Reporting has no PRD**~~ — **fixed**: found while drafting the Platform & Cross-Cutting PRD; it was documented only in `AGENTS.md`'s invariants. Now covered alongside Software Auto-Update.

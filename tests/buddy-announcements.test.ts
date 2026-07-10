@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mount } from "@vue/test-utils";
-import { defineComponent } from "vue";
-import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { defineComponent } from "vue";
+
 import { useBuddyAnnouncements } from "../src/composables/useBuddyAnnouncements";
 import { useCaptureStore } from "../src/stores/capture";
 import { useSettingsStore } from "../src/stores/settings";
