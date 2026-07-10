@@ -668,13 +668,25 @@ fn maybe_enqueue_transcription(app: &AppHandle, vault_id: &str, mp3: &Path) {
 /// wait forever — shutdown paths use it so the app can never exit while a
 /// recording is still finalizing (a slow vault or a stuck fsync must not
 /// strand the capture as .part).
-fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
+/// Outcome of a stop wait: `Cleared` = the reservation was released (the
+/// save landed, there was nothing to wait for, or a startup-wedged
+/// reservation was bypassed); `TimedOut` = the bounded deadline expired
+/// while finalize was still running — the caller must not report success.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StopWait {
+    Cleared,
+    TimedOut,
+}
+
+fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) -> StopWait {
     // Bound to a local so the guard below can borrow it across statements —
     // `app.state::<CaptureState>()` is otherwise a temporary that would be
     // dropped at the end of the `let guard = …;` statement.
     let capture_state = app.state::<CaptureState>();
     let mut guard = lock_ignoring_poison(&capture_state.0);
-    let Some(active) = guard.as_ref() else { return };
+    let Some(active) = guard.as_ref() else {
+        return StopWait::Cleared;
+    };
     let _ = active.control_tx.send(Control::Stop);
     if wait.is_none() && bypasses_shutdown_wait(active) {
         // Shutdown against a wedged startup: nothing on disk to strand, and
@@ -683,7 +695,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
         log::warn!(
             "capture: bypassing shutdown wait for a startup-wedged reservation (nothing on disk)"
         );
-        return;
+        return StopWait::Cleared;
     }
     let deadline = wait.map(|limit| std::time::Instant::now() + limit);
     while guard.is_some() {
@@ -692,7 +704,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
                 let now = std::time::Instant::now();
                 if now >= deadline {
                     log::warn!("capture: stop wait timed out");
-                    return;
+                    return StopWait::TimedOut;
                 }
                 // A poisoned condvar wait must recover the same way the
                 // mutex does: recovering the pair keeps shutdown waiting
@@ -717,20 +729,51 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
             }
         }
     }
+    StopWait::Cleared
 }
 
+/// Wire result for stop_capture. `stillSaving` = the bounded wait expired
+/// while finalize was still running; the frontend keeps its saving UI and
+/// lets capture:saved/failed finish the story (GAP-20).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopOutcomeDto {
+    pub still_saving: bool,
+}
+
+impl StopOutcomeDto {
+    fn from_wait(wait: StopWait) -> Self {
+        Self {
+            still_saving: wait == StopWait::TimedOut,
+        }
+    }
+}
+
+/// ASYNC (GAP-20): the wait is on CaptureState's condvar — up to 15 s of
+/// LAME flush + fsync + rename on a slow vault — which froze the whole UI
+/// when this ran as a sync command on the main thread. It touches no
+/// window APIs and no window-state locks, so the window-thread invariant
+/// doesn't pin it; the condvar wait runs on the blocking pool.
 #[tauri::command]
-pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result<(), String> {
-    if lock_ignoring_poison(&state.0).is_none() {
+pub async fn stop_capture(app: AppHandle) -> Result<StopOutcomeDto, String> {
+    if !is_recording(&app) {
         return Err("No recording is running.".to_string());
     }
-    request_stop_and_wait(&app, Some(Duration::from_secs(15)));
-    Ok(())
+    let waiter = app.clone();
+    let wait = tauri::async_runtime::spawn_blocking(move || {
+        request_stop_and_wait(&waiter, Some(Duration::from_secs(15)))
+    })
+    .await
+    .map_err(|e| {
+        log::warn!("stop_capture: wait task failed: {e}");
+        "Stop failed — see the logs for details.".to_string()
+    })?;
+    Ok(StopOutcomeDto::from_wait(wait))
 }
 
 /// Stop triggered from a native menu (tray or buddy) rather than the panel.
 pub fn stop_from_menu(app: &AppHandle) {
-    request_stop_and_wait(app, Some(std::time::Duration::from_secs(15)));
+    let _ = request_stop_and_wait(app, Some(std::time::Duration::from_secs(15)));
 }
 
 pub fn is_recording(app: &AppHandle) -> bool {
@@ -919,7 +962,7 @@ pub fn finalize_if_recording(app: &AppHandle) {
         log::info!("capture: finalizing active recording before shutdown");
         // Unbounded: quitting must block until the save lands — exiting
         // on a timeout would kill the worker and strand the .part.
-        request_stop_and_wait(app, None);
+        let _ = request_stop_and_wait(app, None);
     }
 }
 
@@ -1131,5 +1174,22 @@ mod tests {
         // part=None WITHOUT the wedged flag is an ordinary start in its
         // first ten seconds — not bypassable.
         assert!(!bypasses_shutdown_wait(&active(false, None)));
+    }
+
+    // GAP-20: the moved commands must be async — this only compiles when
+    // stop_capture returns a Future (fn-pointer bound, no runtime needed).
+    #[allow(dead_code)]
+    fn stop_capture_is_async() {
+        fn takes_async<F: std::future::Future>(_: fn(AppHandle) -> F) {}
+        takes_async(stop_capture);
+    }
+
+    #[test]
+    fn stop_outcome_maps_timeout_to_still_saving() {
+        // GAP-20 (related-low): the sync command returned a bare Ok(()) on
+        // the 15 s timeout, so the frontend saw success while the recording
+        // was still finalizing. The typed mapping is the fix's contract.
+        assert!(StopOutcomeDto::from_wait(StopWait::TimedOut).still_saving);
+        assert!(!StopOutcomeDto::from_wait(StopWait::Cleared).still_saving);
     }
 }

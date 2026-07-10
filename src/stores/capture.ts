@@ -470,7 +470,13 @@ export const useCaptureStore = defineStore("capture", {
       this.status = "saving";
       try {
         logBreadcrumb("capture: stop requested");
-        await invoke("stop_capture");
+        const r = await invoke<{ stillSaving: boolean }>("stop_capture");
+        if (r.stillSaving) {
+          // Finalize outlived the bounded wait (slow/network vault). Stay in
+          // the saving UI; capture:saved / capture:failed complete the
+          // transition (GAP-20 — the old bare Ok looked like success).
+          logBreadcrumb("capture: stop still saving after bounded wait");
+        }
         // capture:saved / capture:failed events complete the transition.
       } catch (e) {
         this.status = "idle";

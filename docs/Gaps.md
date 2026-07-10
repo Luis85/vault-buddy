@@ -222,17 +222,12 @@ need it), which means **long work in a sync command freezes window
 show/hide, drags, and the upkeep tick**. Fixes must not move
 window-touching code off the main thread.
 
-### GAP-20 · High · `stop_capture` blocks the main thread for up to 15 s
-`src-tauri/src/capture_commands.rs:701-711`.
-The sync command waits on a condvar until finalize (LAME flush, fsync,
-`rename_noreplace`, note write) completes. Stopping on a slow/network vault
-freezes the whole UI for the entire encode — the exact freeze the tray path
-avoids by spawning `tray-stop`. Related low: after the 15 s timeout it
-still returns `Ok(())`, so the frontend sees success while the recording
-may still be finalizing (only the log records the timeout).
-**Fix:** make it async (the wait is on `CaptureState`, not window locks) or
-return immediately and let `capture:saved`/`failed` drive the UI; return a
-distinct "still saving" result on timeout.
+### GAP-20 · ~~High~~ FIXED 2026-07-10 · `stop_capture` blocks the main thread for up to 15 s
+Now an async command: the condvar wait runs under `spawn_blocking`, and the
+15 s expiry returns a typed `{ stillSaving: true }` instead of a bare Ok —
+the store keeps its saving UI and the capture events finish the story.
+`request_stop_and_wait` returns `StopWait` so no caller can misread a
+timeout as success.
 
 ### GAP-21 · High · `start_capture` blocks the main thread for up to 10 s
 `src-tauri/src/capture_commands.rs:514`.

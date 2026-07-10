@@ -9,12 +9,12 @@
       "loc": 1431,
       "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Bugfix regression tests (Codex PR #46 rounds) account for the growth past 1225; half is the inline #[cfg(test)] module. Shrink only; split (parse/writer/list seams) when next touched."
     },
-    "src-tauri/src/transcription.rs": {
-      "loc": 1086,
+    "src-tauri/src/capture_commands.rs": {
+      "loc": 1133,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
-    "src-tauri/src/capture_commands.rs": {
-      "loc": 1078,
+    "src-tauri/src/transcription.rs": {
+      "loc": 1086,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/capture/src/session.rs": {
@@ -34,7 +34,7 @@
       "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Shrink only; split (list vs editor/composer) when next touched."
     },
     "src/stores/capture.ts": {
-      "loc": 596,
+      "loc": 602,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
     }
   }

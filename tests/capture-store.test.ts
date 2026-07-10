@@ -130,6 +130,21 @@ describe("capture store", () => {
     expect(store.warning).toBeNull();
   });
 
+  it("keeps the saving UI when stop resolves stillSaving (GAP-20)", async () => {
+    // A 15s finalize timeout used to resolve as a bare success; the typed
+    // result must NOT flip the store out of "saving" — capture:saved/failed
+    // events own that transition.
+    mockIPC((cmd) => {
+      if (cmd === "stop_capture") return { stillSaving: true };
+      throw new Error(`unexpected ${cmd}`);
+    });
+    const store = useCaptureStore();
+    store.status = "recording";
+    await store.stop();
+    expect(store.status).toBe("saving");
+    expect(store.error).toBeNull();
+  });
+
   it("failed event resets to idle with error", async () => {
     mockIPC((cmd) => {
       if (cmd === "capture_status") {
