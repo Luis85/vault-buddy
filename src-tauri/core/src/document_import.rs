@@ -137,6 +137,17 @@ pub struct StagingSweep {
     pub pending: usize,
 }
 
+/// A `YYYY` year folder: exactly four ASCII digits. The janitor descends only
+/// into these (see `clean_stale_staging_at`), so a non-dated folder is skipped.
+fn is_year_dir(name: &str) -> bool {
+    name.len() == 4 && name.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A `MM` month folder: exactly two ASCII digits.
+fn is_month_dir(name: &str) -> bool {
+    name.len() == 2 && name.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
 /// Documents folder (walking its `YYYY/MM` subtree — that's where staging
 /// dirs live). Staleness-gated with an injected `now` so a clock jump giving
@@ -169,23 +180,29 @@ pub fn clean_stale_staging_at(
     let Ok(canon_root) = documents_root.canonicalize() else {
         return sweep; // no Documents folder yet → nothing to do
     };
-    // Real subdir whose canonical path stays under canon_root — resolves BOTH
-    // symlinks and Windows junctions, so neither can redirect the walk out.
-    // Returns the CANONICAL path so a real in-place child below canonicalizes
-    // to itself (that self-equality is how the leaf tells an owned staging dir
-    // apart from a symlink/junction named like one).
-    let contained_subdirs = |dir: &Path| -> Vec<PathBuf> {
+    // Real subdir whose NAME passes `name_ok` and whose canonical path stays
+    // under canon_root — resolves BOTH symlinks and Windows junctions, so
+    // neither can redirect the walk out. The name gate keeps the sweep to the
+    // owned `YYYY/MM` layout: the importer only ever stages under dated folders,
+    // so an ordinary `Documents/Projects/Client` two-level path must NOT be
+    // treated as year/month and have a like-named dot dir swept (Codex review) —
+    // the same dated-layout-only discipline capture recovery uses. Returns the
+    // CANONICAL path so a real in-place child below canonicalizes to itself
+    // (that self-equality is how the leaf tells an owned staging dir apart from a
+    // symlink/junction named like one).
+    let contained_subdirs = |dir: &Path, name_ok: fn(&str) -> bool| -> Vec<PathBuf> {
         std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
+            .filter(|e| e.file_name().to_str().is_some_and(name_ok))
             .filter_map(|e| e.path().canonicalize().ok())
             .filter(|c| c.is_dir() && c.starts_with(&canon_root))
             .collect()
     };
     // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
-    for year in contained_subdirs(&canon_root) {
-        for month in contained_subdirs(&year) {
+    for year in contained_subdirs(&canon_root, is_year_dir) {
+        for month in contained_subdirs(&year, is_month_dir) {
             let Ok(entries) = std::fs::read_dir(&month) else {
                 continue;
             };
@@ -525,6 +542,30 @@ mod tests {
         assert!(!orphan.exists()); // owned orphan gone
         assert!(month.join("2026-07-10 Real.md").exists()); // real note kept
         assert!(foreign.exists()); // foreign dot-dir untouched
+    }
+
+    #[test]
+    fn janitor_ignores_staging_dirs_outside_the_dated_layout() {
+        use std::time::{Duration, SystemTime};
+        // The importer only stages under Documents/<YYYY>/<MM>. A like-named dot
+        // dir in an ordinary two-level path (Documents/Projects/Client) must NOT
+        // be treated as year/month and swept.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Documents");
+        let dated = root.join("2026/07");
+        let plain = root.join("Projects/Client");
+        std::fs::create_dir_all(&dated).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        let owned = dated.join(".2026-07-10 Doc.1-2.vault-buddy.tmp.import");
+        let outside = plain.join(".x.1-2.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&owned).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        let sweep = clean_stale_staging_at(&root, now, Duration::from_secs(60));
+        assert_eq!(sweep.removed.len(), 1);
+        assert!(!owned.exists()); // dated orphan swept
+        assert!(outside.exists()); // non-dated path left alone
     }
 
     #[test]
