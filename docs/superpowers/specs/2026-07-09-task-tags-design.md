@@ -83,7 +83,10 @@ every tag is validated before any write, so the flow line is always safe.
 - **`update_task`'s patch gains `tags: Option<Vec<String>>`** — `None`
   leaves tags untouched; `Some([])` clears (removes the line/block);
   `Some(nonempty)` validates then writes the flow line. Same single
-  read-modify-write via `update_task_fields`.
+  read-modify-write via `update_task_fields`. Every tags write (clear or set)
+  also pushes `("tag", None)` — retiring the singular alias — so a clear
+  can't silently no-op on an alias-authored file and a set can't leave dual
+  `tag:`/`tags:` keys.
 - No new commands; `list_tasks` carries tags out through the widened DTO.
 
 ## Frontend

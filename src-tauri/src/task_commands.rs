@@ -311,6 +311,15 @@ pub fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), 
         } else {
             updates.push(("tags", Some(format!("[{}]", tags.join(", ")))));
         }
+        // The read side (note_tags) honors a `tag:` singular alias when `tags:`
+        // is absent, so every tags write must ALSO retire it: on an
+        // alias-authored file, writing tags: without removing tag: would leave
+        // dual keys (Obsidian shows the union, we'd show only tags:), and
+        // clearing tags: alone would be a silent no-op — a missing tags: line
+        // un-shadows the stale tag: alias on the next read. A missing tag:
+        // line is a documented no-op, so this is safe on files that never had
+        // the alias.
+        updates.push(("tag", None));
     }
     if updates.is_empty() {
         return Ok(());

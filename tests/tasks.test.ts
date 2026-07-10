@@ -553,6 +553,24 @@ describe("Tasks", () => {
     });
   });
 
+  it("strips every leading # from a tags token, not just one", async () => {
+    // Regression: parseTagsInput used to strip only one leading `#`, so
+    // `##work` optimistically applied as "#work" but the shell strips its
+    // own single `#` and lands "work" on disk — divergence between the
+    // optimistic UI and the persisted value.
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    await wrapper.get('[data-testid="task-add-tags"]').setValue("##work, #home");
+    await wrapper.get('[data-testid="task-input"]').setValue("Double hash");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({
+      cmd: "add_task",
+      args: { id: "v1", title: "Double hash", tags: ["work", "home"] },
+    });
+  });
+
   it("edits tags inline: sends the parsed list, empty input clears", async () => {
     const { wrapper, calls } = mountView({
       list_tasks: () => [
@@ -629,6 +647,50 @@ describe("Tasks", () => {
     await pencils[0].trigger("click");
     // One editor, not two — the clicked row only.
     expect(wrapper.findAll('[data-testid="task-edit-title"]')).toHaveLength(1);
+  });
+
+  it("shows the tag-only no-match empty state and keeps the dismiss chip", async () => {
+    // Filter to a tag, then archive the one task that carries it: the filtered
+    // list empties out (a second, untagged task keeps the OVERALL list
+    // non-empty so the "No tasks yet." branch doesn't mask this case) but the
+    // tag filter chip must stay visible, or the user is stranded with no way
+    // to clear the filter.
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+        { path: "C:/v/Tasks/b.md", title: "Plain", status: "new", created: "2026-07-07", done: false, due: null, priority: null, tags: [] },
+      ],
+      set_task_status: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-tag"]').trigger("click");
+    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("No tasks match #work");
+    expect(wrapper.find('[data-testid="task-tag-filter-clear"]').exists()).toBe(true);
+  });
+
+  it("tagFilter selects tasks (not sections) in tag grouping", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "WorkHome", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work", "home"] },
+        { path: "C:/v/Tasks/b.md", title: "HomeOnly", status: "new", created: "2026-07-07", done: false, due: null, priority: null, tags: ["home"] },
+      ],
+    });
+    await flushPromises();
+    const chips = wrapper.findAll('[data-testid="task-tag"]');
+    const workChip = chips.find((c) => c.text() === "#work")!;
+    await workChip.trigger("click");
+    await wrapper.get('[data-testid="task-grouping-tags"]').trigger("click");
+    await flushPromises();
+    // Only the work-tagged task is selected — "HomeOnly" never renders.
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.text().includes("WorkHome"))).toBe(true);
+    expect(wrapper.text()).not.toContain("HomeOnly");
+    // The selected task still appears under BOTH its section headers.
+    const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+    expect(headers).toEqual(["#home", "#work"]);
   });
 
   it("grouping defaults to dates and the toggle switches back", async () => {

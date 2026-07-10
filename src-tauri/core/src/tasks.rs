@@ -400,7 +400,11 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
     // lines when they are mappings. Cleared by the first non-item,
     // non-indented line (including the closing fence), so body bullets are
     // never at risk: the fence always clears the flag before the body starts,
-    // and top-level frontmatter keys and the fence are never indented.
+    // and top-level frontmatter keys and the fence are never indented. A
+    // blank line inside a block list ends consumption early — read and write
+    // agree on that boundary (`parse_tags_key`'s block-item loop stops there
+    // too) — so blank-separated block entries are a known, degenerate-input
+    // limitation.
     let mut skip_list_items = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
@@ -1229,5 +1233,37 @@ mod tests {
             "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ntags:\n- work\n---\n",
         );
         assert_eq!(list_tasks(root)[0].tags, vec!["work"]);
+    }
+
+    #[test]
+    fn set_fields_retires_the_tag_alias_alongside_a_tags_write() {
+        // The shell's update_task pushes ("tag", None) with every tags write: on
+        // an alias-authored file, writing tags: without removing tag: would leave
+        // dual keys (Obsidian reads the union), and clearing tags: alone would be
+        // a silent no-op that un-shadows the stale alias on the next read.
+        let doc = "---\ntype: Task\nstatus: new\ntag: work\ntitle: \"A\"\n---\n";
+        let out = set_fields(doc, &[("tags", Some("[home]")), ("tag", None)]).unwrap();
+        assert!(out.contains("tags: [home]\n"));
+        assert!(!out.contains("tag: work"));
+        // Clearing: both keys removed, nothing resurrected.
+        let cleared = set_fields(doc, &[("tags", None), ("tag", None)]).unwrap();
+        assert!(!cleared.contains("tag"));
+        assert!(cleared.contains("title: \"A\"\n"));
+    }
+
+    #[test]
+    fn note_tags_edge_forms() {
+        // Empty flow list is PRESENT — it yields no tags and still shadows the alias.
+        assert!(note_tags("---\ntype: Task\ntags: []\ntag: work\n---\n").is_empty());
+        // CRLF content parses (str::lines strips \r).
+        assert_eq!(
+            note_tags("---\r\ntype: Task\r\ntags: [work]\r\n---\r\n"),
+            vec!["work"]
+        );
+        // No space after the colon.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags:[work]\n---\n"),
+            vec!["work"]
+        );
     }
 }

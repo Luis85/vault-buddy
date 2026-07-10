@@ -13,7 +13,7 @@ function parseTagsInput(s: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of s.split(/[\s,]+/)) {
-    const t = raw.replace(/^#/, "");
+    const t = raw.replace(/^#+/, "");
     if (!t || seen.has(t.toLowerCase())) continue;
     seen.add(t.toLowerCase());
     out.push(t);
@@ -622,6 +622,7 @@ async function saveEdit(task: TaskItem) {
                   class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-[10px] text-violet-200 transition-colors hover:bg-violet-500/30"
                   @click.stop="tagFilter = tag"
                   @keydown.enter.stop.prevent="tagFilter = tag"
+                  @keydown.space.stop.prevent="tagFilter = tag"
                 >#{{ tag }}</span>
                 <span
                   v-if="dueOf(task)"
