@@ -298,6 +298,32 @@ pub fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> std::i
     result
 }
 
+/// Move the staged media directory to `dest` WITHOUT ever replacing an existing
+/// one. `std::fs::rename` silently swaps an empty target dir on Unix, so a racer
+/// (e.g. a sync client) that recreated the reserved `<basename>/` between the
+/// up-front reservation and here would be clobbered. Instead `create_dir` the
+/// destination atomically — `AlreadyExists` on a race, which we propagate to
+/// refuse — then move each extracted entry in (a plain `rename` per top-level
+/// child preserves any nested media subdirs). On ANY failure the partial `dest`
+/// is removed, so a failed publish leaves nothing behind; the media is our own
+/// regenerable extraction, so discarding it is safe.
+fn publish_media_dir(staged: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(dest)?; // Err(AlreadyExists) if the name was raced
+    let moved = (|| -> std::io::Result<()> {
+        for entry in std::fs::read_dir(staged)? {
+            let entry = entry?;
+            std::fs::rename(entry.path(), dest.join(entry.file_name()))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = moved {
+        let _ = std::fs::remove_dir_all(dest); // roll back our partial dest
+        return Err(e);
+    }
+    let _ = std::fs::remove_dir(staged); // the now-empty staged media dir
+    Ok(())
+}
+
 fn publish_inner(
     plan: &StagePlan,
     target_dir: &Path,
@@ -319,15 +345,13 @@ fn publish_inner(
     if media_has_files {
         let dest = target_dir.join(&plan.media_name);
         // The basename was reserved (note + media dir both free) up front, so
-        // dest should be free; a directory here means the name was claimed
-        // AFTER reservation — refuse rather than merge/clobber.
-        if dest.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "media directory already exists at destination",
-            ));
-        }
-        std::fs::rename(&staged_media, &dest)?;
+        // dest should be free; a directory here means the name was claimed AFTER
+        // reservation — refuse rather than merge/clobber. `publish_media_dir`
+        // does this atomically (`create_dir` fails if the name exists): plain
+        // `std::fs::rename` would SILENTLY REPLACE an empty raced dir on Unix,
+        // clobbering a sync client that just recreated it — the never-clobber
+        // invariant the note write also holds (Codex review).
+        publish_media_dir(&staged_media, &dest)?;
         published_media = Some(dest);
         // KNOWN LIMITATION (docs/Gaps.md): if the process is killed / loses
         // power in the ~two-rename window between here and the note write
@@ -551,6 +575,35 @@ mod tests {
         );
         // media rolled back — no orphaned sibling folder
         assert!(!target.join("2026-07-10 Doc").exists());
+    }
+
+    #[test]
+    fn publish_refuses_a_raced_media_dir_without_clobbering_it() {
+        // A racer (e.g. a sync client) recreated the reserved media dir after
+        // reservation. publish must refuse and NOT replace it — the failure
+        // mode plain std::fs::rename would silently swap for an empty dir.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_staging(&target, "2026-07-10 Doc", "u");
+        std::fs::create_dir_all(&plan.work_dir).unwrap();
+        std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
+        let media = plan.work_dir.join(&plan.media_name);
+        std::fs::create_dir_all(&media).unwrap();
+        std::fs::write(media.join("image1.png"), b"PNG").unwrap();
+        // The raced media dir at dest — with content, to prove none is lost.
+        let dest = target.join("2026-07-10 Doc");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("theirs.txt"), b"raced").unwrap();
+
+        let result = publish(&plan, &target, "---\n---\n\n");
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("theirs.txt")).unwrap(),
+            "raced" // untouched — never clobbered
+        );
+        assert!(!dest.join("image1.png").exists()); // our media not merged in
+        assert!(!target.join("2026-07-10 Doc.md").exists()); // no note written
     }
 
     #[test]
