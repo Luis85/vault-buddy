@@ -262,6 +262,39 @@ describe("capture store", () => {
     expect(store.transcriptions["queued.mp3"]).toBeDefined();
   });
 
+  it("transcribeRetargeted re-keys a seeded queued row to the renamed mp3", async () => {
+    // Codex review, PR #46: the shell's rename retarget moved only the Rust
+    // queue entry; a panel that had already seeded transcriptions[old] from
+    // transcription_queue_status kept the stale row, which never received a
+    // terminal event (the worker emits for the NEW mp3) — visible and
+    // cancelable forever, overcounting the summary.
+    mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
+    const store = useCaptureStore();
+    await store.init();
+    store.transcriptions = {
+      "/v/old.mp3": { mp3: "/v/old.mp3", vaultId: "v1", name: "old", phase: "queued", progress: null, model: null, error: null, startedAtMs: 5 },
+    };
+    state.eventHandlers["capture:transcribeRetargeted"]!({ payload: { from: "/v/old.mp3", to: "/v/new (2).mp3" } });
+    expect(store.transcriptions["/v/old.mp3"]).toBeUndefined();
+    const moved = store.transcriptions["/v/new (2).mp3"];
+    expect(moved).toBeDefined();
+    expect(moved.phase).toBe("queued"); // queued state preserved
+    expect(moved.vaultId).toBe("v1");
+    expect(moved.mp3).toBe("/v/new (2).mp3"); // mp3 field re-pointed
+    expect(moved.name).toBe("new (2)"); // display name recomputed from the new path
+  });
+
+  it("transcribeRetargeted is a no-op when no row was seeded for the old mp3", async () => {
+    // The worker will emit capture:transcribing for the new name and seed it
+    // fresh — the retarget event must not conjure a phantom row.
+    mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribeRetargeted"]!({ payload: { from: "/v/old.mp3", to: "/v/new.mp3" } });
+    expect(store.transcriptions["/v/old.mp3"]).toBeUndefined();
+    expect(store.transcriptions["/v/new.mp3"]).toBeUndefined();
+  });
+
   it("surfaces a transcription failure reason as a notification", async () => {
     mockIPC((cmd) =>
       cmd === "capture_status"

@@ -187,6 +187,22 @@ export const useCaptureStore = defineStore("capture", {
       }
     },
     /**
+     * Re-key a seeded transcription row after a capture rename retargeted its
+     * queued job (Codex, PR #46). The row is keyed by mp3 path; without this
+     * a panel that seeded `transcriptions[from]` from transcription_queue_status
+     * keeps a stale row that never gets a terminal event (the worker now emits
+     * for `to`), so it stays visible/cancelable forever and overcounts the
+     * summary. A no-op when nothing was seeded — the worker's own
+     * capture:transcribing seeds `to` fresh, so conjuring a phantom row here
+     * would be wrong.
+     */
+    retargetTranscription(from: string, to: string) {
+      const job = this.transcriptions[from];
+      if (!job) return;
+      delete this.transcriptions[from];
+      this.transcriptions[to] = { ...job, mp3: to, name: nameOf(to) };
+    },
+    /**
      * Record an observation of the currently-active job for the "taking
      * longer than expected" hint. Called from Transcriptions.vue's
      * `watch(() => activeTranscription, ..., { immediate: true })`, so
@@ -371,6 +387,15 @@ export const useCaptureStore = defineStore("capture", {
         this.upsert(event.payload.mp3, { phase: "cancelled", progress: null, skipped: false });
         this.refreshWaitingForRecording();
       });
+      // A capture rename retargeted a still-queued job to a new path; move
+      // this window's seeded row to match, or it strands under the old key
+      // (Codex, PR #46 — the backend queue was fixed, the store was not).
+      await listen<{ from: string; to: string }>(
+        "capture:transcribeRetargeted",
+        (event) => {
+          this.retargetTranscription(event.payload.from, event.payload.to);
+        },
+      );
       await listen<{ atMs: number }>("capture:paused", (event) => {
         this.paused = true;
         this.pausedSinceMs = event.payload.atMs ?? Date.now();

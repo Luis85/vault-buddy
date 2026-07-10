@@ -974,10 +974,16 @@ pub fn rename_capture(
         Path::new(&mp3),
         outcome.mp3.clone(),
     ) {
-        log::info!(
-            "transcribe: retargeted queued transcription from {} to {}",
-            mp3,
-            outcome.mp3.display()
+        let to = outcome.mp3.to_string_lossy().into_owned();
+        log::info!("transcribe: retargeted queued transcription from {mp3} to {to}");
+        // Tell every window to re-key its seeded row: the Rust queue moved,
+        // but a panel that already seeded transcriptions[old] from
+        // transcription_queue_status would otherwise strand it — no terminal
+        // event ever arrives for the old key (Codex PR #46). Field names match
+        // the capture store's listener payload ({ from, to }).
+        let _ = app.emit(
+            "capture:transcribeRetargeted",
+            serde_json::json!({ "from": mp3, "to": to }),
         );
     }
     Ok(RenamedPayload {
