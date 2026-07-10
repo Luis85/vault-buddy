@@ -288,13 +288,11 @@ absolute local paths (`capture_commands.rs:347/980`,
 
 ## 4. Frontend defects & races
 
-### GAP-27 · Medium · Escape in an open dropdown also closes the whole panel
-`src/components/SelectMenu.vue:101-103` + `src/roots/PanelRoot.vue:23-25`.
-`onPopupKeydown` handles Escape with `preventDefault()` but no
-`stopPropagation()`; the keydown bubbles to `window`, where PanelRoot calls
-`close_panel`. Dismissing the bitrate/model/duration dropdown in settings
-hides the entire panel. Search's Escape handler shows the intended pattern.
-**Fix:** `e.stopPropagation()` in SelectMenu's Escape branch.
+### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
+`onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
+`closeMenu()`, matching Search's handler; a regression test opens the popup,
+dispatches Escape on it, and asserts a `window` keydown listener is never
+called.
 
 ### GAP-28 · Medium · The quiet startup update check can stomp a manual check or an in-flight install
 `src/stores/updates.ts:61-73`.
@@ -364,15 +362,16 @@ task document from the half-composed title (a sanctioned vault write).
   non-nullable `number` while `capture.ts:63` defends with `!= null`; one
   of them is wrong. Make it `number | null` to match the defensive read.
 
-### GAP-33 · Low · Accessibility gaps in the two listbox surfaces
-- `src/components/Search.vue:260` — static `aria-expanded="true"` claims an
-  always-open popup even for empty/recents states; bind to
-  `visibleHits.length > 0` and add `aria-autocomplete="list"`.
-- `src/components/SelectMenu.vue:144-169` — keyboard highlight is
-  visual-only: no option `id`s, no `aria-activedescendant`, no
-  `scrollIntoView` (a 13-item list scrolls at 220 px, so the highlight
-  moves off-screen), no Home/End/typeahead — and the 4 existing tests cover
-  none of the keyboard path.
+### GAP-33 · ~~Low~~ FIXED 2026-07-10 · Accessibility gaps in the two listbox surfaces
+- `src/components/SelectMenu.vue` — options now carry `optionId(i)` ids, the
+  listbox binds `aria-activedescendant` to the highlighted option, keyboard
+  moves (`ArrowUp`/`ArrowDown`/`Home`/`End`) call `setActive` which
+  `scrollIntoView`s the option (pointermove keeps the bare assignment so
+  hover can't fight keyboard scrolling); keyboard-path tests pin
+  activedescendant tracking and Home/End.
+- `src/components/Search.vue` — `aria-expanded` now binds to
+  `visibleHits.length > 0` instead of a static `"true"`, plus
+  `aria-autocomplete="list"`.
 
 ## 5. Security & configuration
 
@@ -531,8 +530,8 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   untested (only `rootFor` is).
 - `UpdateSettings.vue` is tested only indirectly through
   `buddy-settings.test.ts`; `HighlightText.vue` only via the util's tests.
-- `SelectMenu.vue`'s 4 tests cover none of the keyboard path, outside-click
-  close, or positioning (GAP-33).
+- `SelectMenu.vue`'s tests now cover the keyboard path (GAP-33, fixed
+  2026-07-10) but not outside-click close or positioning.
 - Event-listener cleanup paths in the roots and `capture.init()` re-entry
   (GAP-32) have no tests.
 
