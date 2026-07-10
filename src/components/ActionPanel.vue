@@ -101,14 +101,18 @@ function onFilterEscape(event: KeyboardEvent) {
 // longer fires on close and transient UI used to survive a close-and-reopen.
 // `shownNonce` bumps each time Rust re-shows the panel (see PanelRoot /
 // toggle_panel's panel-shown event): treat it as the reopen signal and clear
-// what a close used to reset — the filter text and a lingering post-save
-// rename prompt. (The record chooser is now a store-owned view, reset by
+// what a close used to reset — the filter text and a STALE rename prompt
+// only (GAP-29: a tray-stopped recording arms `lastSaved` while the panel is
+// hidden, and an unconditional dismiss here killed that prompt before it
+// ever rendered — the 30 s window only worked if the panel was already
+// open). `dismissRenameIfStale` keeps anything younger than
+// RENAME_PROMPT_MS. (The record chooser is now a store-owned view, reset by
 // `refresh`/`showList`, so it needs no local teardown here.)
 watch(
   () => store.shownNonce,
   () => {
     filter.value = "";
-    capture.dismissRename();
+    capture.dismissRenameIfStale();
   },
 );
 </script>

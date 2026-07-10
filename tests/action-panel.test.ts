@@ -419,6 +419,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
     capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    capture.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("name this recording");
 
@@ -426,6 +427,24 @@ describe("ActionPanel", () => {
     store.shownNonce++; // the panel was reopened
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).not.toContain("name this recording");
+  });
+
+  it("keeps a fresh rename prompt when the panel is shown again (GAP-29)", async () => {
+    // Regression: this test used to fail with an unconditional
+    // `capture.dismissRename()` in the shownNonce watcher — a tray-stopped
+    // recording arms lastSaved while the panel is hidden, and the reopen
+    // reset killed the prompt before it ever rendered.
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    capture.lastSavedAtMs = Date.now() - 5_000; // well within RENAME_PROMPT_MS
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
+
+    const store = useVaultsStore();
+    store.shownNonce++; // the panel was reopened
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
   });
 
   it("renders the Recordings view with its title", async () => {

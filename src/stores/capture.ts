@@ -107,6 +107,9 @@ export const useCaptureStore = defineStore("capture", {
     waitingForRecording: false,
     /** Post-save rename window; null once renamed/dismissed/expired. */
     lastSaved: null as { mp3: string; note: string | null } | null,
+    /** Wall-clock time `lastSaved` was armed — lets `dismissRenameIfStale`
+     * tell a genuinely stale prompt from a fresh one (GAP-29). */
+    lastSavedAtMs: null as number | null,
     renameError: null as string | null,
     renameTimer: null as ReturnType<typeof setTimeout> | null,
   }),
@@ -265,6 +268,7 @@ export const useCaptureStore = defineStore("capture", {
         this.error = null;
         this.warning = null;
         this.lastSaved = { mp3: event.payload.mp3, note: event.payload.note };
+        this.lastSavedAtMs = Date.now();
         this.renameError = null;
         this.armRenameExpiry();
         // waitingForRecording is backend truth computed as `active.is_none()
@@ -560,7 +564,18 @@ export const useCaptureStore = defineStore("capture", {
         this.renameTimer = null;
       }
       this.lastSaved = null;
+      this.lastSavedAtMs = null;
       this.renameError = null;
+    },
+    /** Dismiss the rename prompt only when it is genuinely stale (older than
+     * the rename window) — the panel-reopen reset must not kill a fresh
+     * prompt armed while the panel was closed (GAP-29). The 30 s timer is
+     * the primary expiry; this is the reopen-time belt for throttled timers
+     * in a hidden webview. */
+    dismissRenameIfStale() {
+      if (!this.lastSaved) return;
+      if (this.lastSavedAtMs != null && Date.now() - this.lastSavedAtMs < RENAME_PROMPT_MS) return;
+      this.dismissRename();
     },
     async rename(title: string) {
       if (!this.lastSaved) return;

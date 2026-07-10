@@ -802,6 +802,19 @@ describe("capture store", () => {
     vi.useRealTimers();
   });
 
+  it("panel reopen keeps a rename prompt younger than the rename window (GAP-29)", () => {
+    // A tray-stopped recording arms lastSaved in the hidden panel's store;
+    // the shownNonce watcher used to dismiss it before it ever rendered.
+    const store = useCaptureStore();
+    store.lastSaved = { mp3: "/v/2026-07-10 1200 Meeting.mp3", note: null };
+    store.lastSavedAtMs = Date.now() - 5_000; // 5 s old — fresh
+    store.dismissRenameIfStale();
+    expect(store.lastSaved).not.toBeNull();
+    store.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS — stale
+    store.dismissRenameIfStale();
+    expect(store.lastSaved).toBeNull();
+  });
+
   it("rename calls rename_capture and updates the saved file", async () => {
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockIPC((cmd, args) => {

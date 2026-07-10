@@ -299,15 +299,11 @@ called.
 `await check()` and discards the stale result otherwise, so it can never
 flip `phase`/`available` under a manual check or a mid-flight install.
 
-### GAP-29 · Medium · The rename prompt is unreachable for saves that happen while the panel is closed
-`src/components/ActionPanel.vue:97-103`.
-The `shownNonce` watcher calls `capture.dismissRename()` on every
-`panel-shown`. A recording stopped from the tray (panel closed) arms
-`lastSaved` in the hidden panel's store; opening the panel to name the
-recording kills the prompt before it renders — the 30 s rename window only
-works if the panel was already open.
-**Fix:** only dismiss when the prompt is older than a threshold (a real
-*stale* prompt), or skip the dismiss on the first show after a save.
+### GAP-29 · ~~Medium~~ FIXED 2026-07-10 · The rename prompt is unreachable for saves that happen while the panel is closed
+The store now stamps `lastSavedAtMs` on `capture:saved`; the `shownNonce`
+watcher calls the new `dismissRenameIfStale()` instead of an unconditional
+`dismissRename()`, so a prompt younger than `RENAME_PROMPT_MS` survives a
+reopen.
 
 ### GAP-30 · Medium · After a failed config read, one transcription toggle rewrites the vault's capture config to defaults
 `src/components/RecordMode.vue:105-118, 87`.
