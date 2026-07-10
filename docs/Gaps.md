@@ -44,6 +44,20 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
+### GAP-55 · Low · A document dropped during an in-flight import is silently discarded
+`src/components/ImportVaultPicker.vue` (`pick`) + `src/stores/vaults.ts`
+(`begin_document_import` → `refresh()` re-arms `pendingImportPath`;
+`showList()` clears it). If a second document is dropped on the buddy while
+the first conversion is still running, `begin_document_import` overwrites
+`pendingImportPath` with the new path; when the first `pick()` promise
+resolves it calls `showList()`, which clears `pendingImportPath` — so the
+second drop is dropped with no toast or error. Narrow (requires a drop
+during an in-flight conversion, and imports are serialized by `ImportLock`
+so only one runs at a time anyway) and non-destructive (nothing is written;
+the user simply re-drops). **Fix, if pursued:** queue pending import paths
+instead of a single-slot stash, or refuse a drop while an import is in
+flight with a "one at a time" toast. Surfaced by the Task 9 review.
+
 ### GAP-54 · Low · Document-import media publish has a non-atomic crash window
 `src-tauri/core/src/document_import.rs` (`publish_inner`, the media
 `rename` before the note `write_note_atomic`). Publishing moves the media

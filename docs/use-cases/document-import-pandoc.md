@@ -1,10 +1,12 @@
 ---
 type: UseCase
-status: planned
+status: shipped
 domain: knowledge-intake
 source_prd: "docs/prds/knowledge-intake.md"
 related_specs:
   - "docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md"
+related_plans:
+  - "docs/superpowers/plans/2026-07-10-document-import-pandoc.md"
 tags: [use-case, knowledge-intake]
 ---
 
@@ -16,9 +18,13 @@ tags: [use-case, knowledge-intake]
 
 Knowledge Intake PRD, [Capability Overview](../prds/knowledge-intake.md) and [Vault Settings](../prds/knowledge-intake.md): a new Capture Provider alongside Audio Recording, tracked separately from the generic "File Import" Version 3 placeholder because it's fully specified and nearer-term.
 
-## Status: Not started (design complete)
+## Status: Shipped
 
-Design: [2026-07-10-document-import-pandoc-design.md](../superpowers/specs/2026-07-10-document-import-pandoc-design.md). No code exists yet.
+Design: [2026-07-10-document-import-pandoc-design.md](../superpowers/specs/2026-07-10-document-import-pandoc-design.md);
+implementation: [2026-07-10-document-import-pandoc.md](../superpowers/plans/2026-07-10-document-import-pandoc.md).
+The domain lives in `core/src/document_import.rs` + `src-tauri/src/document_commands.rs`
+with the settings/picker UI in `DocumentImportSettings.vue` / `ImportVaultPicker.vue`;
+see AGENTS.md § The document-import domain for the invariants.
 
 ## Summary
 
