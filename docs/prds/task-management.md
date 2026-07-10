@@ -4,19 +4,22 @@
   listing, and completion in v0.5.0; archive + open-task counter in v0.5.1;
   due dates, priority, date buckets, inline editing, open-in-Obsidian and
   filtering in v0.5.2; Obsidian-compatible tags on Tasks (chips, tag filter,
-  tag grouping) in v0.5.3. Cross-vault aggregation, lists, the dashboard,
-  templates, Task Tags on non-Task notes / Todos, and the AI features below
-  remain unbuilt. See [Per-Vault Task List](../use-cases/per-vault-task-list.md).
+  tag grouping) in v0.5.3; the cross-vault aggregated view (one merged
+  "All tasks" list, frontend fan-out over the per-vault commands) in
+  v0.5.4. User-defined lists, the dashboard, templates, Task Tags on
+  non-Task notes / Todos, and the AI features below remain unbuilt. See
+  [Per-Vault Task List](../use-cases/per-vault-task-list.md) and
+  [Aggregated Task Dashboard & Lists](../use-cases/aggregated-task-dashboard-and-lists.md).
 - **Version:** 1.0
 - **Parent Product:** Vault Buddy
 
 Use cases extracted from this PRD, with shipping status: [Per-Vault Task
 List](../use-cases/per-vault-task-list.md) (shipped v0.5.0, extended
-through v0.5.3), [Task Tags &
-Todos](../use-cases/task-tags-and-todos.md), [Aggregated Task Dashboard &
-Lists](../use-cases/aggregated-task-dashboard-and-lists.md), [AI-Assisted
-Task Management](../use-cases/ai-assisted-task-management.md) (all
-planned). See [docs/use-cases/](../use-cases/README.md) for the full
+through v0.5.3), [Aggregated Task Dashboard &
+Lists](../use-cases/aggregated-task-dashboard-and-lists.md) (aggregated
+view shipped v0.5.4; lists/modal/bulk/search planned), [Task Tags &
+Todos](../use-cases/task-tags-and-todos.md) and [AI-Assisted
+Task Management](../use-cases/ai-assisted-task-management.md) (planned). See [docs/use-cases/](../use-cases/README.md) for the full
 catalog.
 
 ---
@@ -394,7 +397,9 @@ Obsidian is never required for creating or editing tasks.
 - Task creation — ✅ shipped (v0.5.0; due/priority/tags on create by v0.5.3)
 - Task editing — ✅ shipped per vault (v0.5.2/v0.5.3: inline rename, due,
   priority, tags, archive; delete/move/duplicate still open)
-- Task aggregation — unbuilt
+- Task aggregation — ✅ shipped (v0.5.4: the merged All-tasks view with
+  vault attribution and a vault-picking add; Task-tagged Notes as aggregate
+  rows still open)
 - Task lists — unbuilt
 - Dashboard — unbuilt (per-vault date buckets shipped in v0.5.2 are the
   single-vault precursor)

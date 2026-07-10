@@ -1,6 +1,6 @@
 ---
 type: UseCase
-status: partially-shipped
+status: shipped
 domain: task-management
 source_prd: "docs/prds/task-management.md"
 shipped_in: v0.5.4
