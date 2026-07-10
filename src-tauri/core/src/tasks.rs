@@ -276,7 +276,17 @@ fn parse_tags_key(content: &str, key: &str) -> Option<Vec<String>> {
                 if next.trim_end() == "---" {
                     break;
                 }
-                let Some(item) = next.trim_start().strip_prefix("- ") else {
+                let t = next.trim_start();
+                // A comment-only line before/between items is YAML-skippable
+                // — breaking here silently dropped every tag after it
+                // (Codex, PR #46). A whole line starting `#` is always a
+                // comment (the lenient `#work`-as-tag form only exists
+                // inside a VALUE, never as a line).
+                if t.starts_with('#') {
+                    lines.next();
+                    continue;
+                }
+                let Some(item) = t.strip_prefix("- ") else {
                     break;
                 };
                 items.push(strip_inline_comment(item.trim()).trim());
@@ -450,8 +460,12 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if skip_list_items {
             let starts_indented = line.starts_with([' ', '\t']);
-            if starts_indented || trimmed.trim_start().starts_with("- ") {
-                continue; // item or its indented continuation — part of the consumed value
+            let t = trimmed.trim_start();
+            // Comment-only lines ride with the block they annotate — the
+            // reader scans past them (see parse_tags_key), so the writer
+            // must consume them too or an edit would orphan them.
+            if starts_indented || t.starts_with("- ") || t.starts_with('#') {
+                continue; // item, its indented continuation, or a comment
             }
             skip_list_items = false;
         }
@@ -1396,6 +1410,41 @@ mod tests {
         assert_eq!(
             note_tags("---\ntype: Task\ntags:[work]\n---\n"),
             vec!["work"]
+        );
+    }
+
+    #[test]
+    fn note_tags_skips_comment_only_lines_inside_a_block_list() {
+        // Codex review, PR #46: a comment-only line before or between block
+        // items (`tags:` / `  # areas` / `  - work`) broke the item scan and
+        // silently dropped every tag after it — YAML skips comment lines
+        // inside a block list, so the reader must scan past them.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags:\n  # areas\n  - work\n- home\n---\n"),
+            vec!["work", "home"]
+        );
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags:\n- work\n# midway\n- home\ntitle: \"T\"\n---\n"),
+            vec!["work", "home"]
+        );
+    }
+
+    #[test]
+    fn set_fields_consumes_comment_lines_inside_a_block_list() {
+        // Writer mirror of the reader rule above: rewriting/removing a block
+        // key must consume the block's comment-only lines along with its
+        // items, or they'd orphan into the frontmatter after the edit.
+        let doc = "---\ntype: Task\nstatus: new\ntags:\n# areas\n- work\n  # midway\n- home\ntitle: \"A\"\n---\nbody\n";
+        let out = set_fields(doc, &[("tags", Some("[crafts]"))]).unwrap();
+        assert!(out.contains("tags: [crafts]\n"));
+        assert!(!out.contains("- work"));
+        assert!(!out.contains("# areas"));
+        assert!(!out.contains("# midway"));
+        assert!(out.contains("title: \"A\"\n"));
+        let out = set_fields(doc, &[("tags", None)]).unwrap();
+        assert_eq!(
+            out,
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\nbody\n"
         );
     }
 
