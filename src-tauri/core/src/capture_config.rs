@@ -464,10 +464,7 @@ pub fn update_document_import_config_at(
     path: &Path,
     di: DocumentImportConfig,
 ) -> std::io::Result<()> {
-    let mut cfg = match std::fs::read_to_string(path) {
-        Ok(json) => parse_config(&json),
-        Err(_) => AppConfig::default(),
-    };
+    let mut cfg = load_config_from(path);
     cfg.document_import = di;
     write_config(path, &cfg)
 }
