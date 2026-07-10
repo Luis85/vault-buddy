@@ -9,7 +9,10 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery, document_import};
+
+use crate::capture_commands::ConfigWriteLock;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,6 +197,19 @@ const CONVERT_TIMEOUT: Duration = Duration::from_secs(120);
 #[derive(Default, Clone)]
 pub struct ImportLock(pub std::sync::Arc<std::sync::Mutex<()>>);
 
+/// `try_lock` that treats a POISONED mutex as acquired. The guarded state is
+/// `()` — there is nothing a panic-while-held could actually corrupt — so
+/// poisoning must not permanently wedge every future import behind a single
+/// past panic. Only `WouldBlock` (an import genuinely in progress right now)
+/// means "don't proceed"; that fail-fast semantics is unchanged.
+fn try_acquire(m: &std::sync::Mutex<()>) -> Option<std::sync::MutexGuard<'_, ()>> {
+    match m.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 /// Monotonic per-invocation token so two same-date imports can't collide on
 /// the staging dir name even across the (lock-serialized) boundary.
 static IMPORT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -221,9 +237,9 @@ pub async fn convert_document(
     // thread; ImportLock stores that Arc (see the struct note).
     let mutex = lock.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = match mutex.try_lock() {
-            Ok(g) => g,
-            Err(_) => return Err("An import is already in progress.".to_string()),
+        let _guard = match try_acquire(&mutex) {
+            Some(g) => g,
+            None => return Err("An import is already in progress.".to_string()),
         };
         convert_blocking(&id, &source_path, &today_str, &year, &month, &unique)
     })
@@ -243,6 +259,14 @@ fn convert_blocking(
     unique: &str,
 ) -> Result<String, String> {
     let src = Path::new(source_path);
+    // Pandoc runs with cwd = the staging work_dir, not the caller's cwd — a
+    // relative source_path would resolve against the WRONG directory and
+    // either fail confusingly or (worse) read an unintended file. The
+    // frontend always sends an absolute path from the native file picker;
+    // this is a defense-in-depth guard, not the primary contract.
+    if !src.is_absolute() {
+        return Err("Import failed — the file path must be absolute.".into());
+    }
     let ext = src
         .extension()
         .and_then(|e| e.to_str())
@@ -394,6 +418,68 @@ pub async fn detect_pandoc() -> PandocStatus {
     })
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentsConfigDto {
+    pub documents_folder: Option<String>,
+}
+
+/// Per-vault documents folder (or None → the frontend shows the "Documents"
+/// default). Unknown vault → None, never an error. Mirrors get_tasks_config.
+#[tauri::command]
+pub fn get_documents_config(id: String) -> DocumentsConfigDto {
+    let vault = capture_config::vault_config(&capture_config::load_config(), &id);
+    DocumentsConfigDto {
+        documents_folder: vault.documents_folder,
+    }
+}
+
+/// Persist the vault's documents folder. Validates containment BEFORE writing
+/// (the effective folder — explicit or the "Documents" default — must stay in
+/// the vault), serialized behind ConfigWriteLock. Read-modify-write preserves
+/// the vault's other config. Mirrors set_tasks_config exactly.
+#[tauri::command]
+pub fn set_documents_config(
+    lock: tauri::State<ConfigWriteLock>,
+    id: String,
+    documents_folder: Option<String>,
+) -> Result<(), String> {
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let folder = documents_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
+    let effective = folder.as_deref().unwrap_or("Documents");
+    let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
+    capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
+    v.documents_folder = folder;
+    capture_config::update_vault_config(&id, v)
+}
+
+/// App-global Pandoc path override (None → PATH lookup). Serialized behind
+/// ConfigWriteLock; round-tripped by serialize_config (Task 1).
+#[tauri::command]
+pub fn set_pandoc_path(
+    lock: tauri::State<ConfigWriteLock>,
+    pandoc_path: Option<String>,
+) -> Result<(), String> {
+    let path = pandoc_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string);
+    let _guard = lock_ignoring_poison(&lock.0);
+    capture_config::update_document_import_config(capture_config::DocumentImportConfig {
+        pandoc_path: path,
+    })
+}
+
 /// Staleness floor: only sweep staging dirs older than this, so a live
 /// conversion's fresh dir is never touched even if the ImportLock check
 /// somehow raced. 10 min is comfortably longer than any real conversion.
@@ -419,7 +505,7 @@ pub fn run_import_recovery(app: &AppHandle) {
                 // lock convert takes. If we can't get it, an import is mid-flight
                 // and its fresh staging dir must not be swept — retry later.
                 let lock = app.state::<ImportLock>();
-                let Ok(_guard) = lock.0.try_lock() else {
+                let Some(_guard) = try_acquire(&lock.0) else {
                     log::info!("import-recovery: postponed while an import is active");
                     return true; // pending → retry
                 };

@@ -1,11 +1,7 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
-// pub: the detect_pandoc command + PandocStatus DTO aren't wired into
-// generate_handler! yet (that's Task 6 of the document-import slice) — pub
-// keeps them part of the crate's public API so dead_code doesn't fire on
-// code that is genuinely about to be used, not actually dead.
-pub mod document_commands;
+mod document_commands;
 mod mcp_commands;
 mod search_commands;
 mod task_commands;
@@ -244,6 +240,7 @@ pub fn run() {
         .manage(transcription::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
         .manage(mcp_commands::McpServerState::default())
+        .manage(document_commands::ImportLock::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -351,6 +348,11 @@ pub fn run() {
             mcp_commands::get_mcp_config,
             mcp_commands::set_mcp_config,
             mcp_commands::regenerate_mcp_token,
+            document_commands::detect_pandoc,
+            document_commands::convert_document,
+            document_commands::get_documents_config,
+            document_commands::set_documents_config,
+            document_commands::set_pandoc_path,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
