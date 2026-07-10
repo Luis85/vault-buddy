@@ -73,16 +73,11 @@ schedule resyncs `next_tick` to `now + TICK` (suspend gap never encoded);
 a wake before schedule (pause/resume control message) consumes nothing.
 Catch-up under 500 ms is unchanged (backpressure still averages out).
 
-### GAP-06 · Medium · Never-clobber degrades to a racy fallback on filesystems without hard links
-`src-tauri/core/src/capture_paths.rs:269-291` (`rename_noreplace`), used by
-every finalize/note write and recovery.
-When `hard_link` fails with anything other than AlreadyExists/NotFound
-(exFAT, FAT32, SMB shares), the fallback is a TOCTOU-racy `exists()` check
-+ replacing `std::fs::rename`. A sync client creating the same name between
-check and rename gets its file silently replaced — the one path where the
-headline invariant can break. Documented in-code as deliberate leniency.
-**Fix:** on Windows use `MoveFileExW` *without* `MOVEFILE_REPLACE_EXISTING`
-(natively non-replacing) instead of the exists-guarded rename.
+### GAP-06 · ~~Medium~~ FIXED 2026-07-10 · Never-clobber degrades to a racy fallback on filesystems without hard links
+On Windows the fallback is now MoveFileExW WITHOUT MOVEFILE_REPLACE_EXISTING
+(natively non-replacing, no TOCTOU window); non-Windows keeps the guarded
+rename (compile gate only, never shipped). Windows-arm execution arrives
+with sub-pass D's Windows `cargo test` step (GAP-43).
 
 ### GAP-07 · Medium · `rename_capture` has no vault-containment check at all
 `src-tauri/src/capture_commands.rs:779-820`.

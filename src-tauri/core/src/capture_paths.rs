@@ -294,6 +294,53 @@ fn hard_link_error_is_decisive(e: &std::io::Error) -> bool {
     )
 }
 
+/// The non-decisive-error fallback for filesystems that can't hard-link
+/// (exFAT/FAT32/SMB). On Windows: MoveFileExW WITHOUT
+/// MOVEFILE_REPLACE_EXISTING is natively non-replacing — it fails with
+/// ERROR_ALREADY_EXISTS when `to` exists, which io::Error maps to
+/// ErrorKind::AlreadyExists, exactly the signal our suffix-retry callers
+/// key on. This closes the TOCTOU window the old exists()+rename check had
+/// (GAP-06): a sync client creating the same name between check and rename
+/// was silently replaced — the one path where never-clobber could break.
+#[cfg(windows)]
+fn rename_noreplace_fallback(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    fn wide(p: &Path) -> Vec<u16> {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    // Flags deliberately 0: same-directory move (all callers), no replace,
+    // no copy fallback needed.
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+            wide(from).as_ptr(),
+            wide(to).as_ptr(),
+            0,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Non-Windows keeps the guarded rename it always had: these builds are the
+/// Linux compile gate and tests, never a shipped binary, and Unix has no
+/// portable non-replacing rename below renameat2 (not in std).
+#[cfg(not(windows))]
+fn rename_noreplace_fallback(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "destination exists",
+        ));
+    }
+    std::fs::rename(from, to)
+}
+
 /// Atomic non-replacing move: hard_link + remove_file fails with
 /// AlreadyExists if `to` exists — unlike std::fs::rename, which
 /// replaces on both Unix and Windows.
@@ -309,13 +356,12 @@ fn hard_link_error_is_decisive(e: &std::io::Error) -> bool {
 ///   `rename_into_reserved`) into an endless suffix-minting loop, since
 ///   `to` existing looks like a fresh collision on every retry.
 /// - Any `hard_link` error *except* `AlreadyExists`/`NotFound` (see
-///   `hard_link_error_is_decisive`) falls back to the guarded
-///   exists()+rename path — the same racy-but-pre-check-guarded
-///   behavior this function had before hard links were introduced, so
-///   it can never be worse than what shipped before. This covers
-///   exFAT/FAT32/SMB filesystems that report all sorts of "can't hard
-///   link" codes, not just the ones we happen to have enumerated.
-///   NTFS/ext4 keep the atomic hard-link path.
+///   `hard_link_error_is_decisive`) falls back to the platform's native
+///   non-replacing move on Windows (MoveFileExW without
+///   MOVEFILE_REPLACE_EXISTING); the pre-check-guarded rename elsewhere.
+///   This covers exFAT/FAT32/SMB filesystems that report all sorts of
+///   "can't hard link" codes, not just the ones we happen to have
+///   enumerated. NTFS/ext4 keep the atomic hard-link path.
 pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(from, to) {
         Ok(()) => {
@@ -328,15 +374,7 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
             Ok(())
         }
         Err(e) if hard_link_error_is_decisive(&e) => Err(e),
-        Err(_) => {
-            if to.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    "destination exists",
-                ));
-            }
-            std::fs::rename(from, to)
-        }
+        Err(_) => rename_noreplace_fallback(from, to),
     }
 }
 
@@ -592,6 +630,63 @@ mod tests {
         rename_noreplace(&from, &to).unwrap();
         assert!(!from.exists(), "source removed");
         assert_eq!(std::fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    #[test]
+    fn fallback_refuses_existing_destination() {
+        // GAP-06: the non-decisive-error fallback (filesystems without hard
+        // links: exFAT/FAT32/SMB) must be non-replacing. On Windows that is
+        // MoveFileExW WITHOUT MOVEFILE_REPLACE_EXISTING (native, no TOCTOU
+        // window); elsewhere the guarded exists()+rename remains (the
+        // non-Windows build is a compile gate, never shipped).
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.mp3");
+        let to = dir.path().join("to.mp3");
+        std::fs::write(&from, "a").unwrap();
+        std::fs::write(&to, "keep me").unwrap();
+        let err = rename_noreplace_fallback(&from, &to).expect_err("must not replace");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn fallback_moves_when_destination_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.mp3");
+        let to = dir.path().join("to.mp3");
+        std::fs::write(&from, "a").unwrap();
+        rename_noreplace_fallback(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "a");
+    }
+
+    // Windows twin of the two contract tests above — same two contracts,
+    // gated to `cfg(windows)` because `rename_noreplace_fallback`'s Windows
+    // body calls MoveFileExW via the windows-sys FFI, which only links on a
+    // Windows target. This crate's tests run in the Linux `rust-core` CI
+    // job, so this test does not execute there; it executes once sub-pass
+    // D's Windows `cargo test` CI step lands (GAP-43) — until then it is a
+    // compile-only guarantee that the Windows arm has the same signature
+    // and behavior as the non-Windows arm the Linux job does exercise.
+    #[cfg(windows)]
+    #[test]
+    fn fallback_windows_contract() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let from = dir.path().join("from.mp3");
+        let to = dir.path().join("to.mp3");
+        std::fs::write(&from, "a").unwrap();
+        std::fs::write(&to, "keep me").unwrap();
+        let err = rename_noreplace_fallback(&from, &to).expect_err("must not replace");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "keep me");
+
+        let from2 = dir.path().join("from2.mp3");
+        let to2 = dir.path().join("to2.mp3");
+        std::fs::write(&from2, "a").unwrap();
+        rename_noreplace_fallback(&from2, &to2).unwrap();
+        assert!(!from2.exists());
+        assert_eq!(std::fs::read_to_string(&to2).unwrap(), "a");
     }
 
     #[cfg(unix)]
