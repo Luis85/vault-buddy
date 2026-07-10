@@ -398,6 +398,25 @@ function cancelEdit() {
   editingKey.value = null;
 }
 
+function onEditTitleEnter(task: AggTask, e: KeyboardEvent) {
+  // Mirrors onTitleEnter (GAP-31), which only covered the add-task input —
+  // Codex review, PR #46 round 2 found the inline editor's title field was
+  // missed: an IME candidate commit fires Enter with isComposing=true, which
+  // must select the candidate, not save/close the editor with a
+  // half-composed title.
+  if (e.isComposing) return;
+  void saveEdit(task);
+}
+
+function onEditTitleEsc(e: KeyboardEvent) {
+  // Same guard for Escape: during composition, Escape cancels the IME
+  // CANDIDATE, not the edit — without this, cancelEdit would drop the
+  // in-progress (uncommitted) edit as a side effect of dismissing the
+  // candidate.
+  if (e.isComposing) return;
+  cancelEdit();
+}
+
 async function saveEdit(task: AggTask) {
   if (busy.value.has(task.path)) return;
   const patch: TaskPatch = {};
@@ -646,8 +665,8 @@ async function saveEdit(task: AggTask) {
                 type="text"
                 aria-label="Task title"
                 class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-                @keydown.enter.prevent="saveEdit(task)"
-                @keydown.esc="cancelEdit"
+                @keydown.enter.prevent="onEditTitleEnter(task, $event)"
+                @keydown.esc="onEditTitleEsc"
               >
               <div class="flex items-center gap-1">
                 <input

@@ -507,6 +507,46 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(false);
   });
 
+  it("ignores Enter on the inline editor while composing an IME candidate", async () => {
+    // Codex review, PR #46 round 2: the add-path guard (GAP-31) was applied
+    // to the new-task input but missed the editor's title field — an IME
+    // candidate commit fired Enter with isComposing=true and saved/closed
+    // the editor with a half-composed title.
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    const titleInput = wrapper.get('[data-testid="task-edit-title"]');
+    await titleInput.setValue("候選");
+    await titleInput.trigger("keydown", { key: "Enter", isComposing: true });
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
+    expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(true); // editor still open
+    // After composition ends, normal Enter saves.
+    await titleInput.trigger("keydown", { key: "Enter", isComposing: false });
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")).toEqual({
+      cmd: "update_task",
+      args: { id: "v1", path: "C:/v/Tasks/2026-07-08-b.md", patch: { title: "候選" } },
+    });
+  });
+
+  it("ignores Escape on the inline editor while composing an IME candidate", async () => {
+    // Escape during composition cancels the IME CANDIDATE, not the edit —
+    // without the guard, cancelEdit would drop the in-progress edit too.
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    const titleInput = wrapper.get('[data-testid="task-edit-title"]');
+    await titleInput.setValue("Nope");
+    await titleInput.trigger("keydown", { key: "Escape", isComposing: true });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(true); // editor still open
+    await titleInput.trigger("keydown", { key: "Escape", isComposing: false });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(false);
+    expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
+  });
+
   it("shows the filter only above 5 tasks and narrows by title", async () => {
     const { wrapper } = mountView({ list_tasks: () => many(6) });
     await flushPromises();
