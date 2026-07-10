@@ -229,13 +229,11 @@ the store keeps its saving UI and the capture events finish the story.
 `request_stop_and_wait` returns `StopWait` so no caller can misread a
 timeout as success.
 
-### GAP-21 · High · `start_capture` blocks the main thread for up to 10 s
-`src-tauri/src/capture_commands.rs:514`.
-The sync command waits `ready_rx.recv_timeout(10s)` while the
-`capture-device` thread opens WASAPI devices; a slow or wedged audio driver
-(the timeout's own premise) freezes the entire UI for the duration.
-**Fix:** make it async, or return after the reservation and deliver
-readiness via an event.
+### GAP-21 · ~~High~~ FIXED 2026-07-10 · `start_capture` blocks the main thread for up to 10 s
+Now an async command: the whole start body (device-ready wait included)
+runs under `spawn_blocking` with reservation semantics unchanged; the
+buddy-show indicator tail is marshalled back to the main thread
+(window show is main-thread-only).
 
 ### GAP-22 · Medium · Read-only list commands do unbounded filesystem/device work on the main thread
 `capture_commands.rs:300` (`list_recordings` — scans dated folders and

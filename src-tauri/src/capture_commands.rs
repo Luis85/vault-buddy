@@ -294,10 +294,8 @@ pub fn list_recordings(id: String) -> Vec<RecordingDto> {
     services::list_recordings(&ServicePaths::real(), &id)
 }
 
-#[tauri::command]
-pub fn start_capture(
-    app: AppHandle,
-    state: tauri::State<CaptureState>,
+fn start_capture_blocking(
+    app: &AppHandle,
     id: String,
     mode: Option<String>,
 ) -> Result<StatusPayload, String> {
@@ -342,6 +340,7 @@ pub fn start_capture(
     // Reserve the state up front: the lock is held only for the is-running
     // check plus the insert, which closes the double-start window without
     // serializing device setup (or any I/O) under the mutex.
+    let state = app.state::<CaptureState>();
     {
         let mut guard = lock_ignoring_poison(&state.0);
         if guard.is_some() {
@@ -485,9 +484,9 @@ pub fn start_capture(
     if let Err(e) = device_thread {
         // Without the worker there IS no recording: nothing has touched
         // disk yet, so fail the start cleanly and drop the reservation.
-        clear_active(&app);
+        clear_active(app);
         let msg = format!("Could not start the recording worker: {e}");
-        emit_failed(&app, &msg);
+        emit_failed(app, &msg);
         return Err(msg);
     }
 
@@ -507,8 +506,8 @@ pub fn start_capture(
             started_at_ms
         }
         Ok(Err(e)) => {
-            clear_active(&app);
-            emit_failed(&app, &e);
+            clear_active(app);
+            emit_failed(app, &e);
             return Err(e);
         }
         Err(_) => {
@@ -577,7 +576,7 @@ pub fn start_capture(
                 // `(recovered)` on the next launch.
                 log::error!("could not spawn capture-janitor thread: {e}");
             }
-            emit_failed(&app, &msg);
+            emit_failed(app, &msg);
             return Err(msg);
         }
     };
@@ -621,17 +620,47 @@ pub fn start_capture(
         // and the audio reaches disk (its done_tx send is a no-op into the
         // dropped receiver) — and report the start as failed.
         let _ = control_tx.send(Control::Stop);
-        clear_active(&app);
-        crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Idle);
+        clear_active(app);
+        crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Idle);
         let msg = format!("Recording could not be monitored; stopping: {e}");
-        emit_failed(&app, &msg);
+        emit_failed(app, &msg);
         return Err(msg);
     }
 
-    // Indicator hardening: recording buddy must be visible.
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-    }
+    Ok(payload)
+}
+
+/// ASYNC (GAP-21): the 10 s device-ready wait (`ready_rx.recv_timeout`)
+/// froze the whole UI when this ran as a sync command on the main thread —
+/// a wedged audio driver is the timeout's own premise. The body runs on
+/// the blocking pool; reservation semantics are unchanged (names reserved
+/// under the CaptureState mutex before the worker spawns, double-starts
+/// rejected). The one main-thread-only side effect — showing the buddy,
+/// the recording indicator — is marshalled back via run_on_main_thread
+/// (window show/hide is main-thread-only; tray updates off-main are the
+/// capture-monitor precedent).
+#[tauri::command]
+pub async fn start_capture(
+    app: AppHandle,
+    id: String,
+    mode: Option<String>,
+) -> Result<StatusPayload, String> {
+    let worker = app.clone();
+    let payload =
+        tauri::async_runtime::spawn_blocking(move || start_capture_blocking(&worker, id, mode))
+            .await
+            .map_err(|e| {
+                log::warn!("start_capture: task failed: {e}");
+                "Recording start failed — see the logs for details.".to_string()
+            })??;
+    // Indicator hardening: recording buddy must be visible. Best-effort,
+    // same as before — a failed post just loses the show, never the start.
+    let shower = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = shower.get_webview_window("main") {
+            let _ = window.show();
+        }
+    });
     crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
     let _ = app.emit("capture:started", payload.clone());
     Ok(payload)
@@ -1182,6 +1211,14 @@ mod tests {
     fn stop_capture_is_async() {
         fn takes_async<F: std::future::Future>(_: fn(AppHandle) -> F) {}
         takes_async(stop_capture);
+    }
+
+    // GAP-21: start_capture must be async — compiles only when the command
+    // returns a Future.
+    #[allow(dead_code)]
+    fn start_capture_is_async() {
+        fn takes_async<F: std::future::Future>(_: fn(AppHandle, String, Option<String>) -> F) {}
+        takes_async(start_capture);
     }
 
     #[test]

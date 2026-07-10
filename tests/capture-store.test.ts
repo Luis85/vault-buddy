@@ -92,13 +92,24 @@ describe("capture store", () => {
   });
 
   it("start failure surfaces the error and stays idle", async () => {
+    // GAP-21: start_capture became an async command (spawn_blocking on the
+    // Rust side); the frontend already awaits invoke(), so this rejection
+    // path's timing is unchanged — re-verified here, mirroring the
+    // status-resets + error-toast idiom used for stop/cancel/retranscribe.
     mockIPC(() => {
       throw "No microphone found";
     });
     const store = useCaptureStore();
+    const notes = useNotificationsStore();
     await store.start("v1");
     expect(store.status).toBe("idle");
     expect(store.error).toContain("No microphone");
+    expect(
+      notes.items.some((i) => i.kind === "error" && i.message.includes("No microphone")),
+    ).toBe(true);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("capture start rejected"),
+    );
   });
 
   it("stop passes through saving and returns to idle on saved event", async () => {
