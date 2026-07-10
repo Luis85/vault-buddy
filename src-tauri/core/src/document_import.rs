@@ -264,8 +264,18 @@ pub fn clean_stale_staging_at(
                     })
                     .unwrap_or(false);
                 if stale {
-                    if std::fs::remove_dir_all(&path).is_ok() {
-                        sweep.removed.push(path);
+                    match std::fs::remove_dir_all(&path) {
+                        Ok(()) => sweep.removed.push(path),
+                        Err(e) => {
+                            // A locked file (Windows AV/indexing, or a surviving
+                            // Pandoc descendant still holding one open) can fail
+                            // the delete. Count it as pending so the recovery
+                            // loop RETRIES rather than treating the pass as clean
+                            // and leaving the orphan until the next launch (Codex
+                            // review).
+                            log::warn!("import-recovery: failed to remove {path:?}: {e}");
+                            sweep.pending += 1;
+                        }
                     }
                 } else {
                     sweep.pending += 1; // fresh orphan → caller reschedules
