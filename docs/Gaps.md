@@ -373,15 +373,8 @@ Added `onTitleEnter` handler in Tasks.vue and early isComposing return in Action
 
 ## 5. Security & configuration
 
-### GAP-34 · Medium · CSP is disabled for all three webviews
-`src-tauri/tauri.conf.json:56` — `"security": { "csp": null }`. Every
-window can invoke all 40 commands, four of which write into vaults; the app
-renders strings derived from vault contents (search results, note titles).
-`HighlightText` being index-based mitigates, but CSP is cheap
-defense-in-depth for exactly the injection class that would weaponize
-GAP-01/GAP-07.
-**Fix:** set a restrictive CSP (e.g. `default-src 'self'; style-src 'self'
-'unsafe-inline'`).
+### GAP-34 · ~~Medium~~ FIXED 2026-07-10 · CSP is disabled for all three webviews
+`src-tauri/tauri.conf.json:56` — CSP is now `"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"` (Tauri appends its IPC/asset origins automatically). The policy mitigates injection attacks from strings rendered from vault contents (search results, note titles). Linux compile gate (`npx tauri build --no-bundle`) green. **Runtime behavior in the packaged WebView2 app is NOT yet verified — the next Windows-checklist run must confirm all three windows render (buddy sprites, panel styles, bubble) and the updater/settings views work; a breakage is a one-line revert of this commit.**
 
 ### GAP-35 · ~~Medium~~ FIXED 2026-07-10 · GitHub Actions pinned by mutable tag, including the one that holds the updater signing key
 All three workflows: `actions/checkout@v4`, `actions/setup-node@v4`,
