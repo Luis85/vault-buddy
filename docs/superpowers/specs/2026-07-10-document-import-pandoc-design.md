@@ -117,11 +117,15 @@ A new "Document Import" section in Buddy settings, structurally a peer of
   but a process already running (Vault Buddy) keeps the `PATH` snapshot it
   started with — Windows only broadcasts the change, it doesn't rewrite
   other processes' environment blocks. So `detect_pandoc` re-reads the
-  current `PATH` from `HKCU\Environment` and `HKLM\SYSTEM\CurrentControl
-  Set\Control\Session Manager\Environment` on every call, merges it with
-  the process's own `PATH`, and searches *that* combined value for
-  `pandoc.exe`, rather than trusting the environment Vault Buddy was
-  launched with.
+  current `PATH` from the two Windows environment-registry keys — the user
+  key `HKCU\Environment` and the machine key (kept unbroken; note there is
+  no space in `CurrentControlSet`):
+  ```
+  HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment
+  ```
+  merges those with the process's own `PATH`, and searches *that* combined
+  value for `pandoc.exe`, rather than trusting the environment Vault Buddy
+  was launched with.
 - **Install link**: opens Pandoc's install page in the OS's default
   browser. Vault Buddy does not download or run an installer itself —
   that would blur back into "bundling," with all the trust and
@@ -177,37 +181,64 @@ A new "Document Import" section in Buddy settings, structurally a peer of
    turns out to have images) the same way capture reserves `.mp3`/`.md`
    pairs. The media folder name is fixed at this point — it's whatever
    the final sibling folder will be called — even though it's about to
-   be staged under a temp parent, not the vault.
-2. Invokes Pandoc against a **temp working directory**, never the final
-   vault path: `pandoc <source> -f <docx|odt|rtf> -t gfm
+   be staged under a temp parent, not the final path yet. **That temp
+   working directory lives inside the destination vault**, not the OS
+   temp dir (e.g. a hidden `.vault-buddy.tmp`-style staging dir under the
+   target `YYYY/MM` folder, matching the owned-temp convention capture
+   already uses). This is deliberate: the final step moves the staged
+   media directory into place with a `rename`, and a `rename` across
+   filesystems fails with a cross-device error — vaults routinely live on
+   a different drive than the OS temp dir (a synced folder on `D:`, a
+   network/removable drive). Staging on the *same volume as the vault*
+   keeps the publish step a same-filesystem rename, so it's atomic and
+   can't half-publish. (The temp dir is dot-prefixed and its basename is
+   excluded from the recordings/tasks/search walks, so it's never
+   surfaced even in the window between staging and publish.)
+2. Invokes Pandoc against that in-vault **temp working directory**, never
+   the final path: `pandoc <source> -f <docx|odt|rtf> -t gfm --sandbox
    --extract-media=<tempWorkDir>/<reservedMediaName> -o
-   <tempWorkDir>/<reservedNoteName>.md`. Both outputs are staged under
-   the *same* temp parent, using the *exact* names and the *exact*
-   sibling relationship (media folder named after and next to the note)
-   that they'll have in their final vault location. This matters for two
-   reasons: (a) staging the media directory outside the vault means a
-   non-zero exit or timeout can never leave a partial media folder sitting
-   in the vault, since Pandoc creates `--extract-media`'s target directory
-   and writes into it as it runs; (b) Pandoc rewrites the markdown's image
-   links to point at wherever `--extract-media` put the files, so if the
-   temp media folder's name or its relative position to the note differed
-   from the final layout, those rewritten links would break the moment
-   the files landed in the vault. Because the relative relationship is
-   identical in both places, step 3's move changes only the *shared
-   parent* directory, and the relative links Pandoc wrote stay correct
-   with no rewriting needed. GFM (GitHub-Flavored Markdown) is the output
-   target rather than Pandoc's native Markdown dialect, because Obsidian's
+   <tempWorkDir>/<reservedNoteName>.md`. `--sandbox` is not optional: the
+   source document is untrusted (it came from email, a download, or the
+   web), and Pandoc's readers can be steered to *read arbitrary local
+   files or fetch remote resources* while resolving linked media —
+   `--sandbox` restricts I/O to the given input/output, so a malicious
+   `.docx`/`.odt`/`.rtf` can't exfiltrate a local file into the vault or
+   trigger network access during what the user was told is a purely local
+   import. `detect_pandoc` records the Pandoc version, and
+   `convert_document` gates on `--sandbox` being supported (Pandoc ≥ 2.15;
+   some minimal builds lacking embedded data files degrade it) — if the
+   detected Pandoc can't honor `--sandbox`, the feature reports that in
+   settings and refuses the conversion rather than running unsandboxed on
+   untrusted input. Both outputs are staged under the *same* temp parent,
+   using the *exact* names and the *exact* sibling relationship (media
+   folder named after and next to the note) they'll have in their final
+   vault location. This matters for two reasons: (a) staging the media
+   directory outside the final tree means a non-zero exit or timeout can
+   never leave a partial media folder at the published path, since Pandoc
+   creates `--extract-media`'s target directory and writes into it as it
+   runs; (b) Pandoc rewrites the markdown's image links to point at
+   wherever `--extract-media` put the files, so if the temp media folder's
+   name or its relative position to the note differed from the final
+   layout, those rewritten links would break the moment the files landed
+   at the published path. Because the relative relationship is identical
+   in both places, step 3's move changes only the *shared parent*
+   directory, and the relative links Pandoc wrote stay correct with no
+   rewriting needed. GFM (GitHub-Flavored Markdown) is the output target
+   rather than Pandoc's native Markdown dialect, because Obsidian's
    renderer is much closer to GFM than to Pandoc's extension-heavy default
    (footnote/definition-list/etc. syntax Obsidian doesn't understand).
 3. Only once Pandoc exits successfully: Vault Buddy prepends the
-   frontmatter block to the temp markdown, then moves both the note and
-   the temp media directory (if non-empty) into their final vault paths
-   — the note via the same atomic temp+fsync+`rename_noreplace` write
-   every other domain uses, the media directory via a rename into place
-   alongside it, both keeping the exact names reserved in step 1. A
-   failure at any point before this step leaves the temp
-   locations to clean up and **nothing in the vault**, matching the
-   error-handling section's guarantee.
+   frontmatter block to the temp markdown, then publishes both the note
+   and the temp media directory (if non-empty) to their final paths — a
+   same-volume `rename` for each (guaranteed same-filesystem by step 1's
+   in-vault staging), the note via the same atomic
+   temp+fsync+`rename_noreplace` write every other domain uses, both
+   keeping the exact names reserved in step 1. Publish order is
+   **media directory first, then the note**, so the note is never visible
+   pointing at images that haven't landed yet. A failure at any point
+   before this step leaves the temp locations to clean up and **nothing
+   at the published path**, matching the error-handling section's
+   guarantee.
 
 Format-to-reader mapping is a fixed three-entry table: `.docx` → `docx`,
 `.odt` → `odt`, `.rtf` → `rtf`. No format sniffing beyond the extension —
