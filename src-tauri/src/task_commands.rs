@@ -125,8 +125,13 @@ pub async fn list_tasks(id: String) -> Vec<TaskDto> {
 
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it.
+///
+/// ASYNC (GAP-22 class, Codex PR #46): the fsync'd create + collision retry is
+/// blocking disk I/O — offloaded so a slow/cloud/network vault can't freeze
+/// the panel/buddy event loop. The cheap up-front validation stays inline so
+/// a bad due/priority/tag errors before any thread hop.
 #[tauri::command]
-pub fn add_task(
+pub async fn add_task(
     id: String,
     title: String,
     due: Option<String>,
@@ -144,15 +149,19 @@ pub fn add_task(
     let due = validated_due(due)?;
     let priority = validated_priority(priority)?;
     let tags = validated_tags(tags.unwrap_or_default())?;
-    services::add_task(
-        &ServicePaths::real(),
-        &id,
-        &title,
-        &today,
-        due.as_deref(),
-        priority.as_deref(),
-        &tags,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        services::add_task(
+            &ServicePaths::real(),
+            &id,
+            &title,
+            &today,
+            due.as_deref(),
+            priority.as_deref(),
+            &tags,
+        )
+    })
+    .await
+    .map_err(|e| format!("add_task: task failed: {e}"))?
 }
 
 /// Set a task's status. `status` must be one of new/done/archived. The path
@@ -160,9 +169,17 @@ pub fn add_task(
 /// `services::set_task_status`. That call also returns the task's display
 /// title for a future MCP-write announce hook — unused here, so the
 /// frontend's `Result<(), String>` contract stays unchanged.
+///
+/// ASYNC (GAP-22 class, Codex PR #46): the surgical fsync'd frontmatter
+/// rewrite is offloaded — it fires on every checkbox toggle/archive, and a
+/// slow vault must not stall the event loop.
 #[tauri::command]
-pub fn set_task_status(id: String, path: String, status: String) -> Result<(), String> {
-    services::set_task_status(&ServicePaths::real(), &id, &path, &status).map(|_title| ())
+pub async fn set_task_status(id: String, path: String, status: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::set_task_status(&ServicePaths::real(), &id, &path, &status).map(|_title| ())
+    })
+    .await
+    .map_err(|e| format!("set_task_status: task failed: {e}"))?
 }
 
 /// Number of OPEN tasks (status != "done"; archived already excluded by
@@ -203,8 +220,13 @@ pub struct TaskPatchDto {
 /// multi-key frontmatter write (title quoted here; `priority: normal` and a
 /// cleared due remove their lines; an empty tags list clears the
 /// line/block). An empty patch is a no-op Ok.
+///
+/// ASYNC (GAP-22 class, Codex PR #46): validation + patch assembly are cheap
+/// and stay inline (so a bad field errors before any thread hop), but the
+/// vault resolution, containment canonicalize, read, and atomic fsync'd write
+/// are offloaded — a save to a slow/cloud/network vault must not freeze the UI.
 #[tauri::command]
-pub fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), String> {
+pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), String> {
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
     if let Some(title) = &patch.title {
         let t = title.trim();
@@ -242,12 +264,17 @@ pub fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), 
     if updates.is_empty() {
         return Ok(());
     }
-    let (vault_path, root) = tasks_root_for(&id)?;
-    if root.exists() {
-        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-    }
-    let refs: Vec<(&str, Option<&str>)> = updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-    tasks::update_task_fields(&root, Path::new(&path), &refs)
+    tauri::async_runtime::spawn_blocking(move || {
+        let (vault_path, root) = tasks_root_for(&id)?;
+        if root.exists() {
+            capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+        }
+        let refs: Vec<(&str, Option<&str>)> =
+            updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+        tasks::update_task_fields(&root, Path::new(&path), &refs)
+    })
+    .await
+    .map_err(|e| format!("update_task: task failed: {e}"))?
 }
 
 /// Open a task document in Obsidian from its list row. Read-only: canonical

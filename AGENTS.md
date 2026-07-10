@@ -231,8 +231,11 @@ Three OS windows, one frontend bundle, one Rust process:
   blocking filesystem/device work and touches no window API is async on
   the blocking pool: `search_vaults`, `start_capture`, `stop_capture`
   (typed `stillSaving` on its bounded-wait expiry), `list_recordings`,
-  `list_tasks`, `count_open_tasks`, `list_audio_devices`, and the MCP
-  settings commands. `start_capture`'s buddy-show indicator tail is
+  `list_tasks`, `count_open_tasks`, `list_audio_devices`, the task WRITE
+  commands `add_task`/`set_task_status`/`update_task` (fsync'd frontmatter
+  writes — a slow/network vault must not freeze the event loop on a save;
+  `open_task` stays sync like the sibling `open_*` URI launches), and the
+  MCP settings commands. `start_capture`'s buddy-show indicator tail is
   marshalled back via `run_on_main_thread`.
 - The app is **single-instance** (`tauri-plugin-single-instance`, registered
   FIRST in the builder — keep it first): a second launch exits immediately
@@ -248,7 +251,7 @@ Keep this table in sync when adding/removing commands.
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` *(async)* |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks` *(async)*, `add_task`, `set_task_status`, `count_open_tasks` *(async)*, `open_task`, `update_task` |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks` *(async)*, `add_task` *(async)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 
