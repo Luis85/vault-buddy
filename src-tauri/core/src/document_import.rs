@@ -180,24 +180,28 @@ pub fn clean_stale_staging_at(
     let Ok(canon_root) = documents_root.canonicalize() else {
         return sweep; // no Documents folder yet → nothing to do
     };
-    // Real subdir whose NAME passes `name_ok` and whose canonical path stays
-    // under canon_root — resolves BOTH symlinks and Windows junctions, so
-    // neither can redirect the walk out. The name gate keeps the sweep to the
-    // owned `YYYY/MM` layout: the importer only ever stages under dated folders,
-    // so an ordinary `Documents/Projects/Client` two-level path must NOT be
-    // treated as year/month and have a like-named dot dir swept (Codex review) —
-    // the same dated-layout-only discipline capture recovery uses. Returns the
-    // CANONICAL path so a real in-place child below canonicalizes to itself
-    // (that self-equality is how the leaf tells an owned staging dir apart from a
-    // symlink/junction named like one).
+    // A REAL, in-place dated subdir whose NAME passes `name_ok`. `dir` is always
+    // canonical (canon_root, or a value this fn already returned), so a real
+    // in-place child canonicalizes to ITSELF — we require `canon == path` and
+    // reject anything else. That rejects a symlink/junction dated ancestor: even
+    // one pointing INSIDE the vault (so containment alone passes) would redirect
+    // the walk into a non-import layout like `Documents/Projects/07` reached via
+    // a `2026` link, letting recovery delete a staging-named dir the importer
+    // never owned (Codex review) — the same `canon == path` discipline the leaf
+    // uses. The NAME gate additionally keeps the sweep to the owned `YYYY/MM`
+    // layout so an ordinary `Documents/Projects/Client` path isn't treated as
+    // dated at all (capture recovery's dated-layout-only discipline).
     let contained_subdirs = |dir: &Path, name_ok: fn(&str) -> bool| -> Vec<PathBuf> {
         std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
             .filter(|e| e.file_name().to_str().is_some_and(name_ok))
-            .filter_map(|e| e.path().canonicalize().ok())
-            .filter(|c| c.is_dir() && c.starts_with(&canon_root))
+            .filter_map(|e| {
+                let path = e.path();
+                let canon = path.canonicalize().ok()?;
+                (canon == path && canon.is_dir()).then_some(canon)
+            })
             .collect()
     };
     // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
@@ -615,6 +619,30 @@ mod tests {
         assert!(sweep.removed.is_empty()); // nothing deleted
         assert!(real.join("keep.md").exists()); // target data intact
         assert!(link.exists()); // the link itself left alone too
+    }
+
+    // A SYMLINK dated ancestor (`Documents/2026` → another in-vault folder) must
+    // not redirect the walk: the importer only ever creates REAL dated dirs, so
+    // a staging-named dir reached through the link belongs to a layout we never
+    // owned and must be left alone (Codex review). Unix-only (symlink API).
+    #[cfg(unix)]
+    #[test]
+    fn janitor_does_not_descend_through_a_symlinked_dated_ancestor() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Documents");
+        // A non-import layout with a staging-named dir the importer never made.
+        let elsewhere = root.join("Projects/07");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let outside = elsewhere.join(".x.1-1.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&outside).unwrap();
+        // A dated-looking symlink (name passes is_year_dir) pointing at Projects.
+        std::os::unix::fs::symlink(root.join("Projects"), root.join("2026")).unwrap();
+
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        let sweep = clean_stale_staging_at(&root, now, Duration::from_secs(60));
+        assert!(sweep.removed.is_empty()); // never descended through the link
+        assert!(outside.exists()); // the unowned staging-named dir survives
     }
 
     #[test]
