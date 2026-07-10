@@ -83,7 +83,10 @@ const vaultOptions = computed(() =>
 // two writes can land out of order, leaving the file disagreeing with the UI),
 // so the row's controls are disabled and re-entrant actions are ignored until
 // it resolves — a toggle and an archive for the same task can't race. A
-// reactive Set so the template's :disabled tracks add/delete.
+// reactive Set so the template's :disabled tracks add/delete. Keyed by path alone:
+// task paths are unique across vaults (two vaults would have to contain the same
+// absolute file), and the aggregation spec documents that assumption — this comment
+// is its code-side anchor.
 const busy = ref(new Set<string>());
 const isBusy = (path: string) => busy.value.has(path);
 

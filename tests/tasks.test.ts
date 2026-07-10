@@ -881,22 +881,25 @@ describe("Tasks", () => {
 
   it("aggregate add routes to the picked vault and merges the created task", async () => {
     const { wrapper, calls } = mountAggregateAttached();
-    await flushPromises();
-    // Picker defaults to the first vault (Alpha).
-    expect(wrapper.get('[data-testid="task-add-vault"]').text()).toContain("Alpha");
-    // Pick Beta from the teleported menu.
-    await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
-    (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
-    await flushPromises();
-    await wrapper.get('[data-testid="task-input"]').setValue("Cross task");
-    await wrapper.get('[data-testid="task-add"]').trigger("click");
-    await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ id: "vb", title: "Cross task" });
-    // Created task renders enriched with Beta's chip.
-    const row = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("Cross task"))!;
-    expect(row.get('[data-testid="task-vault"]').attributes("title")).toBe("Beta");
-    wrapper.unmount();
-    document.body.innerHTML = "";
+    try {
+      await flushPromises();
+      // Picker defaults to the first vault (Alpha).
+      expect(wrapper.get('[data-testid="task-add-vault"]').text()).toContain("Alpha");
+      // Pick Beta from the teleported menu.
+      await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
+      (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-input"]').setValue("Cross task");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ id: "vb", title: "Cross task" });
+      // Created task renders enriched with Beta's chip.
+      const row = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("Cross task"))!;
+      expect(row.get('[data-testid="task-vault"]').attributes("title")).toBe("Beta");
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
   });
 
   it("shows a vault chip with the vault initial on aggregate rows", async () => {

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { defineStore } from "pinia";
 
 import { announce } from "../announce";
-import { dailyNoteOpenedMessage,vaultOpenedMessage } from "../buddyMessages";
+import { dailyNoteOpenedMessage, vaultOpenedMessage } from "../buddyMessages";
 import { logWarning } from "../logging";
 import type { Vault } from "../types";
 
