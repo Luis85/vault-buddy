@@ -33,6 +33,22 @@ function mountAggregate(handlers: Partial<Record<string, (args: unknown) => unkn
   return { wrapper, calls };
 }
 
+function mountAggregateAttached(handlers: Partial<Record<string, (args: unknown) => unknown>> = {}) {
+  const calls: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    calls.push({ cmd, args });
+    if (handlers[cmd]) return handlers[cmd]!(args);
+    if (cmd === "list_vaults") return vaultsFixture;
+    if (cmd === "list_tasks") return [];
+    if (cmd === "add_task") {
+      const a = args as { id: string; title: string };
+      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, priority: null, tags: [] };
+    }
+  });
+  const wrapper = mount(Tasks, { props: { vaultId: null }, attachTo: document.body });
+  return { wrapper, calls };
+}
+
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 const many = (n: number): TaskItem[] =>
@@ -798,10 +814,37 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "set_task_status")?.args).toMatchObject({ id: "vb", status: "archived" });
   });
 
-  it("aggregate mode hides the add row until the picker lands", async () => {
+  it("aggregate mode shows the add row with the vault picker", async () => {
     const { wrapper } = mountAggregate();
     await flushPromises();
-    expect(wrapper.find('[data-testid="task-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="task-input"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="task-add-vault"]').exists()).toBe(true);
+  });
+
+  it("per-vault mode has no vault picker", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-add-vault"]').exists()).toBe(false);
+  });
+
+  it("aggregate add routes to the picked vault and merges the created task", async () => {
+    const { wrapper, calls } = mountAggregateAttached();
+    await flushPromises();
+    // Picker defaults to the first vault (Alpha).
+    expect(wrapper.get('[data-testid="task-add-vault"]').text()).toContain("Alpha");
+    // Pick Beta from the teleported menu.
+    await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
+    (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Cross task");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ id: "vb", title: "Cross task" });
+    // Created task renders enriched with Beta's chip.
+    const row = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("Cross task"))!;
+    expect(row.get('[data-testid="task-vault"]').attributes("title")).toBe("Beta");
+    wrapper.unmount();
+    document.body.innerHTML = "";
   });
 
   it("shows a vault chip with the vault initial on aggregate rows", async () => {

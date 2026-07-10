@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TaskItem, TaskPatch, Vault } from "../types";
+import SelectMenu from "./SelectMenu.vue";
 
 // Split a free-text tags field on commas/whitespace, strip leading `#`s,
 // drop empties, dedupe case-insensitively keeping the first casing.
@@ -68,6 +69,12 @@ const showAddOptions = ref(false);
 const addDue = ref("");
 const addPriority = ref("normal");
 const addTags = ref("");
+// Aggregate add: which vault receives the new task. Defaults to the first
+// vault; component-local, no persistence across opens (YAGNI per spec).
+const addVaultId = ref("");
+const vaultOptions = computed(() =>
+  allVaults.value.map((v) => ({ value: v.id, label: v.name })),
+);
 // Task paths whose set_task_status write is in flight. A second action on the
 // same row while its write is pending would race the first (on a slow disk the
 // two writes can land out of order, leaving the file disagreeing with the UI),
@@ -214,6 +221,7 @@ onMounted(async () => {
       // is reserved for list_vaults failing or EVERY vault failing.
       const vaults = await invoke<Vault[]>("list_vaults");
       allVaults.value = vaults;
+      addVaultId.value = vaults[0]?.id ?? "";
       const failed: string[] = [];
       const results = await Promise.all(
         vaults.map(async (v) => {
@@ -245,21 +253,22 @@ onMounted(async () => {
 });
 
 async function add() {
-  // The add row is gated behind !isAggregate for now (Task 3 adds the vault
-  // picker and lifts this guard); a null vaultId here would mean the row
-  // rendered when it shouldn't have.
-  if (props.vaultId === null) return;
   const title = newTitle.value.trim();
-  if (!title || adding.value) return;
+  const targetVault = isAggregate.value ? addVaultId.value : props.vaultId;
+  if (!title || adding.value || !targetVault) return;
   adding.value = true;
   try {
-    const args: Record<string, unknown> = { id: props.vaultId, title };
+    const args: Record<string, unknown> = { id: targetVault, title };
     if (addDue.value) args.due = addDue.value;
     if (addPriority.value !== "normal") args.priority = addPriority.value;
     const tags = parseTagsInput(addTags.value);
     if (tags.length > 0) args.tags = tags;
     const created = await invoke<TaskItem>("add_task", args);
-    tasks.value.unshift({ ...created, vaultId: props.vaultId, vaultName: "" });
+    tasks.value.unshift({
+      ...created,
+      vaultId: targetVault,
+      vaultName: allVaults.value.find((v) => v.id === targetVault)?.name ?? "",
+    });
     sortInPlace();
     newTitle.value = "";
     addDue.value = "";
@@ -436,7 +445,14 @@ async function saveEdit(task: AggTask) {
       </button>
     </div>
 
-    <div v-if="!isAggregate" class="flex items-center gap-1">
+    <div class="flex items-center gap-1">
+      <SelectMenu
+        v-if="isAggregate"
+        v-model="addVaultId"
+        :options="vaultOptions"
+        aria-label="Vault for the new task"
+        data-testid="task-add-vault"
+      />
       <input
         v-model="newTitle"
         data-testid="task-input"
@@ -469,7 +485,7 @@ async function saveEdit(task: AggTask) {
       </button>
     </div>
 
-    <div v-if="!isAggregate && showAddOptions" class="flex items-center gap-1">
+    <div v-if="showAddOptions" class="flex items-center gap-1">
       <input
         v-model="addDue"
         data-testid="task-add-due"
