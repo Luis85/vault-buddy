@@ -52,7 +52,8 @@ Vue 3 + Pinia + Tailwind 4, Vitest (happy-dom + mockIPC), Pandoc ≥ 2.15
 **Modify:**
 - `src-tauri/core/src/capture_config.rs` — add `documents_folder` to `VaultCaptureConfig`; add `DocumentImportConfig` app-global section; parse/serialize/round-trip.
 - `src-tauri/core/src/lib.rs` (crate root) — `pub mod document_import;`.
-- `src-tauri/src/lib.rs` — register the four new commands in `generate_handler!`.
+- `src-tauri/src/lib.rs` — register the six new commands in `generate_handler!` + `.manage(ImportLock::default())` + `.manage(DocumentImportPending::default())`.
+- `src-tauri/src/commands.rs` — factor `show_panel(app)` out of `toggle_panel` (reused by `begin_document_import`).
 - `src-tauri/src/main.rs` / shell `lib.rs` module list — `mod document_commands;`.
 - `src-tauri/Cargo.toml` — `[target.'cfg(windows)'.dependencies] winreg` for the registry PATH read.
 - `src/types.ts` — `DocumentsConfig`, `PandocStatus` types; extend `CaptureConfig` with `documentsFolder`.
@@ -407,22 +408,40 @@ git commit -m "feat(core): document-import format map, naming, and frontmatter"
 - Test: inline `#[cfg(test)]`.
 
 **Interfaces:**
-- Consumes: `capture_note::{write_note_collision_safe, NOTE_TMP_SUFFIX}`, `capture_paths::rename_noreplace`, Task 2 types.
+- Consumes: `capture_note::{write_note_atomic, NOTE_TMP_SUFFIX}`, `capture_paths::candidate`, Task 2 types.
 - Produces:
+  - `fn reserve_basename(target_dir: &Path, basename: &str) -> String` — walks the ` (N)` suffix scheme until BOTH `<name>.md` and the `<name>/` media folder are free; returns that name. Resolved BEFORE Pandoc so the media-folder name (which Pandoc bakes into image links) is final.
   - `struct StagePlan { work_dir: PathBuf, media_name: String, note_name: String }`.
-  - `fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePlan` — the dot-prefixed in-vault temp dir (carrying `unique` so two imports to the same date can't collide on the temp dir) + the relative media/note names Pandoc is handed (media = `<basename>`, note = `<basename>.md`).
-  - `fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> io::Result<PathBuf>` — prepends frontmatter to the staged note, publishes media dir first (if present & non-empty) then the note (collision-safe), returns the final note path. Cleans the work dir on the way out.
+  - `fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePlan` — the dot-prefixed in-vault temp dir (carrying `unique` so two imports to the same date can't collide on the temp dir) + the relative media/note names Pandoc is handed (media = `<basename>`, note = `<basename>.md`). `basename` here is the already-reserved name.
+  - `fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> io::Result<PathBuf>` — prepends frontmatter to the staged note, publishes media dir first (if present & non-empty) then the note at the EXACT reserved name (non-replacing), rolling the media dir back if the note write fails. Returns the final note path. Cleans the work dir on the way out.
   - `fn cleanup_staging(work_dir: &Path)` — best-effort `remove_dir_all`.
 
 **Design notes for the implementer:**
-- The work dir is dot-prefixed (`.<basename>.vault-buddy.import.tmp`) UNDER `target_dir`, so it's on the vault's volume (same-fs rename) AND auto-excluded from every `vault_walk` scan (dot-directories are skipped) and recovery.
+- The suffix is resolved up front by `reserve_basename`, NOT at write time. Pandoc bakes the media-folder name into every image link as it converts, so the final sibling-folder name must be known before Pandoc runs — a publish-time re-suffix would break the links (note says `<name>/…`, folder became `<name> (1)/…`). `publish` therefore writes the note at the exact reserved name with `write_note_atomic` (non-replacing), not the suffix-retrying `write_note_collision_safe`.
+- The work dir is dot-prefixed (`.<basename>.<unique>.vault-buddy.tmp.import`) UNDER `target_dir`, so it's on the vault's volume (same-fs rename) AND auto-excluded from every `vault_walk` scan (dot-directories are skipped) and recovery.
 - Pandoc is told `--extract-media=<media_name>` and `-o <note_name>` with `cwd = work_dir` (the shell does this in Task 5), so links are written relative to the note. Publishing moves the media dir and note into `target_dir` keeping those exact names, so links stay valid with no rewriting.
 - Media dir may not exist (no images). Only publish it when it exists and is non-empty.
-- Publish order: media dir → note. The note is never visible pointing at not-yet-landed images.
+- Publish order: media dir → note. The note is never visible pointing at not-yet-landed images. If the note write races and fails, roll the media dir back.
 
 - [ ] **Step 1: Write failing tests**
 
 ```rust
+#[test]
+fn reserve_basename_avoids_both_note_and_media_collisions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("Documents/2026/07");
+    std::fs::create_dir_all(&target).unwrap();
+    // base free → returned as-is
+    assert_eq!(reserve_basename(&target, "2026-07-10 Report"), "2026-07-10 Report");
+    // a prior note claims the base → next suffix (capture_paths::candidate
+    // numbers the first collision (2), matching the capture/tasks scheme)
+    std::fs::write(target.join("2026-07-10 Report.md"), "x").unwrap();
+    assert_eq!(reserve_basename(&target, "2026-07-10 Report"), "2026-07-10 Report (2)");
+    // a prior MEDIA FOLDER (no note) also forces a suffix — both must be free
+    std::fs::create_dir_all(target.join("2026-07-10 Photo")).unwrap();
+    assert_eq!(reserve_basename(&target, "2026-07-10 Photo"), "2026-07-10 Photo (2)");
+}
+
 #[test]
 fn plan_staging_uses_dot_prefixed_in_vault_workdir() {
     let plan = plan_staging(Path::new("/vault/Documents/2026/07"), "2026-07-10 Report", "t1");
@@ -474,49 +493,43 @@ fn publish_without_media_writes_only_the_note() {
 
 #[test]
 fn publish_rolls_back_media_if_note_commit_fails() {
-    // Simulate the note name being claimed by a NON-suffixable collision:
-    // pre-create both the base name AND enough suffixes is impractical, so
-    // instead force write_note_collision_safe to fail by making target_dir a
-    // file (create_dir_all in publish_inner already ran on a real dir, so we
-    // target the media-rollback path directly): pre-place a media dir dest.
+    // The reserved note name is claimed AFTER reservation (the residual
+    // post-reservation race): publish must NOT re-suffix (that would break the
+    // media links) — it fails and rolls the already-published media dir back.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("Documents/2026/07");
     std::fs::create_dir_all(&target).unwrap();
-    // Existing media dir at destination → media publish errors AFTER we've
-    // asserted media-has-files, exercising the AlreadyExists guard; to test
-    // ROLLBACK specifically we instead make the note write fail. Simplest:
-    // pre-create a directory where the note file must go, so rename_noreplace
-    // can't place the .md and every suffix also collides with a dir.
     let plan = plan_staging(&target, "2026-07-10 Doc", "u");
     std::fs::create_dir_all(&plan.work_dir).unwrap();
     std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
     let media = plan.work_dir.join(&plan.media_name);
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("image1.png"), b"PNG").unwrap();
-    // Block the note path with a directory so the write fails.
-    std::fs::create_dir_all(target.join("2026-07-10 Doc.md")).unwrap();
+    // Claim the exact reserved note name so the non-replacing write fails.
+    std::fs::write(target.join("2026-07-10 Doc.md"), "SOMEONE ELSE").unwrap();
 
     let result = publish(&plan, &target, "---\n---\n\n");
     assert!(result.is_err());
+    // original untouched (never clobbered)
+    assert_eq!(std::fs::read_to_string(target.join("2026-07-10 Doc.md")).unwrap(), "SOMEONE ELSE");
     // media rolled back — no orphaned sibling folder
     assert!(!target.join("2026-07-10 Doc").exists());
 }
 
 #[test]
-fn publish_never_clobbers_an_existing_note() {
+fn publish_writes_at_the_exact_reserved_name() {
+    // publish does NOT suffix — the reserved basename is final so Pandoc's
+    // baked-in media links stay valid. A free target writes at the exact name.
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("Documents/2026/07");
     std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(target.join("2026-07-10 Note.md"), "OLD").unwrap();
     let plan = plan_staging(&target, "2026-07-10 Note", "u");
     std::fs::create_dir_all(&plan.work_dir).unwrap();
     std::fs::write(plan.work_dir.join(&plan.note_name), "NEW\n").unwrap();
 
     let note = publish(&plan, &target, "---\n---\n\n").unwrap();
-    // original untouched; new note took a suffixed name
-    assert_eq!(std::fs::read_to_string(target.join("2026-07-10 Note.md")).unwrap(), "OLD");
-    assert_ne!(note, target.join("2026-07-10 Note.md"));
-    assert!(note.exists());
+    assert_eq!(note, target.join("2026-07-10 Note.md"));
+    assert!(std::fs::read_to_string(&note).unwrap().contains("NEW"));
 }
 ```
 
@@ -530,7 +543,25 @@ Expected: FAIL (`plan_staging`/`publish` undefined).
 - [ ] **Step 3: Implement**
 
 ```rust
-use crate::capture_note::{write_note_collision_safe, NOTE_TMP_SUFFIX};
+use crate::capture_note::{write_note_atomic, NOTE_TMP_SUFFIX};
+use crate::capture_paths::candidate;
+
+/// Resolve a collision-free basename BEFORE Pandoc runs: walk the ` (N)`
+/// suffix scheme until BOTH `<name>.md` and the `<name>/` media folder are
+/// free, and use that one name for both. Up-front (not at write time) because
+/// Pandoc bakes the media-folder name into image links as it converts — a
+/// publish-time re-suffix would leave the note pointing at the wrong folder.
+pub fn reserve_basename(target_dir: &Path, basename: &str) -> String {
+    for attempt in 1u32.. {
+        let name = candidate(basename, attempt);
+        let note_free = !target_dir.join(format!("{name}.md")).exists();
+        let media_free = !target_dir.join(&name).exists();
+        if note_free && media_free {
+            return name;
+        }
+    }
+    unreachable!("suffix search always terminates")
+}
 
 pub struct StagePlan {
     pub work_dir: PathBuf,
@@ -558,9 +589,11 @@ pub fn cleanup_staging(work_dir: &Path) {
 }
 
 /// Publish a completed staging dir into `target_dir`. Prepends `frontmatter`
-/// to the staged note, then moves media dir (if non-empty) then the note.
-/// Collision-safe: the note takes a ` (N)` suffix rather than clobbering.
-/// Always cleans the work dir before returning.
+/// to the staged note, then moves the media dir (if non-empty) then the note,
+/// both at the EXACT names reserved up front (no re-suffixing — the suffix was
+/// already resolved by `reserve_basename` and Pandoc pinned the links to it).
+/// The note write is non-replacing; on failure the already-published media dir
+/// is rolled back. Always cleans the work dir before returning.
 pub fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> std::io::Result<PathBuf> {
     let result = publish_inner(plan, target_dir, frontmatter);
     cleanup_staging(&plan.work_dir);
@@ -587,8 +620,9 @@ fn publish_inner(
     let mut published_media: Option<PathBuf> = None;
     if media_has_files {
         let dest = target_dir.join(&plan.media_name);
-        // rename_noreplace only guards files; for the media DIR, refuse to
-        // publish over an existing directory (a same-named prior import).
+        // The basename was reserved (note + media dir both free) up front, so
+        // dest should be free; a directory here means the name was claimed
+        // AFTER reservation — refuse rather than merge/clobber.
         if dest.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -599,11 +633,14 @@ fn publish_inner(
         published_media = Some(dest);
     }
 
-    // Collision-safe note write (exclusive temp + rename_noreplace + suffix).
-    // If it fails after media already published, roll the media back so a
-    // failed import never leaves an orphaned media folder (Codex review).
-    match write_note_collision_safe(&target_dir.join(&plan.note_name), &full) {
-        Ok(note) => Ok(note),
+    // Write the note at the EXACT reserved name (non-replacing). NOT
+    // write_note_collision_safe — re-suffixing here would break Pandoc's
+    // baked-in media links. If the name was claimed after reservation the
+    // write fails; roll the already-published media dir back so a failed
+    // import never leaves an orphaned media folder (Codex review).
+    let note_path = target_dir.join(&plan.note_name);
+    match write_note_atomic(&note_path, &full) {
+        Ok(()) => Ok(note_path),
         Err(e) => {
             if let Some(media) = published_media {
                 let _ = std::fs::remove_dir_all(&media);
@@ -614,12 +651,12 @@ fn publish_inner(
 }
 ```
 
-**Note for implementer:** if the note took a ` (N)` suffix, its embedded
-image links still say `<media_name>/…` while the media folder is
-`<media_name>` — that's correct because the media dir kept its original
-name. The rare double-import-same-second case is acceptable (documented in
-the spec's non-goals as out of the common path); the media-dir
-`AlreadyExists` guard prevents a silent overwrite.
+**Note for implementer:** `reserve_basename` (Step 3) already guaranteed both
+`<name>.md` and `<name>/` were free, so the common "same document, same date,
+again" case gets its own ` (N)` name up front and never reaches the
+`AlreadyExists` guards here. Those guards are the backstop for the residual
+post-reservation race only (a sync client / hand-created file landing between
+reservation and publish), which fails cleanly with a rollback.
 
 - [ ] **Step 4: Run — verify pass**
 
@@ -1019,7 +1056,13 @@ fn convert_blocking(
     let safe = vault_buddy_core::capture_paths::safe_recording_root(vault_root, &documents_folder)?;
     vault_buddy_core::capture_paths::assert_path_inside_vault(vault_root, &safe)?;
     let dir = document_import::target_dir(vault_root, &documents_folder, year, month);
-    let basename = document_import::document_basename(stem, today);
+    // Resolve the ` (N)` suffix for BOTH note and media folder up front — the
+    // target dir must exist for the existence checks, and Pandoc bakes the
+    // media-folder name into image links, so it can't be decided at publish
+    // time (Codex review).
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare import: {e}"))?;
+    let raw = document_import::document_basename(stem, today);
+    let basename = document_import::reserve_basename(&dir, &raw);
     let plan = document_import::plan_staging(&dir, &basename, unique);
 
     // Fresh staging dir.
@@ -1353,25 +1396,43 @@ git commit -m "feat(ui): Import Document action in the record chooser"
 ## Task 9: Frontend — buddy drag-drop → vault picker
 
 **Files:**
-- Modify: `src/stores/vaults.ts` — `importPicker` view + `pendingImportPath` + `openImportPicker()`
+- Modify: `src/stores/vaults.ts` — `importPicker` view + `pendingImportPath` + `openImportPicker()` + `refresh()` consumes `take_pending_import`
 - Create: `src/components/ImportVaultPicker.vue`
 - Modify: `src/components/ActionPanel.vue` — route the view
-- Modify: `src/roots/BuddyRoot.vue` — drag-drop listener
-- Modify: `tests/documentImport.test.ts` (picker case)
+- Modify: `src/roots/BuddyRoot.vue` — drag-drop listener → `begin_document_import`
+- Modify: `src-tauri/src/document_commands.rs` — `DocumentImportPending` state + `begin_document_import` / `take_pending_import`
+- Modify: `src-tauri/src/commands.rs` — factor `show_panel(app)` out of `toggle_panel`
+- Modify: `src-tauri/src/lib.rs` — register the two commands + `.manage(DocumentImportPending::default())`
+- Modify: `tests/documentImport.test.ts` (picker + refresh case)
 
 **Interfaces:**
-- Consumes: `getCurrentWebview().onDragDropEvent` (Tauri v2 drag-drop), `toggle_panel`, `convert_document`, the vaults list.
+- Consumes: `getCurrentWebview().onDragDropEvent` (Tauri v2 drag-drop), `begin_document_import`, `take_pending_import`, `convert_document`, the vaults list.
 - Produces:
-  - vaults store: `view` union gains `"importPicker"`; state `pendingImportPath: string | null`; action `openImportPicker(path: string)` (sets both, bumps nothing else); `back()` from `importPicker` → `showList()`.
-  - `ImportVaultPicker.vue`: lists `store.vaults`, each row calls `convert_document({ id, sourcePath: store.pendingImportPath })`, toasts, returns to list.
+  - Rust: `DocumentImportPending(Mutex<Option<String>>)` state; `begin_document_import(app, path)` (stash + `show_panel`); `take_pending_import(app) -> Option<String>`; `commands::show_panel(app)` factored from `toggle_panel`.
+  - vaults store: `view` union gains `"importPicker"`; state `pendingImportPath: string | null`; action `openImportPicker(path)`; `refresh()` consumes `take_pending_import` before the `pendingView`/`showList` branch; `showList()` clears `pendingImportPath`.
+  - `ImportVaultPicker.vue`: lists `store.vaults`, each row calls `convert_document({ id, sourcePath: store.pendingImportPath })`, toasts, returns to list; Pandoc-gated on mount.
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write failing tests**
 
 ```ts
 it("openImportPicker sets the pending path and view", () => {
   setActivePinia(createPinia());
   const store = useVaultsStore();
   store.openImportPicker("C:/x/Report.docx");
+  expect(store.view).toBe("importPicker");
+  expect(store.pendingImportPath).toBe("C:/x/Report.docx");
+});
+
+it("refresh routes to the import picker when Rust has a pending import", async () => {
+  setActivePinia(createPinia());
+  mockIPC((cmd) => {
+    if (cmd === "take_pending_import") return "C:/x/Report.docx";
+    if (cmd === "list_vaults") return [];
+    if (cmd === "count_open_tasks") return 0;
+    return undefined;
+  });
+  const store = useVaultsStore();
+  await store.refresh();
   expect(store.view).toBe("importPicker");
   expect(store.pendingImportPath).toBe("C:/x/Report.docx");
 });
@@ -1384,10 +1445,55 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-Vaults store:
+**Why not emit-then-toggle:** the buddy and panel windows have separate
+Pinia stores, so the buddy can't set the panel store directly. An earlier
+sketch (emit `import-document`, then `toggle_panel`, PanelRoot calls
+`openImportPicker`) is racy (Codex review): `toggle_panel` *hides* an
+already-open panel, and every open runs `panel-shown` → `refresh()` whose
+default is `showList()`, which would clobber a direct `openImportPicker`.
+The robust design makes the pending import **Rust-owned** and consumed
+*inside* `refresh()`, exactly like the failed-update-install `pendingView`
+idiom — but sourced from Rust because the trigger is cross-window, and the
+panel is **shown** (never toggled).
+
+**Rust (`document_commands.rs`):**
+```rust
+/// One-shot pending buddy-drop import path, consumed by the panel's refresh.
+#[derive(Default)]
+pub struct DocumentImportPending(pub std::sync::Mutex<Option<String>>);
+
+/// A buddy drop: stash the path, then SHOW the panel (idempotent — never
+/// toggles it hidden) so refresh() lands and consumes the pending import.
+/// Sync command → main thread, where the window getters/show/focus are valid
+/// (same rule as toggle_panel). Reuses the panel-show helper toggle_panel
+/// uses (position while hidden, show, focus, emit `panel-shown`).
+#[tauri::command]
+pub fn begin_document_import(app: tauri::AppHandle, path: String) {
+    {
+        let state = app.state::<DocumentImportPending>();
+        *vault_buddy_core::sync_util::lock_ignoring_poison(&state.0) = Some(path);
+    }
+    crate::commands::show_panel(&app); // factor out of toggle_panel's show branch
+}
+
+/// Take (and clear) the pending buddy-drop import path. Panel refresh calls
+/// this and routes to the picker when it returns Some.
+#[tauri::command]
+pub fn take_pending_import(app: tauri::AppHandle) -> Option<String> {
+    let state = app.state::<DocumentImportPending>();
+    vault_buddy_core::sync_util::lock_ignoring_poison(&state.0).take()
+}
+```
+Register both in `generate_handler!`, `.manage(DocumentImportPending::default())`,
+and **factor `toggle_panel`'s show branch into `commands::show_panel(app)`**
+(position-while-hidden + show + focus + emit `panel-shown` + hide bubble) so
+`begin_document_import` reuses it without duplicating window logic. `toggle_panel`
+keeps its hide branch and calls `show_panel` for the show branch.
+
+**Vaults store (`src/stores/vaults.ts`):**
 - Add `"importPicker"` to the `view` union.
 - Add state `pendingImportPath: null as string | null,`.
-- Add action:
+- Add action `openImportPicker(path: string)`:
   ```ts
   openImportPicker(path: string) {
     this.view = "importPicker";
@@ -1395,41 +1501,55 @@ Vaults store:
   },
   ```
 - In `showList()` add `this.pendingImportPath = null;`.
-- `back()`: `importPicker` falls through to `showList()` (no new case needed, but clear the path — it's cleared by showList).
+- In `refresh()`, **consume the Rust pending import FIRST** (before the
+  `pendingView`/`showList` branch), so a buddy drop always wins over the
+  list default:
+  ```ts
+  const dropped = await invoke<string | null>("take_pending_import").catch(() => null);
+  if (dropped) {
+    this.openImportPicker(dropped);
+  } else if (this.pendingView) {
+    /* existing pendingView branch */
+  } else {
+    this.showList();
+  }
+  this.shownNonce++;
+  await this.loadVaults();
+  await this.loadTaskCounts();
+  ```
 
-`ImportVaultPicker.vue`: header "Import into which vault?", a list of `store.vaults` rows; row click → `convert_document`, success/error toast, then `store.showList()`. Filter to supported extension already guaranteed by the drop handler.
+**`ImportVaultPicker.vue`:** header "Import into which vault?", a list of
+`store.vaults` rows; row click → `invoke("convert_document", { id: v.id,
+sourcePath: store.pendingImportPath })`, success/error toast, then
+`store.showList()`. (Extension already validated by the drop handler.)
 
-`ActionPanel.vue`: add `v-else-if="view === 'importPicker'"` rendering `<ImportVaultPicker />`; add its title to the header title map (`importPicker: "Import document"`); import the component.
+**`ActionPanel.vue`:** add `v-else-if="view === 'importPicker'"` rendering
+`<ImportVaultPicker />`; add its header title (`importPicker: "Import
+document"`); import the component.
 
-`BuddyRoot.vue`: in `onMounted`, register a drag-drop listener:
+**`BuddyRoot.vue`:** register a drag-drop listener in `onMounted`:
 ```ts
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-// ...
 const SUPPORTED = ["docx", "odt", "rtf"];
 unlistenDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
   if (event.payload.type !== "drop") return;
   const path = event.payload.paths.find((p) => {
     const ext = p.split(".").pop()?.toLowerCase();
-    return ext && SUPPORTED.includes(ext);
+    return ext ? SUPPORTED.includes(ext) : false;
   });
-  if (!path) return; // unsupported drop — ignore silently (or toast via panel)
-  // Open the panel and route to the picker. The picker reads pendingImportPath.
-  // The store lives per-window; set it via a Rust-independent path: open the
-  // panel, then the panel refresh reads a pending import. Simplest: pass the
-  // path through a one-shot event the panel listens for.
+  if (!path) return; // unsupported drop — ignore
+  invokeQuiet("begin_document_import", { path });
 });
 ```
+Store `unlistenDrop` and call it in `onUnmounted`. No `toggle_panel`, no
+event emit — `begin_document_import` shows the panel and arms the pending
+import itself.
 
-**Implementer decision (make it explicit, don't leave ambiguous):** because
-each window has its own Pinia, the buddy window can't set the panel store
-directly. Use a small Tauri event: BuddyRoot emits `import-document`
-`{ path }` (via `@tauri-apps/api/event`'s `emit`), then invokes
-`toggle_panel`. `PanelRoot` listens for `import-document` and calls
-`vaults.openImportPicker(path)`. This mirrors how `panel-shown` drives the
-panel. Add the emit in BuddyRoot and the listener in `PanelRoot.vue`.
-Gate the drop on Pandoc being installed by having PanelRoot run
-`detect_pandoc` when it receives the event; if absent, route to
-`settings` + toast instead of the picker.
+**Pandoc gate for drops:** `ImportVaultPicker` runs `detect_pandoc` on mount;
+if not installed (or too old), it shows an inline "Install Pandoc in
+Settings" message with a button that routes to `settings` instead of a vault
+list — so a drop while Pandoc is absent lands somewhere actionable rather
+than failing on convert.
 
 - [ ] **Step 4: Run — verify pass**
 
@@ -1439,8 +1559,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/stores/vaults.ts src/components/ImportVaultPicker.vue src/components/ActionPanel.vue src/roots/BuddyRoot.vue src/roots/PanelRoot.vue tests/documentImport.test.ts
-git commit -m "feat(ui): buddy drag-drop imports a document via a vault picker"
+git add src/stores/vaults.ts src/components/ImportVaultPicker.vue src/components/ActionPanel.vue src/roots/BuddyRoot.vue src-tauri/src/document_commands.rs src-tauri/src/commands.rs src-tauri/src/lib.rs tests/documentImport.test.ts
+git commit -m "feat: buddy drag-drop imports a document via a vault picker"
 ```
 
 ---
@@ -1453,10 +1573,11 @@ git commit -m "feat(ui): buddy drag-drop imports a document via a vault picker"
 
 - [ ] **Step 1: Update AGENTS.md**
 
-- IPC surface table: add a `document_commands.rs` row — `detect_pandoc`, `convert_document` (async — external subprocess), `get_documents_config`, `set_documents_config`. Update the "All N commands" count (43 → 47).
-- Add a "The document-import domain" subsection under the capture-domain area, summarizing: Pandoc-gated, `--sandbox` + heap cap, in-vault staging, publish-media-then-note, fifth sanctioned vault write.
+- IPC surface table: add a `document_commands.rs` row — `detect_pandoc`, `convert_document` (async — external subprocess), `get_documents_config`, `set_documents_config`, `begin_document_import`, `take_pending_import`. Update the "All N commands" count (43 → 49).
+- Add a "The document-import domain" subsection under the capture-domain area, summarizing: Pandoc-gated, `--sandbox` + heap cap, up-front joint note+media reservation, in-vault staging, publish-media-then-note with rollback, process-wide `ImportLock`, containment re-validation, fifth sanctioned vault write.
+- Note the `commands::show_panel` refactor (factored from `toggle_panel`; also used by `begin_document_import`) in the window-system section.
 - "Where state lives on disk" row: note the app-global `documentImport` section + per-vault `documentsFolder` in `config.json`.
-- Frontend-state section: mention the `importPicker` view and the `import-document` event.
+- Frontend-state section: mention the `importPicker` view and the Rust-owned pending-import consumed in `refresh()` (via `take_pending_import`).
 
 - [ ] **Step 2: Flip the use-case status**
 
@@ -1515,6 +1636,6 @@ git commit -m "chore: update shrink-only baselines for document import"
 
 ## Self-Review Notes
 
-- **Spec coverage:** trigger flows (Tasks 8/9), Pandoc gate + settings (Tasks 4/6/7), format scope (Task 2), file org/naming/frontmatter (Tasks 2/3), sandbox + heap cap + relative paths + cross-volume staging (Tasks 3/5), registry PATH refresh (Task 4), conversion serialization via ImportLock (Task 5), media-publish rollback (Task 3), documents-folder containment revalidation (Tasks 5/6), failure = nothing published + toast (Tasks 3/5/8/9), success = silent save + toast (Tasks 8/9), config round-trip (Task 1), never-clobber (Task 3). All mapped.
-- **Type consistency:** `PandocStatus`/`DocumentsConfigDto` camelCase across Rust↔TS; `convert_document(id, sourcePath)` and `set_documents_config(id, documentsFolder, pandocPath)` arg names match the Vue call sites; `DocFormat`/`DocMeta`/`StagePlan` used consistently across Tasks 2/3/5; `plan_staging` takes `(target_dir, basename, unique)` everywhere; `ImportLock` holds an `Arc<Mutex<()>>` so its guard survives `spawn_blocking`.
-- **Known deviations to watch:** `winreg` is Windows-only (cfg-gated) — machete/deny may need a documented ignore; the ImportLock `try_lock` intentionally rejects (not queues) a concurrent import; the double-import-same-second media-dir case errors + rolls back rather than clobbering (accepted per spec non-goals).
+- **Spec coverage:** trigger flows (Tasks 8/9), Pandoc gate + settings (Tasks 4/6/7), format scope (Task 2), file org/naming/frontmatter (Tasks 2/3), sandbox + heap cap + relative paths + cross-volume staging (Tasks 3/5), registry PATH refresh (Task 4), conversion serialization via ImportLock (Task 5), up-front joint note+media reservation (Tasks 3/5), media-publish rollback (Task 3), documents-folder containment revalidation (Tasks 5/6), buddy-drop pending-import surviving panel-shown (Task 9), failure = nothing published + toast (Tasks 3/5/8/9), success = silent save + toast (Tasks 8/9), config round-trip (Task 1), never-clobber (Task 3). All mapped.
+- **Type consistency:** `PandocStatus`/`DocumentsConfigDto` camelCase across Rust↔TS; `convert_document(id, sourcePath)` and `set_documents_config(id, documentsFolder, pandocPath)` arg names match the Vue call sites; `DocFormat`/`DocMeta`/`StagePlan`/`reserve_basename` used consistently across Tasks 2/3/5; `plan_staging(target_dir, basename, unique)` and `publish` write at the exact reserved name (no re-suffix); `ImportLock` holds an `Arc<Mutex<()>>` so its guard survives `spawn_blocking`; the buddy drop routes through `begin_document_import`/`take_pending_import` + `commands::show_panel`, not an emit-then-toggle.
+- **Known deviations to watch:** `winreg` is Windows-only (cfg-gated) — machete/deny may need a documented ignore; the ImportLock `try_lock` intentionally rejects (not queues) a concurrent import; the residual post-reservation name race errors + rolls back rather than re-suffixing (would break Pandoc's baked-in links); factoring `show_panel` out of `toggle_panel` must preserve every existing `toggle_panel` invariant (position-while-hidden, focus, `panel-shown`, hide bubble).

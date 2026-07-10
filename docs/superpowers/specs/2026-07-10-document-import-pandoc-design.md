@@ -83,7 +83,21 @@ Two entry points, both converging on the same `convert_document` command
    happens. A supported drop is **ambiguous about target vault** (the
    buddy is one fixed 88×88 icon, not a vault row), so it opens the panel
    to a new "Import into which vault?" picker view; picking a vault fires
-   `convert_document(vaultId, path)`.
+   `convert_document(vaultId, path)`. **The dropped path is armed as a
+   pending import that survives the panel-open, not raced against it.**
+   The buddy and panel windows have separate Pinia stores, so the path
+   can't be written into the panel store directly; and the panel is
+   revealed through the same `panel-shown` → `PanelRoot.refresh()` flow
+   every open uses, whose default is `showList()`. If the buddy merely
+   emitted an event and toggled the panel, the toggle could *hide* an
+   already-open panel, and `refresh()`'s `showList()` would clobber a
+   direct `openImportPicker` call. So the drop instead calls a Rust
+   command (`begin_document_import(path)`) that stashes the path in
+   shell-side state and **shows** the panel idempotently (never toggles
+   it hidden); `refresh()` then *consumes* that pending path (via
+   `take_pending_import`) and routes to the picker in place of the list —
+   exactly the pending-view idiom the failed-update-install reopen
+   already uses, sourced from Rust because the trigger is cross-window.
 2. **File picker via a new "Import Document" action** in the record
    chooser (`RecordMode.vue`), alongside Meeting / Voice Note / Browse
    recordings. Opens a native file dialog filtered to the same three
@@ -169,8 +183,13 @@ A new "Document Import" section in Buddy settings, structurally a peer of
   transcript sidecar carries a marker: it's a machine-legible signal that
   this file is Vault Buddy's regenerable output rather than a
   hand-authored note, useful for any future "Documents" browser view.
-- Collision handling: the same exclusive-create + `(N)`-suffix retry
-  pattern as Tasks/Recordings — no new discipline invented.
+- Collision handling: the same exclusive-create + `(N)`-suffix scheme as
+  Tasks/Recordings, but the suffix is resolved **up front** (jointly for the
+  note and its media folder — see Conversion mechanics step 1) rather than at
+  write time, because Pandoc bakes the media folder name into image links
+  before the note is written. A second import of the same image-bearing
+  document on the same date takes `<name> (1)` for both the note and the
+  media folder, links intact — it does not fail.
 
 ## Conversion mechanics
 
@@ -204,11 +223,20 @@ same date can't collide on the temp dir.
    is created or any file is written — otherwise Pandoc output and the
    published note would land *outside* the selected vault. Validation failure
    is a normal conversion error (toast, nothing written). Then it builds the
-   dated target path, and reserves the note filename (and media folder name,
-   if the doc turns out to have images) the same way capture reserves
-   `.mp3`/`.md` pairs. The media folder name is fixed at this point — it's whatever
-   the final sibling folder will be called — even though it's about to
-   be staged under a temp parent, not the final path yet. **That temp
+   dated target path and **resolves a collision-free basename BEFORE Pandoc
+   runs**: it walks the ` (N)` suffix sequence (`capture_paths::candidate`,
+   the same scheme capture uses) until it finds a name for which *both*
+   `<basename>.md` AND the `<basename>/` media folder are free, and that one
+   name is used for both the note and the media folder. This up-front joint
+   reservation is not the usual "write, and let the writer suffix on
+   collision" — it *can't* be, because Pandoc bakes the media folder name into
+   every image link as it converts, so the final sibling-folder name has to
+   be known before Pandoc is invoked. Deferring the suffix to publish time (as
+   the note writer normally does) would leave the note's links pointing at
+   `<basename>/…` while the folder had to become `<basename> (1)/…` — broken
+   links. The media folder name is therefore fixed here — it's exactly the
+   reserved basename — even though it's about to be staged under a temp
+   parent, not the final path yet. **That temp
    working directory lives inside the destination vault**, not the OS
    temp dir (e.g. a hidden `.vault-buddy.tmp`-style staging dir under the
    target `YYYY/MM` folder, matching the owned-temp convention capture
@@ -283,22 +311,26 @@ same date can't collide on the temp dir.
    same-volume `rename` for each (guaranteed same-filesystem by step 1's
    in-vault staging), the note via the same atomic
    temp+fsync+`rename_noreplace` write every other domain uses, both
-   keeping the exact names reserved in step 1. Publish order is
-   **media directory first, then the note**, so the note is never visible
-   pointing at images that haven't landed yet — but that ordering opens a
-   partial-write window the publish step must close: the note write is
-   non-replacing (`rename_noreplace`), so it can still fail with
-   `AlreadyExists` if the note name was claimed *after* step 1's
-   reservation (a concurrent import, a sync client, or the user
-   hand-creating the same dated name while Pandoc ran). If the note commit
-   fails for any reason after the media directory has already been
-   published, **the media directory is rolled back** (removed from the
-   published path) before the error returns, so a failed import never
-   leaves an orphaned media folder behind. The collision-safe note writer's
-   own ` (N)`-suffix retry handles the ordinary same-name case without
-   reaching this rollback; the rollback is the backstop for a genuine
-   commit failure. A failure at any point before this step leaves only the
-   temp locations to clean up and **nothing at the published path**,
+   keeping the exact names reserved in step 1. Both are written at those
+   *exact* reserved names — **not** re-suffixed at publish time, because the
+   suffix was already resolved jointly in step 1 and Pandoc's image links are
+   pinned to that media-folder name; re-suffixing the note here would break
+   them. Publish order is **media directory first, then the note**, so the
+   note is never visible pointing at images that haven't landed yet — but
+   that ordering opens a partial-write window the publish step must close:
+   the note write is non-replacing (`rename_noreplace` at the exact name), so
+   it can still fail with `AlreadyExists` if the reserved name was claimed
+   *after* step 1's reservation (a concurrent import — improbable under the
+   process lock — a sync client, or the user hand-creating the same dated
+   name while Pandoc ran). If the note commit fails for any reason after the
+   media directory has already been published, **the media directory is
+   rolled back** (removed from the published path) before the error returns,
+   so a failed import never leaves an orphaned media folder behind. This
+   residual post-reservation race fails the import cleanly (toast, nothing
+   left behind) rather than re-suffixing — the ordinary "same document,
+   same date, again" case never reaches it because step 1 already gave that
+   import its own ` (N)` name. A failure at any point before this step leaves
+   only the temp locations to clean up and **nothing at the published path**,
    matching the error-handling section's guarantee.
 
 Format-to-reader mapping is a fixed three-entry table: `.docx` → `docx`,
