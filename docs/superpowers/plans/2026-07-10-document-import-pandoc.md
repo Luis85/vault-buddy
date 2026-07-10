@@ -1058,27 +1058,39 @@ fn probe_pandoc(program: &str) -> Option<(String, u32, u32)> {
     Some((program.to_string(), major, minor))
 }
 
-/// First working pandoc across the ordered candidates (override → PATH), with
-/// its full first `--version` line for display. None if no candidate runs.
+/// The first `--version` line of a program known to run, for display.
+fn pandoc_version_line(program: &str) -> String {
+    pandoc_command(program)
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(|l| l.trim().to_string()))
+        .unwrap_or_default()
+}
+
+/// Resolve a pandoc to use across the ordered candidates (override → PATH).
+/// **Prefer a sandbox-capable (≥ 2.15) candidate** (Codex review): a
+/// working-but-old override must not shadow a supported Pandoc on PATH —
+/// returning the old one would make convert_document reject it at the sandbox
+/// gate and never probe PATH. Keep probing past a too-old runnable candidate
+/// and return the first sandbox-capable one; only if NONE is sandbox-capable
+/// return the first runnable (old) one, so detect_pandoc reports an accurate
+/// "installed but too old" (and convert_document still rejects it).
 fn resolve_working_pandoc() -> Option<(String, u32, u32, String)> {
+    let mut too_old: Option<(String, u32, u32)> = None;
     for program in pandoc_candidates() {
-        // Re-run to capture the version line too; probe_pandoc already proved
-        // it succeeds, so this second call is cheap and only on the winner.
         if let Some((prog, major, minor)) = probe_pandoc(&program) {
-            let line = pandoc_command(&prog)
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .next()
-                        .map(|l| l.trim().to_string())
-                });
-            return Some((prog, major, minor, line.unwrap_or_default()));
+            if sandbox_supported(major, minor) {
+                let line = pandoc_version_line(&prog);
+                return Some((prog, major, minor, line));
+            }
+            too_old.get_or_insert((prog, major, minor));
         }
     }
-    None
+    too_old.map(|(prog, major, minor)| {
+        let line = pandoc_version_line(&prog);
+        (prog, major, minor, line)
+    })
 }
 
 /// Detect Pandoc on demand (settings-open + Recheck). Async + spawn_blocking:

@@ -148,27 +148,51 @@ fn probe_pandoc(program: &str) -> Option<(String, u32, u32)> {
     Some((program.to_string(), major, minor))
 }
 
-/// First working pandoc across the ordered candidates (override → PATH), with
-/// its full first `--version` line for display. None if no candidate runs.
+/// The first `--version` line of a program known to run, for display.
+fn pandoc_version_line(program: &str) -> String {
+    pandoc_command(program)
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(|l| l.trim().to_string())
+        })
+        .unwrap_or_default()
+}
+
+/// Resolve a pandoc to use across the ordered candidates (override → PATH),
+/// with its full first `--version` line for display. None if no candidate
+/// runs.
+///
+/// **Prefer a candidate that meets the sandbox minimum** (Codex review): a
+/// working-but-old (< 2.15) override must not shadow a supported Pandoc on
+/// PATH. Returning the old override here would make `convert_document` reject
+/// it at the sandbox gate and never probe PATH, so imports stay broken until
+/// the user clears the override. So we keep probing past a too-old runnable
+/// candidate and return the first sandbox-capable one; only if NONE is
+/// sandbox-capable do we return the first runnable (old) one, so
+/// `detect_pandoc` can still report an accurate "installed but too old"
+/// status (and `convert_document` still rejects it — nothing usable exists).
 fn resolve_working_pandoc() -> Option<(String, u32, u32, String)> {
+    let mut too_old: Option<(String, u32, u32)> = None;
     for program in pandoc_candidates() {
-        // Re-run to capture the version line too; probe_pandoc already proved
-        // it succeeds, so this second call is cheap and only on the winner.
         if let Some((prog, major, minor)) = probe_pandoc(&program) {
-            let line = pandoc_command(&prog)
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .next()
-                        .map(|l| l.trim().to_string())
-                });
-            return Some((prog, major, minor, line.unwrap_or_default()));
+            if sandbox_supported(major, minor) {
+                let line = pandoc_version_line(&prog);
+                return Some((prog, major, minor, line));
+            }
+            // Runnable but too old — remember the FIRST such one and keep
+            // looking for a newer candidate.
+            too_old.get_or_insert((prog, major, minor));
         }
     }
-    None
+    too_old.map(|(prog, major, minor)| {
+        let line = pandoc_version_line(&prog);
+        (prog, major, minor, line)
+    })
 }
 
 /// Pandoc argument vector (program excluded). Source is added by the caller as
