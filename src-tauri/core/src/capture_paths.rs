@@ -121,11 +121,26 @@ pub struct OwningVault<'v> {
 /// and symlink escapes (GAP-01). An unresolvable `path` is a rejection —
 /// never a fallback to lexical matching; a registry entry whose own folder
 /// can't resolve is skipped.
+///
+/// The FINAL COMPONENT must not itself be a link, even one whose target
+/// resolves inside the vault: write-bearing callers (the transcript
+/// sidecar minter, the rename planner) derive sibling paths from the RAW
+/// path, not from `path_canonical` — a symlinked file would carry those
+/// writes to the LINK's parent, which can sit outside every vault, while
+/// only the target was ever checked. Requiring the canonical path to equal
+/// `canonicalize(parent).join(file_name)` pins the actual directory entry
+/// to the folder the caller will write into; a plain file always satisfies
+/// this trivially, so ordinary containment is unaffected.
 pub fn vault_owning_path<'v>(
     vaults: &'v [crate::discovery::Vault],
     path: &Path,
 ) -> Option<OwningVault<'v>> {
     let path_canonical = std::fs::canonicalize(path).ok()?;
+    let parent_canonical = path.parent().and_then(|p| std::fs::canonicalize(p).ok())?;
+    let file_name = path.file_name()?;
+    if path_canonical != parent_canonical.join(file_name) {
+        return None;
+    }
     for vault in vaults {
         let Ok(vault_canonical) = std::fs::canonicalize(&vault.path) else {
             continue;
@@ -838,6 +853,29 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         let vaults = vec![vault_at(&vault_dir)];
         assert!(vault_owning_path(&vaults, &link).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_owning_path_rejects_a_symlinked_file_even_when_its_target_is_inside() {
+        // Whole-branch review, GAP-01 seam: a symlink whose TARGET resolves
+        // inside the vault passed the gate, but write-bearing callers derive
+        // sibling paths (transcript sidecar, rename targets) from the RAW
+        // path — writes would land at the LINK's parent, outside the vault.
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let real = vault_dir.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&real, "x").unwrap();
+        let outside_link = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        std::os::unix::fs::symlink(&real, &outside_link).unwrap();
+        let inside_link = vault_dir.join("2026-07-04 1405 Alias.mp3");
+        std::os::unix::fs::symlink(&real, &inside_link).unwrap();
+        let vaults = vec![vault_at(&vault_dir)];
+        assert!(vault_owning_path(&vaults, &outside_link).is_none());
+        assert!(vault_owning_path(&vaults, &inside_link).is_none());
+        // the real file itself still matches
+        assert!(vault_owning_path(&vaults, &real).is_some());
     }
 
     #[test]

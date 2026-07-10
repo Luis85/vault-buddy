@@ -25,6 +25,10 @@
       "loc": 846,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
+    "src-tauri/core/src/capture_paths.rs": {
+      "loc": 830,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
+    },
     "src/components/Tasks.vue": {
       "loc": 760,
       "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Shrink only; split (list vs editor/composer) when next touched."
