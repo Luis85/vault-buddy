@@ -174,6 +174,118 @@ async fn requests_without_the_token_or_with_an_evil_origin_are_rejected() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cors_preflight_and_response_headers_for_localhost_browser_clients() {
+    // Codex catch: a browser-hosted localhost MCP client (the spec's MCP
+    // Inspector validation target) sends an OPTIONS CORS preflight WITHOUT
+    // the Authorization header — browsers never attach credentials to
+    // preflights — so auth-before-CORS 401'd the preflight and the real POST
+    // never happened, even though origin_ok explicitly allows localhost
+    // origins. The guard now answers preflights for origins origin_ok
+    // admits — and ONLY those (an evil origin still 403s before the CORS
+    // arm) — and reflects ACAO + exposes Mcp-Session-Id on actual responses
+    // so browser JS can read the session id and continue. Narrows nothing,
+    // opens nothing: the bearer token stays required on every real request.
+    let dir = tempfile::tempdir().unwrap();
+    let server = start(fixture_deps(dir.path(), false), 0, TOKEN.to_string()).unwrap();
+    let url = format!("http://127.0.0.1:{}/mcp", server.port);
+    let plain = reqwest::Client::new();
+
+    // 1. Preflight with a localhost Origin and NO auth → 204 + CORS grant.
+    let resp = plain
+        .request(reqwest::Method::OPTIONS, &url)
+        .header("Origin", "http://localhost:6274")
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "authorization, content-type",
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
+    let h = resp.headers();
+    assert_eq!(
+        h.get("access-control-allow-origin").expect("ACAO"),
+        "http://localhost:6274"
+    );
+    assert_eq!(
+        h.get("access-control-allow-methods").expect("methods"),
+        "GET, POST, DELETE"
+    );
+    assert_eq!(
+        h.get("access-control-allow-headers").expect("headers"),
+        "authorization, content-type, mcp-session-id, mcp-protocol-version, last-event-id"
+    );
+    assert_eq!(h.get("access-control-max-age").expect("max-age"), "86400");
+
+    // 2. Preflight with an evil Origin → 403: the origin gate fires before
+    //    the CORS arm, so a hostile page never even gets a preflight answer.
+    let resp = plain
+        .request(reqwest::Method::OPTIONS, &url)
+        .header("Origin", "http://evil.test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // 3. A real POST with a localhost Origin + valid auth → ACAO reflected
+    //    and Mcp-Session-Id exposed, or browser JS could not continue the
+    //    session it just initialized.
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "cors-test", "version": "0.0.0" }
+        }
+    });
+    let resp = plain
+        .post(&url)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .header("Origin", "http://localhost:6274")
+        .header("Accept", "application/json, text/event-stream")
+        .json(&init)
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "initialize: {}", resp.status());
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-origin")
+            .expect("ACAO on the real response"),
+        "http://localhost:6274"
+    );
+    assert_eq!(
+        resp.headers()
+            .get("access-control-expose-headers")
+            .expect("expose-headers"),
+        "mcp-session-id"
+    );
+    assert!(resp.headers().get("mcp-session-id").is_some());
+
+    // 4. No Origin (a non-browser client) → no CORS headers at all; the
+    //    non-browser path is byte-for-byte unchanged.
+    let resp = plain
+        .post(&url)
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .header("Accept", "application/json, text/event-stream")
+        .json(&init)
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "initialize: {}", resp.status());
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+    assert!(resp
+        .headers()
+        .get("access-control-expose-headers")
+        .is_none());
+
+    server.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stop_closes_the_listener_even_with_a_pinned_open_stream() {
     // Codex review catch: a client holding a streamable-HTTP stream open must
     // not keep the old endpoint (and old token) alive past a disable/restart.

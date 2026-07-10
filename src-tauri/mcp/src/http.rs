@@ -66,7 +66,7 @@ pub fn auth_ok(header: Option<&str>, token: &str) -> bool {
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use rmcp::transport::streamable_http_server::{
@@ -91,8 +91,56 @@ async fn guard(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let headers = req.headers();
-    if !origin_ok(header_str(headers, header::ORIGIN)) {
+    // Kept as the original HeaderValue so CORS responses echo exactly the
+    // value origin_ok validated — never a wildcard, never a re-parse. An
+    // Origin that isn't visible ASCII behaves as absent (same as
+    // `header_str` always treated it): it can't match a localhost form, and
+    // it earns no CORS headers.
+    let origin = headers
+        .get(header::ORIGIN)
+        .filter(|v| v.to_str().is_ok())
+        .cloned();
+    if !origin_ok(origin.as_ref().and_then(|v| v.to_str().ok())) {
         return Err(StatusCode::FORBIDDEN);
+    }
+    // CORS preflight (Codex catch): a browser-hosted localhost MCP client
+    // (the spec's MCP Inspector target) sends OPTIONS WITHOUT Authorization —
+    // browsers never attach credentials to preflights — so answering it must
+    // come BEFORE the auth gate or the real POST never happens. It sits
+    // AFTER the origin gate on purpose: a non-localhost Origin was already
+    // 403'd above, so this arm can only ever echo an origin origin_ok
+    // admitted. Non-browser OPTIONS (no Origin) falls through to auth
+    // exactly as before. Hand-rolled rather than a CORS layer dependency so
+    // the whole admission story stays auditable next to origin_ok.
+    //
+    // Security posture: CORS here NARROWS nothing and OPENS nothing.
+    // origin_ok remains the only admission decision, and the bearer token is
+    // still required on every actual request — these headers just let an
+    // already-allowed localhost browser complete its handshake and read the
+    // Mcp-Session-Id it needs to continue its session.
+    if req.method() == Method::OPTIONS {
+        if let Some(origin) = origin {
+            let mut resp = Response::new(axum::body::Body::empty());
+            *resp.status_mut() = StatusCode::NO_CONTENT;
+            let h = resp.headers_mut();
+            h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET, POST, DELETE"),
+            );
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static(
+                    "authorization, content-type, mcp-session-id, mcp-protocol-version, last-event-id",
+                ),
+            );
+            h.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                HeaderValue::from_static("86400"),
+            );
+            h.insert(header::VARY, HeaderValue::from_static("Origin"));
+            return Ok(resp);
+        }
     }
     if !auth_ok(header_str(headers, header::AUTHORIZATION), &g.token) {
         return Err(StatusCode::UNAUTHORIZED);
@@ -105,7 +153,22 @@ async fn guard(
         BodyBound::MissingLength => return Err(StatusCode::LENGTH_REQUIRED),
         BodyBound::TooLarge => return Err(StatusCode::PAYLOAD_TOO_LARGE),
     }
-    Ok(next.run(req).await)
+    let mut response = next.run(req).await;
+    // The actual (non-preflight) response for a browser request: reflect the
+    // admitted origin and expose Mcp-Session-Id — without it, browser JS can
+    // make the request but cannot READ the session id header, so the session
+    // dies after initialize. No Origin present (every non-browser client) →
+    // no CORS headers, byte-for-byte the old behavior.
+    if let Some(origin) = origin {
+        let h = response.headers_mut();
+        h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        h.insert(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("mcp-session-id"),
+        );
+        h.append(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    Ok(response)
 }
 
 /// How long in-flight connections get to drain after a shutdown request
