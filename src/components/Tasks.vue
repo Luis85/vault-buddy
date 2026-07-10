@@ -405,6 +405,11 @@ function onEditTitleEnter(task: AggTask, e: KeyboardEvent) {
   // must select the candidate, not save/close the editor with a
   // half-composed title.
   if (e.isComposing) return;
+  // preventDefault lives HERE, after the guard — the template's `.prevent`
+  // modifier ran before this handler and cancelled the candidate-commit
+  // Enter's default, breaking IME selection (Codex, PR #46). A real Enter
+  // still suppresses any form/default action before saving.
+  e.preventDefault();
   void saveEdit(task);
 }
 
@@ -670,7 +675,7 @@ async function saveEdit(task: AggTask) {
                 type="text"
                 aria-label="Task title"
                 class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-                @keydown.enter.prevent="onEditTitleEnter(task, $event)"
+                @keydown.enter="onEditTitleEnter(task, $event)"
                 @keydown.esc="onEditTitleEsc"
               >
               <div class="flex items-center gap-1">

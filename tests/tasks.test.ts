@@ -530,6 +530,37 @@ describe("Tasks", () => {
     });
   });
 
+  it("does not cancel a composing Enter's default in the editor (IME candidate commit survives)", async () => {
+    // Codex review, PR #46: `@keydown.enter.prevent` runs preventDefault
+    // BEFORE onEditTitleEnter can see isComposing, so a candidate-commit
+    // Enter had its default cancelled and IME selection broke. Inspect
+    // defaultPrevented directly on a manually dispatched event — trigger()
+    // hides the event object.
+    const { wrapper } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    const input = wrapper.get('[data-testid="task-edit-title"]')
+      .element as HTMLInputElement;
+
+    const composing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      cancelable: true,
+      bubbles: true,
+    });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    input.dispatchEvent(composing);
+    expect(composing.defaultPrevented).toBe(false); // candidate commit not cancelled
+
+    const real = new KeyboardEvent("keydown", {
+      key: "Enter",
+      cancelable: true,
+      bubbles: true,
+    });
+    Object.defineProperty(real, "isComposing", { value: false });
+    input.dispatchEvent(real);
+    expect(real.defaultPrevented).toBe(true); // a real Enter is still consumed
+  });
+
   it("editor Escape cancels only the edit — it must not reach the panel-close handler", async () => {
     // Codex review, PR #46: onEditTitleEsc cancelled the row edit but let
     // the keydown bubble to PanelRoot's window-level Escape handler, which
