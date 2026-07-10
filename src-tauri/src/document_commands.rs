@@ -377,17 +377,21 @@ fn convert_blocking(
     let safe = capture_paths::safe_recording_root(vault_root, &documents_folder)?;
     capture_paths::assert_path_inside_vault(vault_root, &safe)?;
     let dir = document_import::target_dir(vault_root, &documents_folder, year, month);
+    // Guard the FULLY DATED dir BEFORE creating it — the folder-root check
+    // above is lexical and can't see a `Documents/2026` or `2026/07`
+    // symlink/junction that escapes the vault. `assert_path_inside_vault`
+    // canonicalizes the nearest EXISTING ancestor, so a pre-existing dated
+    // symlink is caught here before `create_dir_all` follows it and creates
+    // directories outside the vault (Codex review).
+    capture_paths::assert_path_inside_vault(vault_root, &dir)?;
     // Resolve the ` (N)` suffix for BOTH note and media folder up front — the
     // target dir must exist for the existence checks, and Pandoc bakes the
     // media-folder name into image links, so it can't be decided at publish
     // time (Codex review).
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare import: {e}"))?;
-    // Re-validate the FULLY DATED dir after creating it — the folder-root
-    // check above is lexical and can't see a `Documents/2026` or `2026/07`
-    // symlink/junction that escapes the vault. `start_capture` guards its
-    // dated folder the same way after create_dir_all (Codex review): a
-    // canonical containment check on the concrete path so staging + publish
-    // can't land outside the vault through a nested date-folder link.
+    // Re-validate the now-created dir to close the race between the pre-check
+    // and `create_dir_all` (a dated symlink swapped in between the two).
+    // `start_capture` guards its dated folder the same way after create.
     capture_paths::assert_path_inside_vault(vault_root, &dir)?;
     let raw = document_import::document_basename(stem, today);
     let basename = document_import::reserve_basename(&dir, &raw);
