@@ -320,11 +320,18 @@ Added `onTitleEnter` handler in Tasks.vue and early isComposing return in Action
   ignore when `activeTranscription` is set.
 - `src/stores/vaults.ts:81-101` — `taskCounts` refreshes only on panel
   open, so the vault-row badge is stale after task edits until reopen.
-  Refresh from `back()`/Tasks mutations.
+  Refresh from `back()`/Tasks mutations. (FIXED 2026-07-10 — added
+  `refreshTaskCount(id)`, called from Tasks.vue on toggle/archive/add
+  success, plus a full `loadTaskCounts()` from `back()` when leaving the
+  tasks view.)
 - `src/components/Tasks.vue:84-86, 98-104` — failed-toggle revert forges
   `status: "new"` instead of restoring the original (`in-progress` etc.);
   the failure re-insert uses a pre-await index, restoring one slot off
   after a concurrent add. Capture the original status; recompute the index.
+  (FIXED 2026-07-10 — toggle now captures `prevStatus` before the
+  optimistic flip and restores it verbatim on failure; archive's failure
+  path pushes the removed task back and re-sorts instead of trusting a
+  captured index.)
 - `src/stores/capture.ts:242-430` — `init()` registers 14 listeners with
   no re-entry guard or unlisten storage (safe today; double-init
   double-fires everything). Roots assign `unlisten*` only after `await
@@ -333,7 +340,10 @@ Added `onTitleEnter` handler in Tasks.vue and early isComposing return in Action
 - `src/stores/notifications.ts:20-26` — dedupe reuses the newest identical
   toast without extending its TTL (a re-raise at t=3.9 s vanishes at 4.0 s
   and reads as flicker); dismissed ids' timers still fire. Restart the
-  timer on dedupe-reuse.
+  timer on dedupe-reuse. (FIXED 2026-07-10 — a `timers` map keyed by
+  notification id lets dedupe-reuse `clearTimeout`+restart the TTL, and
+  `dismiss`/`clear` now cancel their timer instead of leaving it to fire a
+  no-op later.)
 - `src/stores/vaults.ts:184-195` — `back()` carries duplicated dead
   branches; nothing enforces valid view+vaultId pairs (a null-id
   `captureSettings` renders the list under the wrong header) — unreachable

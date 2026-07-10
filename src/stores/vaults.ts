@@ -100,6 +100,18 @@ export const useVaultsStore = defineStore("vaults", {
       );
       this.taskCounts = Object.fromEntries(entries);
     },
+    /** Refresh ONE vault's open-task badge after a mutation (GAP-32 / Codex
+     * PR #46): panel-shown is too late for a badge the user is looking at.
+     * On failure keep the previous count — zeroing a badge because one
+     * mid-session refresh failed would misreport a vault that has tasks. */
+    async refreshTaskCount(id: string) {
+      try {
+        const count = await invoke<number>("count_open_tasks", { id });
+        this.taskCounts = { ...this.taskCounts, [id]: count };
+      } catch (e) {
+        logWarning(`count_open_tasks refresh failed for vault ${id}: ${String(e)}`);
+      }
+    },
     // Ask the next panel open to land on `view` instead of the vault list.
     // Reflected immediately (a still-open panel updates now) and stored as
     // pending so the panel-shown `refresh` re-applies it rather than resetting
@@ -194,6 +206,11 @@ export const useVaultsStore = defineStore("vaults", {
       } else if (this.view === "transcriptions") {
         return this.showList();
       } else if (this.view === "tasks") {
+        // Leaving the tasks view: a full reload (not just the one row a
+        // single mutation would refresh) covers bulk edits and the
+        // aggregate view's null vaultId, where there's no single vault to
+        // target with refreshTaskCount.
+        void this.loadTaskCounts();
         return this.showList();
       } else {
         this.showList();

@@ -216,6 +216,41 @@ describe("Tasks", () => {
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
 
+  it("failed toggle restores the ORIGINAL status, not a forged one (GAP-32)", async () => {
+    // Revert used to hardcode status "new": a failed toggle on an
+    // in-progress task silently relabeled it.
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/ip.md", title: "In progress", status: "in-progress", created: "2026-07-08", done: false, due: null, priority: null, tags: [] },
+      ],
+      set_task_status: () => {
+        throw new Error("disk full");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    const checkbox = wrapper.findAll('[data-testid="task-checkbox"]')[0];
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false);
+    const task = (wrapper.vm as any).tasks[0];
+    expect(task.status).toBe("in-progress");
+    expect(task.done).toBe(false);
+  });
+
+  it("refreshes the vault's task count after a successful mutation (GAP-32)", async () => {
+    // Badges only reloaded on panel-shown — stale after add/toggle/archive
+    // until reopen (Codex PR #46 finding).
+    const { wrapper, calls } = mountView({
+      count_open_tasks: () => 1,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    expect(
+      calls.some((c) => c.cmd === "count_open_tasks" && (c.args as { id: string }).id === "v1"),
+    ).toBe(true);
+  });
+
   it("does not add a task when the title is empty or whitespace", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();

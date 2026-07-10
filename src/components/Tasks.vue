@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
+import { useVaultsStore } from "../stores/vaults";
 import type { TaskItem, TaskPatch, Vault } from "../types";
 import SelectMenu from "./SelectMenu.vue";
 
@@ -58,6 +59,7 @@ const isAggregate = computed(() => props.vaultId === null);
 type AggTask = TaskItem & { vaultId: string; vaultName: string };
 
 const notifications = useNotificationsStore();
+const vaultsStore = useVaultsStore();
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -271,6 +273,9 @@ async function add() {
       vaultName: allVaults.value.find((v) => v.id === targetVault)?.name ?? "",
     });
     sortInPlace();
+    // GAP-32 / Codex PR #46: the vault-row badge only reloaded on
+    // panel-shown, going stale after an add until the panel reopened.
+    void vaultsStore.refreshTaskCount(targetVault);
     newTitle.value = "";
     addDue.value = "";
     addPriority.value = "normal";
@@ -297,6 +302,11 @@ async function toggle(task: AggTask) {
   // Ignore a re-action while this row's write is still pending — otherwise two
   // concurrent set_task_status writes for the same task can land out of order.
   if (busy.value.has(task.path)) return;
+  // GAP-32: captured BEFORE the optimistic flip so a failed write can
+  // restore the task's actual original status (e.g. "in-progress") instead
+  // of forging "new" — the old revert derived the restored value from the
+  // just-flipped `done` boolean, which only ever knows "done"/"new".
+  const prevStatus = task.status;
   const done = !task.done;
   // Optimistic: flip locally, revert + notify on failure.
   task.done = done;
@@ -305,9 +315,16 @@ async function toggle(task: AggTask) {
   busy.value.add(task.path);
   try {
     await invoke("set_task_status", { id: task.vaultId, path: task.path, status: task.status });
+    // Badge refresh (GAP-32 / Codex PR #46): kicked off right after the
+    // write resolves, before the row's busy flag clears in `finally` — it's
+    // fire-and-forget (`void`) against the vaults store's own state, so it
+    // never blocks this row's controls either way, but starting it here
+    // keeps it colocated with the success branch rather than a `finally`
+    // that also runs on failure.
+    void vaultsStore.refreshTaskCount(task.vaultId);
   } catch (e) {
-    task.done = !done;
-    task.status = done ? "new" : "done";
+    task.status = prevStatus;
+    task.done = prevStatus === "done";
     sortInPlace();
     notifications.error(String(e));
     logWarning(`set_task_status failed: ${String(e)}`);
@@ -319,14 +336,18 @@ async function toggle(task: AggTask) {
 async function archive(task: AggTask) {
   if (busy.value.has(task.path)) return;
   busy.value.add(task.path);
-  // Optimistic: remove from the list; re-insert at the same spot + notify on
-  // failure (the list stays sorted, so re-inserting at `index` restores order).
+  // Optimistic: remove from the list; on failure push back + re-sort rather
+  // than re-inserting at a captured index (GAP-32: the index goes stale —
+  // one slot off — if a concurrent add landed while this write was in
+  // flight; recomputing placement via sortInPlace is always correct).
   const index = tasks.value.findIndex((t) => t.path === task.path);
   const removed = tasks.value.splice(index, 1)[0];
   try {
     await invoke("set_task_status", { id: task.vaultId, path: task.path, status: "archived" });
+    void vaultsStore.refreshTaskCount(task.vaultId);
   } catch (e) {
-    tasks.value.splice(index, 0, removed);
+    tasks.value.push(removed);
+    sortInPlace();
     notifications.error(String(e));
     logWarning(`archive failed: ${String(e)}`);
   } finally {

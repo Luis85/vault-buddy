@@ -370,4 +370,23 @@ describe("vaults store", () => {
     store.back();
     expect(store.view).toBe("list");
   });
+
+  it("refreshTaskCount updates one vault and keeps the previous count on failure (GAP-32)", async () => {
+    const store = useVaultsStore();
+    store.taskCounts = { a: 2, b: 5 };
+    mockIPC((cmd, args) => {
+      if (cmd === "count_open_tasks") {
+        const id = (args as { id: string }).id;
+        if (id === "a") return 3;
+        throw "ipc unavailable";
+      }
+    });
+    await store.refreshTaskCount("a");
+    expect(store.taskCounts.a).toBe(3);
+    await store.refreshTaskCount("b");
+    expect(store.taskCounts.b).toBe(5); // kept, not zeroed; failure logged
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("count_open_tasks refresh failed for vault b"),
+    );
+  });
 });
