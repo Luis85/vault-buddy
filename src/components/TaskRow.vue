@@ -49,53 +49,60 @@ const isOverdue = (t: AggTask): boolean => {
         class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
         @change="$emit('toggle')"
       >
-      <button
-        type="button"
-        data-testid="task-open"
-        class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        :aria-label="`Open ${task.title} in Obsidian`"
-        :title="`Open ${task.title} in Obsidian`"
-        @click="$emit('open')"
-      >
-        <span
-          v-if="isAggregate"
-          data-testid="task-vault"
-          class="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-violet-600/80 text-[9px] font-bold text-white"
-          :title="task.vaultName"
-        >{{ task.vaultName.charAt(0).toUpperCase() }}</span>
-        <span
-          v-if="task.priority === 'high' || task.priority === 'low'"
-          data-testid="task-priority"
-          class="h-1.5 w-1.5 shrink-0 rounded-full"
-          :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
-          :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
-          aria-hidden="true"
-        />
-        <span
-          class="min-w-0 flex-1 truncate text-sm"
-          :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+      <!-- The open button, tag chips, and due chip share one flex-1 group so
+           the title truncates and the chips sit at the right — but the chips
+           are SIBLINGS of the open button, not descendants. A focusable
+           button nested in another button is invalid interactive content
+           (Codex, PR #46): browsers expose it inconsistently and a chip
+           activation could be swallowed by the parent open button. -->
+      <div class="flex min-w-0 flex-1 items-center gap-1.5">
+        <button
+          type="button"
+          data-testid="task-open"
+          class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :aria-label="`Open ${task.title} in Obsidian`"
+          :title="`Open ${task.title} in Obsidian`"
+          @click="$emit('open')"
         >
-          {{ task.title }}
-        </span>
-        <span
+          <span
+            v-if="isAggregate"
+            data-testid="task-vault"
+            class="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-violet-600/80 text-[9px] font-bold text-white"
+            :title="task.vaultName"
+          >{{ task.vaultName.charAt(0).toUpperCase() }}</span>
+          <span
+            v-if="task.priority === 'high' || task.priority === 'low'"
+            data-testid="task-priority"
+            class="h-1.5 w-1.5 shrink-0 rounded-full"
+            :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
+            :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
+            aria-hidden="true"
+          />
+          <span
+            class="min-w-0 flex-1 truncate text-sm"
+            :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+          >
+            {{ task.title }}
+          </span>
+        </button>
+        <button
           v-for="tag in task.tags"
           :key="tag"
+          type="button"
           data-testid="task-tag"
-          role="button"
-          tabindex="0"
           :aria-label="`Filter by tag ${tag}`"
-          class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-[10px] text-violet-200 transition-colors hover:bg-violet-500/30"
-          @click.stop="$emit('tagClick', tag)"
-          @keydown.enter.stop.prevent="$emit('tagClick', tag)"
-          @keydown.space.stop.prevent="$emit('tagClick', tag)"
-        >#{{ tag }}</span>
+          class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-[10px] text-violet-200 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          @click="$emit('tagClick', tag)"
+        >
+          #{{ tag }}
+        </button>
         <span
           v-if="dueOf(task)"
           data-testid="task-due"
           class="shrink-0 text-[10px] tabular-nums"
           :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
         >{{ dueLabel(dueOf(task)!) }}</span>
-      </button>
+      </div>
       <button
         type="button"
         data-testid="task-edit"

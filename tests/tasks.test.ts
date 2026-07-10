@@ -704,6 +704,22 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "open_task")).toBeUndefined();
   });
 
+  it("tag chips are real buttons and siblings of the open button (not nested)", async () => {
+    // Codex review, PR #46: role="button" chips nested inside the task-open
+    // <button> is invalid interactive content — browsers expose it
+    // inconsistently, so a chip activation can be swallowed by the parent
+    // open button. The chips must be their own buttons outside it.
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"] },
+      ],
+    });
+    await flushPromises();
+    const chip = wrapper.get('[data-testid="task-tag"]').element;
+    expect(chip.tagName).toBe("BUTTON"); // native button, not a role="button" span
+    expect(chip.closest('[data-testid="task-open"]')).toBeNull(); // not a descendant of the open button
+  });
+
   it("clearing the tag filter restores the full list", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
