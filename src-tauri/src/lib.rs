@@ -1,6 +1,11 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+// pub: the detect_pandoc command + PandocStatus DTO aren't wired into
+// generate_handler! yet (that's Task 6 of the document-import slice) — pub
+// keeps them part of the crate's public API so dead_code doesn't fire on
+// code that is genuinely about to be used, not actually dead.
+pub mod document_commands;
 mod mcp_commands;
 mod search_commands;
 mod task_commands;
