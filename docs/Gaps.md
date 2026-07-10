@@ -374,7 +374,7 @@ Added `onTitleEnter` handler in Tasks.vue and early isComposing return in Action
 ## 5. Security & configuration
 
 ### GAP-34 · ~~Medium~~ FIXED 2026-07-10 · CSP is disabled for all three webviews
-`src-tauri/tauri.conf.json:56` — CSP is now `"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"` (Tauri appends its IPC/asset origins automatically). The policy mitigates injection attacks from strings rendered from vault contents (search results, note titles). Linux compile gate (`npx tauri build --no-bundle`) green. **Runtime behavior in the packaged WebView2 app is NOT yet verified — the next Windows-checklist run must confirm all three windows render (buddy sprites, panel styles, bubble) and the updater/settings views work; a breakage is a one-line revert of this commit.**
+`src-tauri/tauri.conf.json:56` — CSP is now `"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"` (plus `connect-src ipc: http://ipc.localhost` per Tauri's CSP guidance; note Tauri does NOT auto-append origins — on WebView2 `invoke()` rides `window.chrome.webview.postMessage`, which CSP doesn't police, so the connect-src entries cover the wry `ipc:` scheme and any fetch-based transport; adopting the `asset:` protocol later would need explicit `asset: http://asset.localhost` additions). The policy mitigates injection attacks from strings rendered from vault contents (search results, note titles). Linux compile gate (`npx tauri build --no-bundle`) green. **Runtime behavior in the packaged WebView2 app is NOT yet verified — the next Windows-checklist run must confirm all three windows render (buddy sprites, panel styles, bubble) and the updater/settings views work; a breakage is a one-line revert of this commit.**
 
 ### GAP-35 · ~~Medium~~ FIXED 2026-07-10 · GitHub Actions pinned by mutable tag, including the one that holds the updater signing key
 All three workflows: `actions/checkout@v4`, `actions/setup-node@v4`,
@@ -426,8 +426,12 @@ WebView/GTK system libs and a built `dist/`.
 
 ### GAP-41 · ~~High~~ FIXED 2026-07-10 · The release dispatch path is unvalidated
 A new `validate` job in `.github/workflows/release.yml` now rejects a
-`workflow_dispatch` off any branch but `main`, and checks
-`inputs.tag == "v" + tauri.conf.json version` before the build. Kept as a
+`workflow_dispatch` off any branch but `main`, checks
+`inputs.tag == "v" + tauri.conf.json version`, and — for BOTH trigger
+paths — requires the released SHA to be an ancestor of `main` via the
+compare API (`identical`/`behind`), closing the hole where a v* tag pushed
+on a non-main commit with a matching version and green PR-branch CI would
+publish that branch's code (found by Codex on PR #46). Kept as a
 tombstone because the workflow can't be exercised locally — the job only
 proves itself out on the next real release dispatch.
 
