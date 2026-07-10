@@ -293,7 +293,8 @@ pub fn assert_path_inside_vault(vault_path: &Path, root: &Path) -> Result<(), St
 }
 
 /// Whether a `hard_link` error is decisive on its own and must propagate
-/// rather than be papered over by the guarded rename fallback.
+/// rather than be papered over by the platform fallback — native
+/// non-replacing `MoveFileExW` on Windows, the guarded rename elsewhere.
 /// `AlreadyExists` is the live collision signal — `to` is taken, exactly
 /// what non-replacing semantics need to report. `NotFound` means `from`
 /// itself is missing, which the fallback (also rooted at `from`) cannot
@@ -590,8 +591,10 @@ mod tests {
     // propagate" contract at the destination-collision boundary: this is
     // the one case where propagating is still correct (AlreadyExists is
     // decisive, see `hard_link_error_is_decisive`), and it's exercised
-    // through the real `hard_link` + guarded-fallback path since `to`
-    // already exists before `rename_noreplace` is even called.
+    // through the real `hard_link` + platform-fallback path (native
+    // non-replacing `MoveFileExW` on Windows, the guarded rename
+    // elsewhere) since `to` already exists before `rename_noreplace` is
+    // even called.
     #[test]
     fn rename_noreplace_refuses_existing_destination() {
         let dir = tempfile::tempdir().unwrap();
@@ -844,6 +847,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn vault_owning_path_rejects_a_symlink_escaping_the_vault() {
+        // GAP-01: a symlink planted inside the vault whose target resolves
+        // OUTSIDE it must not pass containment via canonicalize() alone.
         let dir = tempfile::tempdir().unwrap();
         let vault_dir = dir.path().join("vault");
         std::fs::create_dir(&vault_dir).unwrap();

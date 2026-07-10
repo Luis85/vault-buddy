@@ -548,9 +548,20 @@ found the failure it prevents:
   keeps the `YYYY-MM-DD HHmm ` prefix and refuses non-capture files;
   execution reuses the reservation + `rename_noreplace` + suffix-retry
   loop, retargets exactly the note's embed line, and a note-side failure
-  after a successful audio move degrades to a warning (audio first).
-  Config writes stay app-side: owned temp + REPLACING rename is correct
-  for `config.json` only, serialized behind `ConfigWriteLock`.
+  after a successful audio move degrades to a warning (audio first). The
+  rename ALSO moves `<old>.transcript.md` onto the reserved base on the
+  same rails and retargets the note's `.transcript` embed alongside the
+  audio embed; a transcript-side collision or failure degrades to the same
+  warning, leaving the old sidecar and its old embed intact rather than
+  orphaning it. The command REQUIRES canonical vault containment
+  (`vault_owning_path`, GAP-01/GAP-07) before planning a rename, refuses
+  outright while the recording is the ACTIVE transcription job (renaming
+  underneath in-flight work would orphan the worker's terminal write), and
+  retargets a still-QUEUED job to the landed name (which may carry a
+  collision suffix the plan didn't predict) so a pending transcription
+  follows the file instead of stranding under the old name. Config writes
+  stay app-side: owned temp + REPLACING rename is correct for
+  `config.json` only, serialized behind `ConfigWriteLock`.
 - **Companion note & follow-up template**: the optional `.md` embeds the audio
   and carries recording metadata; with the per-vault `follow_up_template` on
   (default), `render_note` (core) also appends a `## Follow-up` scaffold (action

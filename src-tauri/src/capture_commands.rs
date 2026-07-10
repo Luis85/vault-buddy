@@ -567,9 +567,14 @@ pub fn start_capture(
                     crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
                 });
             if let Err(e) = janitor {
-                // The reservation stays wedged until the worker replies or
-                // the app restarts — quit stays possible via the
-                // startup-wedged shutdown bypass stamped above (GAP-08).
+                // The janitor closure (and the ready_rx/done_rx it would
+                // have consumed) is dropped along with the failed spawn, so
+                // nothing is left listening for the worker's reply — a late
+                // reply clears nothing. The reservation stays wedged until
+                // the app restarts; quit stays possible via the
+                // startup-wedged shutdown bypass stamped above (GAP-08),
+                // and a late `.part` that does land is recovered as
+                // `(recovered)` on the next launch.
                 log::error!("could not spawn capture-janitor thread: {e}");
             }
             emit_failed(&app, &msg);

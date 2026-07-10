@@ -14,11 +14,11 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/src/capture_commands.rs": {
-      "loc": 1073,
+      "loc": 1078,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/capture/src/session.rs": {
-      "loc": 1035,
+      "loc": 1041,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/transcribe/src/model.rs": {
@@ -26,7 +26,7 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/core/src/capture_paths.rs": {
-      "loc": 830,
+      "loc": 835,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src/components/Tasks.vue": {

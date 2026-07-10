@@ -28,7 +28,10 @@ pub fn check_previous_run(dir: &Path) -> PreviousRun {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => PreviousRun::CleanOrFirst,
         Err(e) => {
             // Unreadable marker: crash detection silently degraded before.
-            log::warn!("diagnostics: cannot read run marker: {e}");
+            log::warn!(
+                "diagnostics: cannot read run marker {}: {e}",
+                dir.join(RUN_MARKER).display()
+            );
             PreviousRun::CleanOrFirst
         }
     }

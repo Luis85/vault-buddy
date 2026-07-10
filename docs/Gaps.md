@@ -267,7 +267,8 @@ any read error other than NotFound; return values still degrade unchanged.
 All eight sites (close-finalize, shutdown-finalize, tray-stop, and the five
 start_capture spawns) now log-and-degrade per site instead of panicking
 across the WebView2 FFI boundary; the setup-time spawns (recovery,
-transcribe-worker) were never in a native callback and keep `.expect`.
+transcribe-worker, topmost-checkpoint) were never in a native callback and
+keep `.expect`.
 
 ### GAP-25 · Low · Assorted swallowed results
 - `src-tauri/src/diagnostics.rs:85-87, 99-101` — run-marker
@@ -496,8 +497,10 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   unreadable-dir skip, and canonicalize-failure branches are exercised only
   indirectly via tasks/search tests.
 - `capture_paths.rs`: `rename_noreplace`'s link-succeeded-but-remove-failed
-  warn path and the non-decisive-error fallback rename (the GAP-06 path);
-  `assert_root_inside_vault` with a missing vault path.
+  warn path; `assert_root_inside_vault` with a missing vault path. (The
+  GAP-06 non-decisive-error fallback itself is no longer untested: the
+  non-Windows arm has direct contract tests, and a `cfg(windows)` twin
+  awaits GAP-43's Windows `cargo test` CI step.)
 - `capture_note.rs`: `write_atomic_replacing`'s numbered-temp squatter path
   and failure-cleanup branch (only `write_note_atomic`'s squatter is
   tested).
@@ -713,7 +716,9 @@ not regress:
   guarantee and per-class caps; `rename_noreplace` AlreadyExists semantics
   on dangling symlinks; `EmitThrottle`/`PositionCheckpointer` state
   machines; write-path TOCTOUs backstopped by exclusive-create or
-  `rename_noreplace` (except the GAP-06 fallback).
+  `rename_noreplace`, including the GAP-06 fallback (direct contract tests
+  on the non-Windows arm; the `cfg(windows)` twin awaits GAP-43's Windows
+  `cargo test` CI step).
 - **Capture/transcribe**: exclusive `.part` create; pairwise reservation
   including the transcript name; recovery ownership/layout/staleness
   filters; pause-never-blocks-shutdown; rename keeps the date prefix and

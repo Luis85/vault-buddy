@@ -338,6 +338,12 @@ fn run_worker(
         // Nothing between the old call site (just above the drain) and
         // here reads `next_tick`, so moving the call doesn't change what
         // any of that code observes.
+        // While paused, the drain above discards every arriving sample
+        // instead of extending `s.buffer`, so `buffered` stays pinned at
+        // whatever pre-pause remnant was already sitting there — it never
+        // grows during the pause. A stall while paused therefore resyncs
+        // through the same `buffered` ≈ 0 arm as a suspend: there is
+        // nothing encode-bound to catch up on either way.
         let buffered_frames = states.iter().map(|s| s.buffer.len()).max().unwrap_or(0) as u64;
         let buffered = Duration::from_micros(buffered_frames * 1_000_000 / TARGET_RATE as u64);
         let (new_next_tick, take_tick) =
