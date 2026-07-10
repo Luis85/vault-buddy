@@ -21,9 +21,9 @@ Task Management PRD:
 - [Bulk Operations](../prds/task-management.md) and [Search](../prds/task-management.md).
 - Roadmap Version 1 (creation/editing/aggregation/lists/dashboard) and Version 2 (templates, recurring tasks, saved filters, quick actions).
 
-## Status: Not started (beyond the single-vault slice)
+## Status: Not started (beyond the single-vault list)
 
-[Per-Vault Task List](per-vault-task-list.md) (shipped v0.5.0) covers only one vault's flat task list with add + status-toggle. There is no cross-vault aggregation service, no list/tag/priority/due-date model on the `TaskItem` struct (`core::tasks`), no dashboard component, no Quick Task modal, and no bulk operations. Editing a task beyond its `status` (rename, edit metadata/content, move, archive, delete, duplicate) is also unimplemented — the vertical-slice spec explicitly deferred it.
+[Per-Vault Task List](per-vault-task-list.md) (shipped v0.5.0, extended through v0.5.3) now covers the single-vault experience: `TaskItem` carries due dates, priority and tags; the view has date buckets, a tag grouping mode, filters, an inline editor (rename/due/priority/tags), archive, and open-in-Obsidian. What THIS use-case adds remains unbuilt: no cross-vault aggregation service, no user-defined lists (Inbox/Next/Today/… as metadata rather than dates), no dashboard component, no standalone Quick Task modal, no bulk operations, no full-text task search, and no delete/move/duplicate.
 
 ## Related use-cases
 

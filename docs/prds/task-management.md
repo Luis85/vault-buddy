@@ -1,14 +1,18 @@
 # Task Management — Capability PRD
 
-- **Status:** Draft — Version 1's first vertical slice (task creation,
-  listing, and completion, per vault) shipped in v0.5.0; aggregation,
-  lists, dashboard, templates, Task Tags/Todos and AI features below remain
-  unbuilt. See [Per-Vault Task List](../use-cases/per-vault-task-list.md).
+- **Status:** Draft — the per-vault task experience has shipped: creation,
+  listing, and completion in v0.5.0; archive + open-task counter in v0.5.1;
+  due dates, priority, date buckets, inline editing, open-in-Obsidian and
+  filtering in v0.5.2; Obsidian-compatible tags on Tasks (chips, tag filter,
+  tag grouping) in v0.5.3. Cross-vault aggregation, lists, the dashboard,
+  templates, Task Tags on non-Task notes / Todos, and the AI features below
+  remain unbuilt. See [Per-Vault Task List](../use-cases/per-vault-task-list.md).
 - **Version:** 1.0
 - **Parent Product:** Vault Buddy
 
 Use cases extracted from this PRD, with shipping status: [Per-Vault Task
-List](../use-cases/per-vault-task-list.md) (shipped v0.5.0), [Task Tags &
+List](../use-cases/per-vault-task-list.md) (shipped v0.5.0, extended
+through v0.5.3), [Task Tags &
 Todos](../use-cases/task-tags-and-todos.md), [Aggregated Task Dashboard &
 Lists](../use-cases/aggregated-task-dashboard-and-lists.md), [AI-Assisted
 Task Management](../use-cases/ai-assisted-task-management.md) (all
@@ -387,11 +391,13 @@ Obsidian is never required for creating or editing tasks.
 
 ### Version 1
 
-- Task creation
-- Task editing
-- Task aggregation
-- Task lists
-- Dashboard
+- Task creation — ✅ shipped (v0.5.0; due/priority/tags on create by v0.5.3)
+- Task editing — ✅ shipped per vault (v0.5.2/v0.5.3: inline rename, due,
+  priority, tags, archive; delete/move/duplicate still open)
+- Task aggregation — unbuilt
+- Task lists — unbuilt
+- Dashboard — unbuilt (per-vault date buckets shipped in v0.5.2 are the
+  single-vault precursor)
 
 ### Version 2
 

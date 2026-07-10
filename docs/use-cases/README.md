@@ -66,7 +66,7 @@ main PRD's former Non-Functional Requirements section.
 | [Recordings Browser](recordings-browser.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Re-transcription](re-transcription.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Rename Recording](rename-recording.md) ⚠ not in PRD text | Knowledge Intake | v0.4.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
-| [Per-Vault Task List](per-vault-task-list.md) ⚠ PRD status stale | Task Management | v0.5.0 | [Task Management](../prds/task-management.md) |
+| [Per-Vault Task List](per-vault-task-list.md) | Task Management | v0.5.0 (extended through v0.5.3: due/priority/buckets/editor/open/filter/tags) | [Task Management](../prds/task-management.md) |
 
 ## Planned (named in a PRD roadmap, not yet built)
 
@@ -104,7 +104,7 @@ main PRD's former Non-Functional Requirements section.
 ## Known documentation gaps found during this extraction
 
 1. ~~**Software Auto-Update has no PRD at all**~~ — **fixed**: now covered by the [Platform & Cross-Cutting Capabilities PRD](../prds/platform-and-cross-cutting.md).
-2. **Task Management PRD status is stale** — still reads `Status: Draft`; [Per-Vault Task List](per-vault-task-list.md) shipped in v0.5.0. `AGENTS.md`'s IPC command inventory is also missing the five `task_commands::*` entries.
+2. ~~**Task Management PRD status is stale**~~ — **fixed**: the PRD's status line and Version 1 roadmap now track what shipped (per-vault list through v0.5.3), and `AGENTS.md`'s IPC inventory lists all eight `task_commands::*` entries.
 3. **Rename Recording is unshipped-by-omission in the PRD's prose** — the feature exists and is safety-critical, but the Knowledge Intake PRD never narrates it as a use case or MVP feature.
 4. **Desktop Audio / Custom recording modes** are named in the Knowledge Intake PRD's Recording Modes table but were never built — only Meeting and Voice Note modes ship.
 5. ~~**Diagnostics & Crash Reporting has no PRD**~~ — **fixed**: found while drafting the Platform & Cross-Cutting PRD; it was documented only in `AGENTS.md`'s invariants. Now covered alongside Software Auto-Update.

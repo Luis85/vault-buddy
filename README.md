@@ -9,7 +9,7 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Status:** vault access · one-click meeting & voice recording · local offline transcription
+- **Status:** vault access · one-click meeting & voice recording · local offline transcription · per-vault task lists
 
 See the [Product Requirements Document](PRD%20-%20Product%20Vision.md) for the full vision,
 principles, capabilities, and roadmap.
@@ -60,14 +60,23 @@ The buddy appears as a small, always-on-top character on your desktop.
   Click a recording to open its note in Obsidian, or **re-transcribe** any
   one on the spot — useful after switching to a larger, more accurate speech
   model.
+- **Track tasks** per vault: the **checklist button** on a vault row opens a
+  todo list backed by plain `type: Task` Markdown notes in a folder you
+  choose (default `Tasks`) — fully Obsidian-compatible, hand-authored files
+  included. Add tasks with an optional due date, priority, and `#tags`;
+  check them off, edit them inline, or archive them; group by due date
+  (Overdue / Today / Upcoming) or by tag; click a title to open the note in
+  Obsidian. The vault row shows a badge with the open-task count.
 
 Vault Buddy is careful with your vault. Browsing vaults and opening notes
 never writes anything — that stays delegated to Obsidian via `obsidian://`
-URIs, and every launched URI is logged. **Recording is the one feature that
-writes into a vault**, and only for vaults you opt in: it saves the audio,
+URIs, and every launched URI is logged. **Only recording and tasks write
+into a vault**, and only where you point them: recording saves the audio,
 an optional companion note, and (if enabled) a transcript sidecar into a
-dated folder you choose, and it never overwrites or edits files you already
-have. Everything stays on your machine — no account, nothing uploaded.
+dated folder you choose; tasks live as plain Markdown notes in the tasks
+folder, and an edit rewrites only the frontmatter lines you changed. Neither
+ever overwrites files you already have. Everything stays on your machine —
+no account, nothing uploaded.
 
 ## Contributing
 
