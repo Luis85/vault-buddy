@@ -87,6 +87,21 @@ async function browse() {
   }
 }
 
+const INSTALL_URL = "https://pandoc.org/installing.html";
+
+// Open the install page in the OS browser via Rust — a raw `target="_blank"`
+// in a Tauri v2 webview either no-ops or replaces the app UI, so we intercept
+// the click and route through the logged `open_external_url` command. The
+// `href` stays for accessibility / right-click-copy; a plain-tap failure just
+// warns (the URL is visible to copy).
+async function openInstall() {
+  try {
+    await invoke("open_external_url", { url: INSTALL_URL });
+  } catch (e) {
+    logWarning(`document import settings: open_external_url failed: ${String(e)}`);
+  }
+}
+
 const statusLabel = computed(() => {
   const s = status.value;
   if (!s) return "";
@@ -120,11 +135,11 @@ const statusLabel = computed(() => {
         </button>
       </div>
       <a
-        href="https://pandoc.org/installing.html"
-        target="_blank"
+        :href="INSTALL_URL"
         rel="noopener noreferrer"
         data-testid="pandoc-install-link"
         class="text-xs text-violet-300 hover:text-violet-200"
+        @click.prevent="openInstall"
       >
         Install Pandoc
       </a>

@@ -321,6 +321,7 @@ pub fn run() {
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
+            commands::open_external_url,
             commands::rearm_crash_detection,
             commands::get_autostart,
             commands::set_autostart,

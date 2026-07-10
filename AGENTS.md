@@ -237,12 +237,12 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 50 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 51 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
-| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, `get_autostart`, `set_autostart` |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture`, `stop_capture`, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings`, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks` |

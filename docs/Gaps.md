@@ -75,7 +75,12 @@ leftover folder. **Fix, if ever pursued:** the staging dir name encodes the
 basename and still exists on crash, so the janitor could parse it and remove
 a matching `<basename>/` media folder that has no sibling `<basename>.md`
 note (provably our orphan, since the basename comes from our owned staging
-dir).
+dir). A crash *inside* `write_note_atomic` (between temp-create and
+`rename_noreplace`) can also strand a hidden `.<basename>.md.vault-buddy.tmp`
+FILE next to the target — the import janitor sweeps only `.vault-buddy.tmp.import`
+dirs, not this temp. It is our own tiny, walk-invisible file (no user data),
+and the surface is shared by every domain that uses `write_note_atomic`
+(capture/transcript/tasks), not import-specific.
 
 ### GAP-01 · High · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
 `src-tauri/src/transcription.rs:581` (`owning_vault_id`), used by

@@ -81,8 +81,21 @@ describe("DocumentImportSettings", () => {
     await flushPromises();
     const link = wrapper.get('[data-testid="pandoc-install-link"]');
     expect(link.attributes("href")).toBe("https://pandoc.org/installing.html");
-    expect(link.attributes("target")).toBe("_blank");
     expect(wrapper.find('[data-testid="pandoc-browse"]').exists()).toBe(true);
+  });
+
+  it("opens the install link through Rust, not raw webview navigation", async () => {
+    // A raw target="_blank" in a Tauri v2 webview no-ops or replaces the app;
+    // the click must route through the logged open_external_url command.
+    routeInvoke({ detect: [NOT_INSTALLED] });
+    const wrapper = mount(DocumentImportSettings);
+    await flushPromises();
+    mocks.invoke.mockClear();
+    await wrapper.get('[data-testid="pandoc-install-link"]').trigger("click");
+    await flushPromises();
+    expect(mocks.invoke).toHaveBeenCalledWith("open_external_url", {
+      url: "https://pandoc.org/installing.html",
+    });
   });
 
   it("shows the too-old warning when sandbox is unsupported", async () => {

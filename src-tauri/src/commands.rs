@@ -556,6 +556,21 @@ pub fn open_logs_folder(app: tauri::AppHandle) {
     crate::diagnostics::open_log_dir(&app);
 }
 
+/// Open an external `https://` link in the OS default browser. The frontend
+/// never navigates the panel webview to an external URL directly — in a Tauri
+/// v2 webview a raw `target="_blank"` either no-ops or replaces the app UI —
+/// so links (e.g. the Pandoc install page) route through here. Restricted to
+/// `https://` so the frontend can't launch arbitrary schemes (`file:`, custom
+/// handlers); `uri::launch` logs it as the same audit trail every launched
+/// URI gets.
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("refusing to open non-https URL".into());
+    }
+    uri::launch(&url)
+}
+
 /// The frontend calls this when an update install fails after
 /// prepare_update_install stamped a clean shutdown — the app keeps
 /// running, so crash detection must come back on.
