@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use log;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecordingMode {
     #[default]
