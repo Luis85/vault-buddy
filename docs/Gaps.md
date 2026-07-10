@@ -44,22 +44,11 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
-### GAP-01 · High · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
-`src-tauri/src/transcription.rs:581` (`owning_vault_id`), used by
-`transcribe_recording_now` and `retranscribe`.
-`Path::starts_with` compares raw components without resolving `..`, so a
-path like `<vault>\..\anywhere\foo.mp3` (pointing at a real file) passes
-the vault-containment check; the pipeline then writes
-`foo.transcript.md` **outside any vault** (`write_placeholder` /
-`force_write_sidecar` and the final sidecar). `retranscribe` additionally
-bypasses the vault's `transcribe` gate. Both commands also skip the
-`is_capture_base` ownership filter that `rename_capture` enforces via
-`rename_plan`, so any `.mp3` in a vault gets a sidecar minted next to it.
-The same lexical matcher in `open_recording_note`
-(`capture_commands.rs:979`) is read-only, lower stakes.
-**Fix:** canonicalize (or reject `ParentDir` components in) the incoming
-path before the prefix match, and require a capture-pattern basename like
-the rename path does.
+### GAP-01 · ~~High~~ FIXED 2026-07-10 · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
+`owning_vault_id` and `open_recording_note` now match on canonical paths via
+`capture_paths::vault_owning_path` (unresolvable = rejected), and both
+transcription commands require `capture_paths::is_capture_mp3` — the same
+ownership filter `rename_plan` enforces (now shared).
 
 ### GAP-02 · Medium · A transient config read failure during save wipes every other vault's settings
 `src-tauri/core/src/capture_config.rs:309-314` (`update_vault_config_at`).

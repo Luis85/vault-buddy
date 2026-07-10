@@ -87,6 +87,60 @@ pub struct RenamePlan {
     pub note_from: PathBuf,
 }
 
+/// Ownership filter shared by the rename and transcription commands: a
+/// `.mp3` (any case) whose stem carries the capture-pattern prefix. Any
+/// command that mints or moves files NEXT TO a given mp3 must pass this —
+/// an arbitrary user mp3 must never grow a Vault Buddy sidecar or be
+/// shuffled by our rename machinery.
+pub fn is_capture_mp3(path: &Path) -> bool {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let is_mp3 = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+    is_mp3 && is_capture_base(&stem)
+}
+
+/// A canonical containment match: the owning vault plus the canonical forms
+/// of BOTH sides, so callers derive vault-relative paths from the same
+/// canonical prefix (`\\?\`-form on Windows) instead of mixing raw and
+/// resolved paths — mixing them makes `strip_prefix` fail (the `open_task`
+/// precedent in task_commands.rs).
+pub struct OwningVault<'v> {
+    pub vault: &'v crate::discovery::Vault,
+    pub vault_canonical: PathBuf,
+    pub path_canonical: PathBuf,
+}
+
+/// The registered vault whose folder contains `path`, matched on CANONICAL
+/// paths. `Path::starts_with` compares raw components without resolving
+/// `..` or links, so a lexical prefix check accepts `<vault>\..\anywhere`
+/// and symlink escapes (GAP-01). An unresolvable `path` is a rejection —
+/// never a fallback to lexical matching; a registry entry whose own folder
+/// can't resolve is skipped.
+pub fn vault_owning_path<'v>(
+    vaults: &'v [crate::discovery::Vault],
+    path: &Path,
+) -> Option<OwningVault<'v>> {
+    let path_canonical = std::fs::canonicalize(path).ok()?;
+    for vault in vaults {
+        let Ok(vault_canonical) = std::fs::canonicalize(&vault.path) else {
+            continue;
+        };
+        if path_canonical.starts_with(&vault_canonical) {
+            return Some(OwningVault {
+                vault,
+                vault_canonical,
+                path_canonical,
+            });
+        }
+    }
+    None
+}
+
 /// Pure planning for the post-save rename: validates ownership and the
 /// title, derives the new base. Execution (reservation + rename_noreplace +
 /// embed retarget) lives in the capture crate so the safety rails are shared
@@ -96,11 +150,7 @@ pub fn rename_plan(mp3: &Path, new_title: &str) -> Result<RenamePlan, String> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let is_mp3 = mp3
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
-    if !is_mp3 || !is_capture_base(&stem) {
+    if !is_capture_mp3(mp3) {
         // Ownership filter: rename only files carrying our capture
         // pattern — never an arbitrary user mp3 handed in by mistake.
         return Err("Not a Vault Buddy capture file".to_string());
@@ -308,6 +358,7 @@ pub fn reserve_final(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::Vault;
     use chrono::NaiveDate;
 
     fn date() -> NaiveDate {
@@ -627,5 +678,90 @@ mod tests {
         let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting (2).mp3");
         let plan = rename_plan(mp3, "Standup").unwrap();
         assert_eq!(plan.new_base, "2026-07-04 1405 Standup");
+    }
+
+    fn vault_at(dir: &Path) -> Vault {
+        Vault {
+            id: "v1".into(),
+            name: "V".into(),
+            path: dir.to_string_lossy().into_owned(),
+            open: false,
+        }
+    }
+
+    #[test]
+    fn is_capture_mp3_requires_capture_stem_and_mp3_extension() {
+        assert!(is_capture_mp3(Path::new("/v/2026-07-04 1405 Meeting.mp3")));
+        // extension is case-insensitive, same as rename_plan's check
+        assert!(is_capture_mp3(Path::new("/v/2026-07-04 1405 Meeting.MP3")));
+        assert!(!is_capture_mp3(Path::new("/v/holiday-song.mp3")));
+        assert!(!is_capture_mp3(Path::new("/v/2026-07-04 1405 Meeting.md")));
+    }
+
+    #[test]
+    fn vault_owning_path_matches_a_file_inside_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let mp3 = vault_dir.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&mp3, "x").unwrap();
+        let vaults = vec![vault_at(&vault_dir)];
+        let owned = vault_owning_path(&vaults, &mp3).expect("inside the vault");
+        assert_eq!(owned.vault.id, "v1");
+        assert_eq!(owned.path_canonical, std::fs::canonicalize(&mp3).unwrap());
+        assert_eq!(
+            owned.vault_canonical,
+            std::fs::canonicalize(&vault_dir).unwrap()
+        );
+    }
+
+    #[test]
+    fn vault_owning_path_rejects_a_dotdot_escape() {
+        // GAP-01: Path::starts_with compares raw components, so
+        // `<vault>/../outside.mp3` passed the old lexical prefix check while
+        // pointing at a real file OUTSIDE the vault.
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let outside = dir.path().join("2026-07-04 1405 Outside.mp3");
+        std::fs::write(&outside, "x").unwrap();
+        let sneaky = vault_dir.join("..").join("2026-07-04 1405 Outside.mp3");
+        let vaults = vec![vault_at(&vault_dir)];
+        assert!(sneaky.exists(), "the escape path must point at a real file");
+        assert!(vault_owning_path(&vaults, &sneaky).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_owning_path_rejects_a_symlink_escaping_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let outside = dir.path().join("2026-07-04 1405 Outside.mp3");
+        std::fs::write(&outside, "x").unwrap();
+        let link = vault_dir.join("2026-07-04 1405 Linked.mp3");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let vaults = vec![vault_at(&vault_dir)];
+        assert!(vault_owning_path(&vaults, &link).is_none());
+    }
+
+    #[test]
+    fn vault_owning_path_rejects_missing_files_and_skips_dead_vaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let mp3 = vault_dir.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&mp3, "x").unwrap();
+        // an unresolvable path is a rejection, not a fallback to lexical matching
+        assert!(vault_owning_path(&[vault_at(&vault_dir)], Path::new("/no/such.mp3")).is_none());
+        // a registry entry whose folder is gone is skipped; a later vault still matches
+        let dead = Vault {
+            id: "dead".into(),
+            name: "Dead".into(),
+            path: dir.path().join("gone").to_string_lossy().into_owned(),
+            open: false,
+        };
+        let vaults = vec![dead, vault_at(&vault_dir)];
+        assert_eq!(vault_owning_path(&vaults, &mp3).unwrap().vault.id, "v1");
     }
 }

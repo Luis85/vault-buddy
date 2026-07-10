@@ -577,12 +577,13 @@ fn fail_transcription(app: &AppHandle, mp3: &Path, message: &str) {
     toast(app, "Transcription failed", message);
 }
 
-/// The vault whose folder contains `mp3` (for the retry command).
+/// The vault whose folder contains `mp3` (for the retry/force commands),
+/// matched on CANONICAL paths — `Path::starts_with` on raw components
+/// accepted `<vault>\..\anywhere` escapes and symlinks (GAP-01). None when
+/// the path cannot be resolved or no registered vault contains it.
 fn owning_vault_id(mp3: &Path) -> Option<String> {
-    discovery::discover_vaults()
-        .into_iter()
-        .find(|v| mp3.starts_with(&v.path))
-        .map(|v| v.id)
+    let vaults = discovery::discover_vaults();
+    capture_paths::vault_owning_path(&vaults, mp3).map(|owned| owned.vault.id.clone())
 }
 
 /// Run one job body, converting a panic into a `false` so the worker loop can
@@ -701,6 +702,9 @@ pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), Stri
     if !mp3.is_file() {
         return Err("Recording not found.".to_string());
     }
+    if !capture_paths::is_capture_mp3(&mp3) {
+        return Err("Not a Vault Buddy capture file.".to_string());
+    }
     let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
     enqueue_transcription(
         &app,
@@ -720,6 +724,9 @@ pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
     let mp3 = PathBuf::from(&path);
     if !mp3.is_file() {
         return Err("Recording not found.".to_string());
+    }
+    if !capture_paths::is_capture_mp3(&mp3) {
+        return Err("Not a Vault Buddy capture file.".to_string());
     }
     let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
     enqueue_transcription(

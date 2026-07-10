@@ -935,19 +935,22 @@ pub fn run_recovery(app: &AppHandle) {
 /// every other vault open.
 fn open_recording_note(path: &str) -> Result<(), String> {
     let mp3 = PathBuf::from(path);
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| mp3.starts_with(&v.path))
-        .ok_or_else(|| format!("no vault owns {path}"))?;
-    let note = mp3.with_extension("md");
+    let vaults = discovery::discover_vaults();
+    // Canonical containment (GAP-01's read-only sibling): the lexical
+    // starts_with accepted `..`/symlink paths pointing outside every vault.
+    let owned = capture_paths::vault_owning_path(&vaults, &mp3)
+        .ok_or_else(|| "Recording is not inside a known vault.".to_string())?;
+    let note = owned.path_canonical.with_extension("md");
     let target = if note.exists() {
         note
     } else {
-        transcript::transcript_path(&mp3)
+        transcript::transcript_path(&owned.path_canonical)
     };
-    let rel = uri::vault_relative_no_ext(&target, Path::new(&vault.path))
+    // Both sides canonical, so strip_prefix agrees on Windows' \\?\ form
+    // (the open_task precedent).
+    let rel = uri::vault_relative_no_ext(&target, &owned.vault_canonical)
         .ok_or_else(|| format!("recording is outside its vault: {}", target.display()))?;
-    uri::launch(&uri::open_file_uri(&vault.id, &rel))
+    uri::launch(&uri::open_file_uri(&owned.vault.id, &rel))
 }
 
 /// Open a finished recording's note (or transcript sidecar) — the
