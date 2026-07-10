@@ -6,8 +6,8 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, TaskPatch, Vault } from "../types";
-import { dueOf, localToday, parseTagsInput } from "../utils/taskFields";
-import SelectMenu from "./SelectMenu.vue";
+import { dueOf, localToday } from "../utils/taskFields";
+import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
 
@@ -23,15 +23,10 @@ const loadError = ref<string | null>(null);
 const tasks = ref<AggTask[]>([]);
 const allVaults = ref<Vault[]>([]);
 const filter = ref("");
-const newTitle = ref("");
 const adding = ref(false);
-const showAddOptions = ref(false);
-const addDue = ref("");
-const addPriority = ref("normal");
-const addTags = ref("");
-// Aggregate add: which vault receives the new task. Defaults to the first
-// vault; component-local, no persistence across opens (YAGNI per spec).
-const addVaultId = ref("");
+// The add composer owns its own draft field state and reports a parsed payload
+// up via `submit`; the container keeps validation + the write + the reset call.
+const composer = ref<InstanceType<typeof TaskComposer> | null>(null);
 const vaultOptions = computed(() =>
   allVaults.value.map((v) => ({ value: v.id, label: v.name })),
 );
@@ -184,7 +179,6 @@ onMounted(async () => {
       // is reserved for list_vaults failing or EVERY vault failing.
       const vaults = await invoke<Vault[]>("list_vaults");
       allVaults.value = vaults;
-      addVaultId.value = vaults[0]?.id ?? "";
       const failed: string[] = [];
       const results = await Promise.all(
         vaults.map(async (v) => {
@@ -215,17 +209,20 @@ onMounted(async () => {
   }
 });
 
-async function add() {
-  const title = newTitle.value.trim();
-  const targetVault = isAggregate.value ? addVaultId.value : props.vaultId;
+type AddPayload = { title: string; due: string; priority: string; tags: string[]; vaultId: string | null };
+
+async function add(payload: AddPayload) {
+  const title = payload.title.trim();
+  // Aggregate mode resolves the target from the payload's picked vault; a
+  // single-vault view always writes to its own vault.
+  const targetVault = isAggregate.value ? payload.vaultId : props.vaultId;
   if (!title || adding.value || !targetVault) return;
   adding.value = true;
   try {
     const args: Record<string, unknown> = { id: targetVault, title };
-    if (addDue.value) args.due = addDue.value;
-    if (addPriority.value !== "normal") args.priority = addPriority.value;
-    const tags = parseTagsInput(addTags.value);
-    if (tags.length > 0) args.tags = tags;
+    if (payload.due) args.due = payload.due;
+    if (payload.priority !== "normal") args.priority = payload.priority;
+    if (payload.tags.length > 0) args.tags = payload.tags;
     const created = await invoke<TaskItem>("add_task", args);
     tasks.value.unshift({
       ...created,
@@ -236,26 +233,14 @@ async function add() {
     // GAP-32 / Codex PR #46: the vault-row badge only reloaded on
     // panel-shown, going stale after an add until the panel reopened.
     void vaultsStore.refreshTaskCount(targetVault);
-    newTitle.value = "";
-    addDue.value = "";
-    addPriority.value = "normal";
-    addTags.value = "";
-    showAddOptions.value = false;
+    // Fields clear only on success — a failed add keeps the user's input.
+    composer.value?.reset();
   } catch (e) {
     notifications.error(String(e));
     logWarning(`add_task failed: ${String(e)}`);
   } finally {
     adding.value = false;
   }
-}
-
-function onTitleEnter(e: KeyboardEvent) {
-  // GAP-31: committing an IME candidate fires Enter with isComposing=true —
-  // that must select the candidate, never create a task document (a vault
-  // write) from the half-composed title. The Search view's handlers are the
-  // precedent.
-  if (e.isComposing) return;
-  void add();
 }
 
 async function toggle(task: AggTask) {
@@ -416,89 +401,13 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
       </button>
     </div>
 
-    <div class="flex items-center gap-1">
-      <SelectMenu
-        v-if="isAggregate"
-        v-model="addVaultId"
-        :options="vaultOptions"
-        aria-label="Vault for the new task"
-        data-testid="task-add-vault"
-      />
-      <input
-        v-model="newTitle"
-        data-testid="task-input"
-        type="text"
-        placeholder="Add a task…"
-        aria-label="New task title"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-        @keydown.enter="onTitleEnter"
-      >
-      <button
-        type="button"
-        data-testid="task-add-options"
-        :aria-label="showAddOptions ? 'Hide task options' : 'Set due date or priority'"
-        :aria-expanded="showAddOptions"
-        title="Due date / priority"
-        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        :class="showAddOptions ? 'border-violet-400 text-slate-100' : ''"
-        @click="showAddOptions = !showAddOptions"
-      >
-        ⋯
-      </button>
-      <button
-        type="button"
-        data-testid="task-add"
-        :disabled="adding || newTitle.trim() === ''"
-        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-        @click="add"
-      >
-        Add
-      </button>
-    </div>
-
-    <div
-      v-if="showAddOptions"
-      class="flex items-center gap-1"
-    >
-      <input
-        v-model="addDue"
-        data-testid="task-add-due"
-        type="date"
-        aria-label="Due date"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
-      >
-      <div
-        class="flex gap-0.5"
-        role="radiogroup"
-        aria-label="Priority"
-      >
-        <button
-          v-for="p in ['high', 'normal', 'low']"
-          :key="p"
-          type="button"
-          role="radio"
-          :data-testid="`task-add-priority-${p}`"
-          :aria-checked="addPriority === p"
-          class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="
-            addPriority === p
-              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-          "
-          @click="addPriority = p"
-        >
-          {{ p }}
-        </button>
-      </div>
-      <input
-        v-model="addTags"
-        data-testid="task-add-tags"
-        type="text"
-        placeholder="#tags"
-        aria-label="Tags"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-      >
-    </div>
+    <TaskComposer
+      ref="composer"
+      :is-aggregate="isAggregate"
+      :vault-options="vaultOptions"
+      :adding="adding"
+      @submit="add"
+    />
 
     <div
       v-if="!loading && !loadError && tasks.length > 0"
