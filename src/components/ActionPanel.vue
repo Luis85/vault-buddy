@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { useVaultsStore } from "../stores/vaults";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+
 import { useCaptureStore } from "../stores/capture";
-import VaultList from "./VaultList.vue";
+import { useVaultsStore } from "../stores/vaults";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
-import RecordingBar from "./RecordingBar.vue";
-import TranscriptionSummary from "./TranscriptionSummary.vue";
-import RenamePrompt from "./RenamePrompt.vue";
-import RecordMode from "./RecordMode.vue";
-import Recordings from "./Recordings.vue";
-import Transcriptions from "./Transcriptions.vue";
-import Tasks from "./Tasks.vue";
 import NotificationHost from "./NotificationHost.vue";
+import RecordingBar from "./RecordingBar.vue";
+import Recordings from "./Recordings.vue";
+import RecordMode from "./RecordMode.vue";
+import RenamePrompt from "./RenamePrompt.vue";
+import Search from "./Search.vue";
+import Tasks from "./Tasks.vue";
+import Transcriptions from "./Transcriptions.vue";
+import TranscriptionSummary from "./TranscriptionSummary.vue";
+import VaultList from "./VaultList.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -21,6 +23,45 @@ const capture = useCaptureStore();
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
 const { view } = storeToRefs(store);
+
+// One line per view; the fallback is the vault list's title.
+const VIEW_TITLES: Record<string, string> = {
+  settings: "Buddy settings",
+  captureSettings: "Vault settings",
+  recordings: "Recordings",
+  recordMode: "Record",
+  transcriptions: "Transcriptions",
+  tasks: "Tasks",
+  search: "Search",
+};
+const title = computed(() => VIEW_TITLES[view.value] ?? "Vaults");
+
+// `/` jumps to search from the vault list — unless the keystroke is going
+// into a text field (the vault filter must keep receiving "/"). Ctrl/Cmd+F
+// does the same regardless of focus and suppresses the WebView find bar.
+// Gated on the list view so the search input, settings forms, and the task
+// composer never lose keystrokes to a global handler.
+function onPanelKeydown(event: KeyboardEvent) {
+  if (view.value !== "list") return;
+  const inText =
+    event.target instanceof HTMLInputElement ||
+    event.target instanceof HTMLTextAreaElement;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    store.openSearch();
+  } else if (
+    event.key === "/" &&
+    !inText &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  ) {
+    event.preventDefault();
+    store.openSearch();
+  }
+}
+onMounted(() => window.addEventListener("keydown", onPanelKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onPanelKeydown));
 
 const filter = ref("");
 // A short list is scannable at a glance; only offer filtering when the
@@ -69,21 +110,7 @@ watch(
   >
     <div class="mb-2 flex items-center justify-between">
       <h1 class="text-sm font-bold text-slate-100">
-        {{
-          view === "settings"
-            ? "Buddy settings"
-            : view === "captureSettings"
-              ? "Vault settings"
-              : view === "recordings"
-                ? "Recordings"
-                : view === "recordMode"
-                  ? "Record"
-                  : view === "transcriptions"
-                    ? "Transcriptions"
-                    : view === "tasks"
-                      ? "Tasks"
-                      : "Vaults"
-        }}
+        {{ title }}
       </h1>
       <div class="flex items-center gap-2">
         <span
@@ -92,6 +119,34 @@ watch(
         >
           {{ store.vaults.length }}
         </span>
+        <button
+          v-if="view === 'list'"
+          type="button"
+          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          aria-label="Search vaults"
+          title="Search vaults"
+          data-testid="search-toggle"
+          @click="store.openSearch()"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle
+              cx="11"
+              cy="11"
+              r="8"
+            />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+        </button>
         <button
           v-if="view === 'list'"
           type="button"
@@ -112,7 +167,11 @@ watch(
             stroke-linejoin="round"
             aria-hidden="true"
           >
-            <circle cx="12" cy="12" r="3" />
+            <circle
+              cx="12"
+              cy="12"
+              r="3"
+            />
             <path
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
@@ -151,7 +210,7 @@ watch(
       aria-label="Filter vaults"
       class="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
       @keydown.escape="onFilterEscape"
-    />
+    >
     <p
       v-if="view === 'list' && store.error"
       class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
@@ -173,7 +232,10 @@ watch(
       @pause="capture.pause()"
       @resume="capture.resume()"
     />
-    <TranscriptionSummary v-if="view === 'list'" class="mb-2" />
+    <TranscriptionSummary
+      v-if="view === 'list'"
+      class="mb-2"
+    />
     <RenamePrompt
       v-if="view === 'list' && capture.lastSaved"
       class="mb-2"
@@ -224,9 +286,21 @@ watch(
       v-else-if="view === 'tasks' && store.tasksVaultId"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
-      <Tasks :key="store.tasksVaultId" :vault-id="store.tasksVaultId" />
+      <Tasks
+        :key="store.tasksVaultId"
+        :vault-id="store.tasksVaultId"
+      />
     </div>
-    <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+    <div
+      v-else-if="view === 'search'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <Search />
+    </div>
+    <div
+      v-else
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
       <VaultList
         v-if="filtered.length > 0"
         :vaults="filtered"
@@ -242,10 +316,16 @@ watch(
         @capture-settings="store.openCaptureSettings($event)"
         @open-tasks="store.openTasks($event)"
       />
-      <p v-else-if="store.vaults.length > 0" class="text-xs text-slate-400">
+      <p
+        v-else-if="store.vaults.length > 0"
+        class="text-xs text-slate-400"
+      >
         No vaults match "{{ filter }}".
       </p>
-      <p v-else-if="store.loaded" class="text-xs text-slate-400">
+      <p
+        v-else-if="store.loaded"
+        class="text-xs text-slate-400"
+      >
         Obsidian not found — no vaults discovered. Is Obsidian installed and
         has it been opened at least once?
       </p>

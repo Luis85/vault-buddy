@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updaterMocks = vi.hoisted(() => ({
   getVersion: vi.fn(),
@@ -14,9 +15,13 @@ vi.mock("@tauri-apps/plugin-updater", () => ({ check: updaterMocks.check }));
 vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: updaterMocks.relaunch,
 }));
+vi.mock("../src/logging", () => ({
+  logWarning: vi.fn(),
+  logBreadcrumb: vi.fn(),
+}));
 
-import BuddySettings from "../src/components/BuddySettings.vue";
 import { CHARACTERS } from "../src/characters";
+import BuddySettings from "../src/components/BuddySettings.vue";
 import { useSettingsStore } from "../src/stores/settings";
 
 const flush = () => new Promise((r) => setTimeout(r));
@@ -50,6 +55,47 @@ describe("BuddySettings", () => {
     ).toBe("true");
   });
 
+  it("previews a character's motion on hover and stops on leave", async () => {
+    const wrapper = mount(BuddySettings);
+    const knight = wrapper.get('[aria-label="Choose Knight"]');
+    await knight.trigger("pointerenter");
+    // BuddyAvatar renders the run loop via the .running class on its sheet
+    expect(knight.find(".sheet").classes()).toContain("running");
+    await knight.trigger("pointerleave");
+    expect(knight.find(".sheet").classes()).not.toContain("running");
+  });
+
+  it("does not preview while animations are off", async () => {
+    useSettingsStore().toggleAnimations(); // off
+    const wrapper = mount(BuddySettings);
+    const knight = wrapper.get('[aria-label="Choose Knight"]');
+    await knight.trigger("pointerenter");
+    expect(knight.find(".sheet").classes()).not.toContain("running");
+  });
+
+  it("marks the selected character with a badge", async () => {
+    const wrapper = mount(BuddySettings);
+    expect(
+      wrapper
+        .get('[aria-label="Choose Classic"]')
+        .find('[data-testid="selected-badge"]')
+        .exists(),
+    ).toBe(true);
+    expect(
+      wrapper
+        .get('[aria-label="Choose Knight"]')
+        .find('[data-testid="selected-badge"]')
+        .exists(),
+    ).toBe(false);
+    await wrapper.get('[aria-label="Choose Knight"]').trigger("click");
+    expect(
+      wrapper
+        .get('[aria-label="Choose Knight"]')
+        .find('[data-testid="selected-badge"]')
+        .exists(),
+    ).toBe(true);
+  });
+
   it("no longer shows a manual view-direction control (facing is derived from position)", () => {
     const wrapper = mount(BuddySettings);
     expect(wrapper.findAll(".facing-option")).toHaveLength(0);
@@ -80,6 +126,78 @@ describe("BuddySettings", () => {
     expect(useSettingsStore().buddyMessagesEnabled).toBe(false);
   });
 
+  it("loads the OS autostart state into the System card", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_autostart") return true;
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    expect(wrapper.text()).toContain("System");
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="autostart-toggle"]');
+    expect(toggle.element.checked).toBe(true);
+    expect(toggle.element.disabled).toBe(false);
+    clearMocks();
+  });
+
+  it("disables the autostart toggle and shows the error when the read fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_autostart") throw new Error("registry unavailable");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="autostart-toggle"]');
+    expect(toggle.element.disabled).toBe(true);
+    expect(wrapper.get('[data-testid="autostart-error"]').text()).toContain(
+      "registry unavailable",
+    );
+    clearMocks();
+  });
+
+  it("toggling autostart invokes set_autostart", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_autostart") return false;
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    await wrapper.get('[data-testid="autostart-toggle"]').setValue(true);
+    await flush();
+    expect(calls.find((c) => c.cmd === "set_autostart")?.args).toEqual({
+      enabled: true,
+    });
+    clearMocks();
+  });
+
+  it("reverts the autostart toggle and shows the error when the write fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_autostart") return false;
+      if (cmd === "set_autostart") throw new Error("access denied");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="autostart-toggle"]');
+    await wrapper.get('[data-testid="autostart-toggle"]').setValue(true);
+    await flush();
+    expect(toggle.element.checked).toBe(false); // reverted
+    expect(wrapper.get('[data-testid="autostart-error"]').text()).toContain(
+      "access denied",
+    );
+    clearMocks();
+  });
+
+  it("mirrors and persists the check-on-startup toggle in the Updates card", async () => {
+    const wrapper = mount(BuddySettings);
+    await flush();
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="update-on-start-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(true); // on by default
+    await toggle.setValue(false);
+    expect(useSettingsStore().checkUpdatesOnStart).toBe(false);
+    expect(localStorage.getItem("vault-buddy.checkUpdatesOnStart")).toBe("off");
+  });
+
   it("shows the Updates section with the current version", async () => {
     const wrapper = mount(BuddySettings);
     await flush();
@@ -106,6 +224,31 @@ describe("BuddySettings", () => {
     await flush();
     expect(wrapper.text()).toContain("Version 0.2.0 is available");
     expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
+  });
+
+  it("groups the toggles under a Behavior card with a message-duration select", async () => {
+    const wrapper = mount(BuddySettings, { attachTo: document.body });
+    expect(wrapper.text()).toContain("Behavior");
+    expect(wrapper.find('[data-testid="message-duration-select"]').exists()).toBe(true);
+    // the three toggles keep their ids inside the card
+    for (const id of ["#animations-toggle", "#dragging-toggle", "#messages-toggle"]) {
+      expect(wrapper.find(id).exists()).toBe(true);
+    }
+    wrapper.unmount();
+    document.body.innerHTML = "";
+  });
+
+  it("picking a message duration persists it to the store", async () => {
+    const wrapper = mount(BuddySettings, { attachTo: document.body });
+    await wrapper.get('[data-testid="message-duration-select"]').trigger("click");
+    (document.body.querySelector(
+      '[data-testid="message-duration-select-option-long"]',
+    ) as HTMLElement).click();
+    await flush();
+    expect(useSettingsStore().messageDuration).toBe("long");
+    expect(localStorage.getItem("vault-buddy.messageDuration")).toBe("long");
+    wrapper.unmount();
+    document.body.innerHTML = "";
   });
 
   it("keeps the install button visible for retry after a failure", async () => {

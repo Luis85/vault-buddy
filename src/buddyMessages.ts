@@ -14,6 +14,12 @@ export function dailyNoteOpenedMessage(): string {
   return "Here's today's note 📅";
 }
 
+/** Opening a note/file from search — names it, generic fallback for blank. */
+export function noteOpenedMessage(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? `Opening ${trimmed} 📄` : "Opening your note 📄";
+}
+
 /** A recording just started. */
 export function recordingStartedMessage(): string {
   return "Listening… 🎙️";
@@ -42,6 +48,18 @@ export function transcribingMessage(): string {
 /** Transcription finished and the transcript is ready. */
 export function transcribedMessage(): string {
   return "Transcript ready! ✨";
+}
+
+/**
+ * The startup check found an update — the buddy asks; clicking it opens the
+ * panel on the settings view where Install & restart is the answer. Generic
+ * fallback so a blank version never renders a dangling "Update v is ready".
+ */
+export function updateAvailableMessage(version: string): string {
+  const v = version.trim();
+  return v
+    ? `Update v${v} is ready — click me! ⬆️`
+    : "An update is ready — click me! ⬆️";
 }
 
 /** Cuts `s` to at most `n` characters, appending an ellipsis when it does. */

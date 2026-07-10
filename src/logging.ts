@@ -5,8 +5,8 @@
 // same rotating file the panic hook writes `crash.log` beside.
 import {
   error as pluginError,
-  warn as pluginWarn,
   info as pluginInfo,
+  warn as pluginWarn,
 } from "@tauri-apps/plugin-log";
 
 function underTauri(): boolean {

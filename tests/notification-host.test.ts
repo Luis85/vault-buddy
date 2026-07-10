@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it } from "vitest";
+
 import NotificationHost from "../src/components/NotificationHost.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 

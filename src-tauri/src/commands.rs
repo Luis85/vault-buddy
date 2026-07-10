@@ -354,11 +354,26 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
 /// Position + show the greeting bubble beside the buddy on launch. Opens on the
 /// side the buddy faces and emits the resolved anchor so the tail points back
 /// at the buddy. Best-effort; shown only once positioned — a moved-only window
-/// has no stale-frame flash.
-pub(crate) fn show_bubble(app: &tauri::AppHandle) {
+/// has no stale-frame flash. Returns whether the bubble was actually shown so
+/// `announce` can skip delivering text to a window that never appeared.
+pub(crate) fn show_bubble(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
+    // The bubble is the buddy's accessory: hidden-to-tray hides ALL windows
+    // (tray::hide_buddy), and a background announcer — the startup update
+    // check, a transcription finishing — must not pop a bubble beside an
+    // invisible character. Guarded here, at the single positioning/reveal
+    // chokepoint, so the greeting's post-settle show and every announce path
+    // inherit it.
+    let buddy_visible = app
+        .get_webview_window("main")
+        .map(|w| w.is_visible().unwrap_or(false))
+        .unwrap_or(false);
+    if !buddy_visible {
+        log::info!("bubble: suppressed while the buddy is hidden");
+        return false;
+    }
     let Some(bubble) = app.get_webview_window("bubble") else {
-        return;
+        return false;
     };
     let Some((pos, anchor)) = place_beside_buddy(
         app,
@@ -367,7 +382,7 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
         vault_buddy_core::companion_placement::VMode::Center,
         BUBBLE_TUCK_FRAC,
     ) else {
-        return;
+        return false;
     };
     // A window created `visible: false` can ignore `set_position` until it has
     // been shown and realized on its monitor — the cause of "the greeting is
@@ -379,6 +394,7 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
     let _ = bubble.show();
     let _ = bubble.set_position(pos);
     emit_bubble_anchor(app, anchor);
+    true
 }
 
 /// Speak an acknowledgement in the buddy's bubble. The frontend announcer (the
@@ -392,8 +408,12 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) {
 #[tauri::command]
 pub fn announce(app: tauri::AppHandle, text: String) {
     use tauri::Emitter;
-    // Same placement/reveal path as the launch greeting.
-    show_bubble(&app);
+    // Same placement/reveal path as the launch greeting. A suppressed show
+    // (buddy hidden to tray) also skips the text emit: delivering it would
+    // start BubbleRoot's dismiss timer inside a window that never appeared.
+    if !show_bubble(&app) {
+        return;
+    }
     // Deliver the text; BubbleRoot renders it and (re)starts its dismiss timer.
     let _ = app.emit("bubble-message", serde_json::json!({ "text": text }));
 }
@@ -482,6 +502,13 @@ pub fn show_buddy_menu(
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
+/// Vault lookup for shell commands living outside the services layer (the
+/// search commands). Delegates to `services::find_vault` so the user-facing
+/// not-found copy stays single-sourced with the panel's.
+pub(crate) fn find_vault(id: &str) -> Result<vault_buddy_core::discovery::Vault, String> {
+    services::find_vault(&services::ServicePaths::real(), id)
+}
+
 #[tauri::command]
 pub fn list_vaults() -> Vec<vault_buddy_core::discovery::Vault> {
     services::list_vaults(&services::ServicePaths::real())
@@ -518,4 +545,33 @@ pub fn open_logs_folder(app: tauri::AppHandle) {
 pub fn rearm_crash_detection() {
     log::warn!("update install failed after shutdown prep — re-arming crash detection");
     crate::diagnostics::rearm_running_marker();
+}
+
+/// Whether the app is registered to start at login. OS-owned state (the
+/// registry on Windows) — read fresh by the settings view on mount, never
+/// cached app-side, so the UI always reflects what the OS will actually do.
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Register/unregister launch-at-login. Logged like every other
+/// user-initiated config change (audit trail).
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let launcher = app.autolaunch();
+    let result = if enabled {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    };
+    match result {
+        Ok(()) => {
+            log::info!("autostart {}", if enabled { "enabled" } else { "disabled" });
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }

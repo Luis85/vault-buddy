@@ -1,8 +1,9 @@
-import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
-import { logWarning } from "../logging";
+import { defineStore } from "pinia";
+
 import { announce } from "../announce";
-import { vaultOpenedMessage, dailyNoteOpenedMessage } from "../buddyMessages";
+import { dailyNoteOpenedMessage,vaultOpenedMessage } from "../buddyMessages";
+import { logWarning } from "../logging";
 import type { Vault } from "../types";
 
 export const useVaultsStore = defineStore("vaults", {
@@ -20,7 +21,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "recordings"
       | "recordMode"
       | "transcriptions"
-      | "tasks",
+      | "tasks"
+      | "search",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -111,6 +113,14 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = view;
       this.captureSettingsVaultId = captureVaultId;
     },
+    // The gentle variant: arm the NEXT open only, without flipping the live
+    // view — the startup update check must not yank an already-open panel to
+    // settings mid-task (requestView's immediate flip exists for the
+    // failed-install reopen, where the panel is known hidden).
+    requestViewOnNextOpen(view: "list" | "settings" | "captureSettings") {
+      this.pendingView = view;
+      this.pendingCaptureVaultId = null;
+    },
     async runAction(
       command: "open_vault" | "open_daily_note",
       vaultId: string,
@@ -166,6 +176,11 @@ export const useVaultsStore = defineStore("vaults", {
     openTasks(vaultId: string) {
       this.view = "tasks";
       this.tasksVaultId = vaultId;
+    },
+    // Cross-vault, so no per-vault id to remember (unlike tasks/recordings).
+    // back() needs no case: search falls through to the final else → showList.
+    openSearch() {
+      this.view = "search";
     },
     /** Back to the current view's fixed parent (no history stack). */
     back() {

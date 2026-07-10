@@ -1,9 +1,11 @@
-import { createApp } from "vue";
-import { createPinia } from "pinia";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { rootFor } from "./roots";
-import { initLogging, logError } from "./logging";
 import "./style.css";
+
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { createPinia } from "pinia";
+import { createApp } from "vue";
+
+import { initLogging, logError } from "./logging";
+import { rootFor } from "./roots";
 
 initLogging();
 

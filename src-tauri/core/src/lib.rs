@@ -9,12 +9,14 @@ pub mod daily_notes;
 pub mod discovery;
 pub mod process;
 pub mod recordings;
+pub mod search;
 pub mod services;
 pub mod sync_util;
 pub mod tasks;
 pub mod throttle;
 pub mod transcript;
 pub mod uri;
+pub mod vault_walk;
 
 use chrono::NaiveDate;
 use std::path::Path;

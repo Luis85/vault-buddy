@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { flushPromises,mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The component listens for mcp:status pushes; capture the handler so tests
 // can fire one.
@@ -150,5 +150,82 @@ describe("McpSettings", () => {
     });
     await flushPromises();
     expect(wrapper.text()).toContain("could not bind");
+  });
+
+  it("surfaces and logs a failed save, then re-enables the controls", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_mcp_config") return { ...baseConfig };
+      if (cmd === "set_mcp_config") throw new Error("port taken");
+      if (cmd === "regenerate_mcp_token") throw new Error("disk full");
+      return undefined;
+    });
+    const wrapper = mount(McpSettings);
+    await flushPromises();
+    await wrapper.find('[data-testid="mcp-enabled"]').setValue(true);
+    await flushPromises();
+    // The error reaches the card AND the guard resets — a failed save must
+    // not leave the whole card disabled forever.
+    expect(wrapper.text()).toContain("port taken");
+    expect(
+      wrapper.find('[data-testid="mcp-enabled"]').attributes("disabled"),
+    ).toBeUndefined();
+    // Same contract for the regenerate path. Token must be present for the
+    // button to render, so seed one via a status-driven refetch instead:
+    const withToken = mount(McpSettings);
+    mockIPC((cmd) => {
+      if (cmd === "get_mcp_config") return { ...baseConfig, token: "tok" };
+      if (cmd === "regenerate_mcp_token") throw new Error("disk full");
+      return undefined;
+    });
+    withToken.unmount();
+    const wrapper2 = mount(McpSettings);
+    await flushPromises();
+    await wrapper2.find('[data-testid="mcp-regenerate"]').trigger("click");
+    await flushPromises();
+    expect(wrapper2.text()).toContain("disk full");
+  });
+
+  it("copies the token and the client snippets to the clipboard", async () => {
+    const copied: string[] = [];
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: (t: string) => {
+          copied.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
+    mockIPC((cmd) =>
+      cmd === "get_mcp_config"
+        ? {
+            ...baseConfig,
+            enabled: true,
+            token: "tok123",
+            status: { state: "running", port: 22082, message: null },
+          }
+        : undefined,
+    );
+    const wrapper = mount(McpSettings);
+    await flushPromises();
+    await wrapper.find('[data-testid="mcp-copy-token"]').trigger("click");
+    expect(copied).toContain("tok123");
+    // Every snippet copy button routes its live text through the same path.
+    const buttons = wrapper.findAll("button").filter((b) => b.text() === "Copy");
+    for (const b of buttons) await b.trigger("click");
+    expect(copied.some((t) => t.includes("claude mcp add"))).toBe(true);
+    expect(copied.some((t) => t.includes("mcp-remote"))).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("unlistens from mcp:status on unmount", async () => {
+    mockIPC((cmd) => (cmd === "get_mcp_config" ? { ...baseConfig } : undefined));
+    const wrapper = mount(McpSettings);
+    await flushPromises();
+    expect(listeners["mcp:status"]).toBeDefined();
+    wrapper.unmount();
+    await flushPromises();
+    // The mock's unlisten deletes the registration — a hidden-panel remount
+    // must not stack a second live listener.
+    expect(listeners["mcp:status"]).toBeUndefined();
   });
 });

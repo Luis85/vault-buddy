@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+
 import SelectMenu from "./SelectMenu.vue";
 
 interface TranscriptionSettingsValue {
@@ -85,7 +86,10 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
 
 <template>
   <section class="flex items-center justify-between">
-    <label :for="scopedId('capture-transcribe-toggle')" class="text-sm text-slate-200">
+    <label
+      :for="scopedId('capture-transcribe-toggle')"
+      class="text-sm text-slate-200"
+    >
       Transcribe recordings
       <span class="block text-xs text-slate-500">Local speech-to-text · no cloud</span>
     </label>
@@ -95,11 +99,17 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
       data-testid="transcribe-toggle"
       type="checkbox"
       class="h-4 w-4 accent-violet-500"
-    />
+    >
   </section>
-  <div v-if="transcribe" class="flex flex-col gap-3 border-l border-white/10 pl-3">
+  <div
+    v-if="transcribe"
+    class="flex flex-col gap-3 border-l border-white/10 pl-3"
+  >
     <section class="flex items-center justify-between gap-2">
-      <label :for="scopedId('capture-transcription-model')" class="text-sm text-slate-200">Model</label>
+      <label
+        :for="scopedId('capture-transcription-model')"
+        class="text-sm text-slate-200"
+      >Model</label>
       <SelectMenu
         :id="scopedId('capture-transcription-model')"
         v-model="transcriptionModel"
@@ -108,7 +118,10 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
       />
     </section>
     <section class="flex items-center justify-between gap-2">
-      <label :for="scopedId('capture-transcription-language')" class="text-sm text-slate-200">Language</label>
+      <label
+        :for="scopedId('capture-transcription-language')"
+        class="text-sm text-slate-200"
+      >Language</label>
       <SelectMenu
         :id="scopedId('capture-transcription-language')"
         v-model="transcriptionLanguage"
@@ -117,7 +130,10 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
       />
     </section>
     <section class="flex items-center justify-between">
-      <label :for="scopedId('capture-transcript-timestamps-toggle')" class="text-sm text-slate-200">
+      <label
+        :for="scopedId('capture-transcript-timestamps-toggle')"
+        class="text-sm text-slate-200"
+      >
         Timestamps
         <span class="block text-xs text-slate-500">Insert time markers in the transcript</span>
       </label>
@@ -127,7 +143,7 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
         data-testid="transcript-timestamps-toggle"
         type="checkbox"
         class="h-4 w-4 accent-violet-500"
-      />
+      >
     </section>
   </div>
 </template>

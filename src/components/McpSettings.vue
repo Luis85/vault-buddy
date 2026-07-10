@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+
 import { logWarning } from "../logging";
 
 type McpStatus = { state: string; port: number | null; message: string | null };
@@ -143,7 +144,10 @@ const claudeDesktopSnippet = computed(() =>
     </h2>
     <div class="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
       <div class="flex items-center justify-between gap-2">
-        <label for="mcp-enabled" class="text-sm text-slate-200">
+        <label
+          for="mcp-enabled"
+          class="text-sm text-slate-200"
+        >
           Local MCP server
           <span class="block text-xs text-slate-500">{{ statusLabel }}</span>
         </label>
@@ -155,10 +159,13 @@ const claudeDesktopSnippet = computed(() =>
           :checked="cfg.enabled"
           :disabled="saving"
           @change="save({ enabled: ($event.target as HTMLInputElement).checked })"
-        />
+        >
       </div>
       <div class="flex items-center justify-between gap-2">
-        <label for="mcp-port" class="text-sm text-slate-200">Port</label>
+        <label
+          for="mcp-port"
+          class="text-sm text-slate-200"
+        >Port</label>
         <input
           id="mcp-port"
           data-testid="mcp-port"
@@ -169,10 +176,13 @@ const claudeDesktopSnippet = computed(() =>
           :value="cfg.port"
           :disabled="saving"
           @change="save({ port: Number(($event.target as HTMLInputElement).value) })"
-        />
+        >
       </div>
       <div class="flex items-center justify-between gap-2">
-        <label for="mcp-writes" class="text-sm text-slate-200">
+        <label
+          for="mcp-writes"
+          class="text-sm text-slate-200"
+        >
           Allow vault writes
           <span class="block text-xs text-slate-500">
             AI clients may add tasks, update task status, and create today's daily note
@@ -186,9 +196,12 @@ const claudeDesktopSnippet = computed(() =>
           :checked="cfg.allowWrites"
           :disabled="saving"
           @change="save({ allowWrites: ($event.target as HTMLInputElement).checked })"
-        />
+        >
       </div>
-      <div v-if="cfg.token" class="flex items-center justify-between gap-2">
+      <div
+        v-if="cfg.token"
+        class="flex items-center justify-between gap-2"
+      >
         <span class="text-sm text-slate-200">Token</span>
         <span class="flex items-center gap-1">
           <code class="max-w-40 truncate text-xs text-slate-400">{{ cfg.token }}</code>
@@ -211,33 +224,61 @@ const claudeDesktopSnippet = computed(() =>
           </button>
         </span>
       </div>
-      <details v-if="cfg.enabled && cfg.token" class="text-xs text-slate-400">
-        <summary class="cursor-pointer select-none text-slate-300">Client setup</summary>
+      <details
+        v-if="cfg.enabled && cfg.token"
+        class="text-xs text-slate-400"
+      >
+        <summary class="cursor-pointer select-none text-slate-300">
+          Client setup
+        </summary>
         <div class="mt-1.5 flex flex-col gap-2">
           <div>
             <div class="mb-0.5 flex items-center justify-between">
               <span>Claude Code</span>
-              <button type="button" class="cursor-pointer text-slate-300 hover:text-slate-100" @click="copy(claudeSnippet)">Copy</button>
+              <button
+                type="button"
+                class="cursor-pointer text-slate-300 hover:text-slate-100"
+                @click="copy(claudeSnippet)"
+              >
+                Copy
+              </button>
             </div>
             <pre class="overflow-x-auto rounded-lg bg-black/30 p-1.5">{{ claudeSnippet }}</pre>
           </div>
           <div>
             <div class="mb-0.5 flex items-center justify-between">
               <span>Cursor (.cursor/mcp.json)</span>
-              <button type="button" class="cursor-pointer text-slate-300 hover:text-slate-100" @click="copy(cursorSnippet)">Copy</button>
+              <button
+                type="button"
+                class="cursor-pointer text-slate-300 hover:text-slate-100"
+                @click="copy(cursorSnippet)"
+              >
+                Copy
+              </button>
             </div>
             <pre class="overflow-x-auto rounded-lg bg-black/30 p-1.5">{{ cursorSnippet }}</pre>
           </div>
           <div>
             <div class="mb-0.5 flex items-center justify-between">
               <span>Claude Desktop (via mcp-remote)</span>
-              <button type="button" class="cursor-pointer text-slate-300 hover:text-slate-100" @click="copy(claudeDesktopSnippet)">Copy</button>
+              <button
+                type="button"
+                class="cursor-pointer text-slate-300 hover:text-slate-100"
+                @click="copy(claudeDesktopSnippet)"
+              >
+                Copy
+              </button>
             </div>
             <pre class="overflow-x-auto rounded-lg bg-black/30 p-1.5">{{ claudeDesktopSnippet }}</pre>
           </div>
         </div>
       </details>
-      <p v-if="error" class="text-xs text-rose-400">{{ error }}</p>
+      <p
+        v-if="error"
+        class="text-xs text-rose-400"
+      >
+        {{ error }}
+      </p>
     </div>
   </section>
 </template>

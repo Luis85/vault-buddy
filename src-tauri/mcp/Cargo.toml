@@ -2,6 +2,10 @@
 name = "vault_buddy_mcp"
 version = "0.1.0"
 edition = "2021"
+# Unpublished workspace member, like its siblings — cargo-deny's license
+# gate skips private crates (deny.toml `private.ignore`) only when this is
+# set.
+publish = false
 
 [dependencies]
 vault_buddy_core = { path = "../core" }

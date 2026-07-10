@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
+import { afterEach,describe, expect, it, vi } from "vitest";
+
 import RecordingBar from "../src/components/RecordingBar.vue";
 
 describe("RecordingBar", () => {

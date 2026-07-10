@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isReactive } from "vue";
 
 const mocks = vi.hoisted(() => ({
@@ -198,5 +198,45 @@ describe("updates store", () => {
     await store.installUpdate();
     expect(store.phase).toBe("idle");
     expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("quietly surfaces an available update", async () => {
+    const update = { version: "0.2.0", downloadAndInstall: vi.fn() };
+    mocks.check.mockResolvedValue(update);
+    const store = useUpdatesStore();
+    await store.checkForUpdatesQuietly();
+    // identical end state to the manual path, so the settings view's
+    // existing available/install UI works unchanged
+    expect(store.phase).toBe("available");
+    expect(store.available?.version).toBe("0.2.0");
+  });
+
+  it("leaves no trace when the quiet check finds nothing", async () => {
+    // "You're up to date." is a response to a user click; the background
+    // check must leave the settings view exactly as it was
+    mocks.check.mockResolvedValue(null);
+    const store = useUpdatesStore();
+    await store.checkForUpdatesQuietly();
+    expect(store.phase).toBe("idle");
+    expect(store.available).toBeNull();
+  });
+
+  it("leaves no trace and only logs when the quiet check fails", async () => {
+    mocks.check.mockRejectedValue("endpoint unreachable");
+    const store = useUpdatesStore();
+    await store.checkForUpdatesQuietly();
+    expect(store.phase).toBe("idle");
+    expect(store.error).toBeNull();
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("quiet update check failed"),
+    );
+  });
+
+  it("does not run the quiet check while another phase is active", async () => {
+    const store = useUpdatesStore();
+    store.phase = "checking"; // a manual check is in flight
+    await store.checkForUpdatesQuietly();
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(store.phase).toBe("checking");
   });
 });

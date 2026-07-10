@@ -132,6 +132,27 @@ export interface TasksConfig {
   tasksFolder: string | null;
 }
 
+export interface SearchHit {
+  vaultId: string;
+  vaultName: string;
+  /** Display name: file stem for notes, full filename for attachments. */
+  name: string;
+  /** Vault-relative parent folder ("" at the vault root), for display. */
+  folder: string;
+  /** The obsidian://open `file` parameter (extension dropped for notes,
+   * kept for attachments) — pass through to open_search_result verbatim. */
+  file: string;
+  /** First matching content line; null for filename-only matches. */
+  snippet: string | null;
+  /** Note (any-case .md) vs attachment — drives the row icon and key. */
+  isNote: boolean;
+}
+
+export interface SearchResponse {
+  hits: SearchHit[];
+  truncated: boolean;
+}
+
 export interface Recording {
   mp3: string;
   title: string;

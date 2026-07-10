@@ -14,3 +14,6 @@ app-icon.png
 /Voice Notes
 
 /.specorator
+# Quality tooling artifacts (docs/DEVELOPMENT.md § Quality pipeline)
+coverage/
+.fallow/

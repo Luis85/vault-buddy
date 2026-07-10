@@ -577,7 +577,10 @@ Obsidian      Local Tools      MCP Servers
 
 ### Phase 1 — Foundation
 
-*Shipped in v0.3.0, except Search and Tasks.*
+*Shipped in v0.3.0; Tasks' first slice followed in v0.5.0 and keyword
+Search after v0.5.1 (merged, unreleased). Phase 1 is complete in its
+first-slice form — semantic search and task aggregation continue in
+Phase 2.*
 
 - Desktop Companion ✓
 - Transparent Window ✓
@@ -585,8 +588,8 @@ Obsidian      Local Tools      MCP Servers
 - Obsidian CLI ✓ *(via `obsidian://` URIs)*
 - Vault Detection ✓
 - Daily Notes ✓
-- Search
-- Tasks
+- Search ✓ *(keyword, cross-vault — see [Knowledge Search & Retrieval](use-cases/knowledge-search-and-retrieval.md); semantic search stays Phase 2)*
+- Tasks ✓ *(per-vault list — see [Per-Vault Task List](use-cases/per-vault-task-list.md); aggregation stays Phase 2+)*
 
 ### Phase 2 — Productivity
 

@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
+
 import {
-  vaultOpenedMessage,
   dailyNoteOpenedMessage,
-  recordingStartedMessage,
+  failureMessage,
+  mcpWriteMessage,
+  noteOpenedMessage,
   recordingPausedMessage,
   recordingResumedMessage,
   recordingSavedMessage,
-  transcribingMessage,
+  recordingStartedMessage,
   transcribedMessage,
-  failureMessage,
+  transcribingMessage,
+  updateAvailableMessage,
+  vaultOpenedMessage,
 } from "../src/buddyMessages";
 
 describe("buddyMessages", () => {
@@ -16,10 +20,32 @@ describe("buddyMessages", () => {
     expect(vaultOpenedMessage("Personal")).toContain("Personal");
   });
 
+  it("mcpWriteMessage covers every write kind and falls back on unknown", () => {
+    expect(
+      mcpWriteMessage({ kind: "addTask", title: "Buy milk", vaultName: "Notes" }),
+    ).toBe('Added task "Buy milk" to Notes');
+    expect(
+      mcpWriteMessage({ kind: "setTaskStatus", title: "Buy milk", vaultName: "Notes" }),
+    ).toBe('Updated task "Buy milk" in Notes');
+    expect(
+      mcpWriteMessage({ kind: "createDailyNote", title: "2026-07-10", vaultName: "Notes" }),
+    ).toBe("Created today's note in Notes");
+    // A kind this build doesn't know (newer Rust side) must still produce a
+    // sensible line, never leak "undefined".
+    expect(
+      mcpWriteMessage({ kind: "somethingNew", title: "x", vaultName: "Notes" }),
+    ).toBe("An AI client updated Notes");
+  });
+
   it("falls back to a generic line when the vault name is blank", () => {
     // no dangling "Opening  ✨" with a hole where the name should be
     expect(vaultOpenedMessage("")).not.toMatch(/Opening\s{2,}/);
     expect(vaultOpenedMessage("   ").trim().length).toBeGreaterThan(0);
+  });
+
+  it("noteOpenedMessage names the note and falls back when blank", () => {
+    expect(noteOpenedMessage("Meeting notes")).toBe("Opening Meeting notes 📄");
+    expect(noteOpenedMessage("   ")).toBe("Opening your note 📄");
   });
 
   it("has a distinct, non-empty line for each moment", () => {
@@ -38,6 +64,19 @@ describe("buddyMessages", () => {
     // each moment reads differently, so the buddy never repeats itself across
     // two different events
     expect(new Set(lines).size).toBe(lines.length);
+  });
+
+  describe("updateAvailableMessage", () => {
+    it("names the version", () => {
+      expect(updateAvailableMessage("0.6.0")).toContain("0.6.0");
+    });
+
+    it("falls back to a generic line when the version is blank", () => {
+      // no dangling "Update v is ready" with a hole where the version goes
+      const msg = updateAvailableMessage("");
+      expect(msg).not.toMatch(/v\s/);
+      expect(msg.toLowerCase()).toContain("update");
+    });
   });
 
   describe("failureMessage", () => {

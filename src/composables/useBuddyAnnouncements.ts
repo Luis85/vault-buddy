@@ -1,17 +1,18 @@
-import { watch } from "vue";
 import { listen } from "@tauri-apps/api/event";
-import { useCaptureStore } from "../stores/capture";
+import { watch } from "vue";
+
 import { announce } from "../announce";
 import {
-  recordingStartedMessage,
+  failureMessage,
+  mcpWriteMessage,
   recordingPausedMessage,
   recordingResumedMessage,
   recordingSavedMessage,
-  transcribingMessage,
+  recordingStartedMessage,
   transcribedMessage,
-  failureMessage,
-  mcpWriteMessage,
+  transcribingMessage,
 } from "../buddyMessages";
+import { useCaptureStore } from "../stores/capture";
 
 /**
  * Wires capture-store transitions to the buddy's spoken acknowledgements.

@@ -1,8 +1,9 @@
+import { flushPromises,mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
 import { nextTick } from "vue";
-import BuddyAvatar from "../src/components/BuddyAvatar.vue";
+
 import { getCharacter } from "../src/characters";
+import BuddyAvatar from "../src/components/BuddyAvatar.vue";
 
 // past the minimum delay plus the full random jitter — a burst is
 // guaranteed to have been scheduled by then, whatever Math.random returned
