@@ -14,7 +14,7 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/src/capture_commands.rs": {
-      "loc": 1068,
+      "loc": 1073,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/capture/src/session.rs": {

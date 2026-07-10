@@ -828,6 +828,11 @@ pub fn rename_capture(
     // job would leave the worker completing into the now-orphaned old path
     // while the renamed note embeds a placeholder that never resolves —
     // refuse outright rather than try to retarget work already in flight.
+    // Check-then-act: the queue mutex is released between this check and the
+    // execute below, so a job the worker claims in that window is renamed
+    // anyway and the pending-retarget misses — bounded blast radius (the
+    // pre-fix behavior for exactly that one job), accepted over holding the
+    // transcription lock across rename I/O.
     if crate::transcription::is_active_transcription(&app, Path::new(&mp3)) {
         return Err("Cannot rename while this recording is being transcribed.".to_string());
     }
