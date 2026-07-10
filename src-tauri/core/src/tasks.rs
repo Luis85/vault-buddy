@@ -210,6 +210,39 @@ fn strip_inline_comment(rest: &str) -> &str {
     rest
 }
 
+/// Cut a trailing YAML comment off the SCALAR (non-flow, non-block) tags
+/// form only — `tags: work # note` / `tags: #work #home`. `strip_inline_comment`
+/// treats every whitespace-preceded `#` as a comment start, which is correct
+/// for status/created/due/priority (their valid values never contain `#`,
+/// so there's nothing to disambiguate) but wrong here: the lenient reader
+/// also accepts a leading `#` as ANOTHER tag token
+/// (`tags: #work #home` → two tags), and that token's own leading `#` is
+/// whitespace-preceded too. The discriminator: a `#` starts a comment only
+/// when it is NOT glued to a following tag character — i.e. followed by
+/// whitespace or end-of-value (`tags: work # private note` strips at the
+/// first `#`); a `#` immediately followed by a non-whitespace character is
+/// another tag token and scanning continues past it. Codex review, PR #46
+/// round 2: the plain strip truncated `tags: #work #home` to `#work`,
+/// dropping every tag after the first from chips/filtering and from what a
+/// later tags edit would persist.
+fn strip_scalar_tags_comment(rest: &str) -> &str {
+    let b = rest.as_bytes();
+    for i in 0..b.len() {
+        if b[i] != b'#' {
+            continue;
+        }
+        let is_comment_start = if i == 0 {
+            b.len() == 1 || b[1].is_ascii_whitespace()
+        } else {
+            b[i - 1].is_ascii_whitespace() && (i + 1 == b.len() || b[i + 1].is_ascii_whitespace())
+        };
+        if is_comment_start {
+            return rest[..i].trim_end();
+        }
+    }
+    rest
+}
+
 /// Read a STRUCTURED frontmatter scalar (status/created/due/priority): the
 /// raw `note_field` value with an inline YAML comment stripped, plus one
 /// unquote pass for the quoted-then-commented corner (`due: "…" # x` —
@@ -267,7 +300,9 @@ fn parse_tags_key(content: &str, key: &str) -> Option<Vec<String>> {
                 None => strip_inline_comment(rest_raw).trim(),
             }
         } else {
-            strip_inline_comment(rest_raw).trim()
+            // Scalar branch: use the tag-aware discriminator, not the plain
+            // strip — see strip_scalar_tags_comment's doc comment.
+            strip_scalar_tags_comment(rest_raw).trim()
         };
         let raw_items: Vec<&str> = if rest.is_empty() {
             // Block style: consume the following `- item` lines.
@@ -1509,6 +1544,24 @@ mod tests {
             note_tags("---\ntype: Task\ntags: #work\n---\n"),
             vec!["work"]
         );
+    }
+
+    #[test]
+    fn scalar_tag_list_keeps_every_leading_hash_tag() {
+        // Codex PR #46 round 2: `tags: #work #home` lost every tag after the
+        // first — the scalar branch's comment strip treated the whitespace
+        // before the second `#` as starting a YAML comment, truncating the
+        // value to `#work` before the legacy whitespace/comma split ran.
+        let content = "---\ntype: Task\ntitle: \"t\"\ntags: #work #home\n---\n";
+        assert_eq!(note_tags(content), vec!["work", "home"]);
+    }
+
+    #[test]
+    fn scalar_tag_list_still_strips_a_real_comment() {
+        // The discriminator: `#` glued to the next character is another tag
+        // token; `#` followed by whitespace (or end of value) is a comment.
+        let content = "---\ntype: Task\ntitle: \"t\"\ntags: #work # areas\n---\n";
+        assert_eq!(note_tags(content), vec!["work"]);
     }
 
     #[test]
