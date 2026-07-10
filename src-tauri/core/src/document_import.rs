@@ -143,9 +143,14 @@ fn is_year_dir(name: &str) -> bool {
     name.len() == 4 && name.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// A `MM` month folder: exactly two ASCII digits.
+/// A `MM` month folder: exactly two ASCII digits in `01..=12`. The importer
+/// formats the month with `%m`, so it never creates `00`/`13`/`99` — a folder
+/// like that is a user's or another tool's, not an owned month, and must not be
+/// descended into (Codex review).
 fn is_month_dir(name: &str) -> bool {
-    name.len() == 2 && name.bytes().all(|b| b.is_ascii_digit())
+    name.len() == 2
+        && name.bytes().all(|b| b.is_ascii_digit())
+        && matches!(name.parse::<u8>(), Ok(1..=12))
 }
 
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
@@ -643,6 +648,19 @@ mod tests {
         let sweep = clean_stale_staging_at(&root, now, Duration::from_secs(60));
         assert!(sweep.removed.is_empty()); // never descended through the link
         assert!(outside.exists()); // the unowned staging-named dir survives
+    }
+
+    #[test]
+    fn dated_dir_predicates_bound_the_owned_layout() {
+        assert!(is_year_dir("2026"));
+        assert!(!is_year_dir("26")); // wrong length
+        assert!(!is_year_dir("202x")); // non-digit
+        assert!(is_month_dir("01"));
+        assert!(is_month_dir("12"));
+        assert!(!is_month_dir("00")); // the importer's %m never yields these
+        assert!(!is_month_dir("13"));
+        assert!(!is_month_dir("99"));
+        assert!(!is_month_dir("7")); // wrong length
     }
 
     #[test]
