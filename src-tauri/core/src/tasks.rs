@@ -457,9 +457,13 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
                 // block-style list on the following lines — consume it along
                 // with the key line (rewrite and removal alike), so a
                 // hand-authored block list round-trips to one flow line
-                // instead of leaving orphaned `- item` lines.
+                // instead of leaving orphaned `- item` lines. "Nothing" uses
+                // the READER's rule (strip an inline YAML comment first, same
+                // helper): `tags: # areas` + items parses as a block list, so
+                // the writer must consume it too or an edit would orphan the
+                // items and a clear would leave stale tags (Codex, PR #46).
                 let rest = &trimmed[key.len() + 1..];
-                if rest.trim().is_empty() {
+                if strip_inline_comment(rest.trim()).trim().is_empty() {
                     skip_list_items = true;
                 }
                 if let Some(v) = value {
@@ -1144,6 +1148,34 @@ mod tests {
         assert!(!out.contains("tags"));
         assert!(!out.contains("- work"));
         assert!(out.contains("status: new\n"));
+    }
+
+    #[test]
+    fn set_fields_consumes_a_block_list_under_a_comment_only_key_line() {
+        // Codex review, PR #46: `tags: # areas` + following `- item` lines is
+        // read as a block list (the reader strips the comment before its
+        // empty-value check), but the writer checked the raw rest — so an
+        // edit rewrote only the key line and orphaned the items, and a clear
+        // left stale tags behind. Reader and writer must share one rule.
+        let doc = "---\ntype: Task\nstatus: new\ntags: # areas\n- work\n- home\n---\nbody\n";
+        let out = set_fields(doc, &[("tags", Some("[crafts]"))]).unwrap();
+        assert!(out.contains("tags: [crafts]\n"));
+        assert!(!out.contains("- work"));
+        assert!(!out.contains("- home"));
+        let out = set_fields(doc, &[("tags", None)]).unwrap();
+        assert_eq!(out, "---\ntype: Task\nstatus: new\n---\nbody\n");
+    }
+
+    #[test]
+    fn set_fields_keeps_items_after_a_key_with_a_real_value_and_comment() {
+        // The mirror case: a real inline value plus a trailing comment is NOT
+        // a block key — following `- item` lines belong to the body of the
+        // next construct, not to this key, and must survive a rewrite.
+        let doc = "---\ntype: Task\nstatus: new # wip\ntitle: \"A\"\n---\n- body bullet\n";
+        let out = set_fields(doc, &[("status", Some("done"))]).unwrap();
+        assert!(out.contains("status: done\n"));
+        assert!(out.contains("title: \"A\"\n"));
+        assert!(out.contains("- body bullet\n"));
     }
 
     #[test]
