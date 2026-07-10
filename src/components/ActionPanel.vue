@@ -227,7 +227,7 @@ watch(
       <Transcriptions />
     </div>
     <div
-      v-else-if="view === 'tasks' && (store.tasksVaultId !== undefined)"
+      v-else-if="view === 'tasks'"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <Tasks :key="tasksKey" :vault-id="store.tasksVaultId" />

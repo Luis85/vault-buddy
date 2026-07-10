@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import ActionPanel from "../src/components/ActionPanel.vue";
+import Tasks from "../src/components/Tasks.vue";
 import { useVaultsStore } from "../src/stores/vaults";
 import { useCaptureStore } from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
@@ -55,6 +56,10 @@ describe("ActionPanel", () => {
     expect(store.view).toBe("tasks");
     expect(store.tasksVaultId).toBeNull();
     expect(wrapper.text()).toContain("All tasks");
+    // Regression: the container guard must render the Tasks component in
+    // aggregate mode (tasksVaultId === null) — a truthy guard would fall
+    // through to the vault list while the header still said "All tasks".
+    expect(wrapper.findComponent(Tasks).exists()).toBe(true);
   });
 
   it("hides the count badge at zero", () => {
