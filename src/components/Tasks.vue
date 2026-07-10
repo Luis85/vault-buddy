@@ -284,6 +284,15 @@ async function add() {
   }
 }
 
+function onTitleEnter(e: KeyboardEvent) {
+  // GAP-31: committing an IME candidate fires Enter with isComposing=true —
+  // that must select the candidate, never create a task document (a vault
+  // write) from the half-composed title. The Search view's handlers are the
+  // precedent.
+  if (e.isComposing) return;
+  void add();
+}
+
 async function toggle(task: AggTask) {
   // Ignore a re-action while this row's write is still pending — otherwise two
   // concurrent set_task_status writes for the same task can land out of order.
@@ -461,7 +470,7 @@ async function saveEdit(task: AggTask) {
         placeholder="Add a task…"
         aria-label="New task title"
         class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-        @keydown.enter="add"
+        @keydown.enter="onTitleEnter"
       >
       <button
         type="button"

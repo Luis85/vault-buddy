@@ -200,6 +200,19 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Vault 5"); // list unfiltered again
   });
 
+  it("filter Escape ignores IME composition (GAP-31)", async () => {
+    // An IME cancel arrives as Escape with isComposing: the vault filter must
+    // not clear while the user is composing.
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const filterInput = wrapper.find('input[type="search"]');
+    await filterInput.setValue("Vault 3");
+    await filterInput.trigger("keydown", { key: "Escape", isComposing: true });
+    expect((filterInput.element as HTMLInputElement).value).not.toBe("");
+  });
+
   it("shows the friendly empty state when no vaults were found", () => {
     const store = useVaultsStore();
     store.loaded = true;

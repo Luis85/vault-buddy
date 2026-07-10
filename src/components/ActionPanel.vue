@@ -90,6 +90,8 @@ const filtered = computed(() => {
 });
 
 function onFilterEscape(event: KeyboardEvent) {
+  // GAP-31: IME composition can emit Escape; that must dismiss the IME, not clear the filter
+  if (event.isComposing) return;
   if (filter.value) {
     // first Escape clears the filter; a second one bubbles up and closes
     filter.value = "";

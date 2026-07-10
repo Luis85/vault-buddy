@@ -234,6 +234,22 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
   });
 
+  it("ignores Enter while composing an IME candidate (GAP-31)", async () => {
+    // Committing a CJK candidate with Enter used to immediately create a task
+    // document from the half-composed title — a sanctioned vault write.
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    const titleInput = wrapper.get('[data-testid="task-input"]');
+    await titleInput.setValue("候選");
+    await titleInput.trigger("keydown", { key: "Enter", isComposing: true });
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toBeUndefined();
+    // After composition ends, normal Enter works.
+    await titleInput.trigger("keydown", { key: "Enter", isComposing: false });
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "候選" } });
+  });
+
   it("opens a task in Obsidian when its title is clicked and closes the panel", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();

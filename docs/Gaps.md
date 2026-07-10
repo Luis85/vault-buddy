@@ -310,13 +310,8 @@ reopen.
 leaves it false, so no toggle persists the default-seeded config. The
 failure is logged via `logWarning`.
 
-### GAP-31 · Medium · No IME-composition guard on the add-task Enter — a vault write
-`src/components/Tasks.vue:139`.
-Search guards Enter/arrows/Escape with `event.isComposing`; Tasks does not.
-A CJK user committing an IME candidate with Enter immediately creates a
-task document from the half-composed title (a sanctioned vault write).
-`ActionPanel.vue:82`'s filter Escape has the same, lower-stakes gap.
-**Fix:** ignore Enter when `event.isComposing`.
+### GAP-31 · ~~Medium~~ FIXED 2026-07-10 · IME-composition guards on the add-task Enter and filter Escape
+Added `onTitleEnter` handler in Tasks.vue and early isComposing return in ActionPanel's `onFilterEscape` — both now follow Search's precedent.
 
 ### GAP-32 · Low · Assorted store/component edges
 - `src/stores/capture.ts:234-241` — `refreshWaitingForRecording` responses
