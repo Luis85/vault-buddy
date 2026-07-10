@@ -4,7 +4,8 @@
 //! capture note. Spec:
 //! docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md
 
-use crate::capture_note::yaml_quote;
+use crate::capture_note::{write_note_atomic, yaml_quote, NOTE_TMP_SUFFIX};
+use crate::capture_paths::candidate;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,210 @@ pub fn target_dir(vault_path: &Path, documents_folder: &str, year: &str, month: 
     vault_path.join(documents_folder).join(year).join(month)
 }
 
+/// Resolve a collision-free basename BEFORE Pandoc runs: walk the ` (N)`
+/// suffix scheme until BOTH `<name>.md` and the `<name>/` media folder are
+/// free, and use that one name for both. Up-front (not at write time) because
+/// Pandoc bakes the media-folder name into image links as it converts — a
+/// publish-time re-suffix would leave the note pointing at the wrong folder.
+pub fn reserve_basename(target_dir: &Path, basename: &str) -> String {
+    for attempt in 1u32.. {
+        let name = candidate(basename, attempt);
+        let note_free = !target_dir.join(format!("{name}.md")).exists();
+        let media_free = !target_dir.join(&name).exists();
+        if note_free && media_free {
+            return name;
+        }
+    }
+    unreachable!("suffix search always terminates")
+}
+
+pub struct StagePlan {
+    pub work_dir: PathBuf,
+    pub media_name: String,
+    pub note_name: String,
+}
+
+/// Dot-prefixed temp working dir under `target_dir` (same volume → atomic
+/// publish rename; dot-dir → excluded from every vault_walk scan and
+/// recovery). `unique` (a per-invocation token from the shell) keeps two
+/// imports to the same date from colliding on the temp dir. Media/note names
+/// are the FINAL names, so Pandoc's relative-to-note image links stay correct
+/// after the publish move.
+pub fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePlan {
+    let work_dir = target_dir.join(format!(".{basename}.{unique}{NOTE_TMP_SUFFIX}.import"));
+    StagePlan {
+        work_dir,
+        media_name: basename.to_string(),
+        note_name: format!("{basename}.md"),
+    }
+}
+
+pub fn cleanup_staging(work_dir: &Path) {
+    let _ = std::fs::remove_dir_all(work_dir);
+}
+
+/// The owned staging-dir marker. Matched by the janitor so it removes ONLY
+/// our own crash-orphaned temp dirs, never another tool's dot-directory.
+const STAGING_MARKER: &str = ".vault-buddy.tmp.import";
+
+pub fn is_import_staging_dir(name: &str) -> bool {
+    name.starts_with('.') && name.ends_with(STAGING_MARKER)
+}
+
+/// Outcome of one janitor sweep.
+#[derive(Debug, Default, PartialEq)]
+pub struct StagingSweep {
+    /// Stale orphan staging dirs removed this pass (for logging).
+    pub removed: Vec<PathBuf>,
+    /// Staging dirs seen that were too FRESH to remove yet. >0 means the
+    /// shell janitor must reschedule — a crash-then-immediate-restart leaves
+    /// an orphan younger than the staleness window (Codex review).
+    pub pending: usize,
+}
+
+/// Startup janitor: remove crash-orphaned import staging dirs under a vault's
+/// Documents folder (walking its `YYYY/MM` subtree — that's where staging
+/// dirs live). Staleness-gated with an injected `now` so a clock jump giving
+/// a live dir a future mtime can't make it look stale (mirrors capture's
+/// `is_stale_at`). Returns what was removed AND how many fresh orphans remain
+/// (so the caller can reschedule).
+///
+/// **Canonical containment at every level** (Codex review): a symlinked OR
+/// junctioned dated subfolder (`Documents/2026`, `2026/07`) must never let the
+/// sweep descend or `remove_dir_all` outside the vault. `is_symlink()` alone is
+/// insufficient — a Windows directory junction is a reparse point, NOT a
+/// symlink. So each descended dir is `canonicalize()`d and required to stay
+/// under the canonicalized `documents_root`; anything that fails to canonicalize
+/// or escapes is skipped. The caller (the shell janitor) additionally
+/// canonical-checks `documents_root` is inside the vault before calling.
+pub fn clean_stale_staging_at(
+    documents_root: &Path,
+    now: std::time::SystemTime,
+    stale_after: std::time::Duration,
+) -> StagingSweep {
+    let mut sweep = StagingSweep::default();
+    let Ok(canon_root) = documents_root.canonicalize() else {
+        return sweep; // no Documents folder yet → nothing to do
+    };
+    // Real subdir whose canonical path stays under canon_root — resolves BOTH
+    // symlinks and Windows junctions, so neither can redirect the walk out.
+    let contained_subdirs = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.canonicalize()
+                    .map(|c| c.is_dir() && c.starts_with(&canon_root))
+                    .unwrap_or(false)
+            })
+            .collect()
+    };
+    // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
+    for year in contained_subdirs(&canon_root) {
+        for month in contained_subdirs(&year) {
+            let Ok(entries) = std::fs::read_dir(&month) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !is_import_staging_dir(&name) {
+                    continue;
+                }
+                // Canonical containment before ANY delete — a reparse dir named
+                // like a staging dir must not let remove_dir_all escape.
+                let Ok(canon) = path.canonicalize() else {
+                    continue;
+                };
+                if !canon.is_dir() || !canon.starts_with(&canon_root) {
+                    continue;
+                }
+                // Staleness: age from mtime, guarding a future mtime (clock jump).
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|mtime| match now.duration_since(mtime) {
+                        Ok(age) => age >= stale_after,
+                        Err(_) => false, // mtime in the future → treat as fresh
+                    })
+                    .unwrap_or(false);
+                if stale {
+                    if std::fs::remove_dir_all(&canon).is_ok() {
+                        sweep.removed.push(canon);
+                    }
+                } else {
+                    sweep.pending += 1; // fresh orphan → caller reschedules
+                }
+            }
+        }
+    }
+    sweep
+}
+
+/// Publish a completed staging dir into `target_dir`. Prepends `frontmatter`
+/// to the staged note, then moves the media dir (if non-empty) then the note,
+/// both at the EXACT names reserved up front (no re-suffixing — the suffix was
+/// already resolved by `reserve_basename` and Pandoc pinned the links to it).
+/// The note write is non-replacing; on failure the already-published media dir
+/// is rolled back. Always cleans the work dir before returning.
+pub fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> std::io::Result<PathBuf> {
+    let result = publish_inner(plan, target_dir, frontmatter);
+    cleanup_staging(&plan.work_dir);
+    result
+}
+
+fn publish_inner(
+    plan: &StagePlan,
+    target_dir: &Path,
+    frontmatter: &str,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(target_dir)?;
+    let staged_note = plan.work_dir.join(&plan.note_name);
+    let body = std::fs::read_to_string(&staged_note)?;
+    let full = format!("{frontmatter}{body}");
+
+    // Media first, so the note never resolves to missing images. Only when
+    // Pandoc actually extracted something.
+    let staged_media = plan.work_dir.join(&plan.media_name);
+    let media_has_files = staged_media
+        .read_dir()
+        .map(|mut it| it.next().is_some())
+        .unwrap_or(false);
+    let mut published_media: Option<PathBuf> = None;
+    if media_has_files {
+        let dest = target_dir.join(&plan.media_name);
+        // The basename was reserved (note + media dir both free) up front, so
+        // dest should be free; a directory here means the name was claimed
+        // AFTER reservation — refuse rather than merge/clobber.
+        if dest.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "media directory already exists at destination",
+            ));
+        }
+        std::fs::rename(&staged_media, &dest)?;
+        published_media = Some(dest);
+    }
+
+    // Write the note at the EXACT reserved name (non-replacing). NOT
+    // write_note_collision_safe — re-suffixing here would break Pandoc's
+    // baked-in media links. If the name was claimed after reservation the
+    // write fails; roll the already-published media dir back so a failed
+    // import never leaves an orphaned media folder (Codex review).
+    let note_path = target_dir.join(&plan.note_name);
+    match write_note_atomic(&note_path, &full) {
+        Ok(()) => Ok(note_path),
+        Err(e) => {
+            if let Some(media) = published_media {
+                let _ = std::fs::remove_dir_all(&media);
+            }
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +324,184 @@ mod tests {
     fn target_dir_is_documents_folder_dated() {
         let d = target_dir(Path::new("/vault"), "Documents", "2026", "07");
         assert_eq!(d, Path::new("/vault/Documents/2026/07"));
+    }
+
+    #[test]
+    fn reserve_basename_avoids_both_note_and_media_collisions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        // base free → returned as-is
+        assert_eq!(
+            reserve_basename(&target, "2026-07-10 Report"),
+            "2026-07-10 Report"
+        );
+        // a prior note claims the base → next suffix (capture_paths::candidate
+        // numbers the first collision (2), matching the capture/tasks scheme)
+        std::fs::write(target.join("2026-07-10 Report.md"), "x").unwrap();
+        assert_eq!(
+            reserve_basename(&target, "2026-07-10 Report"),
+            "2026-07-10 Report (2)"
+        );
+        // a prior MEDIA FOLDER (no note) also forces a suffix — both must be free
+        std::fs::create_dir_all(target.join("2026-07-10 Photo")).unwrap();
+        assert_eq!(
+            reserve_basename(&target, "2026-07-10 Photo"),
+            "2026-07-10 Photo (2)"
+        );
+    }
+
+    #[test]
+    fn plan_staging_uses_dot_prefixed_in_vault_workdir() {
+        let plan = plan_staging(
+            Path::new("/vault/Documents/2026/07"),
+            "2026-07-10 Report",
+            "t1",
+        );
+        assert!(plan.work_dir.starts_with("/vault/Documents/2026/07"));
+        assert!(plan
+            .work_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with('.'));
+        // the unique token keeps two same-date imports from sharing a temp dir
+        let other = plan_staging(
+            Path::new("/vault/Documents/2026/07"),
+            "2026-07-10 Report",
+            "t2",
+        );
+        assert_ne!(plan.work_dir, other.work_dir);
+        assert_eq!(plan.media_name, "2026-07-10 Report");
+        assert_eq!(plan.note_name, "2026-07-10 Report.md");
+    }
+
+    #[test]
+    fn publish_moves_note_and_media_and_prepends_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_staging(&target, "2026-07-10 Report", "u");
+        std::fs::create_dir_all(&plan.work_dir).unwrap();
+        // Simulate a Pandoc run: note body + a media dir with one file.
+        std::fs::write(
+            plan.work_dir.join(&plan.note_name),
+            "# Body\n\n![img](2026-07-10 Report/image1.png)\n",
+        )
+        .unwrap();
+        let media = plan.work_dir.join(&plan.media_name);
+        std::fs::create_dir_all(&media).unwrap();
+        std::fs::write(media.join("image1.png"), b"PNG").unwrap();
+
+        let note = publish(&plan, &target, "---\ntype: Document\n---\n\n").unwrap();
+        let published = std::fs::read_to_string(&note).unwrap();
+        assert!(published.starts_with("---\ntype: Document\n---\n\n# Body"));
+        // media dir landed beside the note, same name → link still resolves
+        assert!(target.join("2026-07-10 Report/image1.png").exists());
+        // work dir cleaned up
+        assert!(!plan.work_dir.exists());
+    }
+
+    #[test]
+    fn publish_without_media_writes_only_the_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_staging(&target, "2026-07-10 Note", "u");
+        std::fs::create_dir_all(&plan.work_dir).unwrap();
+        std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
+
+        let note = publish(&plan, &target, "---\ntype: Document\n---\n\n").unwrap();
+        assert!(note.exists());
+        // no media subfolder created when there were no images
+        assert!(!target.join("2026-07-10 Note").exists());
+    }
+
+    #[test]
+    fn publish_rolls_back_media_if_note_commit_fails() {
+        // The reserved note name is claimed AFTER reservation (the residual
+        // post-reservation race): publish must NOT re-suffix (that would break the
+        // media links) — it fails and rolls the already-published media dir back.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_staging(&target, "2026-07-10 Doc", "u");
+        std::fs::create_dir_all(&plan.work_dir).unwrap();
+        std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
+        let media = plan.work_dir.join(&plan.media_name);
+        std::fs::create_dir_all(&media).unwrap();
+        std::fs::write(media.join("image1.png"), b"PNG").unwrap();
+        // Claim the exact reserved note name so the non-replacing write fails.
+        std::fs::write(target.join("2026-07-10 Doc.md"), "SOMEONE ELSE").unwrap();
+
+        let result = publish(&plan, &target, "---\n---\n\n");
+        assert!(result.is_err());
+        // original untouched (never clobbered)
+        assert_eq!(
+            std::fs::read_to_string(target.join("2026-07-10 Doc.md")).unwrap(),
+            "SOMEONE ELSE"
+        );
+        // media rolled back — no orphaned sibling folder
+        assert!(!target.join("2026-07-10 Doc").exists());
+    }
+
+    #[test]
+    fn janitor_removes_stale_orphan_staging_dirs_only() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Documents");
+        let month = root.join("2026/07");
+        std::fs::create_dir_all(&month).unwrap();
+        // an orphaned staging dir + a real note + an unrelated dot-dir
+        let orphan = month.join(".2026-07-10 Doc.123-4.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&orphan).unwrap();
+        std::fs::write(orphan.join("partial.md"), "x").unwrap();
+        std::fs::write(month.join("2026-07-10 Real.md"), "keep").unwrap();
+        let foreign = month.join(".obsidian-cache");
+        std::fs::create_dir_all(&foreign).unwrap();
+
+        // now = far future so the orphan is definitely stale
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        let sweep = clean_stale_staging_at(&root, now, Duration::from_secs(60));
+        assert_eq!(sweep.removed.len(), 1);
+        assert_eq!(sweep.pending, 0);
+        assert!(!orphan.exists()); // owned orphan gone
+        assert!(month.join("2026-07-10 Real.md").exists()); // real note kept
+        assert!(foreign.exists()); // foreign dot-dir untouched
+    }
+
+    #[test]
+    fn janitor_keeps_fresh_staging_dirs() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let month = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&month).unwrap();
+        let fresh = month.join(".2026-07-10 Doc.9-9.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&fresh).unwrap();
+        // now ≈ creation time → not yet stale
+        let sweep = clean_stale_staging_at(
+            &tmp.path().join("Documents"),
+            SystemTime::now(),
+            Duration::from_secs(600),
+        );
+        assert!(sweep.removed.is_empty());
+        assert_eq!(sweep.pending, 1); // fresh orphan seen → caller must reschedule
+        assert!(fresh.exists());
+    }
+
+    #[test]
+    fn publish_writes_at_the_exact_reserved_name() {
+        // publish does NOT suffix — the reserved basename is final so Pandoc's
+        // baked-in media links stay valid. A free target writes at the exact name.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_staging(&target, "2026-07-10 Note", "u");
+        std::fs::create_dir_all(&plan.work_dir).unwrap();
+        std::fs::write(plan.work_dir.join(&plan.note_name), "NEW\n").unwrap();
+
+        let note = publish(&plan, &target, "---\n---\n\n").unwrap();
+        assert_eq!(note, target.join("2026-07-10 Note.md"));
+        assert!(std::fs::read_to_string(&note).unwrap().contains("NEW"));
     }
 }
