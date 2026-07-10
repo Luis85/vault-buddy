@@ -478,7 +478,8 @@ git commit -m "feat(core): document-import format map, naming, and frontmatter"
   - `fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> io::Result<PathBuf>` — prepends frontmatter to the staged note, publishes media dir first (if present & non-empty) then the note at the EXACT reserved name (non-replacing), rolling the media dir back if the note write fails. Returns the final note path. Cleans the work dir on the way out.
   - `fn cleanup_staging(work_dir: &Path)` — best-effort `remove_dir_all`.
   - `fn is_import_staging_dir(name: &str) -> bool` — matches the owned `…vault-buddy.tmp.import` marker (never another tool's dot-dir).
-  - `fn clean_stale_staging_at(documents_root: &Path, now: SystemTime, stale_after: Duration) -> Vec<PathBuf>` — removes every import staging dir directly under `documents_root`'s `YYYY/MM` tree whose mtime is older than `stale_after`; returns what it removed. `now` injected so staleness is testable clock-free (mirrors capture's `is_stale_at`).
+  - `struct StagingSweep { removed: Vec<PathBuf>, pending: usize }`.
+  - `fn clean_stale_staging_at(documents_root: &Path, now: SystemTime, stale_after: Duration) -> StagingSweep` — removes every import staging dir under `documents_root`'s `YYYY/MM` tree whose mtime is older than `stale_after` (canonical containment at every level so a symlink OR Windows junction can't redirect the delete outside the vault); returns what it removed plus a count of fresh orphans still pending (so the shell janitor reschedules). `now` injected so staleness is testable clock-free.
 
 **Design notes for the implementer:**
 - The suffix is resolved up front by `reserve_basename`, NOT at write time. Pandoc bakes the media-folder name into every image link as it converts, so the final sibling-folder name must be known before Pandoc runs — a publish-time re-suffix would break the links (note says `<name>/…`, folder became `<name> (1)/…`). `publish` therefore writes the note at the exact reserved name with `write_note_atomic` (non-replacing), not the suffix-retrying `write_note_collision_safe`.
@@ -597,8 +598,9 @@ fn janitor_removes_stale_orphan_staging_dirs_only() {
 
     // now = far future so the orphan is definitely stale
     let now = SystemTime::now() + Duration::from_secs(3600);
-    let removed = clean_stale_staging_at(&root, now, Duration::from_secs(60));
-    assert_eq!(removed.len(), 1);
+    let sweep = clean_stale_staging_at(&root, now, Duration::from_secs(60));
+    assert_eq!(sweep.removed.len(), 1);
+    assert_eq!(sweep.pending, 0);
     assert!(!orphan.exists());              // owned orphan gone
     assert!(month.join("2026-07-10 Real.md").exists()); // real note kept
     assert!(foreign.exists());             // foreign dot-dir untouched
@@ -613,8 +615,9 @@ fn janitor_keeps_fresh_staging_dirs() {
     let fresh = month.join(".2026-07-10 Doc.9-9.vault-buddy.tmp.import");
     std::fs::create_dir_all(&fresh).unwrap();
     // now ≈ creation time → not yet stale
-    let removed = clean_stale_staging_at(&tmp.path().join("Documents"), SystemTime::now(), Duration::from_secs(600));
-    assert!(removed.is_empty());
+    let sweep = clean_stale_staging_at(&tmp.path().join("Documents"), SystemTime::now(), Duration::from_secs(600));
+    assert!(sweep.removed.is_empty());
+    assert_eq!(sweep.pending, 1); // fresh orphan seen → caller must reschedule
     assert!(fresh.exists());
 }
 
@@ -698,55 +701,70 @@ pub fn is_import_staging_dir(name: &str) -> bool {
     name.starts_with('.') && name.ends_with(STAGING_MARKER)
 }
 
+/// Outcome of one janitor sweep.
+#[derive(Debug, Default, PartialEq)]
+pub struct StagingSweep {
+    /// Stale orphan staging dirs removed this pass (for logging).
+    pub removed: Vec<PathBuf>,
+    /// Staging dirs seen that were too FRESH to remove yet. >0 means the
+    /// shell janitor must reschedule — a crash-then-immediate-restart leaves
+    /// an orphan younger than the staleness window (Codex review).
+    pub pending: usize,
+}
+
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
 /// Documents folder (walking its `YYYY/MM` subtree — that's where staging
 /// dirs live). Staleness-gated with an injected `now` so a clock jump giving
 /// a live dir a future mtime can't make it look stale (mirrors capture's
-/// `is_stale_at`). Returns the dirs removed, for logging.
+/// `is_stale_at`). Returns what was removed AND how many fresh orphans remain
+/// (so the caller can reschedule).
 ///
-/// **No-follow at every level** (Codex review): a symlinked/junctioned dated
-/// subfolder (`Documents/2026`, `2026/07`) or a symlink named like a staging
-/// dir must never let the sweep descend or delete outside the vault. Each
-/// level is filtered by `file_type().is_dir() && !is_symlink()` — a symlink is
-/// skipped, never traversed or removed. The caller (the shell janitor) also
+/// **Canonical containment at every level** (Codex review): a symlinked OR
+/// junctioned dated subfolder (`Documents/2026`, `2026/07`) must never let the
+/// sweep descend or `remove_dir_all` outside the vault. `is_symlink()` alone is
+/// insufficient — a Windows directory junction is a reparse point, NOT a
+/// symlink. So each descended dir is `canonicalize()`d and required to stay
+/// under the canonicalized `documents_root`; anything that fails to canonicalize
+/// or escapes is skipped. The caller (the shell janitor) additionally
 /// canonical-checks `documents_root` is inside the vault before calling.
 pub fn clean_stale_staging_at(
     documents_root: &Path,
     now: std::time::SystemTime,
     stale_after: std::time::Duration,
-) -> Vec<PathBuf> {
-    let mut removed = Vec::new();
-    // A real (non-symlink) subdirectory only — no-follow.
-    let real_subdirs = |dir: &Path| -> Vec<PathBuf> {
+) -> StagingSweep {
+    let mut sweep = StagingSweep::default();
+    let Ok(canon_root) = documents_root.canonicalize() else {
+        return sweep; // no Documents folder yet → nothing to do
+    };
+    // Real subdir whose canonical path stays under canon_root — resolves BOTH
+    // symlinks and Windows junctions, so neither can redirect the walk out.
+    let contained_subdirs = |dir: &Path| -> Vec<PathBuf> {
         std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| {
-                e.file_type()
-                    .map(|t| t.is_dir() && !t.is_symlink())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.canonicalize()
+                    .map(|c| c.is_dir() && c.starts_with(&canon_root))
                     .unwrap_or(false)
             })
-            .map(|e| e.path())
             .collect()
     };
     // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
-    for year in real_subdirs(documents_root) {
-        for month in real_subdirs(&year) {
+    for year in contained_subdirs(&canon_root) {
+        for month in contained_subdirs(&year) {
             let Ok(entries) = std::fs::read_dir(&month) else { continue };
             for entry in entries.flatten() {
                 let path = entry.path();
-                // Real dir only — never a symlink named like a staging dir
-                // (removing through it could escape the vault).
-                let is_real_dir = entry
-                    .file_type()
-                    .map(|t| t.is_dir() && !t.is_symlink())
-                    .unwrap_or(false);
-                if !is_real_dir {
-                    continue;
-                }
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if !is_import_staging_dir(&name) {
+                    continue;
+                }
+                // Canonical containment before ANY delete — a reparse dir named
+                // like a staging dir must not let remove_dir_all escape.
+                let Ok(canon) = path.canonicalize() else { continue };
+                if !canon.is_dir() || !canon.starts_with(&canon_root) {
                     continue;
                 }
                 // Staleness: age from mtime, guarding a future mtime (clock jump).
@@ -758,13 +776,17 @@ pub fn clean_stale_staging_at(
                         Err(_) => false, // mtime in the future → treat as fresh
                     })
                     .unwrap_or(false);
-                if stale && std::fs::remove_dir_all(&path).is_ok() {
-                    removed.push(path);
+                if stale {
+                    if std::fs::remove_dir_all(&canon).is_ok() {
+                        sweep.removed.push(canon);
+                    }
+                } else {
+                    sweep.pending += 1; // fresh orphan → caller reschedules
                 }
             }
         }
     }
-    removed
+    sweep
 }
 
 /// Publish a completed staging dir into `target_dir`. Prepends `frontmatter`
@@ -1346,14 +1368,17 @@ git commit -m "feat(shell): convert_document — sandboxed, heap-capped, staged 
 - Test: none new (the pure sweep is tested in Task 3; this is thin wiring — the build gate covers it).
 
 **Interfaces:**
-- Consumes: `document_import::clean_stale_staging_at`, `discovery::discover_vaults`, `capture_config`, `capture_paths::safe_recording_root`, `ImportLock`.
-- Produces: `fn run_import_recovery(app: &AppHandle)` — a named background thread that sweeps each vault's Documents folder for crash-orphaned staging dirs, postponed while an import is active.
+- Consumes: `document_import::{clean_stale_staging_at, StagingSweep}`, `discovery::discover_vaults`, `capture_config`, `capture_paths::{safe_recording_root, assert_path_inside_vault}`, `ImportLock`.
+- Produces: `fn run_import_recovery(app: &AppHandle)` — a named background thread that sweeps each vault's Documents folder for crash-orphaned staging dirs, postponed while an import is active, **and reschedules while fresh orphans age** (mirrors capture's retry loop).
 
 **Why:** a hard kill / crash / power loss mid-Pandoc leaves the in-vault
 `.…vault-buddy.tmp.import` dir behind (`cleanup_staging` never ran). The
 vault-walk scans skip it (dot-dir) so it's invisible, but nothing removes
 it — capture has an analogous `.part` recovery pass; imports need the same
-(Codex review).
+(Codex review). And like capture, one pass isn't enough: a crash-then-
+immediate-restart leaves an orphan younger than the staleness window, so the
+pass must retry as fresh work ages, not exit after a single sweep (Codex
+review).
 
 - [ ] **Step 1: Implement**
 
@@ -1364,52 +1389,75 @@ use tauri::{AppHandle, Manager};
 /// conversion's fresh dir is never touched even if the ImportLock check
 /// somehow raced. 10 min is comfortably longer than any real conversion.
 const IMPORT_STAGING_STALE: std::time::Duration = std::time::Duration::from_secs(600);
+/// Retry cadence while work is pending (a postponed pass, or a fresh orphan
+/// not yet stale) — mirrors capture recovery's 90s retry.
+const IMPORT_RECOVERY_RETRY: std::time::Duration = std::time::Duration::from_secs(90);
+/// Bound the retries (~24h), so a permanently-fresh anomaly can't loop forever.
+const IMPORT_RECOVERY_MAX_PASSES: u32 = 960;
 
 /// Startup janitor for crash-orphaned import staging dirs. Named background
-/// thread; postponed (whole pass) while an import holds the ImportLock.
+/// thread. One `pass()` returns whether work is still pending (postponed, or a
+/// fresh orphan seen); while pending, it retries every IMPORT_RECOVERY_RETRY
+/// so an orphan younger than the staleness window at boot is still reaped once
+/// it ages — exactly the capture-recovery shape.
 pub fn run_import_recovery(app: &AppHandle) {
     let app = app.clone();
     std::thread::Builder::new()
         .name("import-recovery".into())
         .spawn(move || {
-            // Postpone while a conversion runs: try the same lock convert takes.
-            // If we can't get it, an import is mid-flight — its fresh staging dir
-            // must not be swept. Skip this pass; next launch (or a manual retry)
-            // catches any true orphan, which by definition outlives that import.
-            let lock = app.state::<ImportLock>();
-            let Ok(_guard) = lock.0.try_lock() else {
-                log::info!("import-recovery: postponed while an import is active");
-                return;
-            };
-            let cfg = capture_config::load_config();
-            for vault in discovery::discover_vaults() {
-                let v = capture_config::vault_config(&cfg, &vault.id);
-                let folder = v.documents_root();
-                let vault_root = std::path::Path::new(&vault.path);
-                let Ok(root) = capture_paths::safe_recording_root(vault_root, folder) else {
-                    continue;
+            let pass = || -> bool {
+                // Postpone the WHOLE pass while a conversion runs: try the same
+                // lock convert takes. If we can't get it, an import is mid-flight
+                // and its fresh staging dir must not be swept — retry later.
+                let lock = app.state::<ImportLock>();
+                let Ok(_guard) = lock.0.try_lock() else {
+                    log::info!("import-recovery: postponed while an import is active");
+                    return true; // pending → retry
                 };
-                if !root.is_dir() {
-                    continue;
+                let cfg = capture_config::load_config();
+                let mut pending = false;
+                for vault in discovery::discover_vaults() {
+                    let v = capture_config::vault_config(&cfg, &vault.id);
+                    let folder = v.documents_root();
+                    let vault_root = std::path::Path::new(&vault.path);
+                    let Ok(root) = capture_paths::safe_recording_root(vault_root, folder) else {
+                        continue;
+                    };
+                    if !root.is_dir() {
+                        continue;
+                    }
+                    // Canonical containment before we DELETE anything: the
+                    // safe_recording_root check is lexical, so a symlinked/
+                    // junctioned Documents folder could point the sweep outside
+                    // the vault. (clean_stale_staging_at also canonical-checks
+                    // every dated level — symlinks AND Windows junctions.)
+                    if capture_paths::assert_path_inside_vault(vault_root, &root).is_err() {
+                        log::warn!("import-recovery: skipping root outside vault: {root:?}");
+                        continue;
+                    }
+                    let sweep = vault_buddy_core::document_import::clean_stale_staging_at(
+                        &root,
+                        std::time::SystemTime::now(),
+                        IMPORT_STAGING_STALE,
+                    );
+                    for dir in sweep.removed {
+                        log::info!("import-recovery: removed orphaned staging dir {dir:?}");
+                    }
+                    if sweep.pending > 0 {
+                        pending = true; // fresh orphan → retry after it ages
+                    }
                 }
-                // Canonical containment before we DELETE anything: the
-                // safe_recording_root check is lexical, so a symlinked
-                // Documents folder could point the sweep outside the vault.
-                // (clean_stale_staging_at additionally never follows a
-                // symlinked dated subdir — no-follow at every level.)
-                if capture_paths::assert_path_inside_vault(vault_root, &root).is_err() {
-                    log::warn!("import-recovery: skipping root outside vault: {root:?}");
-                    continue;
+                pending
+            };
+            // Retry while work is pending, bounded. A clean pass (no orphans,
+            // not postponed) ends the thread.
+            for _ in 0..IMPORT_RECOVERY_MAX_PASSES {
+                if !pass() {
+                    return;
                 }
-                let removed = vault_buddy_core::document_import::clean_stale_staging_at(
-                    &root,
-                    std::time::SystemTime::now(),
-                    IMPORT_STAGING_STALE,
-                );
-                for dir in removed {
-                    log::info!("import-recovery: removed orphaned staging dir {dir:?}");
-                }
+                std::thread::sleep(IMPORT_RECOVERY_RETRY);
             }
+            log::warn!("import-recovery: gave up after max passes with work still pending");
         })
         .map(|_| ())
         .unwrap_or_else(|e| log::warn!("import-recovery: could not spawn thread: {e}"));

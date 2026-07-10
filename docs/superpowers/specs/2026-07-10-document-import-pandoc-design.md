@@ -415,12 +415,27 @@ later) and **staleness-gated** (a clock jump giving a live dir a future
 mtime must not make it look stale, mirroring capture recovery's exact
 guard). Because it *deletes*, it is also **vault-boundary-guarded exactly
 like the write paths**: a canonical containment check on the Documents root
-before the sweep, plus no-follow traversal at every dated level (a
-symlinked `Documents/2026` or `2026/07`, or a symlink merely named like a
-staging dir, is skipped, never descended into or removed) — so a
-hand-edited folder or a planted junction can never make startup delete
-outside the vault. This is the one place these owned temp dirs are *not*
-excluded from recovery — they are its whole subject.
+before the sweep, and **canonical containment again at every dated level** —
+each descended `Documents/YYYY`/`YYYY/MM` dir and each candidate staging dir
+is `canonicalize()`d and required to stay under the canonical Documents root
+before it is descended into or removed. Canonicalization (not a mere
+`is_symlink()` check) is deliberate: a Windows directory *junction* is a
+reparse point, not a symlink, so an `is_symlink()`-only filter would let a
+junctioned dated subfolder pass as a real directory and `remove_dir_all`
+could escape the vault. Canonicalize resolves both symlinks and junctions,
+so a hand-edited folder or a planted junction can never make startup delete
+outside the vault.
+
+Like capture recovery, **one pass is not enough**: a crash followed by an
+immediate restart leaves an orphan younger than the staleness window, which
+the first sweep must not delete (it can't yet tell it apart from a live
+import's dir). So the janitor **reschedules while work is pending** — the
+sweep reports how many fresh (not-yet-stale) orphans it saw, and a pass that
+was postponed (lock held) or saw a fresh orphan retries on the same ~90s
+cadence capture uses, bounded (~24h) so a permanently-fresh anomaly can't
+loop forever. A clean pass ends the thread. This is the one place these
+owned temp dirs are *not* excluded from recovery — they are its whole
+subject.
 
 ## Testing (for the implementation phase)
 
