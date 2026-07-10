@@ -132,12 +132,17 @@ A new "Document Import" section in Buddy settings, structurally a peer of
   `--extract-media`); **zero images means zero folder** — nothing is
   created that doesn't need to be.
 - Frontmatter, following the `type:`-as-identity convention Tasks
-  established:
+  established, with every string value run through the existing
+  `core::capture_note::yaml_quote` helper (already reused by
+  `tasks.rs`/`transcript.rs` for exactly this reason: an unescaped
+  Windows path's backslashes are invalid escape sequences inside a
+  double-quoted YAML scalar — `yaml_quote` doubles `\` and `"` before
+  quoting, so this is a rendering detail, not a new helper to write):
   ```yaml
   ---
   type: Document
   tags: [vault-buddy-import]
-  source: "C:\Users\...\Quarterly Report.docx"
+  source: "C:\\Users\\...\\Quarterly Report.docx"
   imported: 2026-07-10
   format: docx
   ---
@@ -159,17 +164,26 @@ A new "Document Import" section in Buddy settings, structurally a peer of
    and reserves the note filename (and media folder name, if the doc
    turns out to have images) the same way capture reserves `.mp3`/`.md`
    pairs.
-2. Invokes Pandoc against a **temp file**, not the final vault path
-   directly: `pandoc <source> -f <docx|odt|rtf> -t gfm
-   --extract-media=<mediaDir> -o <tempFile>`. GFM (GitHub-Flavored
+2. Invokes Pandoc against **temp locations only**, never the final vault
+   path: `pandoc <source> -f <docx|odt|rtf> -t gfm
+   --extract-media=<tempMediaDir> -o <tempFile>`. This applies to the
+   media directory too, not just the markdown output — Pandoc creates
+   `--extract-media`'s target directory and writes into it as it runs, so
+   pointing it at the final sibling folder directly would let a non-zero
+   exit or timeout leave a partial media folder sitting in the vault even
+   though the conversion as a whole failed. GFM (GitHub-Flavored
    Markdown) is the output target rather than Pandoc's native Markdown
    dialect, because Obsidian's renderer is much closer to GFM than to
    Pandoc's extension-heavy default (footnote/definition-list/etc. syntax
    Obsidian doesn't understand).
-3. Vault Buddy — not Pandoc — prepends the frontmatter block and performs
-   the atomic write (temp + fsync + `rename_noreplace`), so the write
-   discipline stays uniform with every other domain instead of trusting
-   Pandoc's own file output as the final artifact.
+3. Only once Pandoc exits successfully: Vault Buddy prepends the
+   frontmatter block to the temp markdown, then moves both the note and
+   the temp media directory (if non-empty) into their final vault paths
+   — the note via the same atomic temp+fsync+`rename_noreplace` write
+   every other domain uses, the media directory via a rename into place
+   alongside it. A failure at any point before this step leaves the temp
+   locations to clean up and **nothing in the vault**, matching the
+   error-handling section's guarantee.
 
 Format-to-reader mapping is a fixed three-entry table: `.docx` → `docx`,
 `.odt` → `odt`, `.rtf` → `rtf`. No format sniffing beyond the extension —
