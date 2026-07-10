@@ -3,6 +3,7 @@ mod commands;
 mod diagnostics;
 mod document_commands;
 mod mcp_commands;
+mod pandoc;
 mod search_commands;
 mod task_commands;
 mod transcription;
