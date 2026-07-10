@@ -72,6 +72,19 @@ describe("PanelRoot", () => {
     expect(calls).toContain("close_panel");
   });
 
+  it("ignores a composing Escape (IME candidate-cancel), never closing the panel", async () => {
+    mount(PanelRoot);
+    // GAP-31 follow-up: the filter's own composing guard made a candidate-
+    // cancel Escape bubble to this window handler instead of being swallowed
+    // there — closing the WHOLE panel is worse than the filter-clearing the
+    // original bug caused. isComposing must stop it at this chokepoint.
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(calls).not.toContain("close_panel");
+  });
+
   it("closes the panel when the transparent gutter is clicked", async () => {
     const wrapper = mount(PanelRoot);
     await flushPromises();

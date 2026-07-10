@@ -22,6 +22,12 @@ function closePanel() {
   void invoke("close_panel").catch(() => {});
 }
 function onKeydown(event: KeyboardEvent) {
+  // GAP-31 follow-up: an IME candidate-cancel Escape must dismiss the
+  // candidate, never the panel. This is the window-level chokepoint behind
+  // every view's own composing guard (the vault filter, Search, …) — without
+  // it a composing Escape bubbles here and closes the whole panel, which is
+  // worse than the filter-clearing the original bug caused.
+  if (event.isComposing) return;
   if (event.key === "Escape") closePanel();
 }
 // Clicks on the transparent gutter around the panel card read as "clicked
