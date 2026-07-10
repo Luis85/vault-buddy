@@ -259,6 +259,13 @@ pub(crate) enum Capture {
     Stderr,
 }
 
+/// How long `run_capturing` waits for the pipe drain AFTER the child exits.
+/// A real child closes its pipe on exit, so the reader delivers at once and
+/// this is never hit; it only bounds the pathological case where a surviving
+/// descendant keeps the inherited pipe open (Codex review) so the call can't
+/// block — critically while `ImportLock` is held.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 /// Spawn `cmd`, wait with a wall-clock kill at `timeout`, and return
 /// `(success, captured)`: `success` is true on a zero-exit, false on
 /// non-zero/killed; `captured` is the chosen stream's output (empty when none).
@@ -276,6 +283,7 @@ pub(crate) fn run_capturing(
 ) -> std::io::Result<(bool, String)> {
     use std::io::Read;
     use std::process::Stdio;
+    use std::sync::mpsc;
     cmd.stdin(Stdio::null());
     match capture {
         Capture::Stdout => cmd.stdout(Stdio::piped()).stderr(Stdio::null()),
@@ -292,15 +300,21 @@ pub(crate) fn run_capturing(
             .take()
             .map(|s| Box::new(s) as Box<dyn Read + Send>),
     };
-    let drain = stream.and_then(|mut s| {
-        std::thread::Builder::new()
+    // Drain the captured stream on a named worker that delivers its bytes over a
+    // channel. Reading concurrently keeps a chatty child from filling the pipe
+    // buffer and deadlocking the poll loop below; the channel lets us BOUND how
+    // long we wait for it (see the recv_timeout at the end) instead of an
+    // unbounded join.
+    let rx = stream.map(|mut s| {
+        let (tx, rx) = mpsc::channel();
+        let _ = std::thread::Builder::new()
             .name("pandoc-io".into())
             .spawn(move || {
                 let mut buf = Vec::new();
                 let _ = s.read_to_end(&mut buf);
-                buf
-            })
-            .ok()
+                let _ = tx.send(buf); // no-op if we've already stopped waiting
+            });
+        rx
     });
     let start = std::time::Instant::now();
     let mut timed_out = false;
@@ -316,18 +330,18 @@ pub(crate) fn run_capturing(
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    // On a NORMAL exit the child closed its pipe, so joining the drain returns
-    // its output at once. On a TIMEOUT we must NOT join: killing the child does
-    // not reap a grandchild it may have forked, and that grandchild can keep the
-    // pipe's write end open — so `read_to_end` (and thus the join) would block
-    // as long as it lives, recreating the very hang this timeout bounds. We
-    // don't need the output on a failure, so drop the handle and let the named
-    // reader finish detached.
+    // NEVER block the caller (and, in the import path, `ImportLock`) on the
+    // drain. `try_wait` returning does NOT guarantee the pipe is closed: a child
+    // that EXITED — or a killed child's surviving grandchild — can still hold
+    // the inherited write end open, so `read_to_end` may never see EOF. So we
+    // BOUND the wait rather than join unconditionally: on a timeout we don't
+    // need the output (it's a failure); otherwise we give the reader a short
+    // grace to deliver, then give up with what we have. A reader that outlives
+    // the grace finishes detached (its send no-ops once the receiver is gone).
     let captured = if timed_out {
         String::new()
     } else {
-        drain
-            .and_then(|h| h.join().ok())
+        rx.and_then(|rx| rx.recv_timeout(DRAIN_GRACE).ok())
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_default()
     };
@@ -374,6 +388,25 @@ mod tests {
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "should return at the timeout, not wait out the sleep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_capturing_does_not_hang_when_a_descendant_holds_the_pipe() {
+        // The shell exits 0 immediately but backgrounds a child that inherits
+        // the pipe, so read_to_end never sees EOF even though try_wait returns.
+        // The drain wait must be BOUNDED so the call still returns (the direct
+        // child's success) instead of blocking on the held pipe — the wedge
+        // that would otherwise hold ImportLock (Codex review).
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30 & exit 0"]);
+        let start = std::time::Instant::now();
+        let (ok, _) = run_capturing(cmd, Duration::from_secs(60), Capture::Stderr).unwrap();
+        assert!(ok, "the direct child exited 0");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "must give up on the held pipe near DRAIN_GRACE, not wait out the descendant"
         );
     }
 
