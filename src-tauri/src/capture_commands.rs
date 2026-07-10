@@ -25,6 +25,11 @@ pub struct ActiveCapture {
     /// it — None while devices are still being set up (and for a timed-out
     /// start whose worker never reported back).
     pub part: Option<PathBuf>,
+    /// True only for a reservation whose start timed out (the worker never
+    /// reported back). Together with `part.is_none()` it marks the one
+    /// state shutdown may bypass: nothing reached disk, so the
+    /// never-lose-audio invariant is not in play (GAP-08).
+    pub startup_wedged: bool,
 }
 
 /// The mutex holds the active-capture reservation; the condvar is notified
@@ -350,6 +355,7 @@ pub fn start_capture(
             paused_total_ms: 0,
             paused_since_ms: None,
             part: None,
+            startup_wedged: false,
         });
     }
 
@@ -506,11 +512,21 @@ pub fn start_capture(
             // recv() finally returns or the app restarts.
             let msg = "Recording did not start in time.".to_string();
             let _ = control_tx.send(Control::Stop);
+            if let Some(active) = lock_ignoring_poison(&state.0).as_mut() {
+                active.startup_wedged = true;
+            }
             let app4 = app.clone();
             std::thread::Builder::new()
                 .name("capture-janitor".into())
                 .spawn(move || {
                     if let Ok(Ok(part)) = ready_rx.recv() {
+                        // The late worker DID reach disk: record its .part so
+                        // the shutdown bypass (GAP-08) closes for this drain.
+                        if let Some(active) =
+                            lock_ignoring_poison(&app4.state::<CaptureState>().0).as_mut()
+                        {
+                            active.part = Some(part.clone());
+                        }
                         log::warn!(
                             "capture: late start after timeout — stopping and draining {}",
                             part.display()
@@ -624,6 +640,15 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
     let mut guard = lock_ignoring_poison(&capture_state.0);
     let Some(active) = guard.as_ref() else { return };
     let _ = active.control_tx.send(Control::Stop);
+    if wait.is_none() && bypasses_shutdown_wait(active) {
+        // Shutdown against a wedged startup: nothing on disk to strand, and
+        // recv() may never return — don't hold quit hostage. The Stop above
+        // still halts a late worker the moment it reaches its poll loop.
+        log::warn!(
+            "capture: bypassing shutdown wait for a startup-wedged reservation (nothing on disk)"
+        );
+        return;
+    }
     let deadline = wait.map(|limit| std::time::Instant::now() + limit);
     while guard.is_some() {
         match deadline {
@@ -674,6 +699,24 @@ pub fn stop_from_menu(app: &AppHandle) {
 
 pub fn is_recording(app: &AppHandle) -> bool {
     lock_ignoring_poison(&app.state::<CaptureState>().0).is_some()
+}
+
+/// Whether shutdown/hide may skip waiting on this reservation: only a
+/// startup-wedged one with nothing on disk. Everything else — live
+/// recording, ordinary start, late worker whose .part we've learned —
+/// keeps the wait-forever posture.
+fn bypasses_shutdown_wait(active: &ActiveCapture) -> bool {
+    active.startup_wedged && active.part.is_none()
+}
+
+/// The shutdown/hide variant of `is_recording`: a startup-wedged
+/// reservation with no .part must not make the app unquittable or
+/// unhidable (GAP-08), while capture_status et al. keep conservatively
+/// reporting it as recording.
+pub fn recording_blocks_shutdown(app: &AppHandle) -> bool {
+    lock_ignoring_poison(&app.state::<CaptureState>().0)
+        .as_ref()
+        .is_some_and(|active| !bypasses_shutdown_wait(active))
 }
 
 /// Shared by the IPC commands and the tray menu items. Errors are typed
@@ -970,4 +1013,56 @@ pub fn open_transcript(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_recording(path: String) -> Result<(), String> {
     open_recording_note(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active(startup_wedged: bool, part: Option<PathBuf>) -> ActiveCapture {
+        let (control_tx, _rx) = mpsc::channel::<Control>();
+        // _rx dropped: sends become no-ops, which these pure-predicate
+        // tests never exercise anyway.
+        ActiveCapture {
+            control_tx,
+            vault_id: "v".to_string(),
+            started_at_ms: 0,
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
+            part,
+            startup_wedged,
+        }
+    }
+
+    #[test]
+    fn shutdown_bypasses_only_a_wedged_startup_with_nothing_on_disk() {
+        // GAP-08: a wedged device open kept is_recording true forever —
+        // quit blocked forever, hide_buddy no-op'd forever, every Alt+F4
+        // spawned another permanently blocked close-finalize thread. The
+        // bypass must fire for exactly that state and nothing else.
+        assert!(bypasses_shutdown_wait(&active(true, None)));
+    }
+
+    #[test]
+    fn shutdown_still_waits_for_any_recording_that_reached_disk() {
+        // Never-lose-audio: once a .part exists, wait-forever stands — even
+        // if the wedged flag was set (belt and suspenders: the janitor
+        // records a late worker's part, closing the bypass mid-drain).
+        assert!(!bypasses_shutdown_wait(&active(
+            true,
+            Some(PathBuf::from(".x.mp3.part"))
+        )));
+        assert!(!bypasses_shutdown_wait(&active(
+            false,
+            Some(PathBuf::from(".x.mp3.part"))
+        )));
+    }
+
+    #[test]
+    fn shutdown_waits_for_a_normal_still_starting_recording() {
+        // part=None WITHOUT the wedged flag is an ordinary start in its
+        // first ten seconds — not bypassable.
+        assert!(!bypasses_shutdown_wait(&active(false, None)));
+    }
 }

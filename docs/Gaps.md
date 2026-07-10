@@ -84,19 +84,13 @@ The command now refuses paths outside every registered vault via the
 canonical `capture_paths::vault_owning_path` (GAP-01's helper) before
 planning the rename.
 
-### GAP-08 · Medium · A wedged device open makes the app unquittable
-`src-tauri/src/capture_commands.rs:532-580` + `tray.rs:37-47` +
-`lib.rs:261-284`.
-The start-timeout branch deliberately keeps the reservation until the
-worker's `recv()` returns; if the audio driver never returns,
-`is_recording` stays true forever: `quit` blocks forever in
-`request_stop_and_wait(None)`, `hide_buddy` no-ops forever, and every
-Alt+F4 spawns another permanently blocked `close-finalize` thread. Only a
-process kill exits — which then reports as a crash.
-**Fix:** bounded wait on shutdown when `active.part.is_none()` (nothing on
-disk to strand yet), or mark the reservation "startup-wedged" so quit may
-bypass it. Any fix must keep the "never lose captured audio" invariant for
-sessions that *did* reach disk.
+### GAP-08 · ~~Medium~~ FIXED 2026-07-10 · A wedged device open makes the app unquittable
+The reservation now carries an explicit `startup_wedged` flag (set only in
+the start-timeout branch); shutdown paths (`request_stop_and_wait(None)`,
+`hide_buddy`, `quit`, CloseRequested) bypass the wait only when it is set
+AND `part.is_none()` — nothing on disk. The janitor records a late worker's
+`.part`, closing the bypass; recordings that reached disk keep the
+wait-forever posture.
 
 ### GAP-09 · Low · Daily-note formats with literal words silently create misnamed notes
 `src-tauri/core/src/daily_notes.rs:64-87` + `core/src/lib.rs:33-34`.

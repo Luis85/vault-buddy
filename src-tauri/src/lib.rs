@@ -262,7 +262,7 @@ pub fn run() {
             }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
-                if capture_commands::is_recording(app) {
+                if capture_commands::recording_blocks_shutdown(app) {
                     // Alt+F4 / session shutdown bypass tray::quit — the
                     // recording must still finalize, but that wait is
                     // unbounded and this callback runs on the event loop:

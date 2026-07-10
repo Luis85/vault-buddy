@@ -14,7 +14,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 /// on the buddy, and any future hide path must route through here to
 /// inherit the guard.
 pub fn hide_buddy(app: &AppHandle) {
-    if crate::capture_commands::is_recording(app) {
+    if crate::capture_commands::recording_blocks_shutdown(app) {
         log::info!("hide ignored: recording in progress");
         return;
     }
@@ -34,7 +34,7 @@ pub fn quit(app: &AppHandle) {
     // would freeze the event loop (dead tray, dead buddy) for the whole
     // encode. Park the wait on a worker thread and let it drive the exit
     // once the save has landed; the menu callback returns immediately.
-    if crate::capture_commands::is_recording(app) {
+    if crate::capture_commands::recording_blocks_shutdown(app) {
         let app = app.clone();
         std::thread::Builder::new()
             .name("shutdown-finalize".into())

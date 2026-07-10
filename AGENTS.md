@@ -534,6 +534,10 @@ found the failure it prevents:
   `tray::hide_buddy` (the single guarded chokepoint); quit/close finalize
   on worker threads — never block the event loop — and the app exits only
   after the save lands.
+  One scoped exception (GAP-08): a startup-wedged reservation with no
+  `.part` on disk no longer blocks hide/quit/close — nothing exists to
+  strand; once a late worker reports its `.part`, the wait-forever
+  posture resumes.
 - **Pause is a session Control message** (`Control { Stop, Pause, Resume }`
   on the one channel the shell's device thread forwards): streams stay
   open, drained samples are discarded, nothing is encoded, the fsync
