@@ -41,9 +41,44 @@ pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
+    let old_stem = plan
+        .mp3_from
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let new_stem = mp3_to
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Move the transcript sidecar on the same non-replacing rails (GAP-04).
+    // The reserved base guaranteed `<new>.transcript.md` free; if something
+    // claimed it since, the squatter wins and the transcript STAYS at its
+    // old name with its old embed — suffixing it alone would orphan it from
+    // transcript_path(new mp3). Audio-first: never fails the rename.
+    let transcript_from = vault_buddy_core::transcript::transcript_path(&plan.mp3_from);
+    let transcript_to = vault_buddy_core::transcript::transcript_path(&mp3_to);
+    let (transcript_moved, transcript_error) = if transcript_from.is_file() {
+        match vault_buddy_core::capture_paths::rename_noreplace(&transcript_from, &transcript_to) {
+            Ok(()) => (true, None),
+            Err(e) => (
+                false,
+                Some(format!("the transcript could not be moved: {e}")),
+            ),
+        }
+    } else {
+        (false, None)
+    };
+
     let (note, note_error) = match note_read {
         Ok(Some(text)) => {
-            let retargeted = retarget_embed(&text, &old_mp3_name, &new_mp3_name);
+            let mut retargeted = retarget_embed(&text, &old_mp3_name, &new_mp3_name);
+            if transcript_moved {
+                retargeted = retarget_embed(
+                    &retargeted,
+                    &format!("{old_stem}.transcript"),
+                    &format!("{new_stem}.transcript"),
+                );
+            }
             // Collision-safe exclusive create at the reserved name: a
             // sync-client race costs a suffix, never a clobbered file.
             match write_note_collision_safe(&note_to, &retargeted) {
@@ -61,12 +96,18 @@ pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
         Err(e) => (None, Some(e)),
     };
 
-    let warning = note_error.map(|e| {
+    let mut issues: Vec<String> = Vec::new();
+    if let Some(e) = transcript_error {
+        issues.push(e);
+    }
+    if let Some(e) = note_error {
+        issues.push(format!("{e}; note: {}", plan.note_from.display()));
+    }
+    let warning = (!issues.is_empty()).then(|| {
         let warning = format!(
-            "Recording renamed, but its note needs attention ({e}). \
-             Audio: {}; note: {}",
-            mp3_to.display(),
-            plan.note_from.display()
+            "Recording renamed, but needs attention ({}). Audio: {}",
+            issues.join("; "),
+            mp3_to.display()
         );
         log::warn!("capture: {warning}");
         warning
@@ -90,7 +131,8 @@ mod tests {
         std::fs::write(&mp3, "mp3 bytes").unwrap();
         std::fs::write(
             &note,
-            "---\nvault: \"W\"\n---\n\n![[2026-07-04 1405 Meeting.mp3]]\n",
+            "---\nvault: \"W\"\n---\n\n![[2026-07-04 1405 Meeting.mp3]]\n\n\
+             ## Transcript\n\n![[2026-07-04 1405 Meeting.transcript]]\n",
         )
         .unwrap();
         (mp3, note)
@@ -159,5 +201,99 @@ mod tests {
         let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
         let plan = rename_plan(&mp3, "Standup").unwrap();
         assert!(execute(&plan).is_err());
+    }
+
+    #[test]
+    fn renames_transcript_sidecar_and_retargets_its_embed() {
+        // GAP-04: execute moved only the mp3 + note; <old>.transcript.md
+        // stayed behind, the note kept embedding the old transcript, and the
+        // next launch's backfill re-ran a multi-minute inference for a
+        // sidecar nothing embeds.
+        let dir = tempfile::tempdir().unwrap();
+        let (mp3, _note) = seed(dir.path());
+        let transcript = dir.path().join("2026-07-04 1405 Meeting.transcript.md");
+        std::fs::write(
+            &transcript,
+            "---\nvault-buddy-transcript: complete\n---\nwords\n",
+        )
+        .unwrap();
+        let plan = rename_plan(&mp3, "Standup").unwrap();
+        let outcome = execute(&plan).unwrap();
+        assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+        let new_transcript = dir.path().join("2026-07-04 1405 Standup.transcript.md");
+        assert!(new_transcript.is_file(), "transcript moved with the pair");
+        assert!(!transcript.exists(), "old transcript gone");
+        let text = std::fs::read_to_string(outcome.note.unwrap()).unwrap();
+        assert!(
+            text.contains("![[2026-07-04 1405 Standup.transcript]]"),
+            "transcript embed retargeted: {text}"
+        );
+        assert!(!text.contains("Meeting.transcript"), "{text}");
+    }
+
+    #[test]
+    fn transcript_collision_degrades_to_warning_and_keeps_old_embed() {
+        // Never-clobber: a file that appeared at the new transcript name
+        // after reservation wins; the transcript stays at its OLD name and
+        // the note keeps pointing at it (a retargeted embed would dangle).
+        let dir = tempfile::tempdir().unwrap();
+        let (mp3, _note) = seed(dir.path());
+        let transcript = dir.path().join("2026-07-04 1405 Meeting.transcript.md");
+        std::fs::write(
+            &transcript,
+            "---\nvault-buddy-transcript: complete\n---\nwords\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("2026-07-04 1405 Standup.transcript.md"),
+            "squatter",
+        )
+        .unwrap();
+        // NOTE: the squatter also blocks the plain base at reservation time
+        // (reserve_final checks .transcript.md), so the PAIR advances to
+        // " (2)" — and "(2).transcript.md" is free, so the move succeeds.
+        // Force the collision instead by squatting the suffixed name too:
+        std::fs::write(
+            dir.path().join("2026-07-04 1405 Standup (2).transcript.md"),
+            "squatter 2",
+        )
+        .unwrap();
+        let plan = rename_plan(&mp3, "Standup").unwrap();
+        let outcome = execute(&plan).unwrap();
+        // The pair reserves a base whose transcript slot is free, so with
+        // both squats the mp3 lands at " (3)" and the transcript moves.
+        assert_eq!(
+            outcome.mp3,
+            dir.path().join("2026-07-04 1405 Standup (3).mp3")
+        );
+        assert!(dir
+            .path()
+            .join("2026-07-04 1405 Standup (3).transcript.md")
+            .is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("2026-07-04 1405 Standup.transcript.md"))
+                .unwrap(),
+            "squatter",
+            "never clobbers"
+        );
+    }
+
+    #[test]
+    fn missing_transcript_renames_pair_without_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mp3, _note) = seed(dir.path());
+        let plan = rename_plan(&mp3, "Standup").unwrap();
+        let outcome = execute(&plan).unwrap();
+        assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+        assert!(!dir
+            .path()
+            .join("2026-07-04 1405 Standup.transcript.md")
+            .exists());
+        // an absent transcript leaves the (static) embed line alone
+        let text = std::fs::read_to_string(outcome.note.unwrap()).unwrap();
+        assert!(
+            text.contains("![[2026-07-04 1405 Meeting.transcript]]"),
+            "{text}"
+        );
     }
 }

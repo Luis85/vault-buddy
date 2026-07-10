@@ -61,17 +61,11 @@ left untouched.
 marker via a frontmatter-scoped `note_field(content, "vault-buddy-transcript")`
 reader; body text quoting a marker no longer reclassifies a sidecar.
 
-### GAP-04 · Medium · Renaming a transcribed recording strands the transcript and silently re-transcribes
-`src-tauri/capture/src/rename.rs:18` (with `core/capture_note.rs:127`,
-`core/transcript.rs:183`).
-`execute` moves only the mp3 and note and retargets only the `![[…mp3]]`
-embed line; `<old>.transcript.md` stays behind and the note keeps embedding
-the old transcript name. `transcript_path(new.mp3)` then doesn't exist, so
-the next launch's backfill re-runs a multi-minute whisper inference to
-produce a sidecar nothing embeds, while the recordings list shows the
-transcript as "Missing" despite it existing under the old name.
-**Fix:** move `<old>.transcript.md` on the same `rename_noreplace` rails
-and retarget the `.transcript` embed line in `rename_plan`/`execute`.
+### GAP-04 · ~~Medium~~ FIXED 2026-07-10 · Renaming a transcribed recording strands the transcript and silently re-transcribes
+`rename::execute` now moves `<old>.transcript.md` via the same
+`rename_noreplace` rails right after the mp3 and retargets the note's
+`.transcript` embed; a transcript-side failure degrades to a warning and
+keeps the old embed (audio first, never clobber).
 
 ### GAP-05 · Medium · System suspend mid-recording appends the whole sleep gap as encoded silence
 `src-tauri/capture/src/session.rs:189-215, 276-295`.
