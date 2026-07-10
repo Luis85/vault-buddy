@@ -588,6 +588,31 @@ describe("Tasks", () => {
     }
   });
 
+  it("editor Escape is caught for EVERY field, not just the title (due input)", async () => {
+    // Codex review, PR #46: the Escape-doesn't-close-panel guard was wired
+    // only on the title input; Escape focused in the due/tags/priority
+    // controls bubbled past to PanelRoot's window handler and closed the
+    // whole panel. A root-level handler must catch Escape from any field.
+    setActivePinia(createPinia());
+    mockIPC((cmd) => (cmd === "list_tasks" ? sample.map((t) => ({ ...t })) : null));
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" }, attachTo: document.body });
+    const reachedWindow = vi.fn();
+    window.addEventListener("keydown", reachedWindow);
+    try {
+      await flushPromises();
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      const dueInput = wrapper.get('[data-testid="task-edit-due"]');
+      await dueInput.trigger("keydown", { key: "Escape", isComposing: false });
+      await flushPromises();
+      expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(false); // edit cancelled
+      expect(reachedWindow).not.toHaveBeenCalled(); // panel-close never sees it
+    } finally {
+      window.removeEventListener("keydown", reachedWindow);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
   it("ignores Escape on the inline editor while composing an IME candidate", async () => {
     // Escape during composition cancels the IME CANDIDATE, not the edit —
     // without the guard, cancelEdit would drop the in-progress edit too.

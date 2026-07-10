@@ -56,23 +56,25 @@ function onTitleEnter(e: KeyboardEvent) {
   save();
 }
 
-function onTitleEsc(e: KeyboardEvent) {
-  // Same guard for Escape: during composition, Escape cancels the IME
-  // CANDIDATE, not the edit — without this, cancel would drop the
-  // in-progress (uncommitted) edit as a side effect of dismissing the
-  // candidate.
+function onEditorEsc(e: KeyboardEvent) {
+  // Bound on the editor ROOT so Escape from ANY field (title, due, tags,
+  // priority buttons) is caught here as it bubbles — not just the title
+  // input (Codex, PR #46): otherwise Escape focused in due/tags/priority
+  // bubbles past to PanelRoot's window-level handler and closes the WHOLE
+  // panel instead of dismissing the edit (same class as GAP-27's SelectMenu
+  // Escape). During IME composition, Escape cancels the CANDIDATE, not the
+  // edit, so the guard preserves the in-progress edit.
   if (e.isComposing) return;
-  // Consume the key: without stopPropagation the same keydown bubbles to
-  // PanelRoot's window-level Escape and closes the WHOLE panel — the user
-  // asked to cancel the row edit, not to dismiss the panel (Codex, PR #46;
-  // same class as GAP-27's SelectMenu Escape).
   e.stopPropagation();
   emit("cancel");
 }
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
+  <div
+    class="flex min-w-0 flex-1 flex-col gap-1 py-0.5"
+    @keydown.esc="onEditorEsc"
+  >
     <input
       v-model="editTitle"
       data-testid="task-edit-title"
@@ -80,7 +82,6 @@ function onTitleEsc(e: KeyboardEvent) {
       aria-label="Task title"
       class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
       @keydown.enter="onTitleEnter"
-      @keydown.esc="onTitleEsc"
     >
     <div class="flex items-center gap-1">
       <input
