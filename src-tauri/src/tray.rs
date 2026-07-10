@@ -36,13 +36,18 @@ pub fn quit(app: &AppHandle) {
     // once the save has landed; the menu callback returns immediately.
     if crate::capture_commands::recording_blocks_shutdown(app) {
         let app = app.clone();
-        std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("shutdown-finalize".into())
             .spawn(move || {
                 crate::capture_commands::finalize_if_recording(&app);
                 finish_quit(&app);
-            })
-            .expect("failed to spawn shutdown-finalize thread");
+            });
+        if let Err(e) = spawned {
+            // Menu callbacks run on the main thread — never panic here. Not
+            // quitting is the safe degrade: the recording keeps running and
+            // the user can retry Quit.
+            log::error!("could not spawn shutdown-finalize thread: {e}");
+        }
         return;
     }
     finish_quit(app);
@@ -211,12 +216,17 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 // Stopping waits up to 15s for the finalize — never block
                 // the menu callback (and the event loop) on it.
                 let app = app.clone();
-                std::thread::Builder::new()
-                    .name("tray-stop".into())
-                    .spawn(move || {
-                        crate::capture_commands::stop_from_menu(&app);
-                    })
-                    .expect("failed to spawn tray-stop thread");
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("tray-stop".into())
+                        .spawn(move || {
+                            crate::capture_commands::stop_from_menu(&app);
+                        });
+                if let Err(e) = spawned {
+                    // Dropping one stop request is harmless — the user
+                    // retries from the still-visible tray item.
+                    log::warn!("could not spawn tray-stop thread: {e}");
+                }
             }
             "tray-pause-recording" => crate::capture_commands::pause_from_menu(app),
             "tray-resume-recording" => crate::capture_commands::resume_from_menu(app),

@@ -258,15 +258,11 @@ All six arms (`discovery`, `capture_config::load_config_from`,
 `transcript::needs_transcription`/`transcript_status`) now `log::warn!` on
 any read error other than NotFound; return values still degrade unchanged.
 
-### GAP-24 · Medium · `.expect` on thread spawn inside main-thread native callbacks
-`lib.rs:284` (`close-finalize` in the CloseRequested handler),
-`tray.rs:45/219` (`shutdown-finalize`, `tray-stop`), plus the spawns inside
-`start_capture` (`capture_commands.rs:408/420/510/577/616`). The codebase's
-own rule (documented at `schedule_focus_out_check`) is that a panic in a
-window-event handler aborts across the WebView2 FFI boundary with no crash
-record; spawn failure under resource exhaustion does exactly that here.
-**Fix:** replace with the log-and-degrade pattern `lib.rs:128-130` already
-uses.
+### GAP-24 · ~~Medium~~ FIXED 2026-07-10 · `.expect` on thread spawn inside main-thread native callbacks
+All eight sites (close-finalize, shutdown-finalize, tray-stop, and the five
+start_capture spawns) now log-and-degrade per site instead of panicking
+across the WebView2 FFI boundary; the setup-time spawns (recovery,
+transcribe-worker) were never in a native callback and keep `.expect`.
 
 ### GAP-25 · Low · Assorted swallowed results
 - `src-tauri/src/diagnostics.rs:85-87, 99-101` — run-marker

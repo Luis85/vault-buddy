@@ -365,28 +365,36 @@ pub fn start_capture(
     // Live source-loss warnings: forwarded to the panel while recording.
     let (warn_tx, warn_rx) = mpsc::channel::<String>();
     let app_warn = app.clone();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("capture-warn".into())
         .spawn(move || {
             while let Ok(message) = warn_rx.recv() {
                 let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
             }
-        })
-        .expect("failed to spawn capture-warn thread");
+        });
+    if let Err(e) = spawned {
+        // Recording proceeds without live warning forwarding; sends into
+        // the dropped receiver are already fire-and-forget.
+        log::warn!("could not spawn capture-warn thread: {e}");
+    }
 
     // Advisory level meter: forward the worker's ~5 Hz peaks to the panel.
     let (level_tx, level_rx) = mpsc::channel::<f32>();
     let app_level = app.clone();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("capture-level".into())
         .spawn(move || {
             while let Ok(peak) = level_rx.recv() {
                 let _ = app_level.emit("capture:level", serde_json::json!({ "peak": peak }));
             }
-        })
-        .expect("failed to spawn capture-level thread");
+        });
+    if let Err(e) = spawned {
+        // Recording proceeds without live level forwarding; sends into the
+        // dropped receiver are already fire-and-forget.
+        log::warn!("could not spawn capture-level thread: {e}");
+    }
 
-    std::thread::Builder::new()
+    let device_thread = std::thread::Builder::new()
         .name("capture-device".into())
         .spawn(move || {
             let open = match vault_buddy_capture::devices::open_sources(
@@ -473,8 +481,15 @@ pub fn start_capture(
             let outcome = session.stop();
             drop(streams);
             let _ = done_tx.send(outcome);
-        })
-        .expect("failed to spawn capture-device thread");
+        });
+    if let Err(e) = device_thread {
+        // Without the worker there IS no recording: nothing has touched
+        // disk yet, so fail the start cleanly and drop the reservation.
+        clear_active(&app);
+        let msg = format!("Could not start the recording worker: {e}");
+        emit_failed(&app, &msg);
+        return Err(msg);
+    }
 
     // Wait for device readiness WITHOUT the lock — concurrent starts are
     // already rejected by the reservation above.
@@ -516,7 +531,7 @@ pub fn start_capture(
                 active.startup_wedged = true;
             }
             let app4 = app.clone();
-            std::thread::Builder::new()
+            let janitor = std::thread::Builder::new()
                 .name("capture-janitor".into())
                 .spawn(move || {
                     if let Ok(Ok(part)) = ready_rx.recv() {
@@ -550,8 +565,13 @@ pub fn start_capture(
                     // either way, or a real recording could never start again.
                     clear_active(&app4);
                     crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
-                })
-                .expect("failed to spawn capture-janitor thread");
+                });
+            if let Err(e) = janitor {
+                // The reservation stays wedged until the worker replies or
+                // the app restarts — quit stays possible via the
+                // startup-wedged shutdown bypass stamped above (GAP-08).
+                log::error!("could not spawn capture-janitor thread: {e}");
+            }
             emit_failed(&app, &msg);
             return Err(msg);
         }
@@ -571,7 +591,7 @@ pub fn start_capture(
     // user/menu/shutdown stops AND self-finalization (all sources lost) —
     // the state clears and the outcome surfaces no matter who ended it.
     let app3 = app.clone();
-    std::thread::Builder::new()
+    let monitor = std::thread::Builder::new()
         .name("capture-monitor".into())
         .spawn(move || {
             let result = done_rx
@@ -589,8 +609,19 @@ pub fn start_capture(
                 }
             }
             crate::tray::set_capture_state(&app3, crate::tray::TrayCaptureState::Idle);
-        })
-        .expect("failed to spawn capture-monitor thread");
+        });
+    if let Err(e) = monitor {
+        // Without a monitor nothing would ever drain the outcome or clear
+        // the state. Stop the session — the device thread still finalizes
+        // and the audio reaches disk (its done_tx send is a no-op into the
+        // dropped receiver) — and report the start as failed.
+        let _ = control_tx.send(Control::Stop);
+        clear_active(&app);
+        crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Idle);
+        let msg = format!("Recording could not be monitored; stopping: {e}");
+        emit_failed(&app, &msg);
+        return Err(msg);
+    }
 
     // Indicator hardening: recording buddy must be visible.
     if let Some(window) = app.get_webview_window("main") {
