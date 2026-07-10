@@ -67,18 +67,11 @@ reader; body text quoting a marker no longer reclassifies a sidecar.
 `.transcript` embed; a transcript-side failure degrades to a warning and
 keeps the old embed (audio first, never clobber).
 
-### GAP-05 · Medium · System suspend mid-recording appends the whole sleep gap as encoded silence
-`src-tauri/capture/src/session.rs:189-215, 276-295`.
-The 100 ms tick loop consumes a full `tick_frames` on every wake and
-silence-pads underruns; `next_tick += TICK` never resyncs to
-`Instant::now()`. On Windows, `Instant` (QPC) generally advances across
-suspend, so after a laptop sleeps mid-recording the loop runs back-to-back
-catch-up ticks and appends the entire sleep (potentially hours) as silence,
-inflating `duration_secs` and the file. Related: each pause→resume can
-encode up to ~100 ms of spurious silence from an early wake on an empty
-buffer.
-**Fix:** clamp `next_tick` to `now + TICK` when more than a few ticks
-behind; skip the take on a wake that arrived before schedule.
+### GAP-05 · ~~Medium~~ FIXED 2026-07-10 · System suspend mid-recording appends the whole sleep gap as encoded silence
+The tick loop now runs a pure `plan_tick` policy: a wake >500 ms behind
+schedule resyncs `next_tick` to `now + TICK` (suspend gap never encoded);
+a wake before schedule (pause/resume control message) consumes nothing.
+Catch-up under 500 ms is unchanged (backpressure still averages out).
 
 ### GAP-06 · Medium · Never-clobber degrades to a racy fallback on filesystems without hard links
 `src-tauri/core/src/capture_paths.rs:269-291` (`rename_noreplace`), used by
@@ -543,7 +536,9 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   the entire `#[cfg(windows)]` loopback block are never *executed* by any
   test anywhere (Windows CI never runs `cargo test`, GAP-43).
 - `session.rs`: mid-recording encode/write/flush failure and best-effort
-  finalize; the suspend/early-tick behavior (GAP-05) is unpinned.
+  finalize; `plan_tick` (GAP-05) is unit-tested but the suspend path itself
+  cannot be exercised end-to-end (`Instant` is unmockable) — the loop
+  wiring is reviewed, not tested.
 - `engine.rs`: the FFI trampoline regression tests do run (Linux CI,
   `--features whisper`); the real-model end-to-end test is `#[ignore]`
   (manual). `model.rs`/`decode.rs` have excellent hermetic coverage

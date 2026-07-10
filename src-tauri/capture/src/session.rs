@@ -88,6 +88,33 @@ const TARGET_RATE: u32 = 44_100;
 /// Max buffered audio per source before oldest samples are dropped (2 s).
 const BUFFER_CAP: usize = (TARGET_RATE * 2) as usize;
 const TICK: Duration = Duration::from_millis(100);
+/// A wake more than this far past its schedule is a clock discontinuity
+/// (system suspend — Instant/QPC generally advances across it on Windows),
+/// not encode backpressure: real backpressure never accumulates 5 ticks
+/// while catch-up cycles run back-to-back (GAP-05).
+const MAX_TICK_LAG: Duration = Duration::from_millis(500);
+
+/// One wake's schedule decision, pure so it's unit-testable: returns the
+/// new `next_tick` and whether this wake may consume a tick of audio.
+/// Early wake (a control message before schedule) → consume nothing, keep
+/// the schedule. Past schedule within `max_lag` → normal catch-up. Beyond
+/// `max_lag` → resync to `now` so a suspend gap is never encoded as
+/// catch-up silence. The finish/drain path ignores the take flag — a stop
+/// always drains what's buffered.
+fn plan_tick(
+    now: Instant,
+    next_tick: Instant,
+    tick: Duration,
+    max_lag: Duration,
+) -> (Instant, bool) {
+    if now < next_tick {
+        (next_tick, false)
+    } else if now.duration_since(next_tick) > max_lag {
+        (now + tick, true)
+    } else {
+        (next_tick + tick, true)
+    }
+}
 
 struct SourceState {
     input: SourceInput,
@@ -212,7 +239,8 @@ fn run_worker(
             }
             Err(RecvTimeoutError::Timeout) => {}
         }
-        next_tick += TICK;
+        let (new_next_tick, take_tick) = plan_tick(Instant::now(), next_tick, TICK, MAX_TICK_LAG);
+        next_tick = new_next_tick;
 
         // Drain every source's channel into its (converted) buffer.
         for s in states.iter_mut().filter(|s| s.alive) {
@@ -276,7 +304,7 @@ fn run_worker(
         let tick_frames = (TARGET_RATE / 10) as usize;
         let take = if finish {
             states.iter().map(|s| s.buffer.len()).max().unwrap_or(0)
-        } else if paused {
+        } else if paused || !take_tick {
             0
         } else {
             tick_frames
@@ -894,5 +922,59 @@ mod tests {
             warning.contains("simulated note write failure (test)"),
             "note-write warning includes the interpolated {{e}} reason, not just the static prefix: {warning}"
         );
+    }
+
+    #[test]
+    fn plan_tick_early_wake_keeps_schedule_and_skips_take() {
+        // GAP-05 (pause→resume): a control message wakes recv_timeout BEFORE
+        // next_tick; consuming a full tick there silence-padded up to 100 ms
+        // of spurious audio per pause/resume and drifted the schedule.
+        let base = Instant::now();
+        let next = base + TICK;
+        let (new_next, take) = plan_tick(base, next, TICK, MAX_TICK_LAG);
+        assert_eq!(new_next, next, "schedule unchanged on an early wake");
+        assert!(!take, "nothing consumed on an early wake");
+    }
+
+    #[test]
+    fn plan_tick_on_schedule_advances_one_tick() {
+        let base = Instant::now();
+        let (new_next, take) = plan_tick(base, base, TICK, MAX_TICK_LAG);
+        assert_eq!(new_next, base + TICK);
+        assert!(take);
+    }
+
+    #[test]
+    fn plan_tick_moderate_lag_catches_up_without_resync() {
+        // Encode backpressure below the lag cap keeps the catch-up behavior:
+        // average consumption must match real time or long recordings drop
+        // samples (the reason the fixed schedule exists).
+        let base = Instant::now();
+        let now = base + Duration::from_millis(300);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG);
+        assert_eq!(new_next, base + TICK, "catch-up: schedule not resynced");
+        assert!(take);
+    }
+
+    #[test]
+    fn plan_tick_suspend_gap_resyncs_to_now() {
+        // GAP-05: Instant (QPC) advances across suspend on Windows, so after
+        // a sleep the loop ran back-to-back catch-up ticks appending the
+        // WHOLE gap (potentially hours) as encoded silence. Real
+        // backpressure never accumulates MAX_TICK_LAG; a suspend always does.
+        let base = Instant::now();
+        let now = base + Duration::from_secs(3600);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG);
+        assert_eq!(new_next, now + TICK, "schedule resynced to real time");
+        assert!(take, "one tick still drains the buffers");
+    }
+
+    #[test]
+    fn plan_tick_lag_boundary_is_exclusive() {
+        // Exactly MAX_TICK_LAG behind is still backpressure territory.
+        let base = Instant::now();
+        let now = base + MAX_TICK_LAG;
+        let (new_next, _) = plan_tick(now, base, TICK, MAX_TICK_LAG);
+        assert_eq!(new_next, base + TICK);
     }
 }
