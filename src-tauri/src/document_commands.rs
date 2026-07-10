@@ -8,6 +8,7 @@
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
+use tauri::{AppHandle, Manager};
 use vault_buddy_core::{capture_config, capture_paths, discovery, document_import};
 
 #[derive(Clone, serde::Serialize)]
@@ -391,6 +392,84 @@ pub async fn detect_pandoc() -> PandocStatus {
         sandbox_supported: false,
         configured_path: None,
     })
+}
+
+/// Staleness floor: only sweep staging dirs older than this, so a live
+/// conversion's fresh dir is never touched even if the ImportLock check
+/// somehow raced. 10 min is comfortably longer than any real conversion.
+const IMPORT_STAGING_STALE: std::time::Duration = std::time::Duration::from_secs(600);
+/// Retry cadence while work is pending (a postponed pass, or a fresh orphan
+/// not yet stale) — mirrors capture recovery's 90s retry.
+const IMPORT_RECOVERY_RETRY: std::time::Duration = std::time::Duration::from_secs(90);
+/// Bound the retries (~24h), so a permanently-fresh anomaly can't loop forever.
+const IMPORT_RECOVERY_MAX_PASSES: u32 = 960;
+
+/// Startup janitor for crash-orphaned import staging dirs. Named background
+/// thread. One `pass()` returns whether work is still pending (postponed, or a
+/// fresh orphan seen); while pending, it retries every IMPORT_RECOVERY_RETRY
+/// so an orphan younger than the staleness window at boot is still reaped once
+/// it ages — exactly the capture-recovery shape.
+pub fn run_import_recovery(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("import-recovery".into())
+        .spawn(move || {
+            let pass = || -> bool {
+                // Postpone the WHOLE pass while a conversion runs: try the same
+                // lock convert takes. If we can't get it, an import is mid-flight
+                // and its fresh staging dir must not be swept — retry later.
+                let lock = app.state::<ImportLock>();
+                let Ok(_guard) = lock.0.try_lock() else {
+                    log::info!("import-recovery: postponed while an import is active");
+                    return true; // pending → retry
+                };
+                let cfg = capture_config::load_config();
+                let mut pending = false;
+                for vault in discovery::discover_vaults() {
+                    let v = capture_config::vault_config(&cfg, &vault.id);
+                    let folder = v.documents_root();
+                    let vault_root = std::path::Path::new(&vault.path);
+                    let Ok(root) = capture_paths::safe_recording_root(vault_root, folder) else {
+                        continue;
+                    };
+                    if !root.is_dir() {
+                        continue;
+                    }
+                    // Canonical containment before we DELETE anything: the
+                    // safe_recording_root check is lexical, so a symlinked/
+                    // junctioned Documents folder could point the sweep outside
+                    // the vault. (clean_stale_staging_at also canonical-checks
+                    // every dated level — symlinks AND Windows junctions.)
+                    if capture_paths::assert_path_inside_vault(vault_root, &root).is_err() {
+                        log::warn!("import-recovery: skipping root outside vault: {root:?}");
+                        continue;
+                    }
+                    let sweep = document_import::clean_stale_staging_at(
+                        &root,
+                        std::time::SystemTime::now(),
+                        IMPORT_STAGING_STALE,
+                    );
+                    for dir in sweep.removed {
+                        log::info!("import-recovery: removed orphaned staging dir {dir:?}");
+                    }
+                    if sweep.pending > 0 {
+                        pending = true; // fresh orphan → retry after it ages
+                    }
+                }
+                pending
+            };
+            // Retry while work is pending, bounded. A clean pass (no orphans,
+            // not postponed) ends the thread.
+            for _ in 0..IMPORT_RECOVERY_MAX_PASSES {
+                if !pass() {
+                    return;
+                }
+                std::thread::sleep(IMPORT_RECOVERY_RETRY);
+            }
+            log::warn!("import-recovery: gave up after max passes with work still pending");
+        })
+        .map(|_| ())
+        .unwrap_or_else(|e| log::warn!("import-recovery: could not spawn thread: {e}"));
 }
 
 #[cfg(test)]

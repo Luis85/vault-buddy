@@ -439,6 +439,7 @@ pub fn run() {
             tray::create_tray(app.handle())?;
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
+            document_commands::run_import_recovery(app.handle());
             transcription::run_transcription(app.handle());
             mcp_commands::start_if_enabled(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
