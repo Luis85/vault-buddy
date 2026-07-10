@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mount } from "@vue/test-utils";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import DiagnosticsSettings from "../src/components/DiagnosticsSettings.vue";
 

@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
-import { defineComponent } from "vue";
 import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent } from "vue";
 
 const mocks = vi.hoisted(() => ({
   check: vi.fn(),
@@ -16,8 +16,8 @@ vi.mock("../src/logging", () => ({ logWarning: vi.fn() }));
 vi.mock("../src/announce", () => ({ announce: mocks.announce }));
 
 import {
-  useStartupUpdateCheck,
   STARTUP_CHECK_DELAY_MS,
+  useStartupUpdateCheck,
 } from "../src/composables/useStartupUpdateCheck";
 import { useVaultsStore } from "../src/stores/vaults";
 

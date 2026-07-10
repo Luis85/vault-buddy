@@ -1,9 +1,10 @@
 import { onMounted, onUnmounted } from "vue";
+
+import { announce } from "../announce";
+import { updateAvailableMessage } from "../buddyMessages";
 import { useSettingsStore } from "../stores/settings";
 import { useUpdatesStore } from "../stores/updates";
 import { useVaultsStore } from "../stores/vaults";
-import { announce } from "../announce";
-import { updateAvailableMessage } from "../buddyMessages";
 
 /**
  * With autostart the check can race login networking, and a quiet check

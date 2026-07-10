@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   mkdirSync,
@@ -8,9 +8,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SCRIPT_SRC = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

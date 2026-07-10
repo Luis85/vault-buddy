@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import CompanionCharacter from "../src/components/CompanionCharacter.vue";
+import { mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import BuddyAvatar from "../src/components/BuddyAvatar.vue";
+import CompanionCharacter from "../src/components/CompanionCharacter.vue";
 
 const ipcCalls: Array<{ cmd: string; args: unknown }> = [];
 // The OS drag must go through the Rust-side start_buddy_drag command (which

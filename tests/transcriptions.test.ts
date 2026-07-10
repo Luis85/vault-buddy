@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import Transcriptions from "../src/components/Transcriptions.vue";
 import { useCaptureStore } from "../src/stores/capture";
 import { useVaultsStore } from "../src/stores/vaults";

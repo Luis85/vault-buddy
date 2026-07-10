@@ -1,11 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
-import { nextTick } from "vue";
-import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextTick } from "vue";
+
+import { noteOpenedMessage } from "../src/buddyMessages";
 import Search from "../src/components/Search.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
-import { noteOpenedMessage } from "../src/buddyMessages";
 import type { SearchHit, SearchResponse } from "../src/types";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));

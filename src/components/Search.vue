@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { logWarning } from "../logging";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+
 import { announce } from "../announce";
 import { noteOpenedMessage } from "../buddyMessages";
+import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
-import HighlightText from "./HighlightText.vue";
+import type { SearchHit, SearchResponse } from "../types";
 import {
   clearRecentSearches,
   loadRecentSearches,
   pushRecentSearch,
 } from "../utils/recentSearches";
-import type { SearchHit, SearchResponse } from "../types";
+import HighlightText from "./HighlightText.vue";
 
 const notifications = useNotificationsStore();
 
@@ -265,13 +266,13 @@ onUnmounted(() => {
         @keydown.down="onArrow($event, 1)"
         @keydown.up="onArrow($event, -1)"
         @keydown.enter="onEnter"
-      />
+      >
       <span
         v-if="searching && hits.length > 0"
         data-testid="search-refreshing"
         class="absolute right-2 top-1/2 h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-violet-400"
         aria-hidden="true"
-      ></span>
+      />
     </div>
     <p
       v-if="error"
@@ -279,7 +280,10 @@ onUnmounted(() => {
     >
       {{ error }}
     </p>
-    <p v-if="tooShort" class="text-xs text-slate-400">
+    <p
+      v-if="tooShort"
+      class="text-xs text-slate-400"
+    >
       Type at least {{ MIN_QUERY_CHARS }} characters to search.
     </p>
     <div
@@ -290,8 +294,7 @@ onUnmounted(() => {
       <div class="flex items-center justify-between">
         <span
           class="text-xs font-semibold uppercase tracking-wide text-slate-400"
-          >Recent</span
-        >
+        >Recent</span>
         <button
           type="button"
           data-testid="recent-clear"
@@ -314,7 +317,10 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
-    <p v-else-if="searching && hits.length === 0" class="text-xs text-slate-400">
+    <p
+      v-else-if="searching && hits.length === 0"
+      class="text-xs text-slate-400"
+    >
       Searching…
     </p>
     <p
@@ -405,81 +411,92 @@ onUnmounted(() => {
             <span
               data-testid="group-count"
               class="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-slate-400"
-              >{{ group.count }}</span
-            >
+            >{{ group.count }}</span>
           </h2>
         </div>
         <div
           :id="`search-group-${group.vaultId}`"
           class="flex flex-col gap-1"
         >
-        <button
-          v-for="row in group.rows"
-          :id="hitId(row.i)"
-          :key="row.hit.file + (row.hit.isNote ? ':n' : ':a')"
-          type="button"
-          data-testid="search-hit"
-          role="option"
-          :aria-selected="row.i === selected"
-          class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-2 py-1 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="
-            row.i === selected
-              ? 'border-violet-400/60 bg-white/10'
-              : 'border-white/10 bg-white/5'
-          "
-          @click="openHit(row.hit, $event.ctrlKey || $event.metaKey)"
-          @mousemove="selected = row.i"
-        >
-          <span class="flex w-full min-w-0 items-center gap-1.5">
-            <svg
-              v-if="row.hit.isNote"
-              data-testid="hit-icon-note"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              class="shrink-0 text-slate-400"
-            >
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
-            </svg>
-            <svg
-              v-else
-              data-testid="hit-icon-file"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              class="shrink-0 text-slate-400"
-            >
-              <path
-                d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
-              />
-            </svg>
-            <span
-              class="min-w-0 flex-1 truncate text-sm text-slate-100"
-              :title="row.hit.name"
-            >
-              <HighlightText :text="row.hit.name" :query="resultsQuery" />
+          <button
+            v-for="row in group.rows"
+            :id="hitId(row.i)"
+            :key="row.hit.file + (row.hit.isNote ? ':n' : ':a')"
+            type="button"
+            data-testid="search-hit"
+            role="option"
+            :aria-selected="row.i === selected"
+            class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-2 py-1 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            :class="
+              row.i === selected
+                ? 'border-violet-400/60 bg-white/10'
+                : 'border-white/10 bg-white/5'
+            "
+            @click="openHit(row.hit, $event.ctrlKey || $event.metaKey)"
+            @mousemove="selected = row.i"
+          >
+            <span class="flex w-full min-w-0 items-center gap-1.5">
+              <svg
+                v-if="row.hit.isNote"
+                data-testid="hit-icon-note"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+                class="shrink-0 text-slate-400"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+              </svg>
+              <svg
+                v-else
+                data-testid="hit-icon-file"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+                class="shrink-0 text-slate-400"
+              >
+                <path
+                  d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                />
+              </svg>
+              <span
+                class="min-w-0 flex-1 truncate text-sm text-slate-100"
+                :title="row.hit.name"
+              >
+                <HighlightText
+                  :text="row.hit.name"
+                  :query="resultsQuery"
+                />
+              </span>
             </span>
-          </span>
-          <span v-if="row.hit.folder" class="w-full truncate text-xs text-slate-500">
-            {{ row.hit.folder }}
-          </span>
-          <span v-if="row.hit.snippet" class="w-full truncate text-xs text-slate-400">
-            <HighlightText :text="row.hit.snippet" :query="resultsQuery" />
-          </span>
-        </button>
+            <span
+              v-if="row.hit.folder"
+              class="w-full truncate text-xs text-slate-500"
+            >
+              {{ row.hit.folder }}
+            </span>
+            <span
+              v-if="row.hit.snippet"
+              class="w-full truncate text-xs text-slate-400"
+            >
+              <HighlightText
+                :text="row.hit.snippet"
+                :query="resultsQuery"
+              />
+            </span>
+          </button>
         </div>
       </div>
     </div>

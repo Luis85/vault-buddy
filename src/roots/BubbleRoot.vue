@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { onMounted, onUnmounted, ref, watch } from "vue";
+
 import SpeechBubble from "../components/SpeechBubble.vue";
-import { useBuddyBubble, BUBBLE_MS } from "../composables/useBuddyBubble";
+import { BUBBLE_MS,useBuddyBubble } from "../composables/useBuddyBubble";
+import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 import { useSettingsStore } from "../stores/settings";
-import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 
 // The bubble window is shown by Rust (startup greeting, or `announce` for an
 // acknowledgement); useBuddyBubble owns the current text + auto-dismiss timer.
@@ -98,6 +99,10 @@ onUnmounted(() => {
           : 'items-center',
     ]"
   >
-    <SpeechBubble :text="text" :side="side" :valign="valign" />
+    <SpeechBubble
+      :text="text"
+      :side="side"
+      :valign="valign"
+    />
   </div>
 </template>

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { flushPromises, mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import CaptureSettings from "../src/components/CaptureSettings.vue";
 
 vi.mock("../src/logging", () => ({

@@ -1,18 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/logging", () => ({
   logWarning: vi.fn(),
 }));
 
-import { logWarning } from "../src/logging";
-import { useVaultsStore } from "../src/stores/vaults";
-import { useSettingsStore } from "../src/stores/settings";
 import {
   dailyNoteOpenedMessage,
   vaultOpenedMessage,
 } from "../src/buddyMessages";
+import { logWarning } from "../src/logging";
+import { useSettingsStore } from "../src/stores/settings";
+import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },

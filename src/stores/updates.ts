@@ -1,9 +1,10 @@
-import { markRaw } from "vue";
-import { defineStore } from "pinia";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { defineStore } from "pinia";
+import { markRaw } from "vue";
+
 import { logWarning } from "../logging";
 import { useVaultsStore } from "./vaults";
 

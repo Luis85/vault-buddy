@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { computed, onMounted, ref, watch } from "vue";
+
 import { logWarning } from "../logging";
 import type {
   AudioDevice,
@@ -227,13 +228,28 @@ async function save() {
 </script>
 
 <template>
-  <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
-  <p v-else-if="loadError" class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200">
+  <p
+    v-if="loading"
+    class="text-xs text-slate-400"
+  >
+    Loading…
+  </p>
+  <p
+    v-else-if="loadError"
+    class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+  >
     {{ loadError }}
   </p>
-  <form v-else class="flex flex-col gap-3" @submit.prevent="save">
+  <form
+    v-else
+    class="flex flex-col gap-3"
+    @submit.prevent="save"
+  >
     <section>
-      <label class="mb-1 block text-sm text-slate-200" for="capture-folder">
+      <label
+        class="mb-1 block text-sm text-slate-200"
+        for="capture-folder"
+      >
         Recording folder
         <span class="block text-xs text-slate-500">Inside the vault</span>
       </label>
@@ -244,7 +260,7 @@ async function save() {
         type="text"
         placeholder="Meetings or Voice Notes"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-      />
+      >
       <p
         v-if="folderError"
         data-testid="folder-error"
@@ -254,7 +270,10 @@ async function save() {
       </p>
     </section>
     <section class="flex items-center justify-between">
-      <label for="capture-note-toggle" class="text-sm text-slate-200">
+      <label
+        for="capture-note-toggle"
+        class="text-sm text-slate-200"
+      >
         Companion note
         <span class="block text-xs text-slate-500">.md with metadata + embed</span>
       </label>
@@ -264,13 +283,16 @@ async function save() {
         data-testid="note-toggle"
         type="checkbox"
         class="h-4 w-4 accent-violet-500"
-      />
+      >
     </section>
     <div
       v-if="createNote"
       class="flex items-center justify-between border-l border-white/10 pl-3"
     >
-      <label for="capture-follow-up-toggle" class="text-sm text-slate-200">
+      <label
+        for="capture-follow-up-toggle"
+        class="text-sm text-slate-200"
+      >
         Follow-up template
         <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
       </label>
@@ -280,11 +302,14 @@ async function save() {
         data-testid="follow-up-toggle"
         type="checkbox"
         class="h-4 w-4 accent-violet-500"
-      />
+      >
     </div>
     <TranscriptionSettings v-model="transcriptionSettings" />
     <section class="flex items-center justify-between gap-2">
-      <label for="capture-bitrate" class="text-sm text-slate-200">Bitrate</label>
+      <label
+        for="capture-bitrate"
+        class="text-sm text-slate-200"
+      >Bitrate</label>
       <SelectMenu
         id="capture-bitrate"
         v-model="bitrateKbps"
@@ -293,7 +318,10 @@ async function save() {
       />
     </section>
     <section>
-      <label class="mb-1 block text-sm text-slate-200" for="capture-input-device">
+      <label
+        class="mb-1 block text-sm text-slate-200"
+        for="capture-input-device"
+      >
         Microphone
       </label>
       <SelectMenu
@@ -306,7 +334,10 @@ async function save() {
       />
     </section>
     <section>
-      <label class="mb-1 block text-sm text-slate-200" for="capture-output-device">
+      <label
+        class="mb-1 block text-sm text-slate-200"
+        for="capture-output-device"
+      >
         Desktop audio from
         <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
       </label>
@@ -323,7 +354,10 @@ async function save() {
       <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
         Tasks
       </h2>
-      <label class="mb-1 block text-sm text-slate-200" for="tasks-folder">
+      <label
+        class="mb-1 block text-sm text-slate-200"
+        for="tasks-folder"
+      >
         Tasks folder
         <span class="block text-xs text-slate-500">Inside the vault</span>
       </label>
@@ -336,7 +370,7 @@ async function save() {
         aria-label="Tasks folder"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
         @input="tasksFolderEdited = true"
-      />
+      >
       <p
         v-if="tasksFolderError"
         data-testid="tasks-folder-error"
@@ -361,7 +395,10 @@ async function save() {
       >
         {{ saveState === "saving" ? "Saving…" : "Save" }}
       </button>
-      <span v-if="saveState === 'saved'" class="text-xs text-emerald-300">
+      <span
+        v-if="saveState === 'saved'"
+        class="text-xs text-emerald-300"
+      >
         Saved ✓
       </span>
     </div>

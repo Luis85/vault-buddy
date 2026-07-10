@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { formatDuration } from "../src/utils/formatDuration";
 
 // Pins RecordingBar's original inline `elapsed` formatter exactly (Task

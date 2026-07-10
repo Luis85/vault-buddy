@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { afterEach, describe, expect, it } from "vitest";
+
 import SelectMenu from "../src/components/SelectMenu.vue";
 
 const OPTIONS = [

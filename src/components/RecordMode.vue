@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useVaultsStore } from "../stores/vaults";
+import { computed, onMounted, ref } from "vue";
+
+import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import { useNotificationsStore } from "../stores/notifications";
-import { logWarning } from "../logging";
+import { useVaultsStore } from "../stores/vaults";
 import type { CaptureConfig, Recording } from "../types";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
@@ -171,8 +172,7 @@ function start(mode: "meeting" | "voice-note") {
           v-if="recordingCount !== null"
           data-testid="recording-count"
           class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
-          >{{ recordingCount }}</span
-        >
+        >{{ recordingCount }}</span>
       </button>
     </div>
     <div class="flex flex-col gap-3 border-t border-white/10 pt-3">

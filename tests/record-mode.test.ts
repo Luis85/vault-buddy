@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import RecordMode from "../src/components/RecordMode.vue";
-import { useVaultsStore } from "../src/stores/vaults";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useVaultsStore } from "../src/stores/vaults";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { computed, onMounted, ref } from "vue";
+
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import type { Phase, Recording } from "../types";
@@ -130,17 +131,28 @@ async function open(mp3: string) {
 </script>
 
 <template>
-  <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
+  <p
+    v-if="loading"
+    class="text-xs text-slate-400"
+  >
+    Loading…
+  </p>
   <p
     v-else-if="loadError"
     class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
   >
     {{ loadError }}
   </p>
-  <p v-else-if="recordings.length === 0" class="text-xs text-slate-400">
+  <p
+    v-else-if="recordings.length === 0"
+    class="text-xs text-slate-400"
+  >
     No recordings yet.
   </p>
-  <div v-else class="flex flex-col gap-2">
+  <div
+    v-else
+    class="flex flex-col gap-2"
+  >
     <p
       v-if="openError"
       class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
@@ -205,7 +217,10 @@ async function open(mp3: string) {
             class="flex min-w-0 flex-1 items-baseline justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
             @click="open(r.mp3)"
           >
-            <span class="min-w-0 flex-1 truncate text-sm text-slate-100" :title="r.title">
+            <span
+              class="min-w-0 flex-1 truncate text-sm text-slate-100"
+              :title="r.title"
+            >
               {{ r.title }}
             </span>
             <span class="shrink-0 text-xs text-slate-400">{{ r.recordedAt }}</span>
@@ -222,7 +237,7 @@ async function open(mp3: string) {
               role="status"
               aria-label="Transcribing…"
               class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500/40 border-t-slate-300 align-middle"
-            ></span>
+            />
             <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : effectiveStatus(r) === "cancelled" ? "⦸" : "…" }}</span>
           </span>
           <button
@@ -234,7 +249,17 @@ async function open(mp3: string) {
             class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
             @click="capture.cancelTranscription(r.mp3)"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
@@ -247,7 +272,17 @@ async function open(mp3: string) {
             class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
             @click="onRetranscribeClick(r)"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="M23 4v6h-6M1 20v-6h6" />
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
             </svg>

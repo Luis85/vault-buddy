@@ -1,6 +1,7 @@
-import { onMounted, onUnmounted, ref, type Ref } from "vue";
+import { onMounted, onUnmounted, type Ref,ref } from "vue";
+
 import { greetingFor } from "../greeting";
-import { useSettingsStore, type MessageDuration } from "../stores/settings";
+import { type MessageDuration,useSettingsStore } from "../stores/settings";
 
 // How long a message stays before auto-dismissing, per the user's
 // messageDuration setting. The launch greeting lingers; action

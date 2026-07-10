@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isReactive } from "vue";
 
 const mocks = vi.hoisted(() => ({

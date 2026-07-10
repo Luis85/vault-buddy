@@ -1,13 +1,13 @@
-import knightIdle from "./assets/buddies/knight-idle.png";
-import knightRun from "./assets/buddies/knight-run.png";
-import wizardIdle from "./assets/buddies/wizard-idle.png";
-import wizardRun from "./assets/buddies/wizard-run.png";
-import elfIdle from "./assets/buddies/elf-idle.png";
-import elfRun from "./assets/buddies/elf-run.png";
 import dwarfIdle from "./assets/buddies/dwarf-idle.png";
 import dwarfRun from "./assets/buddies/dwarf-run.png";
+import elfIdle from "./assets/buddies/elf-idle.png";
+import elfRun from "./assets/buddies/elf-run.png";
+import knightIdle from "./assets/buddies/knight-idle.png";
+import knightRun from "./assets/buddies/knight-run.png";
 import lizardIdle from "./assets/buddies/lizard-idle.png";
 import lizardRun from "./assets/buddies/lizard-run.png";
+import wizardIdle from "./assets/buddies/wizard-idle.png";
+import wizardRun from "./assets/buddies/wizard-run.png";
 
 /** 4-frame sprite strips (16×28 px per frame) — see assets/buddies/LICENSE.md */
 export interface SpriteSheet {

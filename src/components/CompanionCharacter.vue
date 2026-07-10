@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import BuddyAvatar from "./BuddyAvatar.vue";
+import { ref } from "vue";
+
 import { logWarning } from "../logging";
+import BuddyAvatar from "./BuddyAvatar.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -182,12 +183,12 @@ function onContextMenu() {
           class="rec-dot absolute left-1/2 top-1 h-3 w-3 -translate-x-1/2 rounded-full ring-2 ring-slate-900"
           :class="paused ? 'bg-amber-400' : 'bg-red-500'"
           aria-hidden="true"
-        ></span>
+        />
         <span
           v-if="transcribing && !recording"
           class="transcribe-dot absolute left-1/2 top-1 h-3 w-3 -translate-x-1/2 animate-pulse rounded-full bg-violet-400 ring-2 ring-slate-900"
           aria-hidden="true"
-        ></span>
+        />
       </span>
     </button>
   </div>

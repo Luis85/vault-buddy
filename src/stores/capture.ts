@@ -1,8 +1,8 @@
-import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { defineStore } from "pinia";
+
 import { logBreadcrumb, logWarning } from "../logging";
-import { useNotificationsStore } from "./notifications";
 import type {
   CaptureRenamed,
   CaptureSaved,
@@ -18,6 +18,7 @@ import type {
   TranscriptionJob,
   TranscriptionQueueStatus,
 } from "../types";
+import { useNotificationsStore } from "./notifications";
 
 /** How long the post-save "Name this recording" window stays open. */
 export const RENAME_PROMPT_MS = 30_000;

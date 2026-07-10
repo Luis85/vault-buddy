@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updaterMocks = vi.hoisted(() => ({
   getVersion: vi.fn(),
@@ -20,8 +20,8 @@ vi.mock("../src/logging", () => ({
   logBreadcrumb: vi.fn(),
 }));
 
-import BuddySettings from "../src/components/BuddySettings.vue";
 import { CHARACTERS } from "../src/characters";
+import BuddySettings from "../src/components/BuddySettings.vue";
 import { useSettingsStore } from "../src/stores/settings";
 
 const flush = () => new Promise((r) => setTimeout(r));

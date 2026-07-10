@@ -1,8 +1,9 @@
-import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
-import { logWarning } from "../logging";
+import { defineStore } from "pinia";
+
 import { announce } from "../announce";
-import { vaultOpenedMessage, dailyNoteOpenedMessage } from "../buddyMessages";
+import { dailyNoteOpenedMessage,vaultOpenedMessage } from "../buddyMessages";
+import { logWarning } from "../logging";
 import type { Vault } from "../types";
 
 export const useVaultsStore = defineStore("vaults", {
