@@ -24,6 +24,7 @@ here documents a failure mode somebody already hit.
 - [The transcription & recordings domains](#the-transcription--recordings-domains-src-tauritranscribe--coresrctranscriptrecordingsrs--transcriptionrs)
 - [The tasks domain](#the-tasks-domain-coresrctasksrs--task_commandsrs--tasksvue)
 - [The search domain](#the-search-domain-coresrcsearchrs--search_commandsrs--searchvue)
+- [The MCP server domain](#the-mcp-server-domain-src-taurimcp--mcp_commandsrs--mcpsettingsvue)
 - [Updater flow](#updater-flow-srcstoresupdatests-updatesettingsvue)
 - [Diagnostics invariants](#diagnostics-invariants)
 - [Frontend state](#frontend-state)
@@ -40,7 +41,7 @@ shell (Rust) hosting a Vue 3 + Pinia + Tailwind 4 frontend. A tiny
 always-on-top transparent window shows an animated buddy character;
 clicking it opens a panel that lists the user's Obsidian vaults and opens
 them (or today's daily note) via `obsidian://` URIs. On top of that base
-the app has grown four vertical domains:
+the app has grown five vertical domains:
 
 - **Capture** — one-click meeting/voice-note recording (cpal + WASAPI
   loopback → streaming LAME MP3) saved into a vault folder with an optional
@@ -50,6 +51,9 @@ the app has grown four vertical domains:
   note embeds; plus a read-only recordings browser.
 - **Tasks** — a per-vault todo list over `type: Task` markdown documents.
 - **Search** — cross-vault, read-only, on-demand filename + content search.
+- **MCP server** — an opt-in, disabled-by-default local MCP endpoint so AI
+  clients (Claude Code/Desktop, Cursor) act on vaults through the same
+  `core::services` chokepoints the panel uses.
 
 The product principles that shape the code: **local-first** (no accounts,
 no cloud; models download once and inference is offline), **the vault is
@@ -99,13 +103,16 @@ vault-buddy/
 │   ├── capabilities/           # single default capability (all 3 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, transcription.rs, task_commands.rs,
-│   │                           #   search_commands.rs, tray.rs, diagnostics.rs, main.rs
-│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, tasks,
+│   │                           #   search_commands.rs, mcp_commands.rs, tray.rs,
+│   │                           #   diagnostics.rs, main.rs
+│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths},
 │   │                           #   companion_placement, checkpoint, app_diagnostics,
 │   │                           #   vault_walk, crash, throttle, sync_util
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
+│   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),
+│   │                           #   token; real-socket integration tests in mcp/tests/
 │   └── transcribe/src/         # STT: decode (Symphonia), model (download+verify),
 │                               #   engine (whisper-rs FFI), lib (orchestration)
 └── tests/                      # Vitest suite (happy-dom + mockIPC, no Tauri runtime)
@@ -125,6 +132,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection, placement math, all vault-write logic. No GUI deps. | Anywhere — test and lint locally |
 | `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows |
 | `src-tauri/capture/` | Audio engine (cpal, LAME). | Anywhere (Linux needs `libasound2-dev`); the WASAPI loopback block is Windows-only, compile-gated |
+| `src-tauri/mcp/` | Tauri-free crate: the embedded MCP server — rmcp service (seven tools over `core::services`), HTTP guards, streamable-HTTP runner. | Anywhere — unit + real-socket integration tests run on Linux; CI gates it explicitly (`-p vault_buddy_mcp`) because `tauri build` alone wouldn't run its tests. |
 | `src-tauri/` (root crate) | Tauri shell: windows, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
@@ -158,8 +166,9 @@ npm run lint && npm run check:loc && npm run check:quality && npm run test:cover
 cd src-tauri && cargo fmt --check   # rustfmt gate (whole workspace)
 cd src-tauri/core && cargo clippy --all-targets -- -D warnings
 cd src-tauri/core && cargo test
-# capture and transcribe test the same way (capture needs libasound2-dev
-# on Linux); transcribe's whisper tests: cargo test --features whisper
+# capture, transcribe, and mcp test the same way (capture needs
+# libasound2-dev on Linux; mcp's roundtrip tests bind real localhost
+# sockets); transcribe's whisper tests: cargo test --features whisper
 
 # Rust quality gates (CI: machete/coverage/deny in rust-core; workspace
 # clippy + shell tests in linux-app — the shell needs `npm run setup:linux`
@@ -192,11 +201,13 @@ Three OS windows, one frontend bundle, one Rust process:
 ```
    ┌───────────────────────────── Rust shell (src-tauri/src) ─────────────────────────────┐
    │  lib.rs: builder, plugins (single-instance FIRST), window events, 1 s metronome,     │
-   │          setup (crash handler → marker → restore → tray → recovery → transcriber)    │
+   │          setup (crash handler → marker → restore → tray → recovery → transcriber →   │
+   │          MCP start_if_enabled)                                                       │
    │  commands.rs ── window placement/toggle, drag, vault open, updater prep, autostart   │
    │  capture_commands.rs ── recording lifecycle + device/monitor/janitor threads         │
    │  transcription.rs ── single-worker transcription queue + model download              │
    │  task_commands.rs / search_commands.rs ── thin gates over core::tasks / core::search │
+   │  mcp_commands.rs ── embedded MCP server lifecycle + settings (vault_buddy_mcp crate) │
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
    └──────┬───────────────────────────┬───────────────────────────┬───────────────────────┘
           │ IPC commands + events     │                           │
@@ -224,7 +235,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 40 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 43 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -233,7 +244,8 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture`, `stop_capture`, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings`, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks` |
-| `search_commands.rs` | `search_vaults` (**the only async command** — deliberate, see search), `open_search_result` |
+| `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
+| `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -255,6 +267,8 @@ actually subscribe.
 | `capture:level` | Mic level ~5 Hz, 0–1, advisory & lossy | capture store |
 | `capture:transcribing/transcribeProgress/transcribed/transcribeSkipped/transcribeFailed/transcribeCancelled` | Transcription job lifecycle (each carries the `mp3`) | capture store |
 | `capture:modelDownload` / `capture:modelReady` | Whisper model download progress / ready | capture store |
+| `mcp:status` | MCP server state `{state, port?, message?}` on every transition | McpSettings (panel) |
+| `mcp:write` | An MCP client's successful vault write `{kind, title, vaultName}` | useBuddyAnnouncements (buddy window ONLY — exactly-once) |
 
 ### Key data flows
 
@@ -287,7 +301,7 @@ actually subscribe.
 | State | Location |
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
-| Per-vault capture/tasks settings | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse) |
+| Per-vault capture/tasks settings + app-global `mcp` section (enabled/port/token/allowWrites) | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
@@ -705,6 +719,74 @@ truncated), per-vault collapse chevrons, All/Notes/Files filter chips
 (client-side over the returned hits), and recent-search chips backed by
 localStorage (`src/utils/recentSearches.ts`, capped at 5, recorded only on
 successful responses).
+
+## The MCP server domain (`src-tauri/mcp/` + `mcp_commands.rs` + `McpSettings.vue`)
+
+An **opt-in, disabled-by-default** local MCP server embedded in the running
+buddy (v0.6.0, first slice of the AI-platform PRD): MCP clients (Claude
+Code/Desktop, Cursor, MCP Inspector) connect over **streamable HTTP at
+`http://127.0.0.1:<port>/mcp`** (default port 22082 = 0x5642 = "VB") and get
+seven tools over the same `core::services` functions the panel uses —
+`list_vaults`, `list_tasks`, `list_recordings`, `open_vault`,
+`open_daily_note`, `add_task`, `set_task_status`. **No new vault
+capability**: MCP writes are exactly the sanctioned task writes plus the
+daily-note create branch, which counts as a write here (with the grant off,
+a missing daily note is a tool error — `obsidian://new` mutates the vault).
+Spec: `docs/superpowers/specs/2026-07-09-local-mcp-server-design.md`.
+Invariants — each exists because a review found the failure it prevents:
+
+- **Two explicit opt-ins.** `mcp.enabled` and the `allowWrites` grant
+  ("Allow vault writes" in settings) both default off; app-global `mcp`
+  section in `config.json`, parsed per-field defensively (out-of-range
+  ports — anything outside 1024–65535 — default to 22082 at parse time, the
+  same range the settings command enforces) and **round-tripped by
+  `serialize_config`** (it once emitted only `vaults`; a capture save would
+  have silently deleted the section — regression-tested).
+- **Guard order origin → auth → body-bound**, all before rmcp sees the
+  request: absent/localhost Origin only (DNS-rebinding defense), constant
+  time bearer check (an EMPTY configured token never matches), and POST —
+  the only body-carrying MCP method — must present a parseable
+  Content-Length ≤ 1 MiB (411/413; a chunked body can't bypass the cap).
+  Bind is 127.0.0.1 only.
+- **Double write gate.** Write tools enter the per-session tool router only
+  when the grant is on at session construction, AND every call re-checks the
+  live atomic — authoritative for sessions that straddle a flip. Any
+  contract-bearing settings change (enabled/port/token/**allowWrites**)
+  restarts the listener so clients re-initialize and fetch a fresh
+  tools/list (no listChanged push in v1); the settings UI serializes saves
+  (in-flight guard) so concurrent stop/start/persist can't interleave.
+- **Audit every call, redacted.** Each tool call logs tool name, vault id,
+  a STATIC outcome label (never raw service errors — they interpolate
+  client-provided values), and `dur_ms` — including gate denials and failed
+  lookups (audit-before-deny). The full message goes only to the client.
+- **Shutdown proves the socket is gone.** `RunningServer::stop()` = cancel +
+  bounded join: cancelling drops the listener (axum), ends SSE bodies
+  (rmcp's `take_until`), and the per-`start()` runtime teardown kills
+  stragglers — **one runtime per `start()` is the invariant** (a shared
+  runtime would let a stale connection keep honoring an old token; a
+  session-bound pinned-stream integration test pins this). Two supports
+  make the bound real: tool handlers offload ALL synchronous work
+  (registry reads, the process scan, walks, fsync'd writes, the `launch`
+  call) to the blocking pool via `spawn_blocking` — run inline on the
+  single-threaded runtime it would starve the drain select and stop()
+  would wait on vault I/O — and teardown is `shutdown_timeout`-bounded,
+  never an implicit `Runtime::drop` (which waits indefinitely for
+  in-flight blocking work). A blocking task that outlives the timeout is
+  LEAKED — it may fire launch/on_write late; accepted and commented. A
+  slow-launch integration test pins stop() ≤ DRAIN_GRACE +
+  SHUTDOWN_TIMEOUT. A bind-report timeout cancels and reaps on a named
+  thread so a late-binding server can't serve as an orphan. Threads:
+  `"mcp-server"`, `"mcp-server-reaper"`, blocking pool `"mcp-blocking"`.
+- **Startup never fails on MCP.** `start_if_enabled` logs + surfaces
+  `error` status on bind failure; an enabled config with no token
+  self-heals by generating one (32 bytes, base64url, in `config.json`).
+  The settings commands are async (the stop path joins the server thread —
+  that wait must not sit on the main thread); config writes stay under
+  `ConfigWriteLock`.
+- **Frontend**: `McpSettings.vue` (Buddy-settings section, self-contained)
+  owns enable/port/writes/token + status + copyable client snippets;
+  successful writes emit `mcp:write`, announced by `useBuddyAnnouncements`
+  in the buddy window through the existing Buddy-messages gate.
 
 ## Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
 

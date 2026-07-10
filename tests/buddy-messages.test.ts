@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   dailyNoteOpenedMessage,
   failureMessage,
+  mcpWriteMessage,
   noteOpenedMessage,
   recordingPausedMessage,
   recordingResumedMessage,
@@ -17,6 +18,23 @@ import {
 describe("buddyMessages", () => {
   it("names the vault when opening one", () => {
     expect(vaultOpenedMessage("Personal")).toContain("Personal");
+  });
+
+  it("mcpWriteMessage covers every write kind and falls back on unknown", () => {
+    expect(
+      mcpWriteMessage({ kind: "addTask", title: "Buy milk", vaultName: "Notes" }),
+    ).toBe('Added task "Buy milk" to Notes');
+    expect(
+      mcpWriteMessage({ kind: "setTaskStatus", title: "Buy milk", vaultName: "Notes" }),
+    ).toBe('Updated task "Buy milk" in Notes');
+    expect(
+      mcpWriteMessage({ kind: "createDailyNote", title: "2026-07-10", vaultName: "Notes" }),
+    ).toBe("Created today's note in Notes");
+    // A kind this build doesn't know (newer Rust side) must still produce a
+    // sensible line, never leak "undefined".
+    expect(
+      mcpWriteMessage({ kind: "somethingNew", title: "x", vaultName: "Notes" }),
+    ).toBe("An AI client updated Notes");
   });
 
   it("falls back to a generic line when the vault name is blank", () => {

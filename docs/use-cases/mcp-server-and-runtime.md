@@ -1,6 +1,6 @@
 ---
 type: UseCase
-status: vision
+status: in-progress
 domain: ai-platform
 source_prd: "docs/prds/ai-platform.md"
 tags: [use-case, ai-platform]
@@ -14,9 +14,23 @@ tags: [use-case, ai-platform]
 
 [AI Platform & Agent Runtime PRD](../prds/ai-platform.md) in full — Runtime Architecture, Human and AI Parity, Capability Domains, MCP Server, Runtime Service Layer, Internal Event Bus, Permissions, AI Clients. Referenced from the main PRD's foundational-documents list and from the Knowledge Lifecycle PRD's [Product Domains](../prds/knowledge-lifecycle.md#product-domains) section. Roadmap: Phase 1 (runtime architecture, service layer, embedded MCP server) through Phase 4 (multi-agent collaboration).
 
-## Status: Not started
+## Status: First slice shipped (v0.6.0 target) — embedded MCP server
 
-Today's Tauri commands (`commands.rs`, `capture_commands.rs`, `task_commands.rs`) are the closest thing to a "service layer," but they are UI-only IPC endpoints — there is no MCP server process, no internal event bus (`TaskCreated`/`RecordingFinished`/etc.), no typed service objects (`KnowledgeService`/`TaskService`/...), and no permission-scoped external-client model. This PRD is explicitly a **Vision** document ("Status: Product Vision"), not a committed increment.
+The PRD's Phase-1 "embedded MCP server" exists: an opt-in, disabled-by-default
+streamable-HTTP server on `127.0.0.1:22082/mcp` (bearer token + Origin
+validation), exposing seven tools — `list_vaults`, `list_tasks`,
+`list_recordings`, `open_vault`, `open_daily_note`, `add_task`,
+`set_task_status` — with writes behind a separate "Allow vault writes" grant
+and every call audit-logged. The seam beneath it is the PRD's service-layer
+idea in miniature: `core::services` is ONE implementation per capability,
+called by both the Tauri IPC commands and the MCP tools (design:
+[2026-07-09-local-mcp-server-design.md](../superpowers/specs/2026-07-09-local-mcp-server-design.md)).
+
+Still vision, not started: the internal event bus
+(`TaskCreated`/`RecordingFinished`/…), typed service objects
+(`KnowledgeService`/`TaskService`/…), fine-grained permission scopes,
+capture/transcription control over MCP, MCP resources/prompts, the plugin
+API, and everything in Phases 2–4.
 
 ## Related use-cases
 

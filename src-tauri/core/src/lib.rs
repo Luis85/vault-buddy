@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod process;
 pub mod recordings;
 pub mod search;
+pub mod services;
 pub mod sync_util;
 pub mod tasks;
 pub mod throttle;
@@ -20,14 +21,23 @@ pub mod vault_walk;
 use chrono::NaiveDate;
 use std::path::Path;
 
+/// The vault-relative daily-note path (no `.md`) for `date`, and whether the
+/// note file already exists. Split from `daily_note_uri` so callers that must
+/// gate creation (the MCP `open_daily_note` tool) can decide BEFORE a URI is
+/// built.
+pub fn daily_note_target(vault_path: &Path, date: NaiveDate) -> (String, bool) {
+    let settings = daily_notes::load_settings(vault_path);
+    let rel = daily_notes::daily_note_rel_path(&settings, date);
+    let exists = vault_path.join(format!("{rel}.md")).exists();
+    (rel, exists)
+}
+
 /// Builds the URI that opens today's daily note for a vault:
 /// `obsidian://open` if the note file already exists, `obsidian://new`
 /// otherwise — Obsidian itself performs the creation. Vault Buddy never
 /// writes into a vault. `vault_id` is the unique key from obsidian.json.
 pub fn daily_note_uri(vault_id: &str, vault_path: &Path, date: NaiveDate) -> String {
-    let settings = daily_notes::load_settings(vault_path);
-    let rel = daily_notes::daily_note_rel_path(&settings, date);
-    let exists = vault_path.join(format!("{rel}.md")).exists();
+    let (rel, exists) = daily_note_target(vault_path, date);
     if exists {
         uri::open_file_uri(vault_id, &rel)
     } else {
