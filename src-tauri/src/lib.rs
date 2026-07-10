@@ -1,6 +1,7 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+mod mcp_commands;
 mod task_commands;
 mod transcription;
 mod tray;
@@ -191,6 +192,7 @@ pub fn run() {
         .manage(capture_commands::CaptureState::default())
         .manage(transcription::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
+        .manage(mcp_commands::McpServerState::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -291,6 +293,9 @@ pub fn run() {
             task_commands::add_task,
             task_commands::set_task_status,
             task_commands::count_open_tasks,
+            mcp_commands::get_mcp_config,
+            mcp_commands::set_mcp_config,
+            mcp_commands::regenerate_mcp_token,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
@@ -380,6 +385,7 @@ pub fn run() {
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
             transcription::run_transcription(app.handle());
+            mcp_commands::start_if_enabled(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {
