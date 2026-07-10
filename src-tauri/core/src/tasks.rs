@@ -253,8 +253,22 @@ fn parse_tags_key(content: &str, key: &str) -> Option<Vec<String>> {
         };
         // Strip a trailing YAML comment BEFORE the empty-value check, so
         // `tags: # comment` correctly falls into the block-list branch below
-        // rather than being read as a (nonexistent) inline value.
-        let rest = strip_inline_comment(rest.trim()).trim();
+        // rather than being read as a (nonexistent) inline value. A FLOW list
+        // is bracket-delimited, so nothing inside `[...]` is a comment — the
+        // whole-value strip was eating the second leading-# tag in
+        // `[#work, #home]` (whitespace-preceded `#`) and truncating the list
+        // (Codex, PR #46). There, keep everything through the closing `]`
+        // and drop only what trails it; an unterminated `[` degrades to the
+        // scalar strip as before.
+        let rest_raw = rest.trim();
+        let rest = if rest_raw.starts_with('[') {
+            match rest_raw.find(']') {
+                Some(end) => rest_raw[..=end].trim(),
+                None => strip_inline_comment(rest_raw).trim(),
+            }
+        } else {
+            strip_inline_comment(rest_raw).trim()
+        };
         let raw_items: Vec<&str> = if rest.is_empty() {
             // Block style: consume the following `- item` lines.
             let mut items = Vec::new();
@@ -1209,6 +1223,28 @@ mod tests {
         assert!(!out.contains("tags"));
         assert!(!out.contains("- work"));
         assert!(out.contains("status: new\n"));
+    }
+
+    #[test]
+    fn note_tags_keeps_leading_hash_tags_inside_a_flow_list() {
+        // Codex review, PR #46: the whole-value comment strip saw the second
+        // `#` in `[#work, #home]` as whitespace-preceded (= comment start)
+        // and truncated the value to `[#work,` before the flow split, so the
+        // tags vanished and a later edit could clobber them. Inside brackets
+        // nothing is a comment; only a trailing comment after `]` is.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: [#work, #home]\n---\n"),
+            vec!["work", "home"]
+        );
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: [#work, #home] # areas\n---\n"),
+            vec!["work", "home"]
+        );
+        // Flow with a trailing comment and no leading-# tags — still stripped.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: [work] # areas\n---\n"),
+            vec!["work"]
+        );
     }
 
     #[test]
