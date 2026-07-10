@@ -12,7 +12,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use rmcp::{tool, tool_router, ErrorData as McpError, ServerHandler};
 use vault_buddy_core::services::{self, ServicePaths};
 
 pub const WRITES_DISABLED: &str = "Vault writes are disabled in Vault Buddy settings.";
@@ -463,21 +463,65 @@ impl VaultBuddyMcp {
     }
 }
 
-// API drift from the brief: bare `#[tool_handler]` defaults its router
-// expression to `Self::tool_router()` (an associated fn call) — see
-// rmcp-macros-2.2.0/src/tool_handler.rs `ToolHandlerAttribute::default`.
-// This service has no such method (its two `#[tool_router(router = ...)]`
-// blocks are custom-named `read_tools_router`/`write_tools_router`), and
-// even if it did, that would rebuild a fresh, always-read-only router on
-// every call instead of reading the per-session grant-filtered router
-// `new()` cached in `self.tool_router`. Naming the router expression
-// explicitly (`router = self.tool_router`) is the SDK's own documented
-// pattern for a stateful/dynamic router — see
-// rmcp-2.2.0/tests/test_tool_macros.rs `Server`, which pairs a
-// `#[tool_router(router = tool_router)]` block with a `tool_router` field
-// and `#[tool_handler(router = self.tool_router)]`.
-#[tool_handler(router = self.tool_router)]
+// Manual ServerHandler instead of `#[tool_handler(router = self.tool_router)]`
+// (Codex review catch): the macro's call_tool delegates straight to the
+// router, so a write tool ABSENT from this session's router (constructed
+// writes-off) failed as rmcp's generic unknown-tool protocol error — no
+// WRITES_DISABLED message for the client and, worse, NO audit line, though
+// the spec's audit rule (and the gate-denial comments above) say the
+// revoked-grant attempt is exactly what must be recorded. The macro offers no
+// hook before routing, so call_tool is written out by hand: it intercepts
+// write-tool names while the grant is off — audited denial, same tool-error
+// shape as the in-handler gate — and otherwise delegates verbatim as the
+// macro expansion does (mirrored from rmcp-macros-2.2.0/src/tool_handler.rs;
+// list_tools/get_tool are the expansion byte-for-byte). tools/list stays
+// construction-filtered: hidden-when-off is the advisory layer, and hiding
+// is not license to answer an actual call unaudited.
 impl ServerHandler for VaultBuddyMcp {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        if matches!(request.name.as_ref(), "add_task" | "set_task_status") && !self.writes_allowed()
+        {
+            let started = Instant::now();
+            // Best-effort vaultId for the audit line only — a denial must
+            // never fail on unparseable arguments, so fall back to "-".
+            let vault_id = request
+                .arguments
+                .as_ref()
+                .and_then(|a| a.get("vaultId"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("-");
+            Self::audit(
+                &request.name,
+                vault_id,
+                &Err(WRITES_DISABLED.to_string()),
+                started,
+            );
+            return Self::tool_error(WRITES_DISABLED);
+        }
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        Ok(rmcp::model::ListToolsResult {
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        self.tool_router.get(name).cloned()
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("vault-buddy", &self.deps.app_version))

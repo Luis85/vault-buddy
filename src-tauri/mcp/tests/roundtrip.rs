@@ -130,6 +130,59 @@ async fn writes_off_hides_and_rejects_write_tools() {
     assert!(!names.contains(&"add_task".to_string()), "{names:?}");
     assert!(names.contains(&"list_vaults".to_string()));
 
+    // Codex review catch: hidden-from-the-router must NOT mean silent. A
+    // client that calls a write tool anyway (cached name from before a
+    // revocation + reconnect, or a manual call) must get the audited
+    // WRITES_DISABLED TOOL error — not rmcp's generic unknown-tool protocol
+    // error, which carries no explanation and produces no audit line.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("add_task").with_arguments(
+                serde_json::json!({ "vaultId": "deadbeef01234567", "title": "Nope" })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("denial must be a tool error, not a protocol unknown-tool error");
+    assert_eq!(result.is_error, Some(true));
+    let text = serde_json::to_string(&result.content).unwrap_or_default();
+    assert!(
+        text.contains("Vault writes are disabled in Vault Buddy settings."),
+        "{text}"
+    );
+    assert!(
+        std::fs::read_dir(dir.path().join("MyVault"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "the denied call must not have written anything"
+    );
+
+    // The denial path must not depend on parseable arguments (there is no
+    // vaultId to audit — it falls back to "-"): still the same tool error.
+    let result = client
+        .call_tool(CallToolRequestParams::new("set_task_status"))
+        .await
+        .expect("argument-free denial must still be a tool error");
+    assert_eq!(result.is_error, Some(true));
+    let text = serde_json::to_string(&result.content).unwrap_or_default();
+    assert!(
+        text.contains("Vault writes are disabled in Vault Buddy settings."),
+        "{text}"
+    );
+
+    // A genuinely unknown tool stays the router's unknown-tool protocol
+    // error — the write-tool intercept must not over-match.
+    let err = client
+        .call_tool(CallToolRequestParams::new("does_not_exist"))
+        .await;
+    assert!(
+        err.is_err(),
+        "unknown tools must keep failing as protocol errors, got: {err:?}"
+    );
+
     client.cancel().await.unwrap();
     server.stop();
 }
