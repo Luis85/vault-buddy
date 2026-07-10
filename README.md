@@ -66,7 +66,10 @@ The buddy appears as a small, always-on-top character on your desktop.
   included. Add tasks with an optional due date, priority, and `#tags`;
   check them off, edit them inline, or archive them; group by due date
   (Overdue / Today / Upcoming) or by tag; click a title to open the note in
-  Obsidian. The vault row shows a badge with the open-task count.
+  Obsidian. The vault row shows a badge with the open-task count. An **All
+  tasks** bar above the vault list opens the same view merged across every
+  vault (badge = summed open count), where adding a task picks which vault
+  it lands in.
 
 Vault Buddy is careful with your vault. Browsing vaults and opening notes
 never writes anything — that stays delegated to Obsidian via `obsidian://`

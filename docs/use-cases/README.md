@@ -67,6 +67,7 @@ main PRD's former Non-Functional Requirements section.
 | [Re-transcription](re-transcription.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Rename Recording](rename-recording.md) ⚠ not in PRD text | Knowledge Intake | v0.4.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Per-Vault Task List](per-vault-task-list.md) | Task Management | v0.5.0 (extended through v0.5.3: due/priority/buckets/editor/open/filter/tags) | [Task Management](../prds/task-management.md) |
+| [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md) | Task Management | v0.5.4 (aggregated view; lists/modal/bulk/search remain planned) | [Task Management](../prds/task-management.md) |
 
 ## Planned (named in a PRD roadmap, not yet built)
 
@@ -75,7 +76,6 @@ main PRD's former Non-Functional Requirements section.
 | [AI-Enriched Meeting Notes](ai-enriched-meeting-notes.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Additional Capture Providers](additional-capture-providers.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Task Tags & Todos](task-tags-and-todos.md) | Task Management | [Task Management](../prds/task-management.md) |
-| [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md) | Task Management | [Task Management](../prds/task-management.md) |
 | [AI-Assisted Task Management](ai-assisted-task-management.md) | Task Management | [Task Management](../prds/task-management.md) |
 | [Knowledge Search & Retrieval](knowledge-search-and-retrieval.md) | Knowledge Retrieval | [PRD](../PRD%20-%20Product%20Vision.md) |
 | [Workflow Automation Engine](workflow-automation-engine.md) | Workflow Engine | [PRD](../PRD%20-%20Product%20Vision.md) |

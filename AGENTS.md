@@ -505,7 +505,28 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   the vault list; its query applies only while the input is shown, so
   archiving below the threshold can't strand a stale, invisible filter.
   `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
-  camelCase across Rust↔TS.
+  camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
+  task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
+  prop; `null` is the aggregate mode, reached via the "All tasks" bar above
+  the vault list in `ActionPanel.vue` (badge = `store.taskCounts` summed) and
+  the store's `openAllTasks()` action (`view = "tasks"`, `tasksVaultId =
+  null`). Aggregate mode fans out `list_vaults` then a parallel per-vault
+  `list_tasks`, best-effort per vault — a vault whose `list_tasks` call fails
+  contributes nothing and is named in one toast, with a blocking "Couldn't
+  load tasks from any vault." banner reserved for `list_vaults` failing or
+  every vault failing. Zero new IPC commands: aggregation is pure frontend
+  fan-out over the two commands the single-vault view already used. Both
+  modes converge on one enriched shape, `AggTask = TaskItem & { vaultId,
+  vaultName }`, so every row action (toggle, archive, edit, open) reads the
+  row's own `task.vaultId` rather than the `vaultId` prop — the prop only
+  decides how the initial fan-out happened. Aggregate-only UI stays additive
+  on top of the shared list: a vault chip on each row (vault-name initial,
+  full name in the tooltip), an add-row vault picker (SelectMenu, defaulting
+  to the first vault) in place of the single-vault view's implicit target,
+  and an "All tasks" header. The sort comparator gains a
+  `vaultName.localeCompare` → `path.localeCompare` tiebreak on both arms so
+  ties across vaults are stable; date buckets, tag mode, filters, and the
+  per-row busy-guard serialization are unchanged and shared by both modes.
 - **Tags (v0.5.3): chips, filter, inputs, and a grouping toggle.** Each row
   renders all of its tags as chips between the title and the due chip; a chip
   click activates a single component-local tag filter (no multi-tag filter
