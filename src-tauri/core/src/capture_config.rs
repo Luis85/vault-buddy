@@ -68,6 +68,8 @@ pub struct VaultCaptureConfig {
     /// Vault-relative folder holding this vault's task documents.
     /// None → the default "Tasks".
     pub tasks_folder: Option<String>,
+    /// Vault-relative folder holding imported documents. None → "Documents".
+    pub documents_folder: Option<String>,
 }
 
 impl Default for VaultCaptureConfig {
@@ -85,6 +87,7 @@ impl Default for VaultCaptureConfig {
             transcript_timestamps: true,
             follow_up_template: true,
             tasks_folder: None,
+            documents_folder: None,
         }
     }
 }
@@ -119,6 +122,11 @@ impl VaultCaptureConfig {
     pub fn tasks_root(&self) -> &str {
         self.tasks_folder.as_deref().unwrap_or("Tasks")
     }
+
+    /// The vault-relative folder holding imported documents. None → "Documents".
+    pub fn documents_root(&self) -> &str {
+        self.documents_folder.as_deref().unwrap_or("Documents")
+    }
 }
 
 /// Default port for the embedded MCP server: 0x5642 = ASCII "VB".
@@ -151,10 +159,22 @@ impl Default for McpConfig {
     }
 }
 
+/// App-global Document Import settings. Pandoc is one system-wide binary,
+/// so its path override is app-global, not per-vault. Top-level
+/// `documentImport` section beside `vaults`/`mcp`; parsed per-field
+/// defensively for the same reason.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DocumentImportConfig {
+    /// Manual override for a Pandoc not on PATH (a portable install).
+    /// None → detect on PATH only.
+    pub pandoc_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AppConfig {
     pub vaults: HashMap<String, VaultCaptureConfig>,
     pub mcp: McpConfig,
+    pub document_import: DocumentImportConfig,
 }
 
 /// Per-field parsing through serde_json::Value: the file is hand-edited,
@@ -172,7 +192,15 @@ pub fn parse_config(json: &str) -> AppConfig {
         }
     }
     let mcp = value.get("mcp").map(mcp_entry).unwrap_or_default();
-    AppConfig { vaults, mcp }
+    let document_import = value
+        .get("documentImport")
+        .map(document_import_entry)
+        .unwrap_or_default();
+    AppConfig {
+        vaults,
+        mcp,
+        document_import,
+    }
 }
 
 fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
@@ -229,6 +257,10 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("tasksFolder")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        documents_folder: entry
+            .get("documentsFolder")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -257,6 +289,17 @@ fn mcp_entry(entry: &serde_json::Value) -> McpConfig {
             .get("allowWrites")
             .and_then(|v| v.as_bool())
             .unwrap_or(defaults.allow_writes),
+    }
+}
+
+fn document_import_entry(entry: &serde_json::Value) -> DocumentImportConfig {
+    DocumentImportConfig {
+        pandoc_path: entry
+            .get("pandocPath")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -306,6 +349,13 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         mcp.insert("allowWrites".to_string(), json!(cfg.mcp.allow_writes));
         root.insert("mcp".to_string(), Value::Object(mcp));
     }
+    if cfg.document_import != DocumentImportConfig::default() {
+        let mut di = Map::new();
+        if let Some(p) = &cfg.document_import.pandoc_path {
+            di.insert("pandocPath".to_string(), json!(p));
+        }
+        root.insert("documentImport".to_string(), Value::Object(di));
+    }
     let mut vaults = Map::new();
     let mut ids: Vec<&String> = cfg.vaults.keys().collect();
     ids.sort();
@@ -339,6 +389,9 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         entry.insert("followUpTemplate".to_string(), json!(v.follow_up_template));
         if let Some(folder) = &v.tasks_folder {
             entry.insert("tasksFolder".to_string(), json!(folder));
+        }
+        if let Some(folder) = &v.documents_folder {
+            entry.insert("documentsFolder".to_string(), json!(folder));
         }
         vaults.insert(id.clone(), Value::Object(entry));
     }
@@ -402,6 +455,27 @@ pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> 
     let mut cfg = load_config_from(path);
     cfg.mcp = mcp;
     write_config(path, &cfg)
+}
+
+/// Read-modify-write for the app-global document-import section, mirroring
+/// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
+/// behind ConfigWriteLock).
+pub fn update_document_import_config_at(
+    path: &Path,
+    di: DocumentImportConfig,
+) -> std::io::Result<()> {
+    let mut cfg = match std::fs::read_to_string(path) {
+        Ok(json) => parse_config(&json),
+        Err(_) => AppConfig::default(),
+    };
+    cfg.document_import = di;
+    write_config(path, &cfg)
+}
+
+pub fn update_document_import_config(di: DocumentImportConfig) -> Result<(), String> {
+    let path = config_path().ok_or("Cannot resolve the config directory")?;
+    update_document_import_config_at(&path, di)
+        .map_err(|e| format!("Could not save document import settings: {e}"))
 }
 
 #[cfg(test)]
@@ -597,6 +671,7 @@ mod tests {
                 transcript_timestamps: false,
                 follow_up_template: true,
                 tasks_folder: Some("Inbox/Tasks".to_string()),
+                documents_folder: Some("Inbox/Documents".to_string()),
             },
         );
         cfg.vaults
@@ -802,5 +877,49 @@ mod tests {
         let cfg = load_config_from(&path);
         assert_eq!(cfg.mcp, mcp);
         assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    #[test]
+    fn documents_root_defaults_to_documents() {
+        let mut c = VaultCaptureConfig::default();
+        assert_eq!(c.documents_root(), "Documents");
+        c.documents_folder = Some("Imports".into());
+        assert_eq!(c.documents_root(), "Imports");
+    }
+
+    #[test]
+    fn parses_document_import_section() {
+        let json = r#"{"documentImport":{"pandocPath":"C:\\pandoc\\pandoc.exe"},"vaults":{}}"#;
+        let cfg = parse_config(json);
+        assert_eq!(
+            cfg.document_import.pandoc_path.as_deref(),
+            Some("C:\\pandoc\\pandoc.exe")
+        );
+    }
+
+    #[test]
+    fn parses_documents_folder_per_vault() {
+        let json = r#"{"vaults":{"v1":{"documentsFolder":"Imports"}}}"#;
+        let cfg = parse_config(json);
+        assert_eq!(
+            cfg.vaults["v1"].documents_folder.as_deref(),
+            Some("Imports")
+        );
+    }
+
+    #[test]
+    fn serialize_roundtrips_document_import_section() {
+        // Regression: serialize_config once emitted only `vaults`; a save from
+        // another surface would silently delete this section. Mirrors the mcp test.
+        let mut cfg = AppConfig::default();
+        cfg.document_import.pandoc_path = Some("/usr/bin/pandoc".into());
+        let round = parse_config(&serialize_config(&cfg));
+        assert_eq!(round.document_import, cfg.document_import);
+    }
+
+    #[test]
+    fn serialize_omits_default_document_import_section() {
+        let cfg = AppConfig::default();
+        assert!(!serialize_config(&cfg).contains("documentImport"));
     }
 }
