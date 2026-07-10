@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
+import { afterEach, describe, expect, it } from "vitest";
 import { defineComponent } from "vue";
+
 import { useSuppressContextMenu } from "../src/composables/useSuppressContextMenu";
 
 const Host = defineComponent({

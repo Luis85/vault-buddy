@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { onMounted, onUnmounted } from "vue";
+
 import ActionPanel from "../components/ActionPanel.vue";
-import { useVaultsStore } from "../stores/vaults";
-import { useCaptureStore } from "../stores/capture";
-import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 import { useStartupUpdateCheck } from "../composables/useStartupUpdateCheck";
+import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
+import { useCaptureStore } from "../stores/capture";
+import { useVaultsStore } from "../stores/vaults";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
@@ -59,7 +60,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-screen w-screen p-2" @click="onGutterClick">
+  <div
+    class="h-screen w-screen p-2"
+    @click="onGutterClick"
+  >
     <ActionPanel />
   </div>
 </template>

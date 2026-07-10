@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+
 import { getCharacter } from "../characters";
 
 const ANIMATIONS_KEY = "vault-buddy.animations";

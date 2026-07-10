@@ -1,4 +1,5 @@
 import { onMounted, onUnmounted } from "vue";
+
 import { useSettingsStore } from "../stores/settings";
 
 // The buddy and panel are separate webviews that share localStorage but not

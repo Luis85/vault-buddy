@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { computed, onMounted, ref } from "vue";
+
 import { CHARACTERS } from "../characters";
-import { useSettingsStore, type MessageDuration } from "../stores/settings";
 import { logWarning } from "../logging";
+import { type MessageDuration,useSettingsStore } from "../stores/settings";
 import BuddyAvatar from "./BuddyAvatar.vue";
+import DiagnosticsSettings from "./DiagnosticsSettings.vue";
 import SelectMenu from "./SelectMenu.vue";
 import UpdateSettings from "./UpdateSettings.vue";
-import DiagnosticsSettings from "./DiagnosticsSettings.vue";
 
 const settings = useSettingsStore();
 
@@ -101,8 +102,7 @@ async function toggleAutostart(event: Event) {
             data-testid="selected-badge"
             class="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-500 text-[9px] font-bold text-white"
             aria-hidden="true"
-            >✓</span
-          >
+          >✓</span>
           <BuddyAvatar
             :character-id="c.id"
             :animated="settings.animationsEnabled"
@@ -120,7 +120,10 @@ async function toggleAutostart(event: Event) {
       </h2>
       <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
         <div class="flex items-center justify-between">
-          <label for="animations-toggle" class="text-sm text-slate-200">
+          <label
+            for="animations-toggle"
+            class="text-sm text-slate-200"
+          >
             Animations
           </label>
           <input
@@ -129,10 +132,13 @@ async function toggleAutostart(event: Event) {
             class="h-4 w-4 accent-violet-500"
             :checked="settings.animationsEnabled"
             @change="settings.toggleAnimations()"
-          />
+          >
         </div>
         <div class="flex items-center justify-between">
-          <label for="dragging-toggle" class="text-sm text-slate-200">
+          <label
+            for="dragging-toggle"
+            class="text-sm text-slate-200"
+          >
             Dragging
             <span class="block text-xs text-slate-500">
               Off pins the buddy in place
@@ -144,10 +150,13 @@ async function toggleAutostart(event: Event) {
             class="h-4 w-4 accent-violet-500"
             :checked="settings.draggingEnabled"
             @change="settings.toggleDragging()"
-          />
+          >
         </div>
         <div class="flex items-center justify-between">
-          <label for="messages-toggle" class="text-sm text-slate-200">
+          <label
+            for="messages-toggle"
+            class="text-sm text-slate-200"
+          >
             Buddy messages
             <span class="block text-xs text-slate-500">
               The buddy comments on what you do
@@ -159,10 +168,13 @@ async function toggleAutostart(event: Event) {
             class="h-4 w-4 accent-violet-500"
             :checked="settings.buddyMessagesEnabled"
             @change="settings.toggleBuddyMessages()"
-          />
+          >
         </div>
         <div class="flex items-center justify-between gap-2">
-          <label for="message-duration" class="text-sm text-slate-200">
+          <label
+            for="message-duration"
+            class="text-sm text-slate-200"
+          >
             Message duration
             <span class="block text-xs text-slate-500">
               How long the buddy's bubbles stay up
@@ -185,7 +197,10 @@ async function toggleAutostart(event: Event) {
       </h2>
       <div class="rounded-xl border border-white/10 bg-white/5 p-2">
         <div class="flex items-center justify-between">
-          <label for="autostart-toggle" class="text-sm text-slate-200">
+          <label
+            for="autostart-toggle"
+            class="text-sm text-slate-200"
+          >
             Start with Windows
             <span class="block text-xs text-slate-500">
               Launch the buddy when you log in
@@ -199,7 +214,7 @@ async function toggleAutostart(event: Event) {
             :checked="autostart === true"
             :disabled="autostart === null || autostartBusy"
             @change="toggleAutostart"
-          />
+          >
         </div>
         <p
           v-if="autostartError"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { computed, onMounted, ref } from "vue";
+
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TaskItem } from "../types";
@@ -120,7 +121,7 @@ async function archive(task: TaskItem) {
         <div
           class="h-full rounded-full bg-violet-500 transition-all"
           :style="{ width: `${progress.pct}%` }"
-        ></div>
+        />
       </div>
       <span class="shrink-0 text-xs tabular-nums text-slate-400">
         {{ progress.done }} / {{ progress.total }}
@@ -136,7 +137,7 @@ async function archive(task: TaskItem) {
         aria-label="New task title"
         class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
         @keydown.enter="add"
-      />
+      >
       <button
         type="button"
         data-testid="task-add"
@@ -148,17 +149,28 @@ async function archive(task: TaskItem) {
       </button>
     </div>
 
-    <p v-if="loading" class="text-xs text-slate-400">Loading…</p>
+    <p
+      v-if="loading"
+      class="text-xs text-slate-400"
+    >
+      Loading…
+    </p>
     <p
       v-else-if="loadError"
       class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ loadError }}
     </p>
-    <p v-else-if="tasks.length === 0" class="text-xs text-slate-400">
+    <p
+      v-else-if="tasks.length === 0"
+      class="text-xs text-slate-400"
+    >
       No tasks yet.
     </p>
-    <ul v-else class="flex flex-col gap-1">
+    <ul
+      v-else
+      class="flex flex-col gap-1"
+    >
       <li
         v-for="task in tasks"
         :key="task.path"
@@ -173,7 +185,7 @@ async function archive(task: TaskItem) {
           :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
           class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
           @change="toggle(task)"
-        />
+        >
         <span
           class="min-w-0 flex-1 truncate text-sm"
           :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
@@ -201,7 +213,13 @@ async function archive(task: TaskItem) {
             stroke-linejoin="round"
             aria-hidden="true"
           >
-            <rect x="3" y="4" width="18" height="4" rx="1" />
+            <rect
+              x="3"
+              y="4"
+              width="18"
+              height="4"
+              rx="1"
+            />
             <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
           </svg>
         </button>

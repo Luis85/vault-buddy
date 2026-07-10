@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
+import { describe, expect, it } from "vitest";
+
 import VaultList from "../src/components/VaultList.vue";
 
 type Busy = "open_vault" | "open_daily_note" | null;

@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
+
 import {
-  vaultOpenedMessage,
   dailyNoteOpenedMessage,
+  failureMessage,
   noteOpenedMessage,
-  recordingStartedMessage,
   recordingPausedMessage,
   recordingResumedMessage,
   recordingSavedMessage,
-  transcribingMessage,
+  recordingStartedMessage,
   transcribedMessage,
-  failureMessage,
+  transcribingMessage,
   updateAvailableMessage,
+  vaultOpenedMessage,
 } from "../src/buddyMessages";
 
 describe("buddyMessages", () => {

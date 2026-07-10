@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
-import { defineComponent } from "vue";
 import { createPinia, setActivePinia } from "pinia";
-import { useBuddyBubble, BUBBLE_MS } from "../src/composables/useBuddyBubble";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent } from "vue";
+
+import { BUBBLE_MS,useBuddyBubble } from "../src/composables/useBuddyBubble";
 
 // A throwaway host: returning the composable from setup() exposes its
 // refs/functions on wrapper.vm (refs are unwrapped there).

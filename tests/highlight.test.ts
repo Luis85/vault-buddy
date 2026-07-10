@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { highlightParts } from "../src/utils/highlight";
 
 describe("highlightParts", () => {

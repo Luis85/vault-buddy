@@ -1,12 +1,13 @@
-import { beforeEach, afterEach, describe, expect, it } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
-import { useVaultsStore } from "../src/stores/vaults";
 import { useCaptureStore } from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
-import { dailyNoteOpenedMessage } from "../src/buddyMessages";
+import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
   { id: "d4e5f6", name: "Personal", path: "C:\\vaults\\Personal", open: false },

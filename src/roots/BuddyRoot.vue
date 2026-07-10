@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+
 import CompanionCharacter from "../components/CompanionCharacter.vue";
-import { useSettingsStore } from "../stores/settings";
-import { useCaptureStore } from "../stores/capture";
-import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
-import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 import { useBuddyAnnouncements } from "../composables/useBuddyAnnouncements";
+import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
+import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
+import { useCaptureStore } from "../stores/capture";
 import type { Facing } from "../stores/settings";
+import { useSettingsStore } from "../stores/settings";
 
 const settings = useSettingsStore();
 const capture = useCaptureStore();

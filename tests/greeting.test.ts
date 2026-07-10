@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+
 import {
-  daypartFor,
-  isWeekend,
-  greetingFor,
   type Daypart,
+  daypartFor,
+  greetingFor,
+  isWeekend,
 } from "../src/greeting";
 
 // Local-time constructor: new Date(y, monthIndex, day, hour, min) uses the

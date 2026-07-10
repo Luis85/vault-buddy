@@ -1,15 +1,16 @@
 import { watch } from "vue";
-import { useCaptureStore } from "../stores/capture";
+
 import { announce } from "../announce";
 import {
-  recordingStartedMessage,
+  failureMessage,
   recordingPausedMessage,
   recordingResumedMessage,
   recordingSavedMessage,
-  transcribingMessage,
+  recordingStartedMessage,
   transcribedMessage,
-  failureMessage,
+  transcribingMessage,
 } from "../buddyMessages";
+import { useCaptureStore } from "../stores/capture";
 
 /**
  * Wires capture-store transitions to the buddy's spoken acknowledgements.
