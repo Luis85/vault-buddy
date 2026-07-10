@@ -9,7 +9,7 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Status:** vault access · one-click meeting & voice recording · local offline transcription
+- **Status:** vault access · cross-vault search · per-vault tasks · one-click meeting & voice recording · local offline transcription
 
 See the [Product Requirements Document](PRD%20-%20Product%20Vision.md) for the full vision,
 principles, capabilities, and roadmap.
@@ -36,6 +36,16 @@ The buddy appears as a small, always-on-top character on your desktop.
   Obsidian if it doesn't exist yet).
 - **Filter** kicks in automatically above 5 vaults — type to narrow by name
   or path. Escape clears the filter, then closes the panel.
+- **Search across every vault**: hit the **magnifier** in the panel header
+  (or press `/` or `Ctrl+F` on the vault list) and start typing — results
+  appear live, grouped by vault, matching note names, note text, and
+  attachment filenames, with the match highlighted and a snippet of the
+  first matching line. Arrow keys move the selection, **Enter** opens it in
+  Obsidian, and **Ctrl+Enter** (or Ctrl+click) opens it while keeping the
+  panel up so you can fire off several results in a row. Filter chips narrow
+  to notes or files, vault groups collapse, and your last five searches wait
+  as clickable chips next time. Searching reads your vaults — it never
+  writes to them.
 - **Drag** the buddy anywhere; its position is remembered across restarts.
   The panel opens toward free screen space, so edges and corners are fine.
 - **Right-click** the buddy for the menu: toggle the idle **animation**,
@@ -60,14 +70,24 @@ The buddy appears as a small, always-on-top character on your desktop.
   Click a recording to open its note in Obsidian, or **re-transcribe** any
   one on the spot — useful after switching to a larger, more accurate speech
   model.
+- **Tasks per vault**: the **Tasks button** on a vault row opens a simple
+  todo list — add a task, check it off, archive it — backed by plain
+  `type: Task` Markdown files in a folder you choose (default `Tasks`), so
+  everything stays visible and editable in Obsidian too. Hand-written task
+  files in that folder show up in the list as well.
 
-Vault Buddy is careful with your vault. Browsing vaults and opening notes
-never writes anything — that stays delegated to Obsidian via `obsidian://`
-URIs, and every launched URI is logged. **Recording is the one feature that
-writes into a vault**, and only for vaults you opt in: it saves the audio,
-an optional companion note, and (if enabled) a transcript sidecar into a
-dated folder you choose, and it never overwrites or edits files you already
-have. Everything stays on your machine — no account, nothing uploaded.
+Vault Buddy is careful with your vault. Browsing, searching, and opening
+notes never write anything — opening stays delegated to Obsidian via
+`obsidian://` URIs, and every launched URI is logged. **Recording and tasks
+are the two features that write into a vault**, and only where you use
+them. Recording saves the audio, an optional companion note, and (if
+enabled) a transcript sidecar into a dated folder you choose — always under
+fresh names, never replacing a file you already have. Tasks create new
+`type: Task` files the same collision-safe way; the one edit they make to
+an existing file is flipping the `status:` line of a task you check off or
+archive — and only in files whose frontmatter says `type: Task`, which
+includes task files you wrote by hand. Nothing else in your vault is ever
+modified. Everything stays on your machine — no account, nothing uploaded.
 
 ## Contributing
 
