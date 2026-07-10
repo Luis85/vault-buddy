@@ -235,7 +235,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 43 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 45 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -243,7 +243,7 @@ Keep this table in sync when adding/removing commands.
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture`, `stop_capture`, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings`, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks` |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks`, `open_task`, `update_task` |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 
