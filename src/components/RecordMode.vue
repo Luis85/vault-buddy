@@ -67,6 +67,12 @@ const browseLabel = computed(() =>
 // status is treated the same as "not installed": the Import button stays
 // disabled rather than optimistically enabled against unknown state.
 const pandoc = ref<PandocStatus | null>(null);
+// True until the FIRST detect_pandoc resolves. Before F1 a blocked button was
+// disabled, so a click during this window was a harmless no-op; now a blocked
+// click routes to Settings, so a click before the probe finishes would wrongly
+// jump to Settings even with a valid Pandoc. Gate the button on this so the
+// pre-probe state can't take the wrong flow (Codex review).
+const checking = ref(true);
 
 // Single computed (not two) so the "not installed" check isn't duplicated
 // between a blocked-flag computed and a hint-text computed. `blocked` (Pandoc
@@ -166,6 +172,9 @@ async function detectPandoc() {
     pandoc.value = await invoke<PandocStatus>("detect_pandoc");
   } catch (e) {
     logWarning(`detect_pandoc failed (vault ${props.vaultId}): ${String(e)}`);
+  } finally {
+    // Probe done (either way) — the button can now trust `importStatus`.
+    checking.value = false;
   }
 }
 
@@ -185,6 +194,9 @@ function start(mode: "meeting" | "voice-note") {
 // A blocked click (Pandoc missing/old) jumps to Settings — the one place to
 // fix it — instead of dead-ending; otherwise open the file picker + convert.
 function onImportClick() {
+  // The button is disabled while checking, but guard anyway so a probe still
+  // in flight never routes to Settings on a state that isn't settled yet.
+  if (checking.value) return;
   if (importStatus.value.blocked) {
     store.openSettings();
     return;
@@ -253,12 +265,16 @@ async function importDocument() {
         data-testid="import-document"
         aria-label="Import a document into this vault"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-        :disabled="importing"
+        :disabled="importing || checking"
         @click="onImportClick"
       >
         <span class="block text-sm font-medium text-slate-100">Import Document</span>
         <span class="block text-xs text-slate-400">{{
-          importing ? "Converting… this can take a few seconds" : importStatus.hint
+          checking
+            ? "Checking Pandoc…"
+            : importing
+              ? "Converting… this can take a few seconds"
+              : importStatus.hint
         }}</span>
       </button>
     </div>

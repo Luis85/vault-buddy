@@ -357,6 +357,37 @@ describe("RecordMode — Import Document", () => {
     expect(useVaultsStore().view).toBe("settings");
   });
 
+  it("disables Import while detection is in flight and never jumps to Settings early", async () => {
+    // Hold detect_pandoc unresolved to simulate the pre-probe window: before a
+    // result exists, a blocked click must NOT route to Settings (it would with
+    // a valid Pandoc that just hadn't been detected yet).
+    let resolveDetect: (v: unknown) => void = () => {};
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "detect_pandoc") {
+        return new Promise((r) => {
+          resolveDetect = r;
+        });
+      }
+      if (cmd === "get_capture_config") return Promise.resolve({});
+      if (cmd === "list_recordings") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises(); // config/recordings settle; detect stays pending
+
+    const button = wrapper.get('[data-testid="import-document"]');
+    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain("Checking Pandoc…");
+    await button.trigger("click");
+    await flushPromises();
+    expect(useVaultsStore().view).not.toBe("settings");
+
+    // Once the probe resolves to a valid install, the button enables normally.
+    resolveDetect(installed());
+    await flushPromises();
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("does nothing when the picker is cancelled", async () => {
     routeRecordMode({});
     mocks.open.mockResolvedValue(null);
