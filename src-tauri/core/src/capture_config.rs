@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use log;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecordingMode {
     #[default]
@@ -373,6 +375,22 @@ pub fn write_config(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
     result
 }
 
+/// Read the current config for a read-modify-write. ONLY a missing file may
+/// default (that is the first save); any other read error must propagate —
+/// treating an unreadable config.json as empty and writing it back would
+/// silently wipe every other vault's settings (GAP-02: a voice-note vault
+/// reverting to Meeting mode re-enables desktop-audio loopback).
+fn read_config_for_update(path: &Path) -> std::io::Result<AppConfig> {
+    match std::fs::read_to_string(path) {
+        Ok(json) => Ok(parse_config(&json)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
+        Err(e) => {
+            log::warn!("config: {} unreadable during save: {e}", path.display());
+            Err(e)
+        }
+    }
+}
+
 /// Read-modify-write so saving one vault preserves the others. No lock of
 /// its own: callers that can race (the IPC command layer) must serialize
 /// calls behind a mutex.
@@ -381,10 +399,7 @@ pub fn update_vault_config_at(
     vault_id: &str,
     v: VaultCaptureConfig,
 ) -> std::io::Result<()> {
-    let mut cfg = match std::fs::read_to_string(path) {
-        Ok(json) => parse_config(&json),
-        Err(_) => AppConfig::default(),
-    };
+    let mut cfg = read_config_for_update(path)?;
     cfg.vaults.insert(vault_id.to_string(), v);
     write_config(path, &cfg)
 }
@@ -399,7 +414,7 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
 /// update_vault_config_at (same no-own-lock rule: IPC callers serialize
 /// behind ConfigWriteLock).
 pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> {
-    let mut cfg = load_config_from(path);
+    let mut cfg = read_config_for_update(path)?;
     cfg.mcp = mcp;
     write_config(path, &cfg)
 }
@@ -802,5 +817,38 @@ mod tests {
         let cfg = load_config_from(&path);
         assert_eq!(cfg.mcp, mcp);
         assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    #[test]
+    fn unreadable_config_fails_the_save_instead_of_wiping_other_vaults() {
+        // GAP-02: any read error used to map to AppConfig::default(), then
+        // write_config replaced the whole file with only the edited vault —
+        // a momentarily locked/unreadable config.json (Windows AV, indexer)
+        // silently dropped vaults B..N. Invalid UTF-8 stands in for that
+        // read failure portably: read_to_string errors, writes would succeed.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let garbage = [0xFFu8, 0xFE, 0x01];
+        std::fs::write(&path, garbage).unwrap();
+        let err = update_vault_config_at(&path, "a", VaultCaptureConfig::default())
+            .expect_err("a non-NotFound read error must fail the save");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        // the save failed LOUDLY and touched nothing
+        assert_eq!(std::fs::read(&path).unwrap(), garbage);
+
+        let err = update_mcp_config_at(&path, McpConfig::default())
+            .expect_err("the mcp save has the same read-modify-write wipe");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&path).unwrap(), garbage);
+    }
+
+    #[test]
+    fn missing_config_still_defaults_on_first_save() {
+        // NotFound is the one read error that may default: it IS the first save.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        update_vault_config_at(&path, "a", VaultCaptureConfig::default()).unwrap();
+        let cfg = load_config_from(&path);
+        assert!(cfg.vaults.contains_key("a"));
     }
 }

@@ -50,17 +50,11 @@ naive fix would violate one (noted inline).
 transcription commands require `capture_paths::is_capture_mp3` — the same
 ownership filter `rename_plan` enforces (now shared).
 
-### GAP-02 · Medium · A transient config read failure during save wipes every other vault's settings
-`src-tauri/core/src/capture_config.rs:309-314` (`update_vault_config_at`).
-Any `read_to_string` error — not just NotFound — maps to
-`AppConfig::default()`, then `write_config` replaces the whole file with
-only the edited vault. A momentarily locked/unreadable `config.json`
-(Windows AV, indexer) while saving vault A silently drops vaults B..N; a
-voice-note vault reverts to Meeting mode, re-enabling desktop-audio
-loopback on its next recording — exactly the flip the per-field parser
-exists to prevent.
-**Fix:** default only on `ErrorKind::NotFound`; propagate (and log) other
-read errors.
+### GAP-02 · ~~Medium~~ FIXED 2026-07-10 · A transient config read failure during save wipes every other vault's settings
+`update_vault_config_at` and `update_mcp_config_at` now share
+`read_config_for_update`: only `NotFound` defaults (first save); any other
+read error logs and propagates, so the save fails loudly and the file is
+left untouched.
 
 ### GAP-03 · Medium · Transcript ownership markers match anywhere in the file, not the frontmatter
 `src-tauri/core/src/transcript.rs:44, 186, 242-245`.
