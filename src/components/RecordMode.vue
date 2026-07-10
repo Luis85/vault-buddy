@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { CaptureConfig, Recording } from "../types";
+import type { CaptureConfig, PandocStatus, Recording } from "../types";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -59,6 +60,24 @@ const browseLabel = computed(() =>
     ? "Browse past recordings"
     : `Browse past recordings (${recordingCount.value} in this vault)`,
 );
+
+// App-global Pandoc install status, null until detect_pandoc resolves (or
+// forever on a failed/absent Tauri runtime — see detectPandoc below). A null
+// status is treated the same as "not installed": the Import button stays
+// disabled rather than optimistically enabled against unknown state.
+const pandoc = ref<PandocStatus | null>(null);
+
+// Single computed (not two) so the "not installed" check isn't duplicated
+// between a disabled-flag computed and a hint-text computed.
+const importStatus = computed(() => {
+  if (!pandoc.value?.installed) {
+    return { disabled: true, hint: "Install Pandoc in Settings to import documents" };
+  }
+  if (!pandoc.value.sandboxSupported) {
+    return { disabled: true, hint: "Update Pandoc (2.15+ needed)" };
+  }
+  return { disabled: false, hint: "Convert a Word, ODT, or RTF file into a note" };
+});
 
 // Bundles the four transcription fields for TranscriptionSettings' v-model.
 // The setter merges the change back into the FULL loaded config (preserving
@@ -129,16 +148,48 @@ async function loadRecordingCount() {
   }
 }
 
+async function detectPandoc() {
+  // Swallowed like every other guarded read here: an unavailable Tauri
+  // runtime or a detection failure just leaves `pandoc` null, which
+  // `importStatus` treats as "not installed" — the button degrades to
+  // disabled rather than block the rest of the view.
+  try {
+    pandoc.value = await invoke<PandocStatus>("detect_pandoc");
+  } catch (e) {
+    logWarning(`detect_pandoc failed (vault ${props.vaultId}): ${String(e)}`);
+  }
+}
+
 onMounted(() => {
   // Independent reads: a hung/failed config read must not block the count
   // and vice versa, so neither awaits the other.
   void loadConfig();
   void loadRecordingCount();
+  void detectPandoc();
 });
 
 function start(mode: "meeting" | "voice-note") {
   void capture.start(props.vaultId, mode);
   store.showList(); // recording bar shows on the list view
+}
+
+async function importDocument() {
+  try {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
+    });
+    if (typeof path !== "string") return; // cancelled — no-op
+    const notePath = await invoke<string>("convert_document", {
+      id: props.vaultId,
+      sourcePath: path,
+    });
+    const name = notePath.split(/[\\/]/).pop() ?? notePath;
+    notifications.success(`Imported ${name}`);
+  } catch (e) {
+    logWarning(`convert_document failed (vault ${props.vaultId}): ${String(e)}`);
+    notifications.error(`Couldn't import document: ${String(e)}`);
+  }
 }
 </script>
 
@@ -173,6 +224,17 @@ function start(mode: "meeting" | "voice-note") {
           data-testid="recording-count"
           class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
         >{{ recordingCount }}</span>
+      </button>
+      <button
+        type="button"
+        data-testid="import-document"
+        aria-label="Import a document into this vault"
+        class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+        :disabled="importStatus.disabled"
+        @click="importDocument"
+      >
+        <span class="block text-sm font-medium text-slate-100">Import Document</span>
+        <span class="block text-xs text-slate-400">{{ importStatus.hint }}</span>
       </button>
     </div>
     <div class="flex flex-col gap-3 border-t border-white/10 pt-3">

@@ -1,4 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The suite has no Tauri runtime, so the component's `@tauri-apps/api/core`
@@ -16,7 +17,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 import DocumentImportSettings from "../src/components/DocumentImportSettings.vue";
+import RecordMode from "../src/components/RecordMode.vue";
 import { logWarning } from "../src/logging";
+import { useNotificationsStore } from "../src/stores/notifications";
 
 const NOT_INSTALLED = {
   installed: false,
@@ -224,6 +227,131 @@ describe("DocumentImportSettings", () => {
     expect(wrapper.find('[data-testid="pandoc-status"]').exists()).toBe(false);
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("detect_pandoc failed"),
+    );
+  });
+});
+
+describe("RecordMode — Import Document", () => {
+  // Routes the three commands RecordMode itself issues on mount
+  // (get_capture_config / list_recordings, unrelated to import) plus
+  // detect_pandoc / convert_document for the action under test — same
+  // vi.hoisted mocks.invoke/mocks.open as the DocumentImportSettings suite
+  // above (this file mocks @tauri-apps/api/core and @tauri-apps/plugin-dialog
+  // once at module scope).
+  const routeRecordMode = (opts: {
+    pandoc?: unknown;
+    convert?: (args: unknown) => unknown;
+  }) => {
+    mocks.invoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "detect_pandoc") return Promise.resolve(opts.pandoc ?? installed());
+      if (cmd === "get_capture_config") return Promise.resolve({});
+      if (cmd === "list_recordings") return Promise.resolve([]);
+      if (cmd === "convert_document") {
+        return Promise.resolve(
+          opts.convert ? opts.convert(args) : "Documents/2026/07/2026-07-10 Report.md",
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+  };
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    mocks.invoke.mockReset();
+    mocks.open.mockReset();
+    vi.mocked(logWarning).mockClear();
+  });
+
+  it("imports a picked document and toasts success", async () => {
+    const convertArgs: unknown[] = [];
+    routeRecordMode({
+      convert: (args) => {
+        convertArgs.push(args);
+        return "Documents/2026/07/2026-07-10 Report.md";
+      },
+    });
+    mocks.open.mockResolvedValue("/home/user/Report.docx");
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    const button = wrapper.get('[data-testid="import-document"]');
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
+    await button.trigger("click");
+    await flushPromises();
+
+    expect(convertArgs).toEqual([{ id: "v1", sourcePath: "/home/user/Report.docx" }]);
+    const notes = useNotificationsStore();
+    expect(
+      notes.items.some((i) => i.kind === "success" && i.message.includes("Imported")),
+    ).toBe(true);
+  });
+
+  it("disables the button and warns when detect_pandoc fails on mount", async () => {
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "detect_pandoc") return Promise.reject(new Error("io error"));
+      if (cmd === "get_capture_config") return Promise.resolve({});
+      if (cmd === "list_recordings") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    const button = wrapper.get('[data-testid="import-document"]');
+    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("detect_pandoc failed"),
+    );
+  });
+
+  it("disables the button with an install hint when Pandoc is not installed", async () => {
+    routeRecordMode({ pandoc: NOT_INSTALLED });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    const button = wrapper.get('[data-testid="import-document"]');
+    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain("Install Pandoc in Settings to import documents");
+  });
+
+  it("disables the button with an update hint when Pandoc is too old for the sandbox", async () => {
+    routeRecordMode({
+      pandoc: installed({ version: "pandoc 2.14", sandboxSupported: false }),
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    const button = wrapper.get('[data-testid="import-document"]');
+    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain("Update Pandoc (2.15+ needed)");
+  });
+
+  it("does nothing when the picker is cancelled", async () => {
+    routeRecordMode({});
+    mocks.open.mockResolvedValue(null);
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="import-document"]').trigger("click");
+    await flushPromises();
+
+    expect(mocks.invoke.mock.calls.some((c) => c[0] === "convert_document")).toBe(false);
+  });
+
+  it("logs and toasts an error when convert_document fails", async () => {
+    routeRecordMode({ convert: () => Promise.reject(new Error("pandoc crashed")) });
+    mocks.open.mockResolvedValue("/home/user/Report.docx");
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="import-document"]').trigger("click");
+    await flushPromises();
+
+    const notes = useNotificationsStore();
+    expect(
+      notes.items.some((i) => i.kind === "error" && i.message.includes("pandoc crashed")),
+    ).toBe(true);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("convert_document failed"),
     );
   });
 });
