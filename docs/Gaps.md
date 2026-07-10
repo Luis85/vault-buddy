@@ -539,8 +539,9 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 ## 8. Tech debt & duplication
 
 ### GAP-45 · Shell
-- `start_capture` is ~293 lines with four inline thread bodies
-  (`capture_commands.rs:332-625`); `process_transcription` ~186 lines.
+- `start_capture_blocking` (the async command's moved body, sub-pass B) is
+  ~330 lines with four inline thread bodies (`capture_commands.rs:321-655`);
+  `process_transcription` ~186 lines.
 - The `discover_vaults().find(|v| v.id == id)` lookup is duplicated 6×
   across three files with two error styles (GAP-26).
 - The roots loop (`recording_roots` → `safe_recording_root` →
@@ -639,6 +640,23 @@ review in the PR-43 ledger):
   lock (take it only to store the handle, with a `starting` flag).
 - `McpSettings.vue`: guard the `mcp:status` listener registration against
   unmount-before-resolve (one leaked listener per fast settings visit).
+
+### GAP-54 · Low · Capture event-ordering corners after the async migration
+Catalogued by sub-pass B's final review (2026-07-10); both exotic, neither
+worse in kind than the pre-async behavior:
+- `capture:saved` can theoretically beat `capture:started`: the monitor
+  thread is live before the async shell emits `started`
+  (`capture_commands.rs`), so a self-finalizing session (≥1 poll tick,
+  ~500 ms) plus a >500 ms async-runtime stall reorders them; the store's
+  `started` handler would then set `status = "recording"` after `saved`
+  reset it, sticking the recording UI with no terminal event. Fix shape: a
+  store-side stale-`started` guard.
+- The janitor's worker-replied-`Err` drain clears the reservation without
+  emitting (the `capture:failed` fired back at start-timeout time), so a
+  stop issued against a resynced wedged reservation can resolve
+  `{stillSaving:false}` with no event ever arriving — the store parks in
+  "saving" until reload. Requires a webview reload to resync the wedged
+  state first; the old bare-`Ok` had the identical hole.
 
 ## 9. Documentation & repo hygiene
 
