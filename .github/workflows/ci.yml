@@ -81,10 +81,10 @@ jobs:
       - name: tests (transcribe crate, whisper feature)
         run: cargo test -p vault_buddy_transcribe --features whisper
         working-directory: src-tauri
-      - name: Install Rust quality tools (machete + llvm-cov, prebuilt)
+      - name: Install Rust quality tools (machete + llvm-cov + deny, prebuilt)
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-machete,cargo-llvm-cov
+          tool: cargo-machete,cargo-llvm-cov,cargo-deny
       - name: unused dependencies (cargo-machete)
         run: cargo machete src-tauri
       # Coverage floor over the pure member crates (default features — the
@@ -96,14 +96,15 @@ jobs:
       - name: coverage floor (core + capture + transcribe, cargo-llvm-cov)
         run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
         working-directory: src-tauri
-      # RustSec advisories + license/source policy (deny.toml). Uses the
-      # prebuilt cargo-deny binary; advisories DB is fetched at run time, so
-      # a newly published CVE can fail this step on an unchanged tree — that
-      # is the point of the gate.
+      # RustSec advisories + license/source policy (src-tauri/deny.toml).
+      # Runs from src-tauri so the config is found by the same path as the
+      # documented local invocation — no reliance on cargo-deny's implicit
+      # config resolution from a manifest-path. The advisories DB is fetched
+      # at run time, so a newly published CVE can fail this step on an
+      # unchanged tree — that is the point of the gate.
       - name: dependency audit (cargo-deny)
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          manifest-path: src-tauri/Cargo.toml
+        run: cargo deny check
+        working-directory: src-tauri
 
   windows-app:
     name: Windows app (build + installer)
