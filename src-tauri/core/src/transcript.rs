@@ -38,10 +38,18 @@ pub fn format_timestamp(ms: u64) -> String {
     format!("[{h:02}:{m:02}:{s:02}]")
 }
 
+/// The sidecar's ownership marker, read from the FRONTMATTER only via
+/// `note_field` — a body that quotes the literal marker text must never
+/// change classification (GAP-03). The render_* functions still write the
+/// full `MARKER_*` lines; only the readers changed.
+fn marker(content: &str) -> Option<String> {
+    crate::capture_note::note_field(content, "vault-buddy-transcript")
+}
+
 /// A sidecar we may (re)write: our own not-yet-finished output. A finished
 /// (`complete`) transcript or a file a user has taken over must never match.
 pub fn is_regenerable(content: &str) -> bool {
-    content.contains(MARKER_PENDING) || content.contains(MARKER_FAILED)
+    matches!(marker(content).as_deref(), Some("pending") | Some("failed"))
 }
 
 pub fn render_placeholder(mp3_file_name: &str) -> String {
@@ -183,7 +191,7 @@ pub fn transcript_path(mp3: &Path) -> PathBuf {
 pub fn needs_transcription(mp3: &Path) -> bool {
     let path = transcript_path(mp3);
     match std::fs::read_to_string(&path) {
-        Ok(content) => content.contains(MARKER_PENDING),
+        Ok(content) => marker(&content).as_deref() == Some("pending"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
         // Unreadable (permissions/AV lock): don't spin on it this pass.
         Err(_) => false,
@@ -239,10 +247,14 @@ impl TranscriptStatus {
 /// confirm fires before it is overwritten. Unreadable → `Missing` (best-effort).
 pub fn transcript_status(mp3: &Path) -> TranscriptStatus {
     match std::fs::read_to_string(transcript_path(mp3)) {
-        Ok(c) if c.contains(MARKER_PENDING) => TranscriptStatus::Pending,
-        Ok(c) if c.contains(MARKER_FAILED) => TranscriptStatus::Failed,
-        Ok(c) if c.contains(MARKER_CANCELLED) => TranscriptStatus::Cancelled,
-        Ok(_) => TranscriptStatus::Complete,
+        Ok(content) => match marker(&content).as_deref() {
+            Some("pending") => TranscriptStatus::Pending,
+            Some("failed") => TranscriptStatus::Failed,
+            Some("cancelled") => TranscriptStatus::Cancelled,
+            // `complete`, an unknown value, or no marker at all: a finished
+            // or hand-edited file — the re-transcribe confirm must fire.
+            _ => TranscriptStatus::Complete,
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => TranscriptStatus::Missing,
         Err(_) => TranscriptStatus::Missing,
     }
@@ -760,5 +772,38 @@ mod tests {
             pending_transcriptions(dir.path()).is_empty(),
             "a failed recording must not auto-backfill — only an explicit retry regenerates it"
         );
+    }
+
+    #[test]
+    fn body_quoting_a_marker_never_reclassifies_a_finished_transcript() {
+        // GAP-03: whole-content contains() matched the marker text ANYWHERE, so
+        // a complete sidecar whose BODY quotes the placeholder line was
+        // classified regenerable, re-enqueued by the backfill, and overwritten
+        // by replace_if_ours — the one way the never-overwrite rule could be
+        // beaten by content coincidence.
+        let content = "---\nvault-buddy-transcript: complete\ntranscript-of: \"a.mp3\"\n---\n\n\
+                       The placeholder shows `vault-buddy-transcript: pending` until done.\n";
+        assert!(!is_regenerable(content));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(transcript_path(&mp3), content).unwrap();
+        assert!(
+            !needs_transcription(&mp3),
+            "backfill must not re-enqueue it"
+        );
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Complete);
+    }
+
+    #[test]
+    fn hand_edited_sidecar_without_frontmatter_marker_is_foreign() {
+        // A user's own file mentioning marker text in prose stays untouchable.
+        let content = "# My notes\n\nvault-buddy-transcript: failed — that's what it said.\n";
+        assert!(!is_regenerable(content));
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(transcript_path(&mp3), content).unwrap();
+        assert_eq!(transcript_status(&mp3), TranscriptStatus::Complete);
+        assert!(!needs_transcription(&mp3));
     }
 }

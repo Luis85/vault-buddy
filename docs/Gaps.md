@@ -56,18 +56,10 @@ ownership filter `rename_plan` enforces (now shared).
 read error logs and propagates, so the save fails loudly and the file is
 left untouched.
 
-### GAP-03 · Medium · Transcript ownership markers match anywhere in the file, not the frontmatter
-`src-tauri/core/src/transcript.rs:44, 186, 242-245`.
-`is_regenerable`, `needs_transcription`, and `transcript_status` use
-whole-content `contains(MARKER_*)`. A hand-edited or `complete` sidecar
-whose *body* contains the literal `vault-buddy-transcript: pending` (e.g.
-notes quoting the placeholder) is classified regenerable, re-enqueued by
-the backfill, and overwritten by `replace_if_ours` — the one place the
-"never overwrite a finished or hand-edited transcript" rule can be beaten
-by content coincidence. `capture_note::note_field` and `tasks::is_task`
-already do frontmatter-scoped matching.
-**Fix:** read the marker via a frontmatter-scoped check
-(`note_field(content, "vault-buddy-transcript")`).
+### GAP-03 · ~~Medium~~ FIXED 2026-07-10 · Transcript ownership markers match anywhere in the file, not the frontmatter
+`is_regenerable`, `needs_transcription`, and `transcript_status` now read the
+marker via a frontmatter-scoped `note_field(content, "vault-buddy-transcript")`
+reader; body text quoting a marker no longer reclassifies a sidecar.
 
 ### GAP-04 · Medium · Renaming a transcribed recording strands the transcript and silently re-transcribes
 `src-tauri/capture/src/rename.rs:18` (with `core/capture_note.rs:127`,
