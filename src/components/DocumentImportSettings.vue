@@ -81,6 +81,11 @@ async function browse() {
       }),
     );
     if (typeof selected === "string") {
+      // Browse assigns programmatically (no @input fires), so mark the field
+      // dirty explicitly — otherwise a still-pending initial detect could
+      // reseed pathOverride from the old configuredPath and savePath would
+      // persist the stale value instead of the picked executable.
+      dirtied.value = true;
       pathOverride.value = selected;
       // savePath() self-guards on `saving`; release it first so its own
       // set_pandoc_path + re-detect run, then finally restores the guard.

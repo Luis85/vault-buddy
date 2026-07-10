@@ -142,6 +142,42 @@ describe("DocumentImportSettings", () => {
     expect((input.element as HTMLInputElement).value).toBe("C:/custom/pandoc.exe");
   });
 
+  it("saves a Browse selection made during a pending detect, not a reseed", async () => {
+    const setPathArgs: unknown[] = [];
+    let resolveFirstDetect: (v: unknown) => void = () => {};
+    let detectCalls = 0;
+    mocks.invoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "detect_pandoc") {
+        detectCalls += 1;
+        // First (on-mount) detect hangs; savePath's re-detect resolves normally.
+        if (detectCalls === 1) {
+          return new Promise((r) => {
+            resolveFirstDetect = r;
+          });
+        }
+        return Promise.resolve(installed({ configuredPath: "C:/picked/pandoc.exe" }));
+      }
+      if (cmd === "set_pandoc_path") {
+        setPathArgs.push(args);
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+    mocks.open.mockResolvedValue("C:/picked/pandoc.exe");
+    const wrapper = mount(DocumentImportSettings);
+    await flushPromises(); // on-mount detect pending
+    await wrapper.get('[data-testid="pandoc-browse"]').trigger("click");
+    await flushPromises();
+    // Now let the on-mount detect resolve — its seed must NOT overwrite Browse.
+    resolveFirstDetect(installed({ configuredPath: "/old/path" }));
+    await flushPromises();
+
+    expect(setPathArgs).toEqual([{ pandocPath: "C:/picked/pandoc.exe" }]);
+    expect(
+      (wrapper.get('[data-testid="pandoc-path-input"]').element as HTMLInputElement).value,
+    ).toBe("C:/picked/pandoc.exe");
+  });
+
   it("shows the too-old warning when sandbox is unsupported", async () => {
     routeInvoke({
       detect: [installed({ version: "pandoc 2.14", sandboxSupported: false })],
