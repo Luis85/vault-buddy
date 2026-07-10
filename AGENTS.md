@@ -1091,7 +1091,10 @@ the GitHub release itself either way. The workflow signs updater artifacts
 (`TAURI_SIGNING_PRIVATE_KEY` secrets) and attaches `latest.json`, which
 installed apps poll from Settings → Updates. CI builds without updater
 artifacts when the signing secrets are absent (forked PRs) instead of
-failing.
+failing. A `validate` job gates the build: it requires the dispatch path to
+come from `main`, checks the tag matches `tauri.conf.json`'s version, and
+requires a successful completed CI run for the released commit before
+`windows-installer` starts.
 
 ## Known gaps
 

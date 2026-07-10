@@ -431,21 +431,20 @@ workspace clippy) after the tauri build produces the `dist/` that
 non-obvious: the shell's tests cannot move to `rust-core` — they need the
 WebView/GTK system libs and a built `dist/`.
 
-### GAP-41 · High · The release dispatch path is unvalidated
-`.github/workflows/release.yml:11-15`.
-The `tag` input isn't checked against `tauri.conf.json`'s version (the
-comment says it "must match" — nothing enforces it) and there is no ref
-guard (unlike `bump-version.yml`): dispatching from any branch releases
-that branch's code under an arbitrary tag, and a mismatch ships a
-`latest.json` whose version disagrees with the tag.
-**Fix:** guard `github.ref_name == 'main'` and
-`inputs.tag == "v" + tauri.conf.json version`.
+### GAP-41 · ~~High~~ FIXED 2026-07-10 · The release dispatch path is unvalidated
+A new `validate` job in `.github/workflows/release.yml` now rejects a
+`workflow_dispatch` off any branch but `main`, and checks
+`inputs.tag == "v" + tauri.conf.json version` before the build. Kept as a
+tombstone because the workflow can't be exercised locally — the job only
+proves itself out on the next real release dispatch.
 
-### GAP-42 · Medium · A release can ship from a red commit
-`.github/workflows/release.yml:20` — the release job runs no tests and has
-no dependency on CI success for the SHA; a tag on a broken commit publishes
-and is immediately offered to every installed app via the updater.
-**Fix:** gate the release job on the CI workflow's success for that SHA.
+### GAP-42 · ~~Medium~~ FIXED 2026-07-10 · A release can ship from a red commit
+The same `validate` job (`.github/workflows/release.yml`) now queries
+`gh run list` for the CI workflow's conclusion on `github.sha` and fails
+closed (including on an API error) unless the most recent completed run is
+`success`; `windows-installer` gained `needs: validate`. Kept as a
+tombstone for the same reason as GAP-41 — untestable outside a real
+dispatch/tag push.
 
 ### GAP-43 · Medium · No Rust tests run on Windows (clippy half FIXED 2026-07-10)
 The workspace-clippy half is fixed: `linux-app` now runs

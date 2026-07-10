@@ -16,10 +16,52 @@ on:
 
 permissions:
   contents: write
+  # validate reads CI run conclusions for the released SHA (GAP-42)
+  actions: read
 
 jobs:
+  validate:
+    name: Validate tag, branch, and CI status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dispatch from main
+        # Tag pushes carry refs/tags/*; the branch guard applies to the
+        # dispatch path only (GAP-41 — dispatching from any branch used to
+        # release that branch's code under an arbitrary tag).
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Dispatch the release from main (was: $REF)"
+          exit 1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Tag must match tauri.conf.json's version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          EXPECTED="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Tag $TAG does not match tauri.conf.json ($EXPECTED) — a mismatch ships a latest.json whose version disagrees with the tag (GAP-41)"
+            exit 1
+          fi
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          # A tag on a red or unvalidated commit must not publish (GAP-42):
+          # installed apps would be offered the broken build via the updater.
+          # Works identically for tag-push and dispatch — github.sha is the
+          # released commit either way.
+          CONCLUSION=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --commit "$SHA" --json conclusion,status --jq '[.[] | select(.status == "completed")] | first | .conclusion' 2>/dev/null || echo "")
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::No successful CI run found for $SHA (got: '${CONCLUSION:-none}') — run CI to green before releasing"
+            exit 1
+          fi
+
   windows-installer:
     name: Build and publish Windows installers
+    needs: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
