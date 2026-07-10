@@ -748,12 +748,18 @@ pub fn rename_capture(
     if lock_ignoring_poison(&state.0).is_some() {
         return Err("Cannot rename while a recording is running.".to_string());
     }
-    // rename_plan re-validates ownership (capture-pattern stems only), so
-    // an arbitrary user mp3 can never be renamed through this command.
-    let plan = capture_paths::rename_plan(Path::new(&mp3), &title)?;
-    if !plan.mp3_from.is_file() {
+    if !Path::new(&mp3).is_file() {
         return Err("Recording file not found — was it moved?".to_string());
     }
+    // Containment (GAP-07): every other write path gates on
+    // assert_*_inside_vault; rename_plan validates only the capture-pattern
+    // stem, so IPC could rename any `YYYY-MM-DD HHmm *.mp3` (and retarget
+    // its note) anywhere on disk. Canonical matching per GAP-01's helper.
+    let vaults = discovery::discover_vaults();
+    if capture_paths::vault_owning_path(&vaults, Path::new(&mp3)).is_none() {
+        return Err("Recording is not inside a known vault.".to_string());
+    }
+    let plan = capture_paths::rename_plan(Path::new(&mp3), &title)?;
     let stem = plan
         .mp3_from
         .file_stem()

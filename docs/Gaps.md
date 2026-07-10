@@ -79,14 +79,10 @@ On Windows the fallback is now MoveFileExW WITHOUT MOVEFILE_REPLACE_EXISTING
 rename (compile gate only, never shipped). Windows-arm execution arrives
 with sub-pass D's Windows `cargo test` step (GAP-43).
 
-### GAP-07 · Medium · `rename_capture` has no vault-containment check at all
-`src-tauri/src/capture_commands.rs:779-820`.
-`rename_plan` validates only the capture-pattern stem and `.mp3` extension;
-the path itself is arbitrary, so IPC can rename any
-`YYYY-MM-DD HHmm *.mp3` (and retarget its note) anywhere on disk — unlike
-every other write path, which gates on `assert_*_inside_vault`.
-**Fix:** resolve the owning vault (canonicalized — see GAP-01) and refuse
-paths outside it.
+### GAP-07 · ~~Medium~~ FIXED 2026-07-10 · `rename_capture` has no vault-containment check at all
+The command now refuses paths outside every registered vault via the
+canonical `capture_paths::vault_owning_path` (GAP-01's helper) before
+planning the rename.
 
 ### GAP-08 · Medium · A wedged device open makes the app unquittable
 `src-tauri/src/capture_commands.rs:532-580` + `tray.rs:37-47` +
