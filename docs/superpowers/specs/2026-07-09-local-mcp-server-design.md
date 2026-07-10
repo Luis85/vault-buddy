@@ -276,15 +276,22 @@ Nothing in this feature may hurt the core app:
 - Disabling (or any restart) must **prove the listener is closed** before
   reporting success — Codex review catch: an abandoned shutdown wait could
   leave the old endpoint alive and honoring the old token while the UI
-  says "stopped". The server thread races graceful shutdown against a
-  bounded drain: cancel sessions via the cancellation token, give
-  in-flight requests ~3 s, then drop the serve future — which hard-closes
-  the listener and every connection by construction (a client pinning an
-  SSE stream open cannot keep the socket alive). The join is therefore
-  bounded, `stop()` returns only after the thread — and thus the socket —
+  says "stopped". Mechanism (as verified against axum/tokio internals
+  during Task 6 review — an earlier draft credited "dropping the serve
+  future", which is not what closes connections): cancelling the token
+  makes axum's graceful shutdown drop the LISTENER immediately;
+  in-flight connections run on detached tasks and are killed when the
+  per-`start()` tokio runtime is torn down as the server thread exits —
+  the ~3 s `DRAIN_GRACE` select bounds how long the thread waits before
+  that teardown. The join is therefore bounded, `stop()` returns only
+  after the thread — and thus the socket and every pinned connection —
   is gone, and the async settings command awaits it off the main thread.
-  A thread that panicked instead of exiting surfaces as `error` status,
-  never a false "stopped".
+  **Invariant: one runtime per `start()`** — reusing a shared runtime
+  across start/stop cycles would let pinned connections outlive `stop()`
+  and keep honoring the old token; a session-bound pinned-stream
+  integration test pins this property against such a refactor. A thread
+  that panicked instead of exiting surfaces as `error` status, never a
+  false "stopped".
 - Regenerating the token restarts the listener; old clients get `401`.
 - A start whose thread never reports its bind outcome (10 s timeout) is
   treated as failed — and the token is cancelled before returning, so a
