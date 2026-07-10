@@ -5,10 +5,6 @@
   },
   "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs \u2014 higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
   "allowlist": {
-    "src-tauri/core/src/tasks.rs": {
-      "loc": 1481,
-      "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Bugfix regression tests (Codex PR #46 rounds) account for the growth past 1225; half is the inline #[cfg(test)] module. Round 2 (1431->1481): the strip_scalar_tags_comment discriminator + its doc comment + two regression tests for the leading-# tag list bug. Shrink only; split (parse/writer/list seams) when next touched."
-    },
     "src-tauri/src/capture_commands.rs": {
       "loc": 1201,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
