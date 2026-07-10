@@ -310,6 +310,41 @@ ever written into your vaults except recordings and their notes.
 
 The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.
 
+## MCP server configuration
+
+The embedded MCP server (opt-in, disabled by default) keeps its app-global
+settings in the same `config.json`, as a top-level `mcp` section beside
+`vaults` — written by Buddy settings → *AI integrations — MCP server*, and
+preserved by every other settings save (the serializer round-trips it):
+
+```json
+{
+  "mcp": {
+    "enabled": false,       // two opt-ins: this switch starts the server…
+    "port": 22082,          // 1024–65535; out-of-range values fall back to 22082
+    "token": "<generated>", // bearer token, created on first enable (Regenerate in settings)
+    "allowWrites": false    // …and this one grants add_task / set_task_status / daily-note create
+  },
+  "vaults": { }
+}
+```
+
+While enabled, the buddy serves streamable HTTP on
+`http://127.0.0.1:<port>/mcp`. Every request needs
+`Authorization: Bearer <token>`; the settings card shows copy-ready client
+snippets rendered from the live port + token:
+
+- **Claude Code** — `claude mcp add --transport http vault-buddy
+  http://127.0.0.1:22082/mcp --header "Authorization: Bearer <token>"`
+- **Cursor** — a `.cursor/mcp.json` block with the url + Authorization header
+- **Claude Desktop** — an `mcpServers` block via the `mcp-remote` stdio shim
+
+Changing any of the four fields (or regenerating the token) restarts the
+listener, ending client sessions so they reconnect and pick up the new
+contract; a regenerated token immediately 401s old clients. Every tool call
+is audit-logged (tool, vault id, outcome label, duration) in
+`vault-buddy.log`.
+
 ### Transcription dependencies
 
 The local speech-to-text path pins `whisper-rs` 0.16 / `whisper-rs-sys` 0.15

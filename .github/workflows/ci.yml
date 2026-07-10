@@ -47,10 +47,10 @@ jobs:
         working-directory: src-tauri
       - name: Install ALSA headers (cpal build dependency on Linux)
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # mcp is listed explicitly like the others: it is NOT (yet) a dependency
-      # of the app crate, so neither the tauri-build jobs nor an app-crate
-      # clippy would compile it — without this line a broken tool/auth change
-      # in the MCP server could merge unnoticed.
+      # mcp is listed explicitly like the others: the tauri-build jobs compile
+      # it (the shell depends on it) but never run its TESTS — including the
+      # real-socket round-trip suite that proves the guarded endpoint and the
+      # shutdown property. Without this line those tests wouldn't run anywhere.
       - name: clippy (core + capture + transcribe + mcp crates)
         run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
         working-directory: src-tauri

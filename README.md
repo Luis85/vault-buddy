@@ -9,7 +9,7 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Status:** vault access · one-click meeting & voice recording · local offline transcription
+- **Status:** vault access · one-click meeting & voice recording · local offline transcription · per-vault tasks · local MCP server for AI clients
 
 See the [Product Requirements Document](PRD%20-%20Product%20Vision.md) for the full vision,
 principles, capabilities, and roadmap.
@@ -61,13 +61,24 @@ The buddy appears as a small, always-on-top character on your desktop.
   one on the spot — useful after switching to a larger, more accurate speech
   model.
 
+- **Connect your AI tools (opt-in)**: Vault Buddy can serve a **local MCP
+  server** so MCP clients — Claude Code, Claude Desktop, Cursor — can list
+  your vaults, open notes, browse tasks and recordings, and (behind a
+  separate "Allow vault writes" switch) add tasks or check them off.
+  Enable it under Buddy settings → *AI integrations — MCP server*; the
+  panel shows ready-to-copy setup snippets for each client. Everything is
+  local: the server listens on `127.0.0.1` only, every request needs the
+  generated token, and every tool call is logged.
+
 Vault Buddy is careful with your vault. Browsing vaults and opening notes
 never writes anything — that stays delegated to Obsidian via `obsidian://`
-URIs, and every launched URI is logged. **Recording is the one feature that
-writes into a vault**, and only for vaults you opt in: it saves the audio,
-an optional companion note, and (if enabled) a transcript sidecar into a
-dated folder you choose, and it never overwrites or edits files you already
-have. Everything stays on your machine — no account, nothing uploaded.
+URIs, and every launched URI is logged. **Recording and tasks are the
+features that write into a vault** (plus AI clients over MCP, but only
+after you flip the separate vault-writes switch): recordings save audio, an
+optional companion note, and (if enabled) a transcript sidecar into a dated
+folder you choose; tasks are single Markdown documents in a folder you
+pick. Nothing ever overwrites or edits files you already have. Everything
+stays on your machine — no account, nothing uploaded.
 
 ## Contributing
 

@@ -21,6 +21,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | --- | --- | --- |
 | `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection. No GUI deps. | Anywhere — test and lint locally |
 | `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere with default features (no whisper.cpp); the `whisper` feature + real engine build on **Windows** (CI gate). |
+| `src-tauri/mcp/` | Tauri-free crate: the embedded MCP server — rmcp service (seven tools over `core::services`), HTTP guards, streamable-HTTP runner. | Anywhere — unit + real-socket integration tests run on Linux; CI gates it explicitly (`-p vault_buddy_mcp`) because `tauri build` alone wouldn't run its tests. |
 | `src-tauri/` (root crate) | Tauri shell: window, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
@@ -68,10 +69,12 @@ launched the app on the CI runner and never exited.
 `resume_capture`, `get_capture_config`, `set_capture_config`,
 `list_audio_devices`, `rename_capture`, the recordings/transcription
 surface: `list_recordings`, `open_recording`, `open_transcript`,
-`retranscribe`, `transcribe_recording_now`, and the tasks surface:
+`retranscribe`, `transcribe_recording_now`, the tasks surface:
 `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
-`set_task_status` — commands live in `src-tauri/src/commands.rs`,
-`src-tauri/src/capture_commands.rs`, and `src-tauri/src/task_commands.rs`.
+`set_task_status`, plus the MCP settings surface: `get_mcp_config`,
+`set_mcp_config`, `regenerate_mcp_token` — commands live in
+`src-tauri/src/commands.rs`, `src-tauri/src/capture_commands.rs`,
+`src-tauri/src/task_commands.rs`, and `src-tauri/src/mcp_commands.rs`.
 Tray + buddy context menu live in `src-tauri/src/tray.rs`; menu item events
 are handled in `lib.rs`.
 
@@ -426,6 +429,65 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
   Set disables the checkbox until its write resolves, so two concurrent writes
   for one task can't land out of order). `TaskItem`/`TaskDto` fields match
   camelCase across Rust↔TS.
+
+### The MCP server domain (`src-tauri/mcp/` + `mcp_commands.rs` + `McpSettings.vue`)
+
+An **opt-in, disabled-by-default** local MCP server embedded in the running
+buddy (v0.6.0, first slice of the AI-platform PRD): MCP clients (Claude
+Code/Desktop, Cursor, MCP Inspector) connect over **streamable HTTP at
+`http://127.0.0.1:<port>/mcp`** (default port 22082 = 0x5642 = "VB") and get
+seven tools over the same `core::services` functions the panel uses —
+`list_vaults`, `list_tasks`, `list_recordings`, `open_vault`,
+`open_daily_note`, `add_task`, `set_task_status`. **No new vault
+capability**: MCP writes are exactly the sanctioned task writes plus the
+daily-note create branch, which counts as a write here (with the grant off,
+a missing daily note is a tool error — `obsidian://new` mutates the vault).
+Spec: `docs/superpowers/specs/2026-07-09-local-mcp-server-design.md`.
+Invariants — each exists because a review found the failure it prevents:
+
+- **Two explicit opt-ins.** `mcp.enabled` and the `allowWrites` grant
+  ("Allow vault writes" in settings) both default off; app-global `mcp`
+  section in `config.json`, parsed per-field defensively (out-of-range
+  ports — anything outside 1024–65535 — default to 22082 at parse time, the
+  same range the settings command enforces) and **round-tripped by
+  `serialize_config`** (it once emitted only `vaults`; a capture save would
+  have silently deleted the section — regression-tested).
+- **Guard order origin → auth → body-bound**, all before rmcp sees the
+  request: absent/localhost Origin only (DNS-rebinding defense), constant
+  time bearer check (an EMPTY configured token never matches), and POST —
+  the only body-carrying MCP method — must present a parseable
+  Content-Length ≤ 1 MiB (411/413; a chunked body can't bypass the cap).
+  Bind is 127.0.0.1 only.
+- **Double write gate.** Write tools enter the per-session tool router only
+  when the grant is on at session construction, AND every call re-checks the
+  live atomic — authoritative for sessions that straddle a flip. Any
+  contract-bearing settings change (enabled/port/token/**allowWrites**)
+  restarts the listener so clients re-initialize and fetch a fresh
+  tools/list (no listChanged push in v1); the settings UI serializes saves
+  (in-flight guard) so concurrent stop/start/persist can't interleave.
+- **Audit every call, redacted.** Each tool call logs tool name, vault id,
+  a STATIC outcome label (never raw service errors — they interpolate
+  client-provided values), and `dur_ms` — including gate denials and failed
+  lookups (audit-before-deny). The full message goes only to the client.
+- **Shutdown proves the socket is gone.** `RunningServer::stop()` = cancel +
+  bounded join: cancelling drops the listener (axum), ends SSE bodies
+  (rmcp's `take_until`), and the per-`start()` runtime teardown is the
+  backstop that kills pinned connections — **one runtime per `start()` is
+  the invariant** (a shared runtime would let a stale connection keep
+  honoring an old token; a session-bound pinned-stream integration test
+  pins this). A bind-report timeout cancels and reaps on a named thread so
+  a late-binding server can't serve as an orphan. Threads: `"mcp-server"`,
+  `"mcp-server-reaper"`.
+- **Startup never fails on MCP.** `start_if_enabled` logs + surfaces
+  `error` status on bind failure; an enabled config with no token
+  self-heals by generating one (32 bytes, base64url, in `config.json`).
+  The settings commands are async (the stop path joins the server thread —
+  that wait must not sit on the main thread); config writes stay under
+  `ConfigWriteLock`.
+- **Frontend**: `McpSettings.vue` (Buddy-settings section, self-contained)
+  owns enable/port/writes/token + status + copyable client snippets;
+  successful writes emit `mcp:write`, announced by `useBuddyAnnouncements`
+  in the buddy window through the existing Buddy-messages gate.
 
 ### Diagnostics invariants
 
