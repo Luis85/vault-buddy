@@ -294,16 +294,6 @@ absolute local paths (`capture_commands.rs:347/980`,
 dispatches Escape on it, and asserts a `window` keydown listener is never
 called.
 
-### GAP-28 · Medium · The quiet startup update check can stomp a manual check or an in-flight install
-`src/stores/updates.ts:61-73`.
-The `phase !== "idle"` guard runs only before `await check()`. A slow quiet
-check resolving after the user manually checked and hit Install flips
-`phase` back to `available` mid-`installUpdate`; landing between
-`download()` and `install()` makes `install()` run on a fresh,
-never-downloaded `Update` object.
-**Fix:** re-check `this.phase === "idle"` after the `await` before
-assigning.
-
 ### GAP-29 · Medium · The rename prompt is unreachable for saves that happen while the panel is closed
 `src/components/ActionPanel.vue:97-103`.
 The `shownNonce` watcher calls `capture.dismissRename()` on every
