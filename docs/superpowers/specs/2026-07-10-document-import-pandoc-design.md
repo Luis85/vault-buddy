@@ -346,19 +346,48 @@ authoritative (e.g. search's `.md`-only note matching).
   nothing written.
 - A conversion is already in progress: the second call fails fast on the
   `try_lock` — toast ("an import is already in progress"), nothing written.
-- Note name claimed between reservation and publish: the collision-safe
-  writer takes a ` (N)` suffix; if the commit still fails, any
-  already-published media directory is rolled back — toast, nothing left
-  at the published path.
+- Reserved name claimed between reservation and publish (the residual
+  post-reservation race): the note write **fails at the exact reserved
+  name** — it does NOT re-suffix, because Pandoc already baked links to the
+  reserved media-folder name and the media may already be published under
+  it; re-suffixing would break those links or orphan the folder. Any
+  already-published media directory is rolled back — toast, nothing left at
+  the published path. (The ordinary "same document, same date, again" case
+  never reaches this — reservation gave it its own ` (N)` name up front.)
 - Pandoc missing at call time (a TOCTOU race — uninstalled or PATH
   changed between detection and this call): command errors, toast shown,
   nothing written.
 - Non-zero exit, or the timeout kills the child: toast shown, temp files
   cleaned up, **nothing lands in the vault** — mirrors `capture:failed`'s
   "no partial/garbage output" guarantee.
+- Process killed / crash / power loss mid-conversion: `cleanup_staging`
+  never runs, so the in-vault staging dir survives. A startup **import
+  janitor** owns that garbage — see Recovery below.
 - Success: silent save + toast, no auto-open — mirrors how a completed
   recording finishes (the user finds the note later; nothing yanks focus
   or opens Obsidian on their behalf).
+
+## Recovery
+
+The in-vault staging dir is normally removed by `cleanup_staging` on both
+the success and the failure path. But a hard kill, crash, or power loss
+while Pandoc is mid-write leaves it behind — partial markdown/media sitting
+in a hidden `.…vault-buddy.tmp.import` dir under the vault's Documents
+folder — and `cleanup_staging` never gets to run. The vault-walk scans
+(recordings/tasks/search) already skip it because it's dot-prefixed, so it's
+invisible in the UI, but invisible is not the same as cleaned up.
+
+So a startup **import janitor** owns these orphans, exactly as the capture
+recovery pass owns stale `.part` files: a scan over each discovered vault's
+Documents folder removes any import staging dir (matched by the owned
+`…vault-buddy.tmp.import` marker — never another tool's dot-dir) whose mtime
+is older than a staleness threshold. It is **postponed while an import is
+active** (it tries the same `ImportLock`; if it can't take the lock, a
+conversion is running and its fresh staging dir must not be touched — retry
+later) and **staleness-gated** (a clock jump giving a live dir a future
+mtime must not make it look stale, mirroring capture recovery's exact
+guard). This is the one place these owned temp dirs are *not* excluded from
+recovery — they are its whole subject.
 
 ## Testing (for the implementation phase)
 

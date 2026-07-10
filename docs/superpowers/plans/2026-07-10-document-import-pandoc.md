@@ -415,10 +415,12 @@ git commit -m "feat(core): document-import format map, naming, and frontmatter"
   - `fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePlan` — the dot-prefixed in-vault temp dir (carrying `unique` so two imports to the same date can't collide on the temp dir) + the relative media/note names Pandoc is handed (media = `<basename>`, note = `<basename>.md`). `basename` here is the already-reserved name.
   - `fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> io::Result<PathBuf>` — prepends frontmatter to the staged note, publishes media dir first (if present & non-empty) then the note at the EXACT reserved name (non-replacing), rolling the media dir back if the note write fails. Returns the final note path. Cleans the work dir on the way out.
   - `fn cleanup_staging(work_dir: &Path)` — best-effort `remove_dir_all`.
+  - `fn is_import_staging_dir(name: &str) -> bool` — matches the owned `…vault-buddy.tmp.import` marker (never another tool's dot-dir).
+  - `fn clean_stale_staging_at(documents_root: &Path, now: SystemTime, stale_after: Duration) -> Vec<PathBuf>` — removes every import staging dir directly under `documents_root`'s `YYYY/MM` tree whose mtime is older than `stale_after`; returns what it removed. `now` injected so staleness is testable clock-free (mirrors capture's `is_stale_at`).
 
 **Design notes for the implementer:**
 - The suffix is resolved up front by `reserve_basename`, NOT at write time. Pandoc bakes the media-folder name into every image link as it converts, so the final sibling-folder name must be known before Pandoc runs — a publish-time re-suffix would break the links (note says `<name>/…`, folder became `<name> (1)/…`). `publish` therefore writes the note at the exact reserved name with `write_note_atomic` (non-replacing), not the suffix-retrying `write_note_collision_safe`.
-- The work dir is dot-prefixed (`.<basename>.<unique>.vault-buddy.tmp.import`) UNDER `target_dir`, so it's on the vault's volume (same-fs rename) AND auto-excluded from every `vault_walk` scan (dot-directories are skipped) and recovery.
+- The work dir is dot-prefixed (`.<basename>.<unique>.vault-buddy.tmp.import`) UNDER `target_dir`, so it's on the vault's volume (same-fs rename) AND auto-excluded from every `vault_walk` scan (dot-directories are skipped). It is NOT excluded from recovery — a crash mid-Pandoc leaves it behind, and the startup import janitor (Task 5b) owns that cleanup.
 - Pandoc is told `--extract-media=<media_name>` and `-o <note_name>` with `cwd = work_dir` (the shell does this in Task 5), so links are written relative to the note. Publishing moves the media dir and note into `target_dir` keeping those exact names, so links stay valid with no rewriting.
 - Media dir may not exist (no images). Only publish it when it exists and is non-empty.
 - Publish order: media dir → note. The note is never visible pointing at not-yet-landed images. If the note write races and fails, roll the media dir back.
@@ -517,6 +519,44 @@ fn publish_rolls_back_media_if_note_commit_fails() {
 }
 
 #[test]
+fn janitor_removes_stale_orphan_staging_dirs_only() {
+    use std::time::{Duration, SystemTime};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("Documents");
+    let month = root.join("2026/07");
+    std::fs::create_dir_all(&month).unwrap();
+    // an orphaned staging dir + a real note + an unrelated dot-dir
+    let orphan = month.join(".2026-07-10 Doc.123-4.vault-buddy.tmp.import");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("partial.md"), "x").unwrap();
+    std::fs::write(month.join("2026-07-10 Real.md"), "keep").unwrap();
+    let foreign = month.join(".obsidian-cache");
+    std::fs::create_dir_all(&foreign).unwrap();
+
+    // now = far future so the orphan is definitely stale
+    let now = SystemTime::now() + Duration::from_secs(3600);
+    let removed = clean_stale_staging_at(&root, now, Duration::from_secs(60));
+    assert_eq!(removed.len(), 1);
+    assert!(!orphan.exists());              // owned orphan gone
+    assert!(month.join("2026-07-10 Real.md").exists()); // real note kept
+    assert!(foreign.exists());             // foreign dot-dir untouched
+}
+
+#[test]
+fn janitor_keeps_fresh_staging_dirs() {
+    use std::time::{Duration, SystemTime};
+    let tmp = tempfile::tempdir().unwrap();
+    let month = tmp.path().join("Documents/2026/07");
+    std::fs::create_dir_all(&month).unwrap();
+    let fresh = month.join(".2026-07-10 Doc.9-9.vault-buddy.tmp.import");
+    std::fs::create_dir_all(&fresh).unwrap();
+    // now ≈ creation time → not yet stale
+    let removed = clean_stale_staging_at(&tmp.path().join("Documents"), SystemTime::now(), Duration::from_secs(600));
+    assert!(removed.is_empty());
+    assert!(fresh.exists());
+}
+
+#[test]
 fn publish_writes_at_the_exact_reserved_name() {
     // publish does NOT suffix — the reserved basename is final so Pandoc's
     // baked-in media links stay valid. A free target writes at the exact name.
@@ -586,6 +626,61 @@ pub fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePla
 
 pub fn cleanup_staging(work_dir: &Path) {
     let _ = std::fs::remove_dir_all(work_dir);
+}
+
+/// The owned staging-dir marker. Matched by the janitor so it removes ONLY
+/// our own crash-orphaned temp dirs, never another tool's dot-directory.
+const STAGING_MARKER: &str = ".vault-buddy.tmp.import";
+
+pub fn is_import_staging_dir(name: &str) -> bool {
+    name.starts_with('.') && name.ends_with(STAGING_MARKER)
+}
+
+/// Startup janitor: remove crash-orphaned import staging dirs under a vault's
+/// Documents folder (walking its `YYYY/MM` subtree — that's where staging
+/// dirs live). Staleness-gated with an injected `now` so a clock jump giving
+/// a live dir a future mtime can't make it look stale (mirrors capture's
+/// `is_stale_at`). Returns the dirs removed, for logging.
+pub fn clean_stale_staging_at(
+    documents_root: &Path,
+    now: std::time::SystemTime,
+    stale_after: std::time::Duration,
+) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
+    let years = match std::fs::read_dir(documents_root) {
+        Ok(rd) => rd,
+        Err(_) => return removed, // no Documents folder yet → nothing to do
+    };
+    for year in years.flatten().filter(|e| e.path().is_dir()) {
+        let Ok(months) = std::fs::read_dir(year.path()) else { continue };
+        for month in months.flatten().filter(|e| e.path().is_dir()) {
+            let Ok(entries) = std::fs::read_dir(month.path()) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !is_import_staging_dir(&name) {
+                    continue;
+                }
+                // Staleness: age from mtime, guarding a future mtime (clock jump).
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|mtime| match now.duration_since(mtime) {
+                        Ok(age) => age >= stale_after,
+                        Err(_) => false, // mtime in the future → treat as fresh
+                    })
+                    .unwrap_or(false);
+                if stale && std::fs::remove_dir_all(&path).is_ok() {
+                    removed.push(path);
+                }
+            }
+        }
+    }
+    removed
 }
 
 /// Publish a completed staging dir into `target_dir`. Prepends `frontmatter`
@@ -1142,6 +1237,96 @@ git commit -m "feat(shell): convert_document — sandboxed, heap-capped, staged 
 
 ---
 
+## Task 5b: Shell — startup import janitor (crash-orphan cleanup)
+
+**Files:**
+- Modify: `src-tauri/src/document_commands.rs` — `run_import_recovery`
+- Modify: `src-tauri/src/lib.rs` — call it in `setup` (near `run_recovery`)
+- Test: none new (the pure sweep is tested in Task 3; this is thin wiring — the build gate covers it).
+
+**Interfaces:**
+- Consumes: `document_import::clean_stale_staging_at`, `discovery::discover_vaults`, `capture_config`, `capture_paths::safe_recording_root`, `ImportLock`.
+- Produces: `fn run_import_recovery(app: &AppHandle)` — a named background thread that sweeps each vault's Documents folder for crash-orphaned staging dirs, postponed while an import is active.
+
+**Why:** a hard kill / crash / power loss mid-Pandoc leaves the in-vault
+`.…vault-buddy.tmp.import` dir behind (`cleanup_staging` never ran). The
+vault-walk scans skip it (dot-dir) so it's invisible, but nothing removes
+it — capture has an analogous `.part` recovery pass; imports need the same
+(Codex review).
+
+- [ ] **Step 1: Implement**
+
+```rust
+use tauri::{AppHandle, Manager};
+
+/// Staleness floor: only sweep staging dirs older than this, so a live
+/// conversion's fresh dir is never touched even if the ImportLock check
+/// somehow raced. 10 min is comfortably longer than any real conversion.
+const IMPORT_STAGING_STALE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Startup janitor for crash-orphaned import staging dirs. Named background
+/// thread; postponed (whole pass) while an import holds the ImportLock.
+pub fn run_import_recovery(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("import-recovery".into())
+        .spawn(move || {
+            // Postpone while a conversion runs: try the same lock convert takes.
+            // If we can't get it, an import is mid-flight — its fresh staging dir
+            // must not be swept. Skip this pass; next launch (or a manual retry)
+            // catches any true orphan, which by definition outlives that import.
+            let lock = app.state::<ImportLock>();
+            let Ok(_guard) = lock.0.try_lock() else {
+                log::info!("import-recovery: postponed while an import is active");
+                return;
+            };
+            let cfg = capture_config::load_config();
+            for vault in discovery::discover_vaults() {
+                let v = capture_config::vault_config(&cfg, &vault.id);
+                let folder = v.documents_root();
+                let Ok(root) = capture_paths::safe_recording_root(
+                    std::path::Path::new(&vault.path),
+                    folder,
+                ) else {
+                    continue;
+                };
+                if !root.is_dir() {
+                    continue;
+                }
+                let removed = vault_buddy_core::document_import::clean_stale_staging_at(
+                    &root,
+                    std::time::SystemTime::now(),
+                    IMPORT_STAGING_STALE,
+                );
+                for dir in removed {
+                    log::info!("import-recovery: removed orphaned staging dir {dir:?}");
+                }
+            }
+        })
+        .map(|_| ())
+        .unwrap_or_else(|e| log::warn!("import-recovery: could not spawn thread: {e}"));
+}
+```
+
+In `src-tauri/src/lib.rs` `setup`, after the existing capture `run_recovery(app)` call:
+```rust
+document_commands::run_import_recovery(app.handle());
+```
+
+- [ ] **Step 2: Build gate**
+
+Run: `cd src-tauri && cargo clippy -p vault-buddy --all-targets -- -D warnings && npx tauri build --no-bundle`
+Expected: builds clean.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src-tauri/src/document_commands.rs src-tauri/src/lib.rs
+git commit -m "feat(shell): startup janitor for crash-orphaned import staging dirs"
+```
+
+---
+
 ## Task 6: Shell — settings commands + register all four
 
 **Files:**
@@ -1574,7 +1759,8 @@ git commit -m "feat: buddy drag-drop imports a document via a vault picker"
 - [ ] **Step 1: Update AGENTS.md**
 
 - IPC surface table: add a `document_commands.rs` row — `detect_pandoc`, `convert_document` (async — external subprocess), `get_documents_config`, `set_documents_config`, `begin_document_import`, `take_pending_import`. Update the "All N commands" count (43 → 49).
-- Add a "The document-import domain" subsection under the capture-domain area, summarizing: Pandoc-gated, `--sandbox` + heap cap, up-front joint note+media reservation, in-vault staging, publish-media-then-note with rollback, process-wide `ImportLock`, containment re-validation, fifth sanctioned vault write.
+- Add a "The document-import domain" subsection under the capture-domain area, summarizing: Pandoc-gated, `--sandbox` + heap cap, up-front joint note+media reservation, in-vault staging, publish-media-then-note with rollback, process-wide `ImportLock`, containment re-validation, startup `import-recovery` janitor for crash-orphaned staging dirs, fifth sanctioned vault write.
+- Diagnostics/threads: note the new named threads `import-recovery` (and, from Task 4, that detection/conversion offload to `spawn_blocking`).
 - Note the `commands::show_panel` refactor (factored from `toggle_panel`; also used by `begin_document_import`) in the window-system section.
 - "Where state lives on disk" row: note the app-global `documentImport` section + per-vault `documentsFolder` in `config.json`.
 - Frontend-state section: mention the `importPicker` view and the Rust-owned pending-import consumed in `refresh()` (via `take_pending_import`).
@@ -1636,6 +1822,6 @@ git commit -m "chore: update shrink-only baselines for document import"
 
 ## Self-Review Notes
 
-- **Spec coverage:** trigger flows (Tasks 8/9), Pandoc gate + settings (Tasks 4/6/7), format scope (Task 2), file org/naming/frontmatter (Tasks 2/3), sandbox + heap cap + relative paths + cross-volume staging (Tasks 3/5), registry PATH refresh (Task 4), conversion serialization via ImportLock (Task 5), up-front joint note+media reservation (Tasks 3/5), media-publish rollback (Task 3), documents-folder containment revalidation (Tasks 5/6), buddy-drop pending-import surviving panel-shown (Task 9), failure = nothing published + toast (Tasks 3/5/8/9), success = silent save + toast (Tasks 8/9), config round-trip (Task 1), never-clobber (Task 3). All mapped.
+- **Spec coverage:** trigger flows (Tasks 8/9), Pandoc gate + settings (Tasks 4/6/7), format scope (Task 2), file org/naming/frontmatter (Tasks 2/3), sandbox + heap cap + relative paths + cross-volume staging (Tasks 3/5), registry PATH refresh (Task 4), conversion serialization via ImportLock (Task 5), up-front joint note+media reservation (Tasks 3/5), media-publish rollback (Task 3), documents-folder containment revalidation (Tasks 5/6), crash-orphan staging recovery (Tasks 3/5b), buddy-drop pending-import surviving panel-shown (Task 9), failure = nothing published + toast (Tasks 3/5/8/9), success = silent save + toast (Tasks 8/9), config round-trip (Task 1), never-clobber (Task 3). All mapped.
 - **Type consistency:** `PandocStatus`/`DocumentsConfigDto` camelCase across Rust↔TS; `convert_document(id, sourcePath)` and `set_documents_config(id, documentsFolder, pandocPath)` arg names match the Vue call sites; `DocFormat`/`DocMeta`/`StagePlan`/`reserve_basename` used consistently across Tasks 2/3/5; `plan_staging(target_dir, basename, unique)` and `publish` write at the exact reserved name (no re-suffix); `ImportLock` holds an `Arc<Mutex<()>>` so its guard survives `spawn_blocking`; the buddy drop routes through `begin_document_import`/`take_pending_import` + `commands::show_panel`, not an emit-then-toggle.
 - **Known deviations to watch:** `winreg` is Windows-only (cfg-gated) — machete/deny may need a documented ignore; the ImportLock `try_lock` intentionally rejects (not queues) a concurrent import; the residual post-reservation name race errors + rolls back rather than re-suffixing (would break Pandoc's baked-in links); factoring `show_panel` out of `toggle_panel` must preserve every existing `toggle_panel` invariant (position-while-hidden, focus, `panel-shown`, hide bubble).
