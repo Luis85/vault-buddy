@@ -414,6 +414,11 @@ function onEditTitleEsc(e: KeyboardEvent) {
   // in-progress (uncommitted) edit as a side effect of dismissing the
   // candidate.
   if (e.isComposing) return;
+  // Consume the key: without stopPropagation the same keydown bubbles to
+  // PanelRoot's window-level Escape and closes the WHOLE panel — the user
+  // asked to cancel the row edit, not to dismiss the panel (Codex, PR #46;
+  // same class as GAP-27's SelectMenu Escape).
+  e.stopPropagation();
   cancelEdit();
 }
 

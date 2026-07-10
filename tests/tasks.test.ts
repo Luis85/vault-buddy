@@ -530,6 +530,33 @@ describe("Tasks", () => {
     });
   });
 
+  it("editor Escape cancels only the edit — it must not reach the panel-close handler", async () => {
+    // Codex review, PR #46: onEditTitleEsc cancelled the row edit but let
+    // the keydown bubble to PanelRoot's window-level Escape handler, which
+    // closed the WHOLE panel — discarding the editing context instead of
+    // just the row edit (same class as GAP-27's SelectMenu Escape).
+    // Attached mount: a detached tree never bubbles to window, so the
+    // assertion would pass vacuously (the GAP-27 test learned this too).
+    setActivePinia(createPinia());
+    mockIPC((cmd) => (cmd === "list_tasks" ? sample.map((t) => ({ ...t })) : null));
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" }, attachTo: document.body });
+    const reachedWindow = vi.fn();
+    window.addEventListener("keydown", reachedWindow);
+    try {
+      await flushPromises();
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      const titleInput = wrapper.get('[data-testid="task-edit-title"]');
+      await titleInput.trigger("keydown", { key: "Escape", isComposing: false });
+      await flushPromises();
+      expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(false); // edit cancelled
+      expect(reachedWindow).not.toHaveBeenCalled(); // panel-close never sees it
+    } finally {
+      window.removeEventListener("keydown", reachedWindow);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
   it("ignores Escape on the inline editor while composing an IME candidate", async () => {
     // Escape during composition cancels the IME CANDIDATE, not the edit —
     // without the guard, cancelEdit would drop the in-progress edit too.
