@@ -154,14 +154,25 @@ pub fn is_valid_tag(s: &str) -> bool {
         && s.chars().any(|c| !c.is_ascii_digit())
 }
 
-/// Normalize one raw tag token from frontmatter: unquote, trim, strip a
+/// Normalize one raw tag token from frontmatter: unquote (double- or
+/// single-quoted — Obsidian accepts both YAML scalar forms), trim, strip a
 /// leading `#`; None when the result fails `is_valid_tag` (dropped by the
 /// lenient reader).
 fn normalize_tag(raw: &str) -> Option<String> {
     let unquoted = crate::capture_note::unquote_yaml(raw.trim());
     let t = unquoted.trim();
+    // Single-quoted YAML scalar: strip the surrounding pair (the charset
+    // forbids quotes inside a tag, so '' escapes can't occur in a valid one).
+    let t = t
+        .strip_prefix('\'')
+        .and_then(|r| r.strip_suffix('\''))
+        .unwrap_or(t);
     let t = t.strip_prefix('#').unwrap_or(t);
-    is_valid_tag(t).then(|| t.to_string())
+    if is_valid_tag(t) {
+        Some(t.to_string())
+    } else {
+        None
+    }
 }
 
 /// Case-insensitive dedupe preserving first-seen casing (Obsidian matches
@@ -1263,6 +1274,21 @@ mod tests {
         // No space after the colon.
         assert_eq!(
             note_tags("---\ntype: Task\ntags:[work]\n---\n"),
+            vec!["work"]
+        );
+    }
+
+    #[test]
+    fn note_tags_unquotes_single_quoted_scalars() {
+        // Regression (Codex review, PR #46): YAML-valid single-quoted tags were
+        // left with their apostrophes, failed the charset check, and silently
+        // vanished — losing chips and letting a later edit clobber the line.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: ['work', 'home/errands']\n---\n"),
+            vec!["work", "home/errands"]
+        );
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags:\n  - 'work'\n---\n"),
             vec!["work"]
         );
     }
