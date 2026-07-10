@@ -804,4 +804,19 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-input"]').exists()).toBe(false);
   });
 
+  it("shows a vault chip with the vault initial on aggregate rows", async () => {
+    const { wrapper } = mountAggregate();
+    await flushPromises();
+    const chips = wrapper.findAll('[data-testid="task-vault"]');
+    expect(chips).toHaveLength(2);
+    expect(chips[0].text()).toBe("B"); // first row = Beta task
+    expect(chips[0].attributes("title")).toBe("Beta");
+  });
+
+  it("shows no vault chip in per-vault mode", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-vault"]').exists()).toBe(false);
+  });
+
 });

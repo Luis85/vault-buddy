@@ -649,6 +649,12 @@ async function saveEdit(task: AggTask) {
                 @click="openInObsidian(task)"
               >
                 <span
+                  v-if="isAggregate"
+                  data-testid="task-vault"
+                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-violet-600/80 text-[9px] font-bold text-white"
+                  :title="task.vaultName"
+                >{{ task.vaultName.charAt(0).toUpperCase() }}</span>
+                <span
                   v-if="task.priority === 'high' || task.priority === 'low'"
                   data-testid="task-priority"
                   class="h-1.5 w-1.5 shrink-0 rounded-full"
