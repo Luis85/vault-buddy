@@ -114,10 +114,31 @@ rejected with a toast pointing at the same place — never a silent no-op.
 accept exactly one file; a queue is exactly the kind of complexity that
 batch would justify, and it's explicitly deferred.
 
-## Pandoc settings UI
+## Settings placement (app-global vs per-vault)
 
-A new "Document Import" section in Buddy settings, structurally a peer of
-`McpSettings.vue`:
+The feature has two settings surfaces because it has two kinds of setting,
+and they must live where their scope's context is available:
+
+- **Pandoc install status + path override are app-global** (Pandoc is one
+  system-wide binary) → a "Document Import" section in **Buddy settings**
+  (`DocumentImportSettings.vue`, a peer of `McpSettings.vue`), which has no
+  vault context and needs none.
+- **The Documents Folder is per-vault** → it lives in the **vault-scoped**
+  `CaptureSettings.vue`, right beside the existing per-vault Tasks Folder
+  control, which already receives a `vaultId` prop and already saves a
+  per-vault folder through its own `get_documents_config` / `set_documents_config`
+  command pair (exactly mirroring `get_tasks_config` / `set_tasks_config`).
+  Putting the folder control in the global settings section would give it no
+  vault id — every read/write would hit the wrong or a default vault. As with
+  `tasks_folder`, **`set_capture_config` must preserve `documents_folder`**
+  (read-modify-write under `ConfigWriteLock`) so saving recording settings
+  can't reset it.
+
+## Pandoc settings UI (Buddy settings, app-global)
+
+The "Document Import" section in Buddy settings, structurally a peer of
+`McpSettings.vue`, carries **only** app-global Pandoc state — no folder
+control:
 
 - **Status line**: Not Installed / Installed vX.Y.Z, from `detect_pandoc`.
 - **Recheck button**: detection is on-demand only — runs once when the
@@ -147,8 +168,14 @@ A new "Document Import" section in Buddy settings, structurally a peer of
   scoped to *not* do that.
 - **Manual path override**: a text field + "Browse…" native file picker,
   for installs not on `PATH` (e.g. a portable Pandoc). Stored in the new
-  app-global `document_import` config section; `detect_pandoc` checks the
-  override first, falling back to `PATH` lookup (`pandoc --version`).
+  app-global `document_import` config section (written via `set_pandoc_path`);
+  `detect_pandoc` checks the override first, falling back to `PATH` lookup
+  (`pandoc --version`), and returns the configured override so the field can
+  seed itself. The "Browse…" picker and the record-chooser file picker both
+  use `@tauri-apps/plugin-dialog`, which is **not currently a dependency** —
+  wiring it in (npm package, `tauri-plugin-dialog` crate, builder
+  registration, and a `dialog:` capability grant) is an explicit prerequisite
+  task, since without it these buttons fail to build / are rejected at invoke.
 
 ## File organization, naming, frontmatter
 

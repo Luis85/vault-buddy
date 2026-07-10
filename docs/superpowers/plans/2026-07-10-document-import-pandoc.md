@@ -31,6 +31,8 @@ Vue 3 + Pinia + Tailwind 4, Vitest (happy-dom + mockIPC), Pandoc ≥ 2.15
 - **Serialize conversions:** a process-wide `ImportLock` `try_lock` wraps the whole convert-and-publish body; a second concurrent import fails fast ("an import is already in progress") rather than racing the exists-reservation. Staging dirs also carry a per-invocation unique token.
 - **Publish rollback:** publish media dir before the note; if the note commit fails after media is published, roll the media directory back so a failed import leaves nothing at the published path.
 - **Validate the documents folder is inside the vault** with `safe_recording_root` + `assert_path_inside_vault` BOTH when saving the setting AND again in `convert_document` before staging (config.json is hand-editable — `../…`/symlink escapes must be caught at conversion time too).
+- **Settings scope split:** app-global Pandoc state (status, path override) lives in `DocumentImportSettings.vue` (no vault context, `detect_pandoc`/`set_pandoc_path`); the per-vault Documents Folder lives in `CaptureSettings.vue` (`get_documents_config(id)`/`set_documents_config(id, folder)`, mirroring the Tasks Folder). `set_capture_config` must preserve `documents_folder`.
+- **Dialog plugin is a prerequisite (Task 0):** `@tauri-apps/plugin-dialog` + `tauri-plugin-dialog` crate + builder `.plugin(...)` + `dialog:allow-open` capability must be wired before any `open()` file picker is used.
 - **YAML values:** every frontmatter string value goes through `capture_note::yaml_quote` (doubles `\` and `"`) — never emit a raw path.
 - **Config defense:** `config.json` is hand-editable; parse per-field so one bad value defaults only itself. `serialize_config` MUST round-trip the new section (regression-test it, like the `mcp` section).
 - **Failure = nothing published + a toast.** Success = silent save + a toast (no auto-open). Mirrors `capture:failed` / a finished recording.
@@ -55,15 +57,75 @@ Vue 3 + Pinia + Tailwind 4, Vitest (happy-dom + mockIPC), Pandoc ≥ 2.15
 - `src-tauri/src/lib.rs` — register the six new commands in `generate_handler!` + `.manage(ImportLock::default())` + `.manage(DocumentImportPending::default())`.
 - `src-tauri/src/commands.rs` — factor `show_panel(app)` out of `toggle_panel` (reused by `begin_document_import`).
 - `src-tauri/src/main.rs` / shell `lib.rs` module list — `mod document_commands;`.
-- `src-tauri/Cargo.toml` — `[target.'cfg(windows)'.dependencies] winreg` for the registry PATH read.
-- `src/types.ts` — `DocumentsConfig`, `PandocStatus` types; extend `CaptureConfig` with `documentsFolder`.
+- `src-tauri/Cargo.toml` — `[target.'cfg(windows)'.dependencies] winreg` for the registry PATH read; `tauri-plugin-dialog` (Task 0).
+- `package.json` — `@tauri-apps/plugin-dialog` (Task 0).
+- `src-tauri/capabilities/default.json` — `dialog:allow-open` grant (Task 0).
+- `src/components/CaptureSettings.vue` — add the per-vault Documents Folder control (vault-scoped, mirrors its Tasks Folder control).
+- `src/types.ts` — `PandocStatus` type (incl. `configuredPath`); extend `CaptureConfig` with `documentsFolder`.
 - `src/stores/vaults.ts` — new `importPicker` view + `pendingImportPath` + `openImportPicker()`.
 - `src/components/RecordMode.vue` — "Import Document" action (file picker) + Pandoc gate.
 - `src/components/ActionPanel.vue` — route the new `importPicker` view.
-- `src/components/BuddySettings.vue` — embed `DocumentImportSettings`.
+- `src/components/BuddySettings.vue` — embed `DocumentImportSettings` (app-global Pandoc only).
 - `src/roots/BuddyRoot.vue` — Tauri drag-drop listener → open panel on the import picker.
 - `AGENTS.md` — IPC table (+4 commands), config-state row, a Document Import domain subsection.
 - `docs/use-cases/document-import-pandoc.md` — flip status once shipped.
+
+---
+
+## Task 0: Wire the Tauri dialog plugin (prerequisite)
+
+The "Browse…" Pandoc-path picker (Task 7) and the "Import Document" file
+picker (Task 8) both use `@tauri-apps/plugin-dialog`'s `open()`. That plugin
+is **not currently in the project** (verified absent from `package.json`,
+`src-tauri/Cargo.toml`, and `capabilities/default.json`), so without this
+task those buttons fail to build / are rejected at invoke. Wire it once, up
+front.
+
+**Files:**
+- Modify: `package.json` (+ `package-lock.json`)
+- Modify: `src-tauri/Cargo.toml`
+- Modify: `src-tauri/src/lib.rs` — builder `.plugin(...)`
+- Modify: `src-tauri/capabilities/default.json` — permission grant
+
+- [ ] **Step 1: Add the JS + Rust dependencies**
+
+```bash
+npm install @tauri-apps/plugin-dialog
+```
+Add to `src-tauri/Cargo.toml` `[dependencies]` (beside the other
+`tauri-plugin-*` entries):
+```toml
+tauri-plugin-dialog = "2"
+```
+
+- [ ] **Step 2: Register the plugin in the builder**
+
+In `src-tauri/src/lib.rs`, add beside the other `.plugin(...)` calls (order
+doesn't matter except `single-instance` stays first):
+```rust
+.plugin(tauri_plugin_dialog::init())
+```
+
+- [ ] **Step 3: Grant the capability**
+
+In `src-tauri/capabilities/default.json`, add to `permissions`:
+```json
+"dialog:allow-open"
+```
+(Only the open dialog is used — not save/message/ask — so grant the narrow
+`dialog:allow-open`, not `dialog:default`.)
+
+- [ ] **Step 4: Build gate**
+
+Run: `cd src-tauri && npx tauri build --no-bundle` and `npm run build`
+Expected: both succeed (the plugin resolves; the capability schema validates).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/src/lib.rs src-tauri/capabilities/default.json
+git commit -m "chore: add the Tauri dialog plugin for document-import file pickers"
+```
 
 ---
 
@@ -838,6 +900,9 @@ pub struct PandocStatus {
     pub version: Option<String>,
     pub path: Option<String>,
     pub sandbox_supported: bool,
+    /// The raw configured override (None → using PATH), so the settings
+    /// field can seed itself without a second command.
+    pub configured_path: Option<String>,
 }
 
 /// First line of `pandoc --version` is `pandoc <x.y.z>`; return (major, minor).
@@ -926,6 +991,10 @@ fn pandoc_command(program: &str) -> Command {
 #[tauri::command]
 pub async fn detect_pandoc() -> PandocStatus {
     tauri::async_runtime::spawn_blocking(|| {
+        let configured = capture_config::load_config()
+            .document_import
+            .pandoc_path
+            .filter(|p| !p.trim().is_empty());
         let program = resolve_pandoc();
         let output = pandoc_command(&program).arg("--version").output();
         match output {
@@ -938,6 +1007,7 @@ pub async fn detect_pandoc() -> PandocStatus {
                     version,
                     path: Some(program),
                     sandbox_supported: sandbox_supported(major, minor),
+                    configured_path: configured,
                 }
             }
             _ => PandocStatus {
@@ -945,6 +1015,7 @@ pub async fn detect_pandoc() -> PandocStatus {
                 version: None,
                 path: None,
                 sandbox_supported: false,
+                configured_path: configured,
             },
         }
     })
@@ -954,6 +1025,7 @@ pub async fn detect_pandoc() -> PandocStatus {
         version: None,
         path: None,
         sandbox_supported: false,
+        configured_path: None,
     })
 }
 ```
@@ -1327,19 +1399,30 @@ git commit -m "feat(shell): startup janitor for crash-orphaned import staging di
 
 ---
 
-## Task 6: Shell — settings commands + register all four
+## Task 6: Shell — settings commands + register all commands
+
+**Design correction (Codex review):** the per-vault Documents Folder and the
+app-global Pandoc path are **separate scopes** and must have separate
+commands, or the folder control ends up in a view with no vault id. So this
+task produces a **per-vault** `get_documents_config`/`set_documents_config`
+pair — mirroring `get_tasks_config`/`set_tasks_config` *exactly* (id-scoped,
+folder only, no Pandoc) — and an **app-global** `set_pandoc_path`. The
+configured override is read back via `detect_pandoc().configuredPath` (Task
+4), so no separate getter is needed.
 
 **Files:**
 - Modify: `src-tauri/src/document_commands.rs` (config get/set)
-- Modify: `src-tauri/src/lib.rs` — register in `generate_handler!`
+- Modify: `src-tauri/src/capture_commands.rs` — `set_capture_config` must PRESERVE `documents_folder` (read-modify-write), exactly as it already preserves `tasks_folder`; and the `CaptureConfig` DTO get/set must round-trip `documentsFolder`.
+- Modify: `src-tauri/src/lib.rs` — register in `generate_handler!` + `.manage`.
 - Test: none new (logic is thin over Task 1, already tested); register-and-build is the gate.
 
 **Interfaces:**
-- Consumes: `capture_config`, `ConfigWriteLock` (from `crate::capture_commands`), `capture_paths` for folder validation.
+- Consumes: `capture_config`, `ConfigWriteLock`, `capture_paths` for folder validation.
 - Produces:
-  - `#[derive(Serialize)] struct DocumentsConfigDto { documents_folder: Option<String>, pandoc_path: Option<String> }`.
+  - `#[derive(Serialize)] struct DocumentsConfigDto { documents_folder: Option<String> }` (per-vault, camelCase).
   - `#[tauri::command] fn get_documents_config(id: String) -> DocumentsConfigDto`.
-  - `#[tauri::command] fn set_documents_config(lock, id: String, documents_folder: Option<String>, pandoc_path: Option<String>) -> Result<(), String>` — validates the folder inside the vault (like `set_tasks_config`), writes the per-vault `documents_folder` AND the app-global `pandoc_path` under the lock.
+  - `#[tauri::command] fn set_documents_config(lock, id: String, documents_folder: Option<String>) -> Result<(), String>` — validates the folder inside the vault (like `set_tasks_config`), writes only the per-vault `documents_folder`.
+  - `#[tauri::command] fn set_pandoc_path(lock, pandoc_path: Option<String>) -> Result<(), String>` — app-global; writes `document_import.pandoc_path`.
 
 - [ ] **Step 1: Implement (no new unit test; covered by Task 1 + build)**
 
@@ -1353,25 +1436,27 @@ use crate::capture_commands::ConfigWriteLock;
 #[serde(rename_all = "camelCase")]
 pub struct DocumentsConfigDto {
     pub documents_folder: Option<String>,
-    pub pandoc_path: Option<String>,
 }
 
+/// Per-vault documents folder (or None → the frontend shows the "Documents"
+/// default). Unknown vault → None, never an error. Mirrors get_tasks_config.
 #[tauri::command]
 pub fn get_documents_config(id: String) -> DocumentsConfigDto {
-    let cfg = capture_config::load_config();
-    let vault = capture_config::vault_config(&cfg, &id);
+    let vault = capture_config::vault_config(&capture_config::load_config(), &id);
     DocumentsConfigDto {
         documents_folder: vault.documents_folder,
-        pandoc_path: cfg.document_import.pandoc_path,
     }
 }
 
+/// Persist the vault's documents folder. Validates containment BEFORE writing
+/// (the effective folder — explicit or the "Documents" default — must stay in
+/// the vault), serialized behind ConfigWriteLock. Read-modify-write preserves
+/// the vault's other config. Mirrors set_tasks_config exactly.
 #[tauri::command]
 pub fn set_documents_config(
     lock: tauri::State<ConfigWriteLock>,
     id: String,
     documents_folder: Option<String>,
-    pandoc_path: Option<String>,
 ) -> Result<(), String> {
     let vault = discovery::discover_vaults()
         .into_iter()
@@ -1382,40 +1467,57 @@ pub fn set_documents_config(
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .map(str::to_string);
-    // Validate the folder actually used (explicit or the "Documents" default)
-    // stays inside the vault — same guard as set_tasks_config.
     let effective = folder.as_deref().unwrap_or("Documents");
     let root = capture_paths::safe_recording_root(StdPath::new(&vault.path), effective)?;
     capture_paths::assert_path_inside_vault(StdPath::new(&vault.path), &root)?;
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
+    v.documents_folder = folder;
+    capture_config::update_vault_config(&id, v)
+}
 
+/// App-global Pandoc path override (None → PATH lookup). Serialized behind
+/// ConfigWriteLock; round-tripped by serialize_config (Task 1).
+#[tauri::command]
+pub fn set_pandoc_path(
+    lock: tauri::State<ConfigWriteLock>,
+    pandoc_path: Option<String>,
+) -> Result<(), String> {
     let path = pandoc_path
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .map(str::to_string);
-
     let _guard = lock_ignoring_poison(&lock.0);
-    // Per-vault documents_folder.
-    let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
-    v.documents_folder = folder;
-    capture_config::update_vault_config(&id, v)?;
-    // App-global pandoc path.
     capture_config::update_document_import_config(
         vault_buddy_core::capture_config::DocumentImportConfig { pandoc_path: path },
     )
 }
 ```
 
-Register in `src-tauri/src/lib.rs` `generate_handler!` (after the `mcp_commands` block):
+**`set_capture_config` must preserve `documents_folder`.** In
+`capture_commands.rs`, `set_capture_config` reconstructs a `VaultCaptureConfig`
+from its DTO; it already re-reads `tasks_folder` under the lock so a capture
+save can't reset it (AGENTS.md invariant). Add `documents_folder` to that same
+preserve step. Also add `documentsFolder` to the `CaptureConfig` DTO's get/set
+mapping so the field round-trips (Task 7's `CaptureConfig` type adds the TS
+side); the vault-scoped `CaptureSettings.vue` reads it via `get_documents_config`
+and writes it via `set_documents_config` (its own command pair, like the Tasks
+folder), so the capture DTO carrying it is only for round-trip preservation.
+
+Register in `src-tauri/src/lib.rs` `generate_handler!` (after the `mcp_commands`
+block) the commands that exist by now — `begin_document_import` /
+`take_pending_import` are added in Task 9 where they're implemented:
 ```rust
 document_commands::detect_pandoc,
 document_commands::convert_document,
 document_commands::get_documents_config,
 document_commands::set_documents_config,
+document_commands::set_pandoc_path,
 ```
 
-Also register the import lock as app state in the builder (beside the other
-`.manage(...)` calls — e.g. next to `ConfigWriteLock`):
+Also register the import lock app state in the builder (beside the other
+`.manage(...)` — `DocumentImportPending` is added in Task 9):
 ```rust
 .manage(document_commands::ImportLock::default())
 ```
@@ -1428,30 +1530,37 @@ Expected: builds clean.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src-tauri/src/document_commands.rs src-tauri/src/lib.rs
-git commit -m "feat(shell): document-import settings commands + handler registration"
+git add src-tauri/src/document_commands.rs src-tauri/src/capture_commands.rs src-tauri/src/lib.rs
+git commit -m "feat(shell): document-import settings commands + preserve documents_folder"
 ```
 
 ---
 
-## Task 7: Frontend — types + Document Import settings section
+## Task 7: Frontend — Pandoc settings (app-global) + Documents Folder (per-vault)
+
+**Two surfaces, matching the two scopes (Codex review):** app-global Pandoc
+status/path lives in `DocumentImportSettings.vue` (Buddy settings, no vault
+context); the per-vault Documents Folder lives in `CaptureSettings.vue`
+(vault-scoped, already has `vaultId`), beside its existing Tasks Folder
+control.
 
 **Files:**
-- Modify: `src/types.ts`
-- Create: `src/components/DocumentImportSettings.vue`
-- Modify: `src/components/BuddySettings.vue` — embed it
-- Test: `tests/documentImport.test.ts` (settings portion)
+- Modify: `src/types.ts` — `PandocStatus` type; add `documentsFolder` to `CaptureConfig`.
+- Create: `src/components/DocumentImportSettings.vue` — app-global Pandoc only.
+- Modify: `src/components/BuddySettings.vue` — embed `DocumentImportSettings`.
+- Modify: `src/components/CaptureSettings.vue` — add the per-vault Documents Folder input.
+- Test: `tests/documentImport.test.ts` (settings portion).
 
 **Interfaces:**
-- Consumes IPC: `detect_pandoc` → `PandocStatus`, `get_documents_config`/`set_documents_config`.
-- Produces: a self-contained settings card (status line, Recheck, install link, folder + path override inputs), matching `McpSettings.vue`'s shape (in-flight `saving` guard, `logWarning` on failure).
+- `DocumentImportSettings.vue` consumes: `detect_pandoc` → `PandocStatus` (incl. `configuredPath`), `set_pandoc_path`. No vault id — none of its state is per-vault.
+- `CaptureSettings.vue` consumes (added): `get_documents_config(id)`, `set_documents_config(id, documentsFolder)` — the same shape as its existing `get_tasks_config`/`set_tasks_config` calls.
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
 import { mount } from "@vue/test-utils";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import DocumentImportSettings from "../src/components/DocumentImportSettings.vue";
 
 describe("DocumentImportSettings", () => {
@@ -1461,10 +1570,9 @@ describe("DocumentImportSettings", () => {
       if (cmd === "detect_pandoc") {
         calls += 1;
         return calls === 1
-          ? { installed: false, version: null, path: null, sandboxSupported: false }
-          : { installed: true, version: "pandoc 3.1.9", path: "pandoc", sandboxSupported: true };
+          ? { installed: false, version: null, path: null, sandboxSupported: false, configuredPath: null }
+          : { installed: true, version: "pandoc 3.1.9", path: "pandoc", sandboxSupported: true, configuredPath: null };
       }
-      if (cmd === "get_documents_config") return { documentsFolder: null, pandocPath: null };
       return undefined;
     });
     const wrapper = mount(DocumentImportSettings);
@@ -1482,7 +1590,7 @@ describe("DocumentImportSettings", () => {
 Run: `npx vitest run tests/documentImport.test.ts`
 Expected: FAIL (component missing).
 
-- [ ] **Step 3: Implement types + component**
+- [ ] **Step 3: Implement types + components**
 
 In `src/types.ts` add:
 ```ts
@@ -1491,23 +1599,30 @@ export type PandocStatus = {
   version: string | null;
   path: string | null;
   sandboxSupported: boolean;
-};
-export type DocumentsConfig = {
-  documentsFolder: string | null;
-  pandocPath: string | null;
+  configuredPath: string | null;
 };
 ```
-And add `documentsFolder: string | null;` to the existing `CaptureConfig` type (keep it optional-safe — RecordMode seeds it).
+And add `documentsFolder: string | null;` to the existing `CaptureConfig`
+type (round-tripped by get/set_capture_config, mirroring `tasksFolder`).
 
-Create `src/components/DocumentImportSettings.vue` mirroring `McpSettings.vue`:
-- `onMounted`: `get_documents_config` → seed folder + path inputs; then `detect_pandoc` → status.
-- `recheck()`: re-run `detect_pandoc` (guarded by an in-flight ref), `data-testid="pandoc-recheck"`.
-- Status line: `installed === false` → "Not installed"; installed but `!sandboxSupported` → "Installed (version) — too old for safe import (need 2.15+)"; else "Installed (version)".
-- Install link: an anchor to `https://pandoc.org/installing.html` opened via `@tauri-apps/plugin-shell`'s `open` (already a dependency — confirm; else use an `<a target="_blank">`). Prefer the shell `open` to launch the OS browser.
-- Folder input (default placeholder "Documents") + path override input with a "Browse…" button using `@tauri-apps/plugin-dialog`'s `open({ filters: [{ name: "Pandoc", extensions: ["exe", ""] }] })`; on change call `set_documents_config` (in-flight guarded), then re-`detect_pandoc` (a new path may resolve).
-- On save failure: `logWarning` + an inline error line (mirror McpSettings).
+Create `src/components/DocumentImportSettings.vue` (app-global only) mirroring
+`McpSettings.vue`:
+- `onMounted`: `detect_pandoc` → status; seed the path-override field from `status.configuredPath`.
+- `recheck()`: re-run `detect_pandoc` (in-flight guarded), `data-testid="pandoc-recheck"`.
+- Status line: `!installed` → "Not installed"; installed but `!sandboxSupported` → "Installed (version) — too old for safe import (need 2.15+)"; else "Installed (version)".
+- Install link: anchor to `https://pandoc.org/installing.html`, opened via `@tauri-apps/plugin-shell`'s `open` if present, else `<a target="_blank">`.
+- Path override input + "Browse…" using `@tauri-apps/plugin-dialog`'s `open({ multiple:false, filters:[{ name:"Pandoc", extensions:["exe",""] }] })` (Task 0 wired the plugin); on change call `set_pandoc_path` (in-flight guarded), then re-`detect_pandoc` so the new path resolves. **No folder input here.**
+- On failure: `logWarning` + inline error line (mirror McpSettings).
 
-Embed in `BuddySettings.vue` as a new section below the MCP section.
+Embed in `BuddySettings.vue` below the MCP section.
+
+In `CaptureSettings.vue`, add a **Documents Folder** text input beside the
+existing Tasks Folder control (it already has `props.vaultId`): load via
+`get_documents_config({ id: props.vaultId })` in the same place it loads the
+tasks config, and save via `set_documents_config({ id: props.vaultId,
+documentsFolder })` in its save flow — copy the Tasks Folder control's
+markup, load, save, and error handling verbatim, swapping the command names
+and label. Placeholder "Documents".
 
 - [ ] **Step 4: Run — verify pass + typecheck**
 
@@ -1517,8 +1632,8 @@ Expected: PASS + typecheck clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/types.ts src/components/DocumentImportSettings.vue src/components/BuddySettings.vue tests/documentImport.test.ts
-git commit -m "feat(ui): Document Import settings section (detect/recheck/override)"
+git add src/types.ts src/components/DocumentImportSettings.vue src/components/BuddySettings.vue src/components/CaptureSettings.vue tests/documentImport.test.ts
+git commit -m "feat(ui): app-global Pandoc settings + per-vault Documents Folder"
 ```
 
 ---
@@ -1758,11 +1873,12 @@ git commit -m "feat: buddy drag-drop imports a document via a vault picker"
 
 - [ ] **Step 1: Update AGENTS.md**
 
-- IPC surface table: add a `document_commands.rs` row — `detect_pandoc`, `convert_document` (async — external subprocess), `get_documents_config`, `set_documents_config`, `begin_document_import`, `take_pending_import`. Update the "All N commands" count (43 → 49).
+- IPC surface table: add a `document_commands.rs` row — `detect_pandoc`, `convert_document` (async — external subprocess), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import`, `take_pending_import`. Update the "All N commands" count (43 → 50).
 - Add a "The document-import domain" subsection under the capture-domain area, summarizing: Pandoc-gated, `--sandbox` + heap cap, up-front joint note+media reservation, in-vault staging, publish-media-then-note with rollback, process-wide `ImportLock`, containment re-validation, startup `import-recovery` janitor for crash-orphaned staging dirs, fifth sanctioned vault write.
 - Diagnostics/threads: note the new named threads `import-recovery` (and, from Task 4, that detection/conversion offload to `spawn_blocking`).
 - Note the `commands::show_panel` refactor (factored from `toggle_panel`; also used by `begin_document_import`) in the window-system section.
-- "Where state lives on disk" row: note the app-global `documentImport` section + per-vault `documentsFolder` in `config.json`.
+- Note the new `tauri-plugin-dialog` + `dialog:allow-open` capability grant.
+- "Where state lives on disk" row: note the app-global `documentImport` section + per-vault `documentsFolder` in `config.json`, and that `set_capture_config` preserves `documents_folder` (like `tasks_folder`).
 - Frontend-state section: mention the `importPicker` view and the Rust-owned pending-import consumed in `refresh()` (via `take_pending_import`).
 
 - [ ] **Step 2: Flip the use-case status**
@@ -1823,5 +1939,7 @@ git commit -m "chore: update shrink-only baselines for document import"
 ## Self-Review Notes
 
 - **Spec coverage:** trigger flows (Tasks 8/9), Pandoc gate + settings (Tasks 4/6/7), format scope (Task 2), file org/naming/frontmatter (Tasks 2/3), sandbox + heap cap + relative paths + cross-volume staging (Tasks 3/5), registry PATH refresh (Task 4), conversion serialization via ImportLock (Task 5), up-front joint note+media reservation (Tasks 3/5), media-publish rollback (Task 3), documents-folder containment revalidation (Tasks 5/6), crash-orphan staging recovery (Tasks 3/5b), buddy-drop pending-import surviving panel-shown (Task 9), failure = nothing published + toast (Tasks 3/5/8/9), success = silent save + toast (Tasks 8/9), config round-trip (Task 1), never-clobber (Task 3). All mapped.
-- **Type consistency:** `PandocStatus`/`DocumentsConfigDto` camelCase across Rust↔TS; `convert_document(id, sourcePath)` and `set_documents_config(id, documentsFolder, pandocPath)` arg names match the Vue call sites; `DocFormat`/`DocMeta`/`StagePlan`/`reserve_basename` used consistently across Tasks 2/3/5; `plan_staging(target_dir, basename, unique)` and `publish` write at the exact reserved name (no re-suffix); `ImportLock` holds an `Arc<Mutex<()>>` so its guard survives `spawn_blocking`; the buddy drop routes through `begin_document_import`/`take_pending_import` + `commands::show_panel`, not an emit-then-toggle.
+- **Type consistency:** `PandocStatus` (incl. `configuredPath`)/`DocumentsConfigDto` camelCase across Rust↔TS; `convert_document(id, sourcePath)`, `set_documents_config(id, documentsFolder)` (per-vault, folder only), and `set_pandoc_path(pandocPath)` (app-global) arg names match the Vue call sites; `DocFormat`/`DocMeta`/`StagePlan`/`reserve_basename` used consistently across Tasks 2/3/5; `plan_staging(target_dir, basename, unique)` and `publish` write at the exact reserved name (no re-suffix); `ImportLock` holds an `Arc<Mutex<()>>` so its guard survives `spawn_blocking`; the buddy drop routes through `begin_document_import`/`take_pending_import` + `commands::show_panel`, not an emit-then-toggle.
+- **Scope split:** app-global Pandoc (status/path) in `DocumentImportSettings.vue` (no vault id); per-vault Documents Folder in `CaptureSettings.vue` (has `vaultId`), via its own `get/set_documents_config` pair mirroring the Tasks Folder; `set_capture_config` preserves `documents_folder`.
+- **Prereqs:** `tauri-plugin-dialog` (Task 0) must be wired before Tasks 7/8 use `open()`; the file pickers are otherwise rejected at invoke.
 - **Known deviations to watch:** `winreg` is Windows-only (cfg-gated) — machete/deny may need a documented ignore; the ImportLock `try_lock` intentionally rejects (not queues) a concurrent import; the residual post-reservation name race errors + rolls back rather than re-suffixing (would break Pandoc's baked-in links); factoring `show_panel` out of `toggle_panel` must preserve every existing `toggle_panel` invariant (position-while-hidden, focus, `panel-shown`, hide bubble).
