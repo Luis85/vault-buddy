@@ -271,17 +271,31 @@ pub struct DeviceListDto {
     pub outputs: Vec<DeviceInfoDto>,
 }
 
+/// ASYNC (GAP-22): COM/WASAPI enumeration commonly takes hundreds of ms;
+/// on the main thread that stalled the settings view. cpal initializes COM
+/// per calling thread, so the blocking pool is fine (the capture-device
+/// worker already enumerates off-main).
 #[tauri::command]
-pub fn list_audio_devices() -> DeviceListDto {
-    let list = vault_buddy_capture::devices::list_devices();
-    let map = |d: vault_buddy_capture::devices::DeviceInfo| DeviceInfoDto {
-        name: d.name,
-        is_default: d.is_default,
-    };
-    DeviceListDto {
-        inputs: list.inputs.into_iter().map(map).collect(),
-        outputs: list.outputs.into_iter().map(map).collect(),
-    }
+pub async fn list_audio_devices() -> DeviceListDto {
+    tauri::async_runtime::spawn_blocking(|| {
+        let list = vault_buddy_capture::devices::list_devices();
+        let map = |d: vault_buddy_capture::devices::DeviceInfo| DeviceInfoDto {
+            name: d.name,
+            is_default: d.is_default,
+        };
+        DeviceListDto {
+            inputs: list.inputs.into_iter().map(map).collect(),
+            outputs: list.outputs.into_iter().map(map).collect(),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_audio_devices: task failed: {e}");
+        DeviceListDto {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    })
 }
 
 /// Read-only list of a vault's past recordings for the Recordings view.
@@ -289,9 +303,19 @@ pub fn list_audio_devices() -> DeviceListDto {
 /// and reads each recording's companion note for type/duration. An unknown
 /// vault or unreadable roots yield an empty list — never an error (mirrors
 /// discovery's degrade-to-empty rule). Never writes into the vault.
+///
+/// ASYNC (GAP-22): scans dated folders and reads every companion note's
+/// frontmatter — a large archive stalled the UI on every panel open.
 #[tauri::command]
-pub fn list_recordings(id: String) -> Vec<RecordingDto> {
-    services::list_recordings(&ServicePaths::real(), &id)
+pub async fn list_recordings(id: String) -> Vec<RecordingDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::list_recordings(&ServicePaths::real(), &id)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_recordings: task failed: {e}");
+        Vec::new()
+    })
 }
 
 fn start_capture_blocking(
@@ -1219,6 +1243,16 @@ mod tests {
     fn start_capture_is_async() {
         fn takes_async<F: std::future::Future>(_: fn(AppHandle, String, Option<String>) -> F) {}
         takes_async(start_capture);
+    }
+
+    // GAP-22: the read-only list commands must be async (blocking fs/COM
+    // work belongs on the blocking pool, not the main thread).
+    #[allow(dead_code)]
+    fn list_commands_are_async() {
+        fn takes_async1<F: std::future::Future>(_: fn(String) -> F) {}
+        fn takes_async0<F: std::future::Future>(_: fn() -> F) {}
+        takes_async1(list_recordings);
+        takes_async0(list_audio_devices);
     }
 
     #[test]

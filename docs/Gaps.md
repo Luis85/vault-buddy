@@ -235,15 +235,11 @@ runs under `spawn_blocking` with reservation semantics unchanged; the
 buddy-show indicator tail is marshalled back to the main thread
 (window show is main-thread-only).
 
-### GAP-22 · Medium · Read-only list commands do unbounded filesystem/device work on the main thread
-`capture_commands.rs:300` (`list_recordings` — scans dated folders and
-reads every note's frontmatter), `task_commands.rs:97/182`
-(`list_tasks`/`count_open_tasks` — recursive subtree walk),
-`capture_commands.rs:269` (`list_audio_devices` — COM/WASAPI enumeration,
-commonly hundreds of ms). A large archive or slow disk stalls the UI on
-every panel open — the reason `search_vaults` was made async.
-**Fix:** make these async (they touch no window APIs or window-state
-locks).
+### GAP-22 · ~~Medium~~ FIXED 2026-07-10 · Read-only list commands do unbounded filesystem/device work on the main thread
+`list_recordings`, `list_tasks`, `count_open_tasks`, and
+`list_audio_devices` are async now, each wrapping its filesystem/COM work
+in `spawn_blocking` (the `search_vaults` precedent); a panicked task
+degrades to the empty value each already used, with a warn.
 
 ## 3. Robustness & swallowed errors
 

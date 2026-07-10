@@ -117,9 +117,16 @@ fn validated_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
 
 /// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
 /// folder → empty list, never an error (mirrors list_recordings). Never writes.
+///
+/// ASYNC (GAP-22): recursive tasks-folder walk — off the main thread.
 #[tauri::command]
-pub fn list_tasks(id: String) -> Vec<TaskDto> {
-    services::list_tasks(&ServicePaths::real(), &id)
+pub async fn list_tasks(id: String) -> Vec<TaskDto> {
+    tauri::async_runtime::spawn_blocking(move || services::list_tasks(&ServicePaths::real(), &id))
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!("list_tasks: task failed: {e}");
+            Vec::new()
+        })
 }
 
 /// Create a task from a title (creating the tasks folder if needed). Rejects
@@ -167,9 +174,19 @@ pub fn set_task_status(id: String, path: String, status: String) -> Result<(), S
 /// Number of OPEN tasks (status != "done"; archived already excluded by
 /// list_tasks) in a vault, for the vault-row badge. Unknown vault / unsafe or
 /// missing folder / escape → 0, never an error (mirrors list_tasks). Read-only.
+///
+/// ASYNC (GAP-22): same walk as list_tasks, fanned out per vault by the
+/// panel's badge refresh.
 #[tauri::command]
-pub fn count_open_tasks(id: String) -> usize {
-    services::count_open_tasks(&ServicePaths::real(), &id)
+pub async fn count_open_tasks(id: String) -> usize {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::count_open_tasks(&ServicePaths::real(), &id)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("count_open_tasks: task failed: {e}");
+        0
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -259,4 +276,18 @@ pub fn open_task(id: String, path: String) -> Result<(), String> {
     let rel = uri::vault_relative_no_ext(&canon_path, &canon_vault)
         .ok_or_else(|| format!("task is outside its vault: {path}"))?;
     uri::launch(&uri::open_file_uri(&id, &rel))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // GAP-22: list_tasks/count_open_tasks must be async — the recursive
+    // tasks-folder walk ran on the main thread on every panel open.
+    #[allow(dead_code)]
+    fn task_list_commands_are_async() {
+        fn is_future<F: std::future::Future>(_: fn(String) -> F) {}
+        is_future(list_tasks);
+        is_future(count_open_tasks);
+    }
 }
