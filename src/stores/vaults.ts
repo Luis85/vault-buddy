@@ -81,6 +81,11 @@ export const useVaultsStore = defineStore("vaults", {
       ).catch(() => null);
       if (dropped) {
         this.openImportPicker(dropped);
+        // A drop supersedes any armed one-shot view (e.g. the startup update
+        // check's "settings"): clear it so a LATER panel-shown refresh doesn't
+        // consume it stale and navigate away after the import returns to list.
+        this.pendingView = null;
+        this.pendingCaptureVaultId = null;
       } else if (this.pendingView) {
         this.view = this.pendingView;
         this.captureSettingsVaultId = this.pendingCaptureVaultId;

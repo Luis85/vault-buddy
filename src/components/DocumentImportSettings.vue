@@ -9,6 +9,10 @@ import { withDialogSuppressed } from "../utils/nativeDialog";
 
 const status = ref<PandocStatus | null>(null);
 const pathOverride = ref("");
+// Set once the user has touched the override field. The input is enabled while
+// the initial detect() is still in flight, so a user who types during a slow
+// probe must not have their edit clobbered by the on-mount seed below.
+const dirtied = ref(false);
 const error = ref<string | null>(null);
 // Single in-flight guard shared by recheck() and savePath() — mirrors
 // McpSettings' one `saving` flag serializing save()/regenerate(): two
@@ -29,8 +33,11 @@ async function detect() {
 
 onMounted(async () => {
   await detect();
-  // Seed the override field from the resolved status, not a second command.
-  pathOverride.value = status.value?.configuredPath ?? "";
+  // Seed the override field from the resolved status, not a second command —
+  // but never over a value the user already typed while detect was in flight.
+  if (!dirtied.value) {
+    pathOverride.value = status.value?.configuredPath ?? "";
+  }
 });
 
 async function recheck() {
@@ -170,6 +177,7 @@ const statusLabel = computed(() => {
             placeholder="pandoc"
             class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
+            @input="dirtied = true"
             @change="savePath"
           >
           <button

@@ -119,6 +119,29 @@ describe("DocumentImportSettings", () => {
     );
   });
 
+  it("does not clobber a path edit typed while detect is still in flight", async () => {
+    // The input is enabled during the initial probe; a value typed then must
+    // survive the on-mount seed that fires when detect resolves.
+    let resolveDetect: (v: unknown) => void = () => {};
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "detect_pandoc") {
+        return new Promise((r) => {
+          resolveDetect = r;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(DocumentImportSettings);
+    await flushPromises(); // detect pending, field enabled
+    const input = wrapper.get('[data-testid="pandoc-path-input"]');
+    await input.setValue("C:/custom/pandoc.exe"); // user edit → dirties the field
+
+    resolveDetect(installed({ configuredPath: "/old/configured/pandoc" }));
+    await flushPromises();
+    // Seed skipped — the edit stands, not the resolved configuredPath.
+    expect((input.element as HTMLInputElement).value).toBe("C:/custom/pandoc.exe");
+  });
+
   it("shows the too-old warning when sandbox is unsupported", async () => {
     routeInvoke({
       detect: [installed({ version: "pandoc 2.14", sandboxSupported: false })],
