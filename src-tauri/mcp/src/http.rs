@@ -108,10 +108,13 @@ async fn guard(
     Ok(next.run(req).await)
 }
 
-/// How long in-flight requests get after a shutdown request before the
-/// listener is closed by force. Bounds `RunningServer::stop()` by
-/// construction — the disable/regenerate path must be able to PROVE the old
-/// socket (and old token) are gone before reporting success.
+/// How long in-flight connections get to drain after a shutdown request
+/// before the runtime is torn down out from under them. Bounds
+/// `RunningServer::stop()` by construction — the disable/regenerate path
+/// must be able to PROVE the old socket (and old token) are gone before
+/// reporting success. Note the LISTENER is not what this waits on: axum
+/// drops it the moment the cancel signal fires (see the shutdown comment in
+/// `start`); this grace is for the accepted connections still being served.
 const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// A live server: the bound port plus the handles to stop it. Dropping
@@ -124,9 +127,12 @@ pub struct RunningServer {
 }
 
 impl RunningServer {
-    /// Cancel + join. The join is bounded by DRAIN_GRACE by construction
-    /// (the runner force-closes after the drain), so this returns promptly
-    /// and only once the listener is actually released.
+    /// Cancel + join. The join is bounded by DRAIN_GRACE by construction:
+    /// the serve select falls through after the grace, `block_on` returns,
+    /// and the thread drops its per-`start` runtime — whose teardown shuts
+    /// down every connection task still alive (see the shutdown comment in
+    /// `start`). So this returns promptly, and only once the listener AND
+    /// every accepted connection are actually gone.
     pub fn stop(self) {
         self.cancel.cancel();
         if self.join.join().is_err() {
@@ -149,6 +155,13 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
     let join = std::thread::Builder::new()
         .name("mcp-server".into())
         .spawn(move || {
+            // INVARIANT: one runtime per start(), owned by this thread and
+            // dropped when this closure ends. The bounded-stop guarantee
+            // DEPENDS on that drop: runtime teardown is what kills any
+            // connection task the graceful drain couldn't finish (see the
+            // shutdown comment at the select below). Reusing a shared or
+            // persistent runtime here would silently let a pinned connection
+            // outlive stop() and keep honoring the old token.
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -193,6 +206,34 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
                 let serve = axum::serve(listener, router)
                     .with_graceful_shutdown(async move { shutdown.cancelled().await });
                 let forced = ct.clone();
+                // How shutdown really works (traced through the vendored
+                // sources — do not "simplify" this back to a claim that
+                // dropping the serve future closes anything). Cancelling `ct`
+                // propagates three ways at once:
+                //   1. axum's graceful shutdown breaks the accept loop and
+                //      drops the LISTENER immediately — before waiting on
+                //      connections (axum-0.8.9 serve/mod.rs,
+                //      WithGracefulShutdown::run). The port is free from that
+                //      moment, regardless of which select arm wins.
+                //   2. rmcp ends every SSE response body: each is built with
+                //      `take_until(child_token.cancelled())`
+                //      (rmcp sse_stream_response), so streams close and their
+                //      connection tasks can finish — the normal path, where
+                //      `serve` completes and the first arm wins.
+                //   3. hyper's per-connection graceful_shutdown stops NEW
+                //      requests on kept-alive connections, but does NOT cut a
+                //      response still in flight.
+                // The second arm bounds the stragglers: accepted connections
+                // run on DETACHED tokio::spawn tasks, so dropping the `serve`
+                // future kills nothing by itself — it only abandons axum's
+                // wait on them. What actually kills a connection that outlives
+                // the grace is falling out of this block_on: the per-`start`
+                // current-thread runtime is dropped at the end of the thread
+                // closure, and tokio's Runtime::drop shuts down every
+                // remaining task (close_and_shutdown_all), closing their
+                // sockets. stop() joins the thread, so it returns only after
+                // that teardown — a client pinning a stream open cannot keep
+                // the old endpoint (and old token) alive past it.
                 tokio::select! {
                     result = serve => {
                         if let Err(e) = result {
@@ -203,10 +244,6 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
                         forced.cancelled().await;
                         tokio::time::sleep(DRAIN_GRACE).await;
                     } => {
-                        // Dropping the serve future hard-closes the listener and
-                        // every connection. A client pinning an SSE stream open
-                        // must not keep the old endpoint (and old token) alive
-                        // after the UI reports the server stopped.
                         log::warn!("mcp: graceful drain timed out; forcing close");
                     }
                 }

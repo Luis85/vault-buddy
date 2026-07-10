@@ -203,6 +203,122 @@ async fn stop_closes_the_listener_even_with_a_pinned_open_stream() {
     assert!(rebind.is_ok(), "old listener still owns the port");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_terminates_a_session_bound_sse_stream_within_the_drain_bound() {
+    // Reviewer follow-up to the pinned-GET test above, which may be refused
+    // sessionless before it is ever served: this one pins a stream the server
+    // GENUINELY serves — the session-bound standalone SSE notification stream,
+    // reached through a full initialize handshake — and asserts the property
+    // that matters for disable/regenerate: stop() is bounded, the port is
+    // freed, AND the pinned stream itself dies, so a stale connection cannot
+    // keep honoring the old token. Two layers enforce that death (cancel ends
+    // rmcp's SSE bodies via take_until — the normal path; the per-`start`
+    // runtime teardown kills any straggler — see the shutdown comment in
+    // http.rs). This test pins the PROPERTY rather than either mechanism, so
+    // a refactor that breaks the guarantee (e.g. a shared runtime plus
+    // streams no longer tied to the token) fails here instead of shipping.
+    let dir = tempfile::tempdir().unwrap();
+    let server = start(fixture_deps(dir.path(), false), 0, TOKEN.to_string()).unwrap();
+    let port = server.port;
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    let client = authed_http_client();
+
+    // Raw JSON-RPC handshake, shapes as rmcp's own client sends them: the
+    // initialize response carries the session id in the Mcp-Session-Id header
+    // (rmcp handle_post), and notifications/initialized completes the session.
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "pin-test", "version": "0.0.0" }
+        }
+    });
+    let resp = client
+        .post(&url)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&init)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "initialize failed: {}",
+        resp.status()
+    );
+    let session_id = resp
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("initialize response carries a session id")
+        .to_str()
+        .unwrap()
+        .to_string();
+    drop(resp); // request-scoped response stream; the session outlives it
+
+    let resp = client
+        .post(&url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .json(&serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+
+    // The session-bound standalone SSE stream: rmcp serves this GET and holds
+    // it open indefinitely (15s keep-alive pings between events).
+    let mut pinned = client
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        pinned.status(),
+        reqwest::StatusCode::OK,
+        "the pinned GET must be genuinely served, not refused"
+    );
+    // Prove the stream is LIVE before stop: rmcp primes standalone streams
+    // with an immediate SSE retry event, so a first chunk arrives promptly.
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), pinned.chunk())
+        .await
+        .expect("pinned stream must be readable before stop()")
+        .unwrap();
+    assert!(first.is_some(), "expected the SSE priming event");
+
+    let started = std::time::Instant::now();
+    tokio::task::spawn_blocking(move || server.stop())
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(8),
+        "stop() must be bounded by the drain grace"
+    );
+    let rebind = tokio::net::TcpListener::bind(("127.0.0.1", port)).await;
+    assert!(rebind.is_ok(), "old listener still owns the port");
+    // The pinned stream must DIE, not linger: after stop() the connection is
+    // gone (its task was torn down with the runtime), so reading reaches
+    // end-of-body or a connection error within the bound — it must not block
+    // on a socket that would still be serving under the old token.
+    let terminated = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            match pinned.chunk().await {
+                Ok(Some(_)) => continue, // drain whatever was in flight
+                Ok(None) => break,       // clean end of body
+                Err(_) => break,         // connection reset/aborted — dead too
+            }
+        }
+    })
+    .await;
+    assert!(
+        terminated.is_ok(),
+        "pinned session stream still alive after stop() — a stale connection would keep honoring the old token"
+    );
+}
+
 #[test]
 fn a_taken_port_is_a_synchronous_error() {
     let dir = tempfile::tempdir().unwrap();
