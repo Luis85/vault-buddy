@@ -185,16 +185,25 @@ fn pandoc_command(program: &str) -> Command {
     cmd
 }
 
-/// Probe one candidate: run `<program> --version`. On success, return the
-/// program string, its parsed (major, minor), AND the first `--version` line
-/// for display — all from the SAME spawn. None if it can't run or exits
-/// non-zero (so the caller falls through to the next candidate).
+/// Max wall-clock for a `--version` probe. `--version` returns near-instantly
+/// for a real Pandoc, so this is generous; it exists only to bound a
+/// pathological candidate (a wrapper/network binary that hangs) so it can't
+/// block the probe loop — critically in the import path, where the probe runs
+/// while `ImportLock` is held (Codex review).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Probe one candidate: run `<program> --version` (bounded — see `PROBE_TIMEOUT`).
+/// On success, return the program string, its parsed (major, minor), AND the
+/// first `--version` line for display — all from the SAME spawn. None if it
+/// can't run, times out, or exits non-zero (so the caller falls through to the
+/// next candidate).
 fn probe_pandoc(program: &str) -> Option<(String, u32, u32, String)> {
-    let out = pandoc_command(program).arg("--version").output().ok()?;
-    if !out.status.success() {
+    let mut cmd = pandoc_command(program);
+    cmd.arg("--version");
+    let (ok, stdout) = run_capturing(cmd, PROBE_TIMEOUT, Capture::Stdout).ok()?;
+    if !ok {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
     let (major, minor) = parse_pandoc_version(&stdout)?;
     // Reuse the version output we already have for the display line — a second
     // spawn (and, on Windows, a second registry PATH read) just to re-read the
@@ -406,7 +415,7 @@ fn convert_blocking(
         .arg(src) // absolute source
         .args(&args);
 
-    let run = run_with_timeout(cmd, CONVERT_TIMEOUT);
+    let run = run_capturing(cmd, CONVERT_TIMEOUT, Capture::Stderr);
     match run {
         Ok((true, _)) => {}
         Ok((false, stderr)) => {
@@ -446,23 +455,50 @@ fn convert_blocking(
     Ok(rel)
 }
 
-/// Spawn + wait with a wall-clock kill. Returns `(success, stderr)`: `success`
-/// is true on a zero-exit, false on non-zero/killed; `stderr` is Pandoc's
-/// captured error output (empty when none) so a field failure is debuggable —
-/// a Windows GUI build has no console for inherited stderr, so without this a
-/// failed conversion would be a black box. `Err` only on spawn failure.
-fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<(bool, String)> {
+/// Which child stream `run_capturing` pipes back: conversion wants stderr (the
+/// failure reason), the `--version` probe wants stdout (the version line).
+#[derive(Clone, Copy)]
+enum Capture {
+    Stdout,
+    Stderr,
+}
+
+/// Spawn `cmd`, wait with a wall-clock kill at `timeout`, and return
+/// `(success, captured)`: `success` is true on a zero-exit, false on
+/// non-zero/killed; `captured` is the chosen stream's output (empty when none).
+/// The kill matters for BOTH callers — a hung `--version` probe (a wrapper or
+/// network binary that never returns) would otherwise block forever, and in the
+/// import path that runs while `ImportLock` is held, wedging every later import
+/// until restart (Codex review). The captured stream is drained on a named
+/// worker so a chatty child can't fill the pipe buffer and deadlock the poll
+/// loop; stdin is nulled so a child can't block reading it, and the other std
+/// stream is nulled. `Err` only on spawn failure.
+fn run_capturing(
+    mut cmd: Command,
+    timeout: Duration,
+    capture: Capture,
+) -> std::io::Result<(bool, String)> {
     use std::io::Read;
     use std::process::Stdio;
-    // Pandoc writes its output to the `-o` file, so stdout is noise — null it.
-    // Pipe stderr and DRAIN it on a named worker: a chatty child could fill the
-    // pipe buffer and block on write while our loop only polls for exit, so a
-    // reader must run concurrently rather than after the wait.
-    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::null());
+    match capture {
+        Capture::Stdout => cmd.stdout(Stdio::piped()).stderr(Stdio::null()),
+        Capture::Stderr => cmd.stdout(Stdio::null()).stderr(Stdio::piped()),
+    };
     let mut child = cmd.spawn()?;
-    let drain = child.stderr.take().and_then(|mut s| {
+    let stream: Option<Box<dyn Read + Send>> = match capture {
+        Capture::Stdout => child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+        Capture::Stderr => child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    };
+    let drain = stream.and_then(|mut s| {
         std::thread::Builder::new()
-            .name("pandoc-stderr".into())
+            .name("pandoc-io".into())
             .spawn(move || {
                 let mut buf = Vec::new();
                 let _ = s.read_to_end(&mut buf);
@@ -471,6 +507,7 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<(boo
             .ok()
     });
     let start = std::time::Instant::now();
+    let mut timed_out = false;
     let success = loop {
         if let Some(status) = child.try_wait()? {
             break status.success();
@@ -478,16 +515,27 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<(boo
         if start.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
+            timed_out = true;
             break false;
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    // Child has exited or been killed → its stderr is closed, so the drain ends.
-    let stderr = drain
-        .and_then(|h| h.join().ok())
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default();
-    Ok((success, stderr))
+    // On a NORMAL exit the child closed its pipe, so joining the drain returns
+    // its output at once. On a TIMEOUT we must NOT join: killing the child does
+    // not reap a grandchild it may have forked, and that grandchild can keep the
+    // pipe's write end open — so `read_to_end` (and thus the join) would block
+    // as long as it lives, recreating the very hang this timeout bounds. We
+    // don't need the output on a failure, so drop the handle and let the named
+    // reader finish detached.
+    let captured = if timed_out {
+        String::new()
+    } else {
+        drain
+            .and_then(|h| h.join().ok())
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default()
+    };
+    Ok((success, captured))
 }
 
 /// Detect Pandoc on demand (settings-open + Recheck). Async + spawn_blocking:
@@ -716,6 +764,35 @@ mod tests {
         );
         assert_eq!(parse_pandoc_version("pandoc.exe 2.14.2"), Some((2, 14)));
         assert_eq!(parse_pandoc_version("not pandoc"), None);
+    }
+
+    // The probe/convert runner must never wait on a hung child. Unix-only
+    // because the tests drive `sh`; the shell crate's tests run on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn run_capturing_returns_the_chosen_stream_on_success() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf 'pandoc 3.1.9\\n'"]);
+        let (ok, out) = run_capturing(cmd, Duration::from_secs(5), Capture::Stdout).unwrap();
+        assert!(ok);
+        assert!(out.contains("pandoc 3.1.9"), "captured stdout: {out:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_capturing_kills_a_hung_child_at_the_timeout() {
+        // A child that would otherwise run for 30s must be killed promptly and
+        // reported as failure — the guarantee that a wedged `--version` can't
+        // hold ImportLock forever.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let start = std::time::Instant::now();
+        let (ok, _) = run_capturing(cmd, Duration::from_millis(150), Capture::Stderr).unwrap();
+        assert!(!ok);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "should return at the timeout, not wait out the sleep"
+        );
     }
 
     #[test]
