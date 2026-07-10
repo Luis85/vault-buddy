@@ -885,7 +885,7 @@ git commit -m "feat(core): document-import staging + collision-safe publish"
 - Produces:
   - `#[derive(Serialize)] struct PandocStatus { installed: bool, version: Option<String>, path: Option<String>, sandbox_supported: bool }` (camelCase).
   - `#[tauri::command] async fn detect_pandoc() -> PandocStatus`.
-  - pure helpers: `fn parse_pandoc_version(stdout: &str) -> Option<(u32,u32)>`, `fn sandbox_supported(major: u32, minor: u32) -> bool` (≥ 2.15), `fn merged_path(base: &str, extra: &[String]) -> String`.
+  - helpers: `fn parse_pandoc_version(stdout: &str) -> Option<(u32,u32)>`, `fn sandbox_supported(major: u32, minor: u32) -> bool` (≥ 2.15), `fn merged_path(base: &str, extra: &[String]) -> String`, `fn pandoc_candidates() -> Vec<String>` (override→PATH, deduped), `fn probe_pandoc(program) -> Option<(String,u32,u32)>`, `fn resolve_working_pandoc() -> Option<(String,u32,u32,String)>` (first candidate that runs — the override→PATH fallback both `detect_pandoc` and `convert_document` share).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1007,15 +1007,25 @@ fn registry_path_entries() -> Vec<String> {
     Vec::new()
 }
 
-/// Locate the pandoc executable: the configured override first, else PATH
-/// (augmented on Windows with the live registry PATH). Returns the resolved
-/// command string to invoke.
-fn resolve_pandoc() -> String {
-    let cfg = capture_config::load_config().document_import;
-    if let Some(p) = cfg.pandoc_path.filter(|p| !p.trim().is_empty()) {
-        return p;
+/// Ordered pandoc candidates to try: the configured override FIRST (if
+/// non-empty), then the bare `pandoc` PATH lookup. Both are probed in order so
+/// a stale/mistyped override does NOT hide a valid Pandoc on PATH — detection
+/// falls through to PATH before reporting Not Installed (the settings contract
+/// promises the override is checked first, *falling back* to PATH). Deduped so
+/// an override literally equal to `pandoc` isn't probed twice.
+fn pandoc_candidates() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(p) = capture_config::load_config()
+        .document_import
+        .pandoc_path
+        .filter(|p| !p.trim().is_empty())
+    {
+        out.push(p);
     }
-    "pandoc".to_string()
+    if !out.iter().any(|c| c == "pandoc") {
+        out.push("pandoc".to_string());
+    }
+    out
 }
 
 /// Build a Command with the registry-augmented PATH so PATH lookup sees a
@@ -1030,6 +1040,42 @@ fn pandoc_command(program: &str) -> Command {
     cmd
 }
 
+/// Probe one candidate: run `<program> --version`. On success, return the
+/// program string with its parsed (major, minor). None if it can't run or
+/// exits non-zero (so the caller falls through to the next candidate).
+fn probe_pandoc(program: &str) -> Option<(String, u32, u32)> {
+    let out = pandoc_command(program).arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (major, minor) = parse_pandoc_version(&stdout)?;
+    Some((program.to_string(), major, minor))
+}
+
+/// First working pandoc across the ordered candidates (override → PATH), with
+/// its full first `--version` line for display. None if no candidate runs.
+fn resolve_working_pandoc() -> Option<(String, u32, u32, String)> {
+    for program in pandoc_candidates() {
+        // Re-run to capture the version line too; probe_pandoc already proved
+        // it succeeds, so this second call is cheap and only on the winner.
+        if let Some((prog, major, minor)) = probe_pandoc(&program) {
+            let line = pandoc_command(&prog)
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .next()
+                        .map(|l| l.trim().to_string())
+                });
+            return Some((prog, major, minor, line.unwrap_or_default()));
+        }
+    }
+    None
+}
+
 /// Detect Pandoc on demand (settings-open + Recheck). Async + spawn_blocking:
 /// spawning a subprocess is blocking I/O and must stay off the main thread.
 #[tauri::command]
@@ -1039,22 +1085,17 @@ pub async fn detect_pandoc() -> PandocStatus {
             .document_import
             .pandoc_path
             .filter(|p| !p.trim().is_empty());
-        let program = resolve_pandoc();
-        let output = pandoc_command(&program).arg("--version").output();
-        match output {
-            Ok(o) if o.status.success() => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                let (major, minor) = parse_pandoc_version(&stdout).unwrap_or((0, 0));
-                let version = stdout.lines().next().map(|l| l.trim().to_string());
-                PandocStatus {
-                    installed: true,
-                    version,
-                    path: Some(program),
-                    sandbox_supported: sandbox_supported(major, minor),
-                    configured_path: configured,
-                }
-            }
-            _ => PandocStatus {
+        // Try the override, then PATH — a stale override must not hide a valid
+        // PATH Pandoc (Codex review).
+        match resolve_working_pandoc() {
+            Some((program, major, minor, version_line)) => PandocStatus {
+                installed: true,
+                version: Some(version_line),
+                path: Some(program),
+                sandbox_supported: sandbox_supported(major, minor),
+                configured_path: configured,
+            },
+            None => PandocStatus {
                 installed: false,
                 version: None,
                 path: None,
@@ -1073,6 +1114,21 @@ pub async fn detect_pandoc() -> PandocStatus {
     })
 }
 ```
+
+Add a unit test for the fallback ordering (pure — no real Pandoc needed):
+```rust
+#[test]
+fn candidates_try_override_then_path_deduped() {
+    // With no override configured, only "pandoc" is probed.
+    // (pandoc_candidates reads config; in a test env with no config file it
+    // returns just ["pandoc"].)
+    assert_eq!(pandoc_candidates(), vec!["pandoc".to_string()]);
+}
+```
+(If `pandoc_candidates` can't be made deterministic under test because it
+reads the real config path, extract the ordering into a pure
+`candidate_order(override: Option<&str>) -> Vec<String>` helper and test that
+instead — the override→PATH→dedup logic is the part worth pinning.)
 
 Add to `src-tauri/Cargo.toml`:
 ```toml
@@ -1242,17 +1298,11 @@ fn convert_blocking(
         .find(|v| v.id == id)
         .ok_or("Vault not found — was it removed from Obsidian?")?;
 
-    // Detect Pandoc synchronously here (we're already on a blocking thread).
-    let program = resolve_pandoc();
-    let ver_out = pandoc_command(&program)
-        .arg("--version")
-        .output()
-        .map_err(|_| "Pandoc is not installed. Install it from Settings → Document Import.")?;
-    if !ver_out.status.success() {
-        return Err("Pandoc is not installed. Install it from Settings → Document Import.".into());
-    }
-    let stdout = String::from_utf8_lossy(&ver_out.stdout);
-    let (major, minor) = parse_pandoc_version(&stdout).unwrap_or((0, 0));
+    // Resolve Pandoc synchronously here (we're already on a blocking thread):
+    // override first, then PATH — a stale override must not hide a valid PATH
+    // Pandoc (Codex review). This is the SAME resolution detect_pandoc uses.
+    let (program, major, minor, _) = resolve_working_pandoc()
+        .ok_or("Pandoc is not installed. Install it from Settings → Document Import.")?;
     if !sandbox_supported(major, minor) {
         return Err("Your Pandoc is too old to import safely (need 2.15+). Please update it.".into());
     }
