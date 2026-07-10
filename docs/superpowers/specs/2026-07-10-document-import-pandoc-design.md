@@ -174,12 +174,39 @@ A new "Document Import" section in Buddy settings, structurally a peer of
 
 ## Conversion mechanics
 
+**Conversions are serialized process-wide.** `convert_document` is async and
+its subprocess work runs under `spawn_blocking`, so Tauri is free to run two
+invocations concurrently — and the UI *can* deliver two in quick succession
+(a double-click on the action, or two files dropped near-simultaneously if
+batch is ever relaxed). Two concurrent conversions targeting the same date
+would both pass step 1's `exists`-based reservation before either publishes,
+pick the *same* note/media names and the same staging dir, and then race into
+the media publish + `rename_noreplace`, corrupting each other's staging or
+leaving a partial media folder. The exists-check reservation is therefore
+**not** sufficient on its own. A single process-wide guard — a `try_lock` on
+a dedicated mutex (an `ImportLock` app state, mirroring `ConfigWriteLock`) —
+wraps the whole convert-and-publish body: a second conversion that can't take
+the lock fails fast with a "an import is already in progress" toast rather
+than racing. (A `try_lock`, not a blocking lock, so a hung Pandoc can't make
+the UI's second attempt hang too.) Each staging dir also carries a
+per-invocation unique suffix so even two imports of *different* files to the
+same date can't collide on the temp dir.
+
 `convert_document`:
 
-1. Resolves the vault's `documents_folder`, builds the dated target path,
-   and reserves the note filename (and media folder name, if the doc
-   turns out to have images) the same way capture reserves `.mp3`/`.md`
-   pairs. The media folder name is fixed at this point — it's whatever
+1. Resolves the vault's `documents_folder` and **re-validates that it stays
+   inside the vault** — the same lexical + canonical containment check the
+   save path uses (`capture_paths::safe_recording_root` +
+   `assert_path_inside_vault`), run again here, not just when the setting is
+   saved. `documents_folder` is hand-editable in `config.json`, so a value
+   like `../../elsewhere` or a folder that resolves through a
+   symlink/junction out of the vault must be caught before any staging dir
+   is created or any file is written — otherwise Pandoc output and the
+   published note would land *outside* the selected vault. Validation failure
+   is a normal conversion error (toast, nothing written). Then it builds the
+   dated target path, and reserves the note filename (and media folder name,
+   if the doc turns out to have images) the same way capture reserves
+   `.mp3`/`.md` pairs. The media folder name is fixed at this point — it's whatever
    the final sibling folder will be called — even though it's about to
    be staged under a temp parent, not the final path yet. **That temp
    working directory lives inside the destination vault**, not the OS
@@ -258,10 +285,21 @@ A new "Document Import" section in Buddy settings, structurally a peer of
    temp+fsync+`rename_noreplace` write every other domain uses, both
    keeping the exact names reserved in step 1. Publish order is
    **media directory first, then the note**, so the note is never visible
-   pointing at images that haven't landed yet. A failure at any point
-   before this step leaves the temp locations to clean up and **nothing
-   at the published path**, matching the error-handling section's
-   guarantee.
+   pointing at images that haven't landed yet — but that ordering opens a
+   partial-write window the publish step must close: the note write is
+   non-replacing (`rename_noreplace`), so it can still fail with
+   `AlreadyExists` if the note name was claimed *after* step 1's
+   reservation (a concurrent import, a sync client, or the user
+   hand-creating the same dated name while Pandoc ran). If the note commit
+   fails for any reason after the media directory has already been
+   published, **the media directory is rolled back** (removed from the
+   published path) before the error returns, so a failed import never
+   leaves an orphaned media folder behind. The collision-safe note writer's
+   own ` (N)`-suffix retry handles the ordinary same-name case without
+   reaching this rollback; the rollback is the backstop for a genuine
+   commit failure. A failure at any point before this step leaves only the
+   temp locations to clean up and **nothing at the published path**,
+   matching the error-handling section's guarantee.
 
 Format-to-reader mapping is a fixed three-entry table: `.docx` → `docx`,
 `.odt` → `odt`, `.rtf` → `rtf`. No format sniffing beyond the extension —
@@ -271,6 +309,15 @@ authoritative (e.g. search's `.md`-only note matching).
 ## Error handling
 
 - Unsupported extension: rejected before Pandoc is ever invoked.
+- Documents folder escapes the vault (hand-edited `../…` or a
+  symlink/junction): rejected before any staging dir is created — toast,
+  nothing written.
+- A conversion is already in progress: the second call fails fast on the
+  `try_lock` — toast ("an import is already in progress"), nothing written.
+- Note name claimed between reservation and publish: the collision-safe
+  writer takes a ` (N)` suffix; if the commit still fails, any
+  already-published media directory is rolled back — toast, nothing left
+  at the published path.
 - Pandoc missing at call time (a TOCTOU race — uninstalled or PATH
   changed between detection and this call): command errors, toast shown,
   nothing written.

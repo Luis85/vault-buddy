@@ -1,0 +1,1520 @@
+# Document Import via Pandoc Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Convert a `.docx` / `.odt` / `.rtf` file into a vault note via a
+user-installed Pandoc, triggered by dropping the file on the buddy or
+picking it from the record chooser, gated behind Pandoc detection.
+
+**Architecture:** A new Document Import domain following the repo's
+pure-core / thin-shell split. Pure path/naming/frontmatter/staging logic
+lives in `core::document_import` (Linux-testable). The shell adds a Pandoc
+detector and an async `convert_document` command (subprocess work under
+`spawn_blocking`, like `search_vaults`). The frontend adds a settings
+section, a record-chooser action, and a buddy drag-drop → vault-picker
+flow. No worker queue (one file at a time). Converted notes are the vault
+domain's fifth sanctioned write path, reusing `capture_note`'s atomic
+never-clobber writers.
+
+**Tech Stack:** Rust (Tauri v2 shell + pure `vault_buddy_core` crate),
+Vue 3 + Pinia + Tailwind 4, Vitest (happy-dom + mockIPC), Pandoc ≥ 2.15
+(external, user-installed).
+
+## Global Constraints
+
+- **Spec:** `docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md` — read it before starting.
+- **Formats:** `.docx` → reader `docx`, `.odt` → `odt`, `.rtf` → `rtf`. No other formats. Extension is authoritative (no content sniffing).
+- **Pandoc version floor:** `--sandbox` requires Pandoc ≥ 2.15. A Pandoc without `--sandbox` support MUST NOT run on untrusted input — report it and refuse the conversion.
+- **Pandoc invocation (exact):** working directory = the in-vault temp dir; outputs given as **relative** names; `--sandbox` always; heap cap `+RTS -M512M -RTS` always; source passed as its real absolute path. `-t gfm` output.
+- **Staging on the vault's volume:** the temp working dir lives INSIDE the destination vault (dot-prefixed), so the publish `rename` is same-filesystem/atomic. Publish media directory FIRST, then the note.
+- **Never clobber a vault file:** reuse `capture_note::write_note_collision_safe` / `write_note_atomic` (exclusive-create temp, `rename_noreplace`, ` (N)` suffix). Config writes (app-side `config.json`) use the REPLACING `write_config` — never for vault files.
+- **Serialize conversions:** a process-wide `ImportLock` `try_lock` wraps the whole convert-and-publish body; a second concurrent import fails fast ("an import is already in progress") rather than racing the exists-reservation. Staging dirs also carry a per-invocation unique token.
+- **Publish rollback:** publish media dir before the note; if the note commit fails after media is published, roll the media directory back so a failed import leaves nothing at the published path.
+- **Validate the documents folder is inside the vault** with `safe_recording_root` + `assert_path_inside_vault` BOTH when saving the setting AND again in `convert_document` before staging (config.json is hand-editable — `../…`/symlink escapes must be caught at conversion time too).
+- **YAML values:** every frontmatter string value goes through `capture_note::yaml_quote` (doubles `\` and `"`) — never emit a raw path.
+- **Config defense:** `config.json` is hand-editable; parse per-field so one bad value defaults only itself. `serialize_config` MUST round-trip the new section (regression-test it, like the `mcp` section).
+- **Failure = nothing published + a toast.** Success = silent save + a toast (no auto-open). Mirrors `capture:failed` / a finished recording.
+- **Threads named; no swallowed errors** (`log::warn!`/`logWarning`); sync commands never block (subprocess work is async + `spawn_blocking`).
+- **Commits:** Conventional Commits, scope `feat(...)` / `test(...)`; imperative subject; body explains the *why*. Do NOT put the model identifier anywhere in commits/PRs.
+- **Compile gate:** after shell changes run `npm run setup:linux` once then `npx tauri build --no-bundle`; run `cargo fmt --check` and workspace clippy `-D warnings`. Frontend: `npm test`, `npm run build`.
+
+---
+
+## File Structure
+
+**Create:**
+- `src-tauri/core/src/document_import.rs` — pure: format map, basename, frontmatter render, target-path resolution, staging/publish plan + helpers.
+- `src-tauri/src/document_commands.rs` — shell: `detect_pandoc`, `convert_document`, `get_documents_config`, `set_documents_config`; Pandoc process invocation.
+- `src/components/DocumentImportSettings.vue` — Buddy-settings section (status / recheck / install link / path override).
+- `src/components/ImportVaultPicker.vue` — the "Import into which vault?" view shown after a buddy drop.
+- `tests/documentImport.test.ts` — frontend Vitest for the settings section, record-chooser action, and picker/drop flow.
+
+**Modify:**
+- `src-tauri/core/src/capture_config.rs` — add `documents_folder` to `VaultCaptureConfig`; add `DocumentImportConfig` app-global section; parse/serialize/round-trip.
+- `src-tauri/core/src/lib.rs` (crate root) — `pub mod document_import;`.
+- `src-tauri/src/lib.rs` — register the four new commands in `generate_handler!`.
+- `src-tauri/src/main.rs` / shell `lib.rs` module list — `mod document_commands;`.
+- `src-tauri/Cargo.toml` — `[target.'cfg(windows)'.dependencies] winreg` for the registry PATH read.
+- `src/types.ts` — `DocumentsConfig`, `PandocStatus` types; extend `CaptureConfig` with `documentsFolder`.
+- `src/stores/vaults.ts` — new `importPicker` view + `pendingImportPath` + `openImportPicker()`.
+- `src/components/RecordMode.vue` — "Import Document" action (file picker) + Pandoc gate.
+- `src/components/ActionPanel.vue` — route the new `importPicker` view.
+- `src/components/BuddySettings.vue` — embed `DocumentImportSettings`.
+- `src/roots/BuddyRoot.vue` — Tauri drag-drop listener → open panel on the import picker.
+- `AGENTS.md` — IPC table (+4 commands), config-state row, a Document Import domain subsection.
+- `docs/use-cases/document-import-pandoc.md` — flip status once shipped.
+
+---
+
+## Task 1: Config — `documents_folder` + `DocumentImportConfig` section
+
+**Files:**
+- Modify: `src-tauri/core/src/capture_config.rs`
+- Test: inline `#[cfg(test)]` in the same file (repo convention).
+
+**Interfaces:**
+- Produces:
+  - `VaultCaptureConfig.documents_folder: Option<String>` + `fn documents_root(&self) -> &str` (default `"Documents"`).
+  - `struct DocumentImportConfig { pandoc_path: Option<String> }` with `Default`.
+  - `AppConfig.document_import: DocumentImportConfig`.
+  - `parse_config` reads it; `serialize_config` round-trips it (emitted only when non-default).
+  - `fn update_document_import_config_at(path, cfg) -> io::Result<()>` + `fn update_document_import_config(cfg) -> Result<(), String>` (mirrors the mcp updater).
+
+- [ ] **Step 1: Write failing tests**
+
+Add to `capture_config.rs` tests:
+
+```rust
+#[test]
+fn documents_root_defaults_to_documents() {
+    let mut c = VaultCaptureConfig::default();
+    assert_eq!(c.documents_root(), "Documents");
+    c.documents_folder = Some("Imports".into());
+    assert_eq!(c.documents_root(), "Imports");
+}
+
+#[test]
+fn parses_document_import_section() {
+    let json = r#"{"documentImport":{"pandocPath":"C:\\pandoc\\pandoc.exe"},"vaults":{}}"#;
+    let cfg = parse_config(json);
+    assert_eq!(cfg.document_import.pandoc_path.as_deref(), Some("C:\\pandoc\\pandoc.exe"));
+}
+
+#[test]
+fn parses_documents_folder_per_vault() {
+    let json = r#"{"vaults":{"v1":{"documentsFolder":"Imports"}}}"#;
+    let cfg = parse_config(json);
+    assert_eq!(cfg.vaults["v1"].documents_folder.as_deref(), Some("Imports"));
+}
+
+#[test]
+fn serialize_roundtrips_document_import_section() {
+    // Regression: serialize_config once emitted only `vaults`; a save from
+    // another surface would silently delete this section. Mirrors the mcp test.
+    let mut cfg = AppConfig::default();
+    cfg.document_import.pandoc_path = Some("/usr/bin/pandoc".into());
+    let round = parse_config(&serialize_config(&cfg));
+    assert_eq!(round.document_import, cfg.document_import);
+}
+
+#[test]
+fn serialize_omits_default_document_import_section() {
+    let cfg = AppConfig::default();
+    assert!(!serialize_config(&cfg).contains("documentImport"));
+}
+```
+
+- [ ] **Step 2: Run tests — verify they fail**
+
+Run: `cd src-tauri/core && cargo test document`
+Expected: FAIL (no `documents_folder` field / `document_import` / `documents_root`).
+
+- [ ] **Step 3: Implement**
+
+In `VaultCaptureConfig` add `pub documents_folder: Option<String>,`; in its `Default` add `documents_folder: None,`; add:
+
+```rust
+/// The vault-relative folder holding imported documents. None → "Documents".
+pub fn documents_root(&self) -> &str {
+    self.documents_folder.as_deref().unwrap_or("Documents")
+}
+```
+
+Add the app-global struct near `McpConfig`:
+
+```rust
+/// App-global Document Import settings. Pandoc is one system-wide binary,
+/// so its path override is app-global, not per-vault. Top-level
+/// `documentImport` section beside `vaults`/`mcp`; parsed per-field
+/// defensively for the same reason.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DocumentImportConfig {
+    /// Manual override for a Pandoc not on PATH (a portable install).
+    /// None → detect on PATH only.
+    pub pandoc_path: Option<String>,
+}
+```
+
+Add `pub document_import: DocumentImportConfig,` to `AppConfig`.
+
+In `vault_entry`, add to the returned struct:
+```rust
+documents_folder: entry.get("documentsFolder").and_then(|v| v.as_str()).map(str::to_string),
+```
+
+In `parse_config`, after the `mcp` line:
+```rust
+let document_import = value
+    .get("documentImport")
+    .map(document_import_entry)
+    .unwrap_or_default();
+AppConfig { vaults, mcp, document_import }
+```
+
+Add the entry parser:
+```rust
+fn document_import_entry(entry: &serde_json::Value) -> DocumentImportConfig {
+    DocumentImportConfig {
+        pandoc_path: entry
+            .get("pandocPath")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    }
+}
+```
+
+In `serialize_config`, before the `vaults` block:
+```rust
+if cfg.document_import != DocumentImportConfig::default() {
+    let mut di = Map::new();
+    if let Some(p) = &cfg.document_import.pandoc_path {
+        di.insert("pandocPath".to_string(), json!(p));
+    }
+    root.insert("documentImport".to_string(), Value::Object(di));
+}
+```
+
+In the vault serialize block, after `tasksFolder`:
+```rust
+if let Some(folder) = &v.documents_folder {
+    entry.insert("documentsFolder".to_string(), json!(folder));
+}
+```
+
+Add the updater (mirror `update_mcp_config_at`/`update_mcp_config`):
+```rust
+pub fn update_document_import_config_at(
+    path: &Path,
+    di: DocumentImportConfig,
+) -> std::io::Result<()> {
+    let mut cfg = match std::fs::read_to_string(path) {
+        Ok(json) => parse_config(&json),
+        Err(_) => AppConfig::default(),
+    };
+    cfg.document_import = di;
+    write_config(path, &cfg)
+}
+
+pub fn update_document_import_config(di: DocumentImportConfig) -> Result<(), String> {
+    let path = config_path().ok_or("Cannot resolve the config directory")?;
+    update_document_import_config_at(&path, di)
+        .map_err(|e| format!("Could not save document import settings: {e}"))
+}
+```
+
+- [ ] **Step 4: Run tests — verify pass**
+
+Run: `cd src-tauri/core && cargo test document && cargo clippy --all-targets -- -D warnings`
+Expected: PASS, no clippy warnings.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/core/src/capture_config.rs
+git commit -m "feat(core): add document-import config (documents folder + pandoc path)"
+```
+
+---
+
+## Task 2: Core — format map, basename, frontmatter render, target path
+
+**Files:**
+- Create: `src-tauri/core/src/document_import.rs`
+- Modify: `src-tauri/core/src/lib.rs` — add `pub mod document_import;`
+- Test: inline `#[cfg(test)]`.
+
+**Interfaces:**
+- Consumes: `capture_config::VaultCaptureConfig::documents_root`, `capture_note::yaml_quote`.
+- Produces:
+  - `enum DocFormat { Docx, Odt, Rtf }` with `fn from_extension(&str) -> Option<DocFormat>`, `fn reader(&self) -> &'static str`, `fn label(&self) -> &'static str`.
+  - `fn document_basename(original_stem: &str, today: &str) -> String` → `YYYY-MM-DD <stem>`.
+  - `struct DocMeta { source_path: String, imported: String, format: DocFormat }`.
+  - `fn render_frontmatter(meta: &DocMeta) -> String` (a `---`-fenced block ending with a trailing newline, no body).
+  - `fn target_dir(vault_path: &Path, documents_folder: &str, year: &str, month: &str) -> PathBuf` → `<vault>/<folder>/<YYYY>/<MM>`.
+
+- [ ] **Step 1: Write failing tests**
+
+```rust
+use super::*;
+use std::path::Path;
+
+#[test]
+fn format_from_extension_is_case_insensitive_and_bounded() {
+    assert_eq!(DocFormat::from_extension("docx"), Some(DocFormat::Docx));
+    assert_eq!(DocFormat::from_extension("DOCX"), Some(DocFormat::Docx));
+    assert_eq!(DocFormat::from_extension("odt"), Some(DocFormat::Odt));
+    assert_eq!(DocFormat::from_extension("rtf"), Some(DocFormat::Rtf));
+    assert_eq!(DocFormat::from_extension("pdf"), None);
+    assert_eq!(DocFormat::Docx.reader(), "docx");
+}
+
+#[test]
+fn basename_is_date_prefixed_original_name() {
+    assert_eq!(document_basename("Quarterly Report", "2026-07-10"),
+               "2026-07-10 Quarterly Report");
+}
+
+#[test]
+fn frontmatter_quotes_windows_source_path() {
+    let meta = DocMeta {
+        source_path: r"C:\Users\me\Quarterly Report.docx".into(),
+        imported: "2026-07-10".into(),
+        format: DocFormat::Docx,
+    };
+    let fm = render_frontmatter(&meta);
+    assert!(fm.starts_with("---\n"));
+    assert!(fm.contains("type: Document\n"));
+    assert!(fm.contains("tags: [vault-buddy-import]\n"));
+    // yaml_quote doubled the backslashes — no raw backslash escape in the scalar.
+    assert!(fm.contains(r#"source: "C:\\Users\\me\\Quarterly Report.docx""#));
+    assert!(fm.contains("imported: 2026-07-10\n"));
+    assert!(fm.contains("format: docx\n"));
+    assert!(fm.trim_end().ends_with("---"));
+}
+
+#[test]
+fn target_dir_is_documents_folder_dated() {
+    let d = target_dir(Path::new("/vault"), "Documents", "2026", "07");
+    assert_eq!(d, Path::new("/vault/Documents/2026/07"));
+}
+```
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `cd src-tauri/core && cargo test --lib document_import`
+Expected: FAIL (module/type not found).
+
+- [ ] **Step 3: Implement `document_import.rs`**
+
+```rust
+//! Document Import: convert .docx/.odt/.rtf to a vault note via Pandoc.
+//! Pure filename/frontmatter/path/staging logic; the shell drives Pandoc.
+//! Fifth sanctioned vault write — same never-clobber discipline as the
+//! capture note. Spec:
+//! docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md
+
+use crate::capture_note::yaml_quote;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocFormat {
+    Docx,
+    Odt,
+    Rtf,
+}
+
+impl DocFormat {
+    /// Extension is authoritative (Obsidian/search treat extensions the same
+    /// way). Case-insensitive so `.DOCX` from Windows still maps.
+    pub fn from_extension(ext: &str) -> Option<DocFormat> {
+        match ext.to_ascii_lowercase().as_str() {
+            "docx" => Some(DocFormat::Docx),
+            "odt" => Some(DocFormat::Odt),
+            "rtf" => Some(DocFormat::Rtf),
+            _ => None,
+        }
+    }
+
+    /// The Pandoc `-f <reader>` value.
+    pub fn reader(&self) -> &'static str {
+        match self {
+            DocFormat::Docx => "docx",
+            DocFormat::Odt => "odt",
+            DocFormat::Rtf => "rtf",
+        }
+    }
+
+    /// Value written to the note's `format:` frontmatter field.
+    pub fn label(&self) -> &'static str {
+        self.reader()
+    }
+}
+
+/// `YYYY-MM-DD <Original Name>` (no extension). `today` supplied by the shell
+/// so the core stays clock-free.
+pub fn document_basename(original_stem: &str, today: &str) -> String {
+    format!("{today} {original_stem}")
+}
+
+pub struct DocMeta {
+    /// The original file's absolute path (provenance).
+    pub source_path: String,
+    /// Import date, `YYYY-MM-DD`.
+    pub imported: String,
+    pub format: DocFormat,
+}
+
+/// The `type: Document` frontmatter block (no body — Pandoc's markdown is
+/// prepended by the shell after this). Every string value quoted via
+/// `yaml_quote`, so a Windows source path can't emit an invalid YAML escape.
+pub fn render_frontmatter(meta: &DocMeta) -> String {
+    format!(
+        "---\ntype: Document\ntags: [vault-buddy-import]\nsource: {}\nimported: {}\nformat: {}\ncreated-by: Vault Buddy\n---\n\n",
+        yaml_quote(&meta.source_path),
+        meta.imported,
+        meta.format.label(),
+    )
+}
+
+/// `<vault>/<documents_folder>/<YYYY>/<MM>`.
+pub fn target_dir(vault_path: &Path, documents_folder: &str, year: &str, month: &str) -> PathBuf {
+    vault_path.join(documents_folder).join(year).join(month)
+}
+```
+
+Add `pub mod document_import;` to `src-tauri/core/src/lib.rs` (alphabetically among the module list).
+
+- [ ] **Step 4: Run — verify pass**
+
+Run: `cd src-tauri/core && cargo test --lib document_import && cargo clippy --all-targets -- -D warnings`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/core/src/document_import.rs src-tauri/core/src/lib.rs
+git commit -m "feat(core): document-import format map, naming, and frontmatter"
+```
+
+---
+
+## Task 3: Core — staging + publish helpers
+
+**Files:**
+- Modify: `src-tauri/core/src/document_import.rs`
+- Test: inline `#[cfg(test)]`.
+
+**Interfaces:**
+- Consumes: `capture_note::{write_note_collision_safe, NOTE_TMP_SUFFIX}`, `capture_paths::rename_noreplace`, Task 2 types.
+- Produces:
+  - `struct StagePlan { work_dir: PathBuf, media_name: String, note_name: String }`.
+  - `fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePlan` — the dot-prefixed in-vault temp dir (carrying `unique` so two imports to the same date can't collide on the temp dir) + the relative media/note names Pandoc is handed (media = `<basename>`, note = `<basename>.md`).
+  - `fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> io::Result<PathBuf>` — prepends frontmatter to the staged note, publishes media dir first (if present & non-empty) then the note (collision-safe), returns the final note path. Cleans the work dir on the way out.
+  - `fn cleanup_staging(work_dir: &Path)` — best-effort `remove_dir_all`.
+
+**Design notes for the implementer:**
+- The work dir is dot-prefixed (`.<basename>.vault-buddy.import.tmp`) UNDER `target_dir`, so it's on the vault's volume (same-fs rename) AND auto-excluded from every `vault_walk` scan (dot-directories are skipped) and recovery.
+- Pandoc is told `--extract-media=<media_name>` and `-o <note_name>` with `cwd = work_dir` (the shell does this in Task 5), so links are written relative to the note. Publishing moves the media dir and note into `target_dir` keeping those exact names, so links stay valid with no rewriting.
+- Media dir may not exist (no images). Only publish it when it exists and is non-empty.
+- Publish order: media dir → note. The note is never visible pointing at not-yet-landed images.
+
+- [ ] **Step 1: Write failing tests**
+
+```rust
+#[test]
+fn plan_staging_uses_dot_prefixed_in_vault_workdir() {
+    let plan = plan_staging(Path::new("/vault/Documents/2026/07"), "2026-07-10 Report", "t1");
+    assert!(plan.work_dir.starts_with("/vault/Documents/2026/07"));
+    assert!(plan.work_dir.file_name().unwrap().to_string_lossy().starts_with('.'));
+    // the unique token keeps two same-date imports from sharing a temp dir
+    let other = plan_staging(Path::new("/vault/Documents/2026/07"), "2026-07-10 Report", "t2");
+    assert_ne!(plan.work_dir, other.work_dir);
+    assert_eq!(plan.media_name, "2026-07-10 Report");
+    assert_eq!(plan.note_name, "2026-07-10 Report.md");
+}
+
+#[test]
+fn publish_moves_note_and_media_and_prepends_frontmatter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("Documents/2026/07");
+    std::fs::create_dir_all(&target).unwrap();
+    let plan = plan_staging(&target, "2026-07-10 Report", "u");
+    std::fs::create_dir_all(&plan.work_dir).unwrap();
+    // Simulate a Pandoc run: note body + a media dir with one file.
+    std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n\n![img](2026-07-10 Report/image1.png)\n").unwrap();
+    let media = plan.work_dir.join(&plan.media_name);
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join("image1.png"), b"PNG").unwrap();
+
+    let note = publish(&plan, &target, "---\ntype: Document\n---\n\n").unwrap();
+    let published = std::fs::read_to_string(&note).unwrap();
+    assert!(published.starts_with("---\ntype: Document\n---\n\n# Body"));
+    // media dir landed beside the note, same name → link still resolves
+    assert!(target.join("2026-07-10 Report/image1.png").exists());
+    // work dir cleaned up
+    assert!(!plan.work_dir.exists());
+}
+
+#[test]
+fn publish_without_media_writes_only_the_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("Documents/2026/07");
+    std::fs::create_dir_all(&target).unwrap();
+    let plan = plan_staging(&target, "2026-07-10 Note", "u");
+    std::fs::create_dir_all(&plan.work_dir).unwrap();
+    std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
+
+    let note = publish(&plan, &target, "---\ntype: Document\n---\n\n").unwrap();
+    assert!(note.exists());
+    // no media subfolder created when there were no images
+    assert!(!target.join("2026-07-10 Note").exists());
+}
+
+#[test]
+fn publish_rolls_back_media_if_note_commit_fails() {
+    // Simulate the note name being claimed by a NON-suffixable collision:
+    // pre-create both the base name AND enough suffixes is impractical, so
+    // instead force write_note_collision_safe to fail by making target_dir a
+    // file (create_dir_all in publish_inner already ran on a real dir, so we
+    // target the media-rollback path directly): pre-place a media dir dest.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("Documents/2026/07");
+    std::fs::create_dir_all(&target).unwrap();
+    // Existing media dir at destination → media publish errors AFTER we've
+    // asserted media-has-files, exercising the AlreadyExists guard; to test
+    // ROLLBACK specifically we instead make the note write fail. Simplest:
+    // pre-create a directory where the note file must go, so rename_noreplace
+    // can't place the .md and every suffix also collides with a dir.
+    let plan = plan_staging(&target, "2026-07-10 Doc", "u");
+    std::fs::create_dir_all(&plan.work_dir).unwrap();
+    std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
+    let media = plan.work_dir.join(&plan.media_name);
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join("image1.png"), b"PNG").unwrap();
+    // Block the note path with a directory so the write fails.
+    std::fs::create_dir_all(target.join("2026-07-10 Doc.md")).unwrap();
+
+    let result = publish(&plan, &target, "---\n---\n\n");
+    assert!(result.is_err());
+    // media rolled back — no orphaned sibling folder
+    assert!(!target.join("2026-07-10 Doc").exists());
+}
+
+#[test]
+fn publish_never_clobbers_an_existing_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("Documents/2026/07");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("2026-07-10 Note.md"), "OLD").unwrap();
+    let plan = plan_staging(&target, "2026-07-10 Note", "u");
+    std::fs::create_dir_all(&plan.work_dir).unwrap();
+    std::fs::write(plan.work_dir.join(&plan.note_name), "NEW\n").unwrap();
+
+    let note = publish(&plan, &target, "---\n---\n\n").unwrap();
+    // original untouched; new note took a suffixed name
+    assert_eq!(std::fs::read_to_string(target.join("2026-07-10 Note.md")).unwrap(), "OLD");
+    assert_ne!(note, target.join("2026-07-10 Note.md"));
+    assert!(note.exists());
+}
+```
+
+Add `tempfile` to `[dev-dependencies]` in `src-tauri/core/Cargo.toml` if not already present (it is used by other core tests — confirm; if absent, add `tempfile = "3"`).
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `cd src-tauri/core && cargo test --lib document_import`
+Expected: FAIL (`plan_staging`/`publish` undefined).
+
+- [ ] **Step 3: Implement**
+
+```rust
+use crate::capture_note::{write_note_collision_safe, NOTE_TMP_SUFFIX};
+
+pub struct StagePlan {
+    pub work_dir: PathBuf,
+    pub media_name: String,
+    pub note_name: String,
+}
+
+/// Dot-prefixed temp working dir under `target_dir` (same volume → atomic
+/// publish rename; dot-dir → excluded from every vault_walk scan and
+/// recovery). `unique` (a per-invocation token from the shell) keeps two
+/// imports to the same date from colliding on the temp dir. Media/note names
+/// are the FINAL names, so Pandoc's relative-to-note image links stay correct
+/// after the publish move.
+pub fn plan_staging(target_dir: &Path, basename: &str, unique: &str) -> StagePlan {
+    let work_dir = target_dir.join(format!(".{basename}.{unique}{NOTE_TMP_SUFFIX}.import"));
+    StagePlan {
+        work_dir,
+        media_name: basename.to_string(),
+        note_name: format!("{basename}.md"),
+    }
+}
+
+pub fn cleanup_staging(work_dir: &Path) {
+    let _ = std::fs::remove_dir_all(work_dir);
+}
+
+/// Publish a completed staging dir into `target_dir`. Prepends `frontmatter`
+/// to the staged note, then moves media dir (if non-empty) then the note.
+/// Collision-safe: the note takes a ` (N)` suffix rather than clobbering.
+/// Always cleans the work dir before returning.
+pub fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> std::io::Result<PathBuf> {
+    let result = publish_inner(plan, target_dir, frontmatter);
+    cleanup_staging(&plan.work_dir);
+    result
+}
+
+fn publish_inner(
+    plan: &StagePlan,
+    target_dir: &Path,
+    frontmatter: &str,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(target_dir)?;
+    let staged_note = plan.work_dir.join(&plan.note_name);
+    let body = std::fs::read_to_string(&staged_note)?;
+    let full = format!("{frontmatter}{body}");
+
+    // Media first, so the note never resolves to missing images. Only when
+    // Pandoc actually extracted something.
+    let staged_media = plan.work_dir.join(&plan.media_name);
+    let media_has_files = staged_media
+        .read_dir()
+        .map(|mut it| it.next().is_some())
+        .unwrap_or(false);
+    let mut published_media: Option<PathBuf> = None;
+    if media_has_files {
+        let dest = target_dir.join(&plan.media_name);
+        // rename_noreplace only guards files; for the media DIR, refuse to
+        // publish over an existing directory (a same-named prior import).
+        if dest.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "media directory already exists at destination",
+            ));
+        }
+        std::fs::rename(&staged_media, &dest)?;
+        published_media = Some(dest);
+    }
+
+    // Collision-safe note write (exclusive temp + rename_noreplace + suffix).
+    // If it fails after media already published, roll the media back so a
+    // failed import never leaves an orphaned media folder (Codex review).
+    match write_note_collision_safe(&target_dir.join(&plan.note_name), &full) {
+        Ok(note) => Ok(note),
+        Err(e) => {
+            if let Some(media) = published_media {
+                let _ = std::fs::remove_dir_all(&media);
+            }
+            Err(e)
+        }
+    }
+}
+```
+
+**Note for implementer:** if the note took a ` (N)` suffix, its embedded
+image links still say `<media_name>/…` while the media folder is
+`<media_name>` — that's correct because the media dir kept its original
+name. The rare double-import-same-second case is acceptable (documented in
+the spec's non-goals as out of the common path); the media-dir
+`AlreadyExists` guard prevents a silent overwrite.
+
+- [ ] **Step 4: Run — verify pass**
+
+Run: `cd src-tauri/core && cargo test --lib document_import && cargo clippy --all-targets -- -D warnings`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/core/src/document_import.rs src-tauri/core/Cargo.toml
+git commit -m "feat(core): document-import staging + collision-safe publish"
+```
+
+---
+
+## Task 4: Shell — Pandoc detection
+
+**Files:**
+- Create: `src-tauri/src/document_commands.rs` (detection half)
+- Modify: `src-tauri/Cargo.toml` — Windows-only `winreg`
+- Modify: shell module list (`src-tauri/src/lib.rs` or `main.rs`) — `mod document_commands;`
+- Test: inline `#[cfg(test)]` for the pure helpers (version parse, sandbox threshold, PATH merge).
+
+**Interfaces:**
+- Produces:
+  - `#[derive(Serialize)] struct PandocStatus { installed: bool, version: Option<String>, path: Option<String>, sandbox_supported: bool }` (camelCase).
+  - `#[tauri::command] async fn detect_pandoc() -> PandocStatus`.
+  - pure helpers: `fn parse_pandoc_version(stdout: &str) -> Option<(u32,u32)>`, `fn sandbox_supported(major: u32, minor: u32) -> bool` (≥ 2.15), `fn merged_path(base: &str, extra: &[String]) -> String`.
+
+- [ ] **Step 1: Write failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pandoc_version_line() {
+        assert_eq!(parse_pandoc_version("pandoc 3.1.9\nCompiled with..."), Some((3, 1)));
+        assert_eq!(parse_pandoc_version("pandoc.exe 2.14.2"), Some((2, 14)));
+        assert_eq!(parse_pandoc_version("not pandoc"), None);
+    }
+
+    #[test]
+    fn sandbox_requires_2_15_or_newer() {
+        assert!(!sandbox_supported(2, 14));
+        assert!(sandbox_supported(2, 15));
+        assert!(sandbox_supported(3, 1));
+        assert!(sandbox_supported(2, 20));
+    }
+
+    #[test]
+    fn merged_path_appends_registry_entries_without_dupes() {
+        let merged = merged_path("/usr/bin:/bin", &["/usr/bin".into(), "/opt/pandoc".into()]);
+        assert!(merged.contains("/opt/pandoc"));
+        // existing entry not duplicated
+        assert_eq!(merged.matches("/usr/bin").count(), 1);
+    }
+}
+```
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `cd src-tauri && cargo test -p vault-buddy --lib document_commands`
+Expected: FAIL (module absent). (If the shell lib test target isn't built yet, this fails to compile — that's the failing state.)
+
+- [ ] **Step 3: Implement the detection half**
+
+```rust
+//! Document Import IPC: Pandoc detection + conversion + settings.
+//! Detection re-reads PATH from the Windows registry so Recheck sees a
+//! just-installed Pandoc without an app restart. Conversion runs Pandoc
+//! sandboxed + heap-capped under spawn_blocking (async command, like
+//! search_vaults). Spec:
+//! docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md
+
+use std::process::Command;
+use vault_buddy_core::capture_config;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PandocStatus {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub path: Option<String>,
+    pub sandbox_supported: bool,
+}
+
+/// First line of `pandoc --version` is `pandoc <x.y.z>`; return (major, minor).
+fn parse_pandoc_version(stdout: &str) -> Option<(u32, u32)> {
+    let first = stdout.lines().next()?;
+    let ver = first.split_whitespace().nth(1)?;
+    let mut parts = ver.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor))
+}
+
+/// `--sandbox` landed in Pandoc 2.15.
+fn sandbox_supported(major: u32, minor: u32) -> bool {
+    (major, minor) >= (2, 15)
+}
+
+/// Append `extra` PATH entries not already present (case-insensitive on the
+/// separator platform). Keeps the process PATH first.
+fn merged_path(base: &str, extra: &[String]) -> String {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let mut out: Vec<String> = base.split(sep).map(str::to_string).collect();
+    for e in extra {
+        if !out.iter().any(|p| p.eq_ignore_ascii_case(e)) {
+            out.push(e.clone());
+        }
+    }
+    out.join(&sep.to_string())
+}
+
+/// Windows: read user + machine PATH from the registry so a just-installed
+/// Pandoc is visible without restarting (a running process keeps its launch
+/// PATH snapshot). Non-Windows: nothing extra (the compile gate + tests).
+#[cfg(windows)]
+fn registry_path_entries() -> Vec<String> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let mut entries = Vec::new();
+    let reads = [
+        (HKEY_CURRENT_USER, "Environment"),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    ];
+    for (hive, sub) in reads {
+        if let Ok(key) = RegKey::predef(hive).open_subkey(sub) {
+            if let Ok(path) = key.get_value::<String, _>("Path") {
+                entries.extend(path.split(';').map(str::to_string));
+            }
+        }
+    }
+    entries
+}
+
+#[cfg(not(windows))]
+fn registry_path_entries() -> Vec<String> {
+    Vec::new()
+}
+
+/// Locate the pandoc executable: the configured override first, else PATH
+/// (augmented on Windows with the live registry PATH). Returns the resolved
+/// command string to invoke.
+fn resolve_pandoc() -> String {
+    let cfg = capture_config::load_config().document_import;
+    if let Some(p) = cfg.pandoc_path.filter(|p| !p.trim().is_empty()) {
+        return p;
+    }
+    "pandoc".to_string()
+}
+
+/// Build a Command with the registry-augmented PATH so PATH lookup sees a
+/// fresh install.
+fn pandoc_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    let base = std::env::var("PATH").unwrap_or_default();
+    let extra = registry_path_entries();
+    if !extra.is_empty() {
+        cmd.env("PATH", merged_path(&base, &extra));
+    }
+    cmd
+}
+
+/// Detect Pandoc on demand (settings-open + Recheck). Async + spawn_blocking:
+/// spawning a subprocess is blocking I/O and must stay off the main thread.
+#[tauri::command]
+pub async fn detect_pandoc() -> PandocStatus {
+    tauri::async_runtime::spawn_blocking(|| {
+        let program = resolve_pandoc();
+        let output = pandoc_command(&program).arg("--version").output();
+        match output {
+            Ok(o) if o.status.success() => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let (major, minor) = parse_pandoc_version(&stdout).unwrap_or((0, 0));
+                let version = stdout.lines().next().map(|l| l.trim().to_string());
+                PandocStatus {
+                    installed: true,
+                    version,
+                    path: Some(program),
+                    sandbox_supported: sandbox_supported(major, minor),
+                }
+            }
+            _ => PandocStatus {
+                installed: false,
+                version: None,
+                path: None,
+                sandbox_supported: false,
+            },
+        }
+    })
+    .await
+    .unwrap_or(PandocStatus {
+        installed: false,
+        version: None,
+        path: None,
+        sandbox_supported: false,
+    })
+}
+```
+
+Add to `src-tauri/Cargo.toml`:
+```toml
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+```
+(If a `[target.'cfg(windows)'.dependencies]` table already exists, add `winreg` to it.)
+
+Add `mod document_commands;` beside the other `mod` lines in the shell crate root.
+
+- [ ] **Step 4: Run — verify pass + compile gate**
+
+Run: `cd src-tauri && cargo test -p vault-buddy --lib document_commands`
+Then the Linux compile gate (once): `npm run setup:linux && npx tauri build --no-bundle`
+Also: `cargo machete .` (winreg is used only under cfg(windows) — machete may flag it; if so, it's a known false positive for target-gated deps — verify machete passes, and if it flags winreg, add an `ignored` entry in the `[package.metadata.cargo-machete]` list with a comment).
+Expected: tests PASS; build succeeds.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/src/document_commands.rs src-tauri/Cargo.toml src-tauri/src/lib.rs
+git commit -m "feat(shell): detect Pandoc (version, sandbox support, registry PATH)"
+```
+
+---
+
+## Task 5: Shell — `convert_document` command
+
+**Files:**
+- Modify: `src-tauri/src/document_commands.rs`
+- Test: inline `#[cfg(test)]` for the arg-builder helper (pure).
+
+**Interfaces:**
+- Consumes: Task 2/3 core fns; `document_import::{DocFormat, DocMeta, document_basename, render_frontmatter, target_dir, plan_staging, publish, cleanup_staging}`; `capture_paths::{safe_recording_root, assert_path_inside_vault}`; `discovery::discover_vaults`; `capture_config`.
+- Produces:
+  - `struct ImportLock(Arc<Mutex<()>>)` app state (process-wide conversion serialization), registered in lib.rs via `.manage(...)`.
+  - `#[tauri::command] async fn convert_document(lock: State<ImportLock>, id: String, source_path: String) -> Result<String, String>` — takes the lock via `try_lock` (fail-fast on a concurrent import), re-validates folder containment, returns the published note's vault-relative path.
+  - pure `fn pandoc_args(reader: &str, media_name: &str, note_name: &str) -> Vec<String>` returning the exact arg vector (sans program), so the sandbox/heap/relative-output contract is unit-tested.
+
+- [ ] **Step 1: Write failing test**
+
+```rust
+#[test]
+fn pandoc_args_are_sandboxed_relative_and_heap_capped() {
+    let args = pandoc_args("docx", "2026-07-10 Report", "2026-07-10 Report.md");
+    // reader
+    assert!(args.windows(2).any(|w| w == ["-f", "docx"]));
+    assert!(args.windows(2).any(|w| w == ["-t", "gfm"]));
+    // sandbox always present
+    assert!(args.iter().any(|a| a == "--sandbox"));
+    // relative extract-media + output (no temp path baked in)
+    assert!(args.iter().any(|a| a == "--extract-media=2026-07-10 Report"));
+    assert!(args.windows(2).any(|w| w == ["-o", "2026-07-10 Report.md"]));
+    // heap cap
+    let joined = args.join(" ");
+    assert!(joined.contains("+RTS -M512M -RTS"));
+}
+```
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `cd src-tauri && cargo test -p vault-buddy --lib document_commands`
+Expected: FAIL (`pandoc_args` undefined).
+
+- [ ] **Step 3: Implement**
+
+```rust
+use std::path::Path;
+use std::time::Duration;
+use vault_buddy_core::{discovery, document_import};
+
+/// Pandoc argument vector (program excluded). Source is added by the caller as
+/// an absolute path; every OUTPUT here is relative (Pandoc runs with cwd =
+/// work dir) so rewritten image links stay valid after publish.
+fn pandoc_args(reader: &str, media_name: &str, note_name: &str) -> Vec<String> {
+    vec![
+        "-f".into(),
+        reader.into(),
+        "-t".into(),
+        "gfm".into(),
+        "--sandbox".into(),
+        format!("--extract-media={media_name}"),
+        "-o".into(),
+        note_name.into(),
+        // GHC RTS heap cap: a timeout bounds time, not memory; a crafted doc
+        // could OOM before it fires. Pandoc dies with a memory error instead.
+        "+RTS".into(),
+        "-M512M".into(),
+        "-RTS".into(),
+    ]
+}
+
+/// Max wall-clock for a single conversion before the child is killed.
+const CONVERT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Process-wide serialization for imports. A `try_lock` (not blocking) so a
+/// second concurrent import fails fast instead of racing step 1's
+/// exists-reservation into a corrupt/partial publish. The inner mutex is an
+/// `Arc` so its guard can be held on the `spawn_blocking` thread (Tauri
+/// `State` itself can't cross that boundary). Registered as app state in
+/// lib.rs beside ConfigWriteLock: `.manage(ImportLock::default())`.
+#[derive(Default, Clone)]
+pub struct ImportLock(pub std::sync::Arc<std::sync::Mutex<()>>);
+
+/// Monotonic per-invocation token so two same-date imports can't collide on
+/// the staging dir name even across the (lock-serialized) boundary.
+static IMPORT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[tauri::command]
+pub async fn convert_document(
+    lock: tauri::State<'_, ImportLock>,
+    id: String,
+    source_path: String,
+) -> Result<String, String> {
+    // Take the process-wide import lock BEFORE spawning the blocking job. A
+    // failed try_lock means another import is mid-flight — fail fast rather
+    // than race. The guard is moved into the blocking closure so it's held
+    // for the whole convert-and-publish body and dropped when it returns.
+    // (State can't cross the spawn_blocking boundary, so clone the inner Arc
+    // via a dedicated Arc<Mutex<()>> — see the lib.rs wiring note below.)
+    let today = chrono::Local::now().date_naive();
+    let today_str = today.format("%Y-%m-%d").to_string();
+    let year = today.format("%Y").to_string();
+    let month = today.format("%m").to_string();
+    let seq = IMPORT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let unique = format!("{}-{}", std::process::id(), seq);
+
+    // The lock is an Arc<Mutex<()>> so its guard can live on the blocking
+    // thread; ImportLock stores that Arc (see the struct note).
+    let mutex = lock.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = match mutex.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Err("An import is already in progress.".to_string()),
+        };
+        convert_blocking(&id, &source_path, &today_str, &year, &month, &unique)
+    })
+    .await
+    .map_err(|e| {
+        log::warn!("convert_document: task failed: {e}");
+        "Import failed — see the logs for details.".to_string()
+    })?
+}
+
+fn convert_blocking(
+    id: &str,
+    source_path: &str,
+    today: &str,
+    year: &str,
+    month: &str,
+    unique: &str,
+) -> Result<String, String> {
+    let src = Path::new(source_path);
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .ok_or("Unsupported file — expected .docx, .odt, or .rtf")?;
+    let format = document_import::DocFormat::from_extension(ext)
+        .ok_or("Unsupported file — expected .docx, .odt, or .rtf")?;
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Could not read the file name")?;
+
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+
+    // Detect Pandoc synchronously here (we're already on a blocking thread).
+    let program = resolve_pandoc();
+    let ver_out = pandoc_command(&program)
+        .arg("--version")
+        .output()
+        .map_err(|_| "Pandoc is not installed. Install it from Settings → Document Import.")?;
+    if !ver_out.status.success() {
+        return Err("Pandoc is not installed. Install it from Settings → Document Import.".into());
+    }
+    let stdout = String::from_utf8_lossy(&ver_out.stdout);
+    let (major, minor) = parse_pandoc_version(&stdout).unwrap_or((0, 0));
+    if !sandbox_supported(major, minor) {
+        return Err("Your Pandoc is too old to import safely (need 2.15+). Please update it.".into());
+    }
+
+    let cfg = capture_config::vault_config(&capture_config::load_config(), id);
+    let documents_folder = cfg.documents_root().to_string();
+    // Re-validate containment even though set_documents_config already did:
+    // config.json is hand-editable, so a `../…` or symlink-escaping folder
+    // must be caught here too before any staging dir is created (Codex
+    // review). Same lexical + canonical check the save path uses.
+    let vault_root = Path::new(&vault.path);
+    let safe = vault_buddy_core::capture_paths::safe_recording_root(vault_root, &documents_folder)?;
+    vault_buddy_core::capture_paths::assert_path_inside_vault(vault_root, &safe)?;
+    let dir = document_import::target_dir(vault_root, &documents_folder, year, month);
+    let basename = document_import::document_basename(stem, today);
+    let plan = document_import::plan_staging(&dir, &basename, unique);
+
+    // Fresh staging dir.
+    document_import::cleanup_staging(&plan.work_dir);
+    std::fs::create_dir_all(&plan.work_dir).map_err(|e| format!("Could not prepare import: {e}"))?;
+
+    let args = pandoc_args(format.reader(), &plan.media_name, &plan.note_name);
+    let mut cmd = pandoc_command(&program);
+    cmd.current_dir(&plan.work_dir)
+        .arg(src) // absolute source
+        .args(&args);
+
+    let run = run_with_timeout(cmd, CONVERT_TIMEOUT);
+    match run {
+        Ok(true) => {}
+        Ok(false) => {
+            document_import::cleanup_staging(&plan.work_dir);
+            return Err("Pandoc could not convert this document.".into());
+        }
+        Err(e) => {
+            document_import::cleanup_staging(&plan.work_dir);
+            log::warn!("convert_document: pandoc run failed: {e}");
+            return Err("Pandoc could not convert this document.".into());
+        }
+    }
+
+    let meta = document_import::DocMeta {
+        source_path: source_path.to_string(),
+        imported: today.to_string(),
+        format,
+    };
+    let frontmatter = document_import::render_frontmatter(&meta);
+    let note = document_import::publish(&plan, &dir, &frontmatter)
+        .map_err(|e| format!("Could not save the imported note: {e}"))?;
+
+    // Vault-relative path for the caller (best-effort; absolute on failure).
+    let rel = note
+        .strip_prefix(&vault.path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| note.to_string_lossy().to_string());
+    Ok(rel)
+}
+
+/// Spawn + wait with a wall-clock kill. Returns Ok(true) on success exit,
+/// Ok(false) on non-zero/killed, Err on spawn failure.
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<bool> {
+    let mut child = cmd.spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status.success());
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+```
+
+**Note:** `chrono` is already a shell dependency (used by `task_commands`/capture). No new dep.
+
+- [ ] **Step 4: Run — verify pass + gate**
+
+Run: `cd src-tauri && cargo test -p vault-buddy --lib document_commands && cargo clippy -p vault-buddy --all-targets -- -D warnings`
+Then compile gate: `npx tauri build --no-bundle`
+Expected: PASS + build succeeds.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src-tauri/src/document_commands.rs
+git commit -m "feat(shell): convert_document — sandboxed, heap-capped, staged import"
+```
+
+---
+
+## Task 6: Shell — settings commands + register all four
+
+**Files:**
+- Modify: `src-tauri/src/document_commands.rs` (config get/set)
+- Modify: `src-tauri/src/lib.rs` — register in `generate_handler!`
+- Test: none new (logic is thin over Task 1, already tested); register-and-build is the gate.
+
+**Interfaces:**
+- Consumes: `capture_config`, `ConfigWriteLock` (from `crate::capture_commands`), `capture_paths` for folder validation.
+- Produces:
+  - `#[derive(Serialize)] struct DocumentsConfigDto { documents_folder: Option<String>, pandoc_path: Option<String> }`.
+  - `#[tauri::command] fn get_documents_config(id: String) -> DocumentsConfigDto`.
+  - `#[tauri::command] fn set_documents_config(lock, id: String, documents_folder: Option<String>, pandoc_path: Option<String>) -> Result<(), String>` — validates the folder inside the vault (like `set_tasks_config`), writes the per-vault `documents_folder` AND the app-global `pandoc_path` under the lock.
+
+- [ ] **Step 1: Implement (no new unit test; covered by Task 1 + build)**
+
+```rust
+use std::path::Path as StdPath;
+use vault_buddy_core::capture_paths;
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+use crate::capture_commands::ConfigWriteLock;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentsConfigDto {
+    pub documents_folder: Option<String>,
+    pub pandoc_path: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_documents_config(id: String) -> DocumentsConfigDto {
+    let cfg = capture_config::load_config();
+    let vault = capture_config::vault_config(&cfg, &id);
+    DocumentsConfigDto {
+        documents_folder: vault.documents_folder,
+        pandoc_path: cfg.document_import.pandoc_path,
+    }
+}
+
+#[tauri::command]
+pub fn set_documents_config(
+    lock: tauri::State<ConfigWriteLock>,
+    id: String,
+    documents_folder: Option<String>,
+    pandoc_path: Option<String>,
+) -> Result<(), String> {
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let folder = documents_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
+    // Validate the folder actually used (explicit or the "Documents" default)
+    // stays inside the vault — same guard as set_tasks_config.
+    let effective = folder.as_deref().unwrap_or("Documents");
+    let root = capture_paths::safe_recording_root(StdPath::new(&vault.path), effective)?;
+    capture_paths::assert_path_inside_vault(StdPath::new(&vault.path), &root)?;
+
+    let path = pandoc_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string);
+
+    let _guard = lock_ignoring_poison(&lock.0);
+    // Per-vault documents_folder.
+    let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
+    v.documents_folder = folder;
+    capture_config::update_vault_config(&id, v)?;
+    // App-global pandoc path.
+    capture_config::update_document_import_config(
+        vault_buddy_core::capture_config::DocumentImportConfig { pandoc_path: path },
+    )
+}
+```
+
+Register in `src-tauri/src/lib.rs` `generate_handler!` (after the `mcp_commands` block):
+```rust
+document_commands::detect_pandoc,
+document_commands::convert_document,
+document_commands::get_documents_config,
+document_commands::set_documents_config,
+```
+
+Also register the import lock as app state in the builder (beside the other
+`.manage(...)` calls — e.g. next to `ConfigWriteLock`):
+```rust
+.manage(document_commands::ImportLock::default())
+```
+
+- [ ] **Step 2: Build gate**
+
+Run: `cd src-tauri && cargo fmt && cargo clippy -p vault-buddy --all-targets -- -D warnings && npx tauri build --no-bundle`
+Expected: builds clean.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src-tauri/src/document_commands.rs src-tauri/src/lib.rs
+git commit -m "feat(shell): document-import settings commands + handler registration"
+```
+
+---
+
+## Task 7: Frontend — types + Document Import settings section
+
+**Files:**
+- Modify: `src/types.ts`
+- Create: `src/components/DocumentImportSettings.vue`
+- Modify: `src/components/BuddySettings.vue` — embed it
+- Test: `tests/documentImport.test.ts` (settings portion)
+
+**Interfaces:**
+- Consumes IPC: `detect_pandoc` → `PandocStatus`, `get_documents_config`/`set_documents_config`.
+- Produces: a self-contained settings card (status line, Recheck, install link, folder + path override inputs), matching `McpSettings.vue`'s shape (in-flight `saving` guard, `logWarning` on failure).
+
+- [ ] **Step 1: Write failing test**
+
+```ts
+import { mount } from "@vue/test-utils";
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import DocumentImportSettings from "../src/components/DocumentImportSettings.vue";
+
+describe("DocumentImportSettings", () => {
+  it("shows Not Installed and re-detects on Recheck", async () => {
+    let calls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") {
+        calls += 1;
+        return calls === 1
+          ? { installed: false, version: null, path: null, sandboxSupported: false }
+          : { installed: true, version: "pandoc 3.1.9", path: "pandoc", sandboxSupported: true };
+      }
+      if (cmd === "get_documents_config") return { documentsFolder: null, pandocPath: null };
+      return undefined;
+    });
+    const wrapper = mount(DocumentImportSettings);
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.text()).toContain("Not installed");
+    await wrapper.get('[data-testid="pandoc-recheck"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.text()).toContain("3.1.9");
+  });
+});
+```
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `npx vitest run tests/documentImport.test.ts`
+Expected: FAIL (component missing).
+
+- [ ] **Step 3: Implement types + component**
+
+In `src/types.ts` add:
+```ts
+export type PandocStatus = {
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+  sandboxSupported: boolean;
+};
+export type DocumentsConfig = {
+  documentsFolder: string | null;
+  pandocPath: string | null;
+};
+```
+And add `documentsFolder: string | null;` to the existing `CaptureConfig` type (keep it optional-safe — RecordMode seeds it).
+
+Create `src/components/DocumentImportSettings.vue` mirroring `McpSettings.vue`:
+- `onMounted`: `get_documents_config` → seed folder + path inputs; then `detect_pandoc` → status.
+- `recheck()`: re-run `detect_pandoc` (guarded by an in-flight ref), `data-testid="pandoc-recheck"`.
+- Status line: `installed === false` → "Not installed"; installed but `!sandboxSupported` → "Installed (version) — too old for safe import (need 2.15+)"; else "Installed (version)".
+- Install link: an anchor to `https://pandoc.org/installing.html` opened via `@tauri-apps/plugin-shell`'s `open` (already a dependency — confirm; else use an `<a target="_blank">`). Prefer the shell `open` to launch the OS browser.
+- Folder input (default placeholder "Documents") + path override input with a "Browse…" button using `@tauri-apps/plugin-dialog`'s `open({ filters: [{ name: "Pandoc", extensions: ["exe", ""] }] })`; on change call `set_documents_config` (in-flight guarded), then re-`detect_pandoc` (a new path may resolve).
+- On save failure: `logWarning` + an inline error line (mirror McpSettings).
+
+Embed in `BuddySettings.vue` as a new section below the MCP section.
+
+- [ ] **Step 4: Run — verify pass + typecheck**
+
+Run: `npx vitest run tests/documentImport.test.ts && npm run build`
+Expected: PASS + typecheck clean.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/types.ts src/components/DocumentImportSettings.vue src/components/BuddySettings.vue tests/documentImport.test.ts
+git commit -m "feat(ui): Document Import settings section (detect/recheck/override)"
+```
+
+---
+
+## Task 8: Frontend — "Import Document" action in the record chooser
+
+**Files:**
+- Modify: `src/components/RecordMode.vue`
+- Modify: `tests/documentImport.test.ts` (add a case)
+
+**Interfaces:**
+- Consumes IPC: `detect_pandoc`, `convert_document`; `@tauri-apps/plugin-dialog` `open`.
+- Produces: an "Import Document" button below "Browse recordings", disabled with a Settings hint when Pandoc is absent; on click opens a file picker (filters docx/odt/rtf), calls `convert_document`, toasts success/failure.
+
+- [ ] **Step 1: Write failing test**
+
+```ts
+it("imports a picked document and toasts success", async () => {
+  const calls: string[] = [];
+  mockIPC((cmd, args) => {
+    calls.push(cmd);
+    if (cmd === "detect_pandoc") return { installed: true, version: "pandoc 3.1", path: "pandoc", sandboxSupported: true };
+    if (cmd === "get_capture_config") return { /* CaptureConfig defaults */ };
+    if (cmd === "list_recordings") return [];
+    if (cmd === "convert_document") return "Documents/2026/07/2026-07-10 Report.md";
+    return undefined;
+  });
+  // mock plugin-dialog open() to return a fake path — see vi.mock pattern in existing tests
+  // assert convert_document was called with { id, sourcePath } and a success toast enqueued.
+});
+```
+(Follow the `vi.mock("@tauri-apps/plugin-dialog", ...)` + `vi.hoisted` pattern already used in the suite for plugin mocks.)
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `npx vitest run tests/documentImport.test.ts`
+Expected: FAIL (button/flow absent).
+
+- [ ] **Step 3: Implement**
+
+In `RecordMode.vue`:
+- On mount, `detect_pandoc()` → a `pandoc` ref (guard: swallow errors → treated as not installed, `logWarning`).
+- Add an "Import Document" button (`data-testid="import-document"`) below the Browse card. When `!pandoc.installed` (or `!pandoc.sandboxSupported`), render it disabled with subtext "Install Pandoc in Settings to import documents" (or "Update Pandoc (2.15+ needed)").
+- `importDocument()`: `open({ multiple: false, filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }] })`; if a path returned, `await invoke("convert_document", { id: props.vaultId, sourcePath: path })`, then `notifications.success("Imported <name>")` and optionally `store.showList()`. On throw: `notifications.error(...)` + `logWarning`.
+
+- [ ] **Step 4: Run — verify pass**
+
+Run: `npx vitest run tests/documentImport.test.ts && npm run build`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/RecordMode.vue tests/documentImport.test.ts
+git commit -m "feat(ui): Import Document action in the record chooser"
+```
+
+---
+
+## Task 9: Frontend — buddy drag-drop → vault picker
+
+**Files:**
+- Modify: `src/stores/vaults.ts` — `importPicker` view + `pendingImportPath` + `openImportPicker()`
+- Create: `src/components/ImportVaultPicker.vue`
+- Modify: `src/components/ActionPanel.vue` — route the view
+- Modify: `src/roots/BuddyRoot.vue` — drag-drop listener
+- Modify: `tests/documentImport.test.ts` (picker case)
+
+**Interfaces:**
+- Consumes: `getCurrentWebview().onDragDropEvent` (Tauri v2 drag-drop), `toggle_panel`, `convert_document`, the vaults list.
+- Produces:
+  - vaults store: `view` union gains `"importPicker"`; state `pendingImportPath: string | null`; action `openImportPicker(path: string)` (sets both, bumps nothing else); `back()` from `importPicker` → `showList()`.
+  - `ImportVaultPicker.vue`: lists `store.vaults`, each row calls `convert_document({ id, sourcePath: store.pendingImportPath })`, toasts, returns to list.
+
+- [ ] **Step 1: Write failing test**
+
+```ts
+it("openImportPicker sets the pending path and view", () => {
+  setActivePinia(createPinia());
+  const store = useVaultsStore();
+  store.openImportPicker("C:/x/Report.docx");
+  expect(store.view).toBe("importPicker");
+  expect(store.pendingImportPath).toBe("C:/x/Report.docx");
+});
+```
+
+- [ ] **Step 2: Run — verify fail**
+
+Run: `npx vitest run tests/documentImport.test.ts`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+Vaults store:
+- Add `"importPicker"` to the `view` union.
+- Add state `pendingImportPath: null as string | null,`.
+- Add action:
+  ```ts
+  openImportPicker(path: string) {
+    this.view = "importPicker";
+    this.pendingImportPath = path;
+  },
+  ```
+- In `showList()` add `this.pendingImportPath = null;`.
+- `back()`: `importPicker` falls through to `showList()` (no new case needed, but clear the path — it's cleared by showList).
+
+`ImportVaultPicker.vue`: header "Import into which vault?", a list of `store.vaults` rows; row click → `convert_document`, success/error toast, then `store.showList()`. Filter to supported extension already guaranteed by the drop handler.
+
+`ActionPanel.vue`: add `v-else-if="view === 'importPicker'"` rendering `<ImportVaultPicker />`; add its title to the header title map (`importPicker: "Import document"`); import the component.
+
+`BuddyRoot.vue`: in `onMounted`, register a drag-drop listener:
+```ts
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+// ...
+const SUPPORTED = ["docx", "odt", "rtf"];
+unlistenDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
+  if (event.payload.type !== "drop") return;
+  const path = event.payload.paths.find((p) => {
+    const ext = p.split(".").pop()?.toLowerCase();
+    return ext && SUPPORTED.includes(ext);
+  });
+  if (!path) return; // unsupported drop — ignore silently (or toast via panel)
+  // Open the panel and route to the picker. The picker reads pendingImportPath.
+  // The store lives per-window; set it via a Rust-independent path: open the
+  // panel, then the panel refresh reads a pending import. Simplest: pass the
+  // path through a one-shot event the panel listens for.
+});
+```
+
+**Implementer decision (make it explicit, don't leave ambiguous):** because
+each window has its own Pinia, the buddy window can't set the panel store
+directly. Use a small Tauri event: BuddyRoot emits `import-document`
+`{ path }` (via `@tauri-apps/api/event`'s `emit`), then invokes
+`toggle_panel`. `PanelRoot` listens for `import-document` and calls
+`vaults.openImportPicker(path)`. This mirrors how `panel-shown` drives the
+panel. Add the emit in BuddyRoot and the listener in `PanelRoot.vue`.
+Gate the drop on Pandoc being installed by having PanelRoot run
+`detect_pandoc` when it receives the event; if absent, route to
+`settings` + toast instead of the picker.
+
+- [ ] **Step 4: Run — verify pass**
+
+Run: `npx vitest run tests/documentImport.test.ts && npm run build`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/stores/vaults.ts src/components/ImportVaultPicker.vue src/components/ActionPanel.vue src/roots/BuddyRoot.vue src/roots/PanelRoot.vue tests/documentImport.test.ts
+git commit -m "feat(ui): buddy drag-drop imports a document via a vault picker"
+```
+
+---
+
+## Task 10: Docs — AGENTS.md + use-case status
+
+**Files:**
+- Modify: `AGENTS.md`
+- Modify: `docs/use-cases/document-import-pandoc.md`
+
+- [ ] **Step 1: Update AGENTS.md**
+
+- IPC surface table: add a `document_commands.rs` row — `detect_pandoc`, `convert_document` (async — external subprocess), `get_documents_config`, `set_documents_config`. Update the "All N commands" count (43 → 47).
+- Add a "The document-import domain" subsection under the capture-domain area, summarizing: Pandoc-gated, `--sandbox` + heap cap, in-vault staging, publish-media-then-note, fifth sanctioned vault write.
+- "Where state lives on disk" row: note the app-global `documentImport` section + per-vault `documentsFolder` in `config.json`.
+- Frontend-state section: mention the `importPicker` view and the `import-document` event.
+
+- [ ] **Step 2: Flip the use-case status**
+
+In `docs/use-cases/document-import-pandoc.md`, change `status: planned` → `status: shipped`, add `shipped_in:` and the plan under `related_specs`, and update the "Status" heading.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add AGENTS.md docs/use-cases/document-import-pandoc.md
+git commit -m "docs: record the shipped Document Import via Pandoc domain"
+```
+
+---
+
+## Task 11: Full verification pass
+
+- [ ] **Step 1: Rust gates**
+
+Run:
+```bash
+cd src-tauri && cargo fmt --check
+cd src-tauri/core && cargo clippy --all-targets -- -D warnings && cargo test
+cd src-tauri && cargo clippy -p vault-buddy --all-targets -- -D warnings && cargo test -p vault-buddy --lib
+cd src-tauri && cargo machete .
+```
+Expected: all pass.
+
+- [ ] **Step 2: Frontend gates**
+
+Run:
+```bash
+npm run lint && npm run check:loc && npm run check:quality && npm test && npm run build
+```
+Expected: all pass. If LOC/quality baselines shifted favorably, re-run with `--update` and commit the baseline.
+
+- [ ] **Step 3: Compile gate (shell)**
+
+Run: `npm run setup:linux && npx tauri build --no-bundle`
+Expected: builds.
+
+- [ ] **Step 4: Manual smoke (if on Windows / a machine with Pandoc)**
+
+Install Pandoc, drop a `.docx` on the buddy, pick a vault, confirm a
+dated `Documents/YYYY/MM/YYYY-MM-DD <name>.md` note with `type: Document`
+frontmatter and (if the doc had images) a sibling media folder with
+resolving links. Repeat via the record-chooser "Import Document" action.
+
+- [ ] **Step 5: Commit any baseline updates**
+
+```bash
+git add scripts/loc-baseline.json scripts/quality-baseline.json
+git commit -m "chore: update shrink-only baselines for document import"
+```
+
+---
+
+## Self-Review Notes
+
+- **Spec coverage:** trigger flows (Tasks 8/9), Pandoc gate + settings (Tasks 4/6/7), format scope (Task 2), file org/naming/frontmatter (Tasks 2/3), sandbox + heap cap + relative paths + cross-volume staging (Tasks 3/5), registry PATH refresh (Task 4), conversion serialization via ImportLock (Task 5), media-publish rollback (Task 3), documents-folder containment revalidation (Tasks 5/6), failure = nothing published + toast (Tasks 3/5/8/9), success = silent save + toast (Tasks 8/9), config round-trip (Task 1), never-clobber (Task 3). All mapped.
+- **Type consistency:** `PandocStatus`/`DocumentsConfigDto` camelCase across Rust↔TS; `convert_document(id, sourcePath)` and `set_documents_config(id, documentsFolder, pandocPath)` arg names match the Vue call sites; `DocFormat`/`DocMeta`/`StagePlan` used consistently across Tasks 2/3/5; `plan_staging` takes `(target_dir, basename, unique)` everywhere; `ImportLock` holds an `Arc<Mutex<()>>` so its guard survives `spawn_blocking`.
+- **Known deviations to watch:** `winreg` is Windows-only (cfg-gated) — machete/deny may need a documented ignore; the ImportLock `try_lock` intentionally rejects (not queues) a concurrent import; the double-import-same-second media-dir case errors + rolls back rather than clobbering (accepted per spec non-goals).
