@@ -462,7 +462,7 @@ predicate.
   2026-07-10: the `frontend` job runs it before the build.
 - `scripts/bump-version.mjs:107-110` — accepts a new version equal to or
   lower than current; equal input later fails at `git commit` with a
-  confusing "nothing to commit". Reject `newVersion <= current`.
+  confusing "nothing to commit". Reject `newVersion <= current`. (FIXED 2026-07-10 — resolveNewVersion rejects X.Y.Z <= current with a message naming both)
 - ~~No `cargo audit` step~~ — fixed 2026-07-10: `cargo deny check`
   (advisories + licenses + sources, `src-tauri/deny.toml`) runs in
   `rust-core`. Still open: no `npm audit` step and no Dependabot/Renovate

@@ -97,6 +97,15 @@ function nextVersion(current, keyword) {
   return `${major}.${minor}.${patch + 1}`;
 }
 
+function compareSemver(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+
 function parseArg(argv) {
   if (argv.length !== 1) {
     throw new Error("Usage: bump-version.mjs <X.Y.Z|patch|minor|major> | --check");
@@ -106,7 +115,14 @@ function parseArg(argv) {
 
 function resolveNewVersion(current, arg) {
   if (BUMP_KEYWORDS.includes(arg)) return nextVersion(current, arg);
-  if (SEMVER_RE.test(arg)) return arg;
+  if (SEMVER_RE.test(arg)) {
+    // GAP-44: an equal version used to die later at `git commit` with a
+    // confusing "nothing to commit"; a lower one silently downgraded.
+    if (compareSemver(arg, current) <= 0) {
+      throw new Error(`New version ${arg} must be greater than the current ${current}`);
+    }
+    return arg;
+  }
   throw new Error(`Invalid version "${arg}": expected X.Y.Z or one of patch/minor/major`);
 }
 
