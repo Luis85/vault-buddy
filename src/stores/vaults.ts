@@ -167,6 +167,11 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = "tasks";
       this.tasksVaultId = vaultId;
     },
+    /** The cross-vault "All tasks" view — tasks view with no vault selected. */
+    openAllTasks() {
+      this.view = "tasks";
+      this.tasksVaultId = null;
+    },
     /** Back to the current view's fixed parent (no history stack). */
     back() {
       if (this.view === "recordings" && this.recordingsVaultId) {

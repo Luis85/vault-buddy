@@ -29,6 +29,10 @@ const FILTER_THRESHOLD = 5;
 const showFilter = computed(
   () => view.value === "list" && store.vaults.length > FILTER_THRESHOLD,
 );
+const totalOpenTasks = computed(() =>
+  Object.values(store.taskCounts).reduce((a, b) => a + b, 0),
+);
+const tasksKey = computed(() => store.tasksVaultId ?? "all");
 const filtered = computed(() => {
   const query = filter.value.trim().toLowerCase();
   if (!query) return store.vaults;
@@ -81,7 +85,9 @@ watch(
                   : view === "transcriptions"
                     ? "Transcriptions"
                     : view === "tasks"
-                      ? "Tasks"
+                      ? store.tasksVaultId === null
+                        ? "All tasks"
+                        : "Tasks"
                       : "Vaults"
         }}
       </h1>
@@ -221,12 +227,32 @@ watch(
       <Transcriptions />
     </div>
     <div
-      v-else-if="view === 'tasks' && store.tasksVaultId"
+      v-else-if="view === 'tasks' && (store.tasksVaultId !== undefined)"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
-      <Tasks :key="store.tasksVaultId" :vault-id="store.tasksVaultId" />
+      <Tasks :key="tasksKey" :vault-id="store.tasksVaultId" />
     </div>
     <div v-else class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+      <button
+        v-if="store.vaults.length > 0"
+        type="button"
+        data-testid="all-tasks"
+        :disabled="store.busyVaultId !== null"
+        class="mb-2 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-left text-sm text-slate-200 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+        aria-label="All tasks across every vault"
+        @click="store.openAllTasks()"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 11l3 3 8-8" />
+          <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+        </svg>
+        <span class="min-w-0 flex-1 truncate">All tasks</span>
+        <span
+          v-if="totalOpenTasks > 0"
+          data-testid="all-tasks-count"
+          class="shrink-0 rounded-full bg-violet-500 px-1.5 text-center text-[10px] font-semibold leading-4 text-white"
+        >{{ totalOpenTasks }}</span>
+      </button>
       <VaultList
         v-if="filtered.length > 0"
         :vaults="filtered"

@@ -339,4 +339,13 @@ describe("vaults store", () => {
     expect(store.view).toBe("list");
     expect(store.tasksVaultId).toBeNull();
   });
+
+  it("openAllTasks opens the tasks view in aggregate mode", () => {
+    const store = useVaultsStore();
+    store.openAllTasks();
+    expect(store.view).toBe("tasks");
+    expect(store.tasksVaultId).toBeNull();
+    store.back();
+    expect(store.view).toBe("list");
+  });
 });
