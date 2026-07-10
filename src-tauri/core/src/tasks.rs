@@ -210,6 +210,29 @@ fn strip_inline_comment(rest: &str) -> &str {
     rest
 }
 
+/// Read a STRUCTURED frontmatter scalar (status/created/due/priority): the
+/// raw `note_field` value with an inline YAML comment stripped, plus one
+/// unquote pass for the quoted-then-commented corner (`due: "…" # x` —
+/// note_field's own unquote no-ops there because the raw value doesn't end
+/// with the quote). Valid values of these fields never contain `#`, spaces,
+/// or quotes, so the strip can't eat real content. Titles deliberately stay
+/// on raw `note_field`: free text, where the lenient read keeps everything.
+/// Codex review, PR #46: `due: 2026-07-15 # client` was failing is_valid_due
+/// and bucketing as no-date; `priority: high # urgent` degraded to normal.
+fn scalar_field(content: &str, key: &str) -> Option<String> {
+    let raw = note_field(content, key)?;
+    let stripped = strip_inline_comment(raw.trim()).trim();
+    let unwrapped = if stripped.len() >= 2
+        && ((stripped.starts_with('"') && stripped.ends_with('"'))
+            || (stripped.starts_with('\'') && stripped.ends_with('\'')))
+    {
+        &stripped[1..stripped.len() - 1]
+    } else {
+        stripped
+    };
+    Some(unwrapped.to_string())
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.
@@ -350,14 +373,14 @@ fn collect_task_file(path: &Path, name: &str, out: &mut Vec<TaskItem>) {
     }
     let stem = name.strip_suffix(".md").unwrap_or(name).to_string();
     let title = note_field(&content, "title").unwrap_or(stem);
-    let status = note_field(&content, "status").unwrap_or_else(|| "new".to_string());
+    let status = scalar_field(&content, "status").unwrap_or_else(|| "new".to_string());
     // Archived tasks are removed from view — never surfaced in the list.
     if status == "archived" {
         return;
     }
-    let created = note_field(&content, "created").unwrap_or_default();
-    let due = note_field(&content, "due");
-    let priority = note_field(&content, "priority");
+    let created = scalar_field(&content, "created").unwrap_or_default();
+    let due = scalar_field(&content, "due");
+    let priority = scalar_field(&content, "priority");
     let tags = note_tags(&content);
     let done = status == "done";
     out.push(TaskItem {
@@ -563,6 +586,44 @@ mod tests {
         assert!(items[2].done);
         assert_eq!(items[0].status, "new");
         assert_eq!(items[2].created, "2026-07-06");
+    }
+
+    #[test]
+    fn list_tasks_strips_inline_comments_from_structured_scalars() {
+        // Codex review, PR #46: `due: 2026-07-15 # client` read the comment
+        // into the value, so a due Obsidian's Properties UI shows failed
+        // is_valid_due and bucketed as no-date; `priority: high # urgent`
+        // degraded to normal; `status: done # shipped` counted as open and
+        // `status: archived # old` stayed listed. Structured scalars strip
+        // comments like the tags reader does. Titles stay raw (free text).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "a.md",
+            "---\ntype: Task\nstatus: done # shipped\ntitle: \"A\"\ncreated: 2026-07-06 # early\ndue: 2026-07-15 # client\npriority: high # urgent\n---\n",
+        );
+        write(
+            root,
+            "b.md",
+            "---\ntype: Task\nstatus: archived # old\ntitle: \"B\"\n---\n",
+        );
+        // Quoted-then-commented corner: the comment strip must also unwrap
+        // the remaining quote pair.
+        write(
+            root,
+            "c.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"C\"\ndue: \"2026-07-16\" # quoted\n---\n",
+        );
+        let items = list_tasks(root);
+        let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["C", "A"]); // archived B gone; done A last
+        assert_eq!(items[0].due.as_deref(), Some("2026-07-16"));
+        assert!(items[1].done);
+        assert_eq!(items[1].status, "done");
+        assert_eq!(items[1].created, "2026-07-06");
+        assert_eq!(items[1].due.as_deref(), Some("2026-07-15"));
+        assert_eq!(items[1].priority.as_deref(), Some("high"));
     }
 
     #[test]
