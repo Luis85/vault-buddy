@@ -104,7 +104,10 @@ async function openInstall() {
 
 const statusLabel = computed(() => {
   const s = status.value;
-  if (!s) return "";
+  // No status yet: distinguish "still probing" from "the probe failed" — the
+  // latter must stay visible so the error + Recheck + path override below (the
+  // recovery affordances) aren't hidden exactly when Pandoc detection breaks.
+  if (!s) return error.value ? "Couldn't detect Pandoc" : "Checking…";
   if (!s.installed) return "Not installed";
   if (!s.sandboxSupported) {
     return `Installed (${s.version}) — too old for safe import (need 2.15+)`;
@@ -114,7 +117,11 @@ const statusLabel = computed(() => {
 </script>
 
 <template>
-  <section v-if="status">
+  <!-- Always rendered (no v-if on status): a failed detect_pandoc leaves
+       status null, and the error line + Recheck + path override below are the
+       exact recovery affordances — hiding the whole card would strand a user
+       whose Pandoc probe broke. -->
+  <section>
     <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
       Document import — Pandoc
     </h2>

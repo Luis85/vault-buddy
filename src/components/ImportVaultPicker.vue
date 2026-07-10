@@ -6,6 +6,7 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { PandocStatus } from "../types";
+import { basename } from "../utils/basename";
 
 // Reached only via a buddy drag-drop: Rust stashes the dropped path
 // (begin_document_import) and shows the panel; the panel's refresh()
@@ -53,21 +54,25 @@ const gate = computed(() => {
 
 const sourceName = computed(() => {
   const path = store.pendingImportPath;
-  if (!path) return "";
-  return path.split(/[\\/]/).pop() ?? path;
+  return path ? basename(path) : "";
 });
 
 async function pick(vaultId: string) {
-  if (busyVaultId.value || !store.pendingImportPath) return;
+  // Snapshot the path we're converting: a second document dropped on the buddy
+  // mid-conversion re-points store.pendingImportPath, and we must not act on
+  // (or discard) that newer drop when THIS conversion resolves (GAP-55).
+  const source = store.pendingImportPath;
+  if (busyVaultId.value || !source) return;
   busyVaultId.value = vaultId;
   try {
     const notePath = await invoke<string>("convert_document", {
       id: vaultId,
-      sourcePath: store.pendingImportPath,
+      sourcePath: source,
     });
-    const name = notePath.split(/[\\/]/).pop() ?? notePath;
-    notifications.success(`Imported ${name}`);
-    store.showList();
+    notifications.success(`Imported ${basename(notePath)}`);
+    // Only return to the list if no newer drop arrived meanwhile — otherwise
+    // leave the picker on the newly-dropped document instead of blanking it.
+    if (store.pendingImportPath === source) store.showList();
   } catch (e) {
     logWarning(`import picker: convert_document failed: ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
@@ -79,7 +84,18 @@ async function pick(vaultId: string) {
 
 <template>
   <div class="flex flex-col gap-2">
-    <p class="text-xs text-slate-400">
+    <p
+      v-if="busyVaultId"
+      data-testid="import-picker-converting"
+      class="text-xs text-slate-400"
+    >
+      Converting <span class="font-medium text-slate-200">{{ sourceName }}</span>… this can
+      take a few seconds.
+    </p>
+    <p
+      v-else
+      class="text-xs text-slate-400"
+    >
       Import
       <span
         v-if="sourceName"

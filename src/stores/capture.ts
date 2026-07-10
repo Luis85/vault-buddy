@@ -18,6 +18,7 @@ import type {
   TranscriptionJob,
   TranscriptionQueueStatus,
 } from "../types";
+import { basename } from "../utils/basename";
 import { useNotificationsStore } from "./notifications";
 
 /** How long the post-save "Name this recording" window stays open. */
@@ -40,13 +41,11 @@ function clamp01(n: number): number {
 }
 
 /**
- * Vault-relative display name: basename without the `.mp3` extension. Split
- * on both separators — capture output can carry Windows paths (`\`) even
- * though tests run on Unix (mirrors `acceptRename`'s basename logic below).
+ * Vault-relative display name: basename without the `.mp3` extension
+ * (mirrors `acceptRename`'s basename logic below).
  */
 function nameOf(mp3: string): string {
-  const base = mp3.split(/[\\/]/).pop() ?? mp3;
-  return base.replace(/\.mp3$/i, "");
+  return basename(mp3).replace(/\.mp3$/i, "");
 }
 
 /**
@@ -588,10 +587,7 @@ export const useCaptureStore = defineStore("capture", {
      */
     async acceptRename(title: string) {
       if (!this.lastSaved) return;
-      const base = (this.lastSaved.mp3.split(/[\\/]/).pop() ?? "").replace(
-        /\.mp3$/i,
-        "",
-      );
+      const base = basename(this.lastSaved.mp3).replace(/\.mp3$/i, "");
       const trimmed = title.trim();
       if (!trimmed || trimmed === base) {
         this.dismissRename();

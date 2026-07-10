@@ -8,6 +8,7 @@ import { useCaptureStore } from "../stores/capture";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { CaptureConfig, PandocStatus, Recording } from "../types";
+import { basename } from "../utils/basename";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -68,16 +69,24 @@ const browseLabel = computed(() =>
 const pandoc = ref<PandocStatus | null>(null);
 
 // Single computed (not two) so the "not installed" check isn't duplicated
-// between a disabled-flag computed and a hint-text computed.
+// between a blocked-flag computed and a hint-text computed. `blocked` (Pandoc
+// missing/too old) does NOT disable the button — a disabled button that says
+// "go to Settings" is a dead end, so a blocked click routes to Settings
+// instead (matching ImportVaultPicker). The button only truly disables while a
+// conversion is in flight.
 const importStatus = computed(() => {
   if (!pandoc.value?.installed) {
-    return { disabled: true, hint: "Install Pandoc in Settings to import documents" };
+    return { blocked: true, hint: "Install Pandoc in Settings to import documents" };
   }
   if (!pandoc.value.sandboxSupported) {
-    return { disabled: true, hint: "Update Pandoc (2.15+ needed)" };
+    return { blocked: true, hint: "Update Pandoc (2.15+ needed)" };
   }
-  return { disabled: false, hint: "Convert a Word, ODT, or RTF file into a note" };
+  return { blocked: false, hint: "Convert a Word, ODT, or RTF file into a note" };
 });
+
+// True while a conversion is running — Pandoc can take several seconds, so the
+// button disables and shows a "Converting…" hint rather than looking inert.
+const importing = ref(false);
 
 // Bundles the four transcription fields for TranscriptionSettings' v-model.
 // The setter merges the change back into the FULL loaded config (preserving
@@ -173,22 +182,36 @@ function start(mode: "meeting" | "voice-note") {
   store.showList(); // recording bar shows on the list view
 }
 
+// A blocked click (Pandoc missing/old) jumps to Settings — the one place to
+// fix it — instead of dead-ending; otherwise open the file picker + convert.
+function onImportClick() {
+  if (importStatus.value.blocked) {
+    store.openSettings();
+    return;
+  }
+  void importDocument();
+}
+
 async function importDocument() {
+  if (importing.value) return;
   try {
     const path = await open({
       multiple: false,
       filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
     });
     if (typeof path !== "string") return; // cancelled — no-op
+    // Flip busy only after the picker resolves, so a cancel doesn't strand it.
+    importing.value = true;
     const notePath = await invoke<string>("convert_document", {
       id: props.vaultId,
       sourcePath: path,
     });
-    const name = notePath.split(/[\\/]/).pop() ?? notePath;
-    notifications.success(`Imported ${name}`);
+    notifications.success(`Imported ${basename(notePath)}`);
   } catch (e) {
     logWarning(`convert_document failed (vault ${props.vaultId}): ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
+  } finally {
+    importing.value = false;
   }
 }
 </script>
@@ -230,11 +253,13 @@ async function importDocument() {
         data-testid="import-document"
         aria-label="Import a document into this vault"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-        :disabled="importStatus.disabled"
-        @click="importDocument"
+        :disabled="importing"
+        @click="onImportClick"
       >
         <span class="block text-sm font-medium text-slate-100">Import Document</span>
-        <span class="block text-xs text-slate-400">{{ importStatus.hint }}</span>
+        <span class="block text-xs text-slate-400">{{
+          importing ? "Converting… this can take a few seconds" : importStatus.hint
+        }}</span>
       </button>
     </div>
     <div class="flex flex-col gap-3 border-t border-white/10 pt-3">

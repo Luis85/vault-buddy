@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 
+import { basename } from "../utils/basename";
+
 const props = defineProps<{ savedMp3: string; error: string | null }>();
 const emit = defineEmits<{
   (e: "accept", title: string): void;
@@ -10,10 +12,7 @@ const emit = defineEmits<{
 // unedited is a no-op and edits can start from the real name. The
 // backend strips the duplicated timestamp prefix, so editing the tail
 // of the full base is safe too.
-const baseName = computed(() => {
-  const name = props.savedMp3.split(/[\\/]/).pop() ?? "";
-  return name.replace(/\.mp3$/i, "");
-});
+const baseName = computed(() => basename(props.savedMp3).replace(/\.mp3$/i, ""));
 const title = ref(baseName.value);
 watch(baseName, (value) => (title.value = value));
 </script>

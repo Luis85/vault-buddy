@@ -627,8 +627,9 @@ because a review found the failure it prevents:
 - **Frontend**: app-global Pandoc status/path lives in
   `DocumentImportSettings.vue` (Buddy settings; `detect_pandoc` /
   `set_pandoc_path` with a Browse picker), the per-vault Documents Folder in
-  `CaptureSettings.vue` via the shared `VaultFolderSetting.vue`, the drop
-  target in `ImportVaultPicker.vue` (Pandoc-gated), and the record-chooser
+  `CaptureSettings.vue` via the shared `VaultFolderSetting.vue`, the OS
+  drag-drop handled in `BuddyRoot.vue` (filters `docx/odt/rtf`) landing on the
+  Pandoc-gated vault chooser `ImportVaultPicker.vue`, and the record-chooser
   action in `RecordMode.vue`. The `vaults` store carries the `importPicker`
   view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
   **before** the list default so a drag-dropped path survives `panel-shown`.

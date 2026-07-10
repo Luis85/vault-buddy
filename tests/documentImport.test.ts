@@ -20,6 +20,7 @@ import DocumentImportSettings from "../src/components/DocumentImportSettings.vue
 import RecordMode from "../src/components/RecordMode.vue";
 import { logWarning } from "../src/logging";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useVaultsStore } from "../src/stores/vaults";
 
 const NOT_INSTALLED = {
   installed: false,
@@ -96,6 +97,26 @@ describe("DocumentImportSettings", () => {
     expect(mocks.invoke).toHaveBeenCalledWith("open_external_url", {
       url: "https://pandoc.org/installing.html",
     });
+  });
+
+  it("keeps the error, Recheck and path override reachable when detect_pandoc fails", async () => {
+    // A failed probe must not hide the whole card — those controls are the
+    // recovery path for a broken Pandoc setup.
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "detect_pandoc") return Promise.reject(new Error("io error"));
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(DocumentImportSettings);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pandoc-error"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="pandoc-recheck"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="pandoc-path-input"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="pandoc-status"]').text()).toContain(
+      "Couldn't detect Pandoc",
+    );
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("detect_pandoc failed"),
+    );
   });
 
   it("shows the too-old warning when sandbox is unsupported", async () => {
@@ -229,19 +250,6 @@ describe("DocumentImportSettings", () => {
     );
   });
 
-  it("logs and stays empty when detect_pandoc fails on mount", async () => {
-    mocks.invoke.mockImplementation((cmd: string) => {
-      if (cmd === "detect_pandoc") return Promise.reject(new Error("io error"));
-      return Promise.resolve(undefined);
-    });
-    const wrapper = mount(DocumentImportSettings);
-    await flushPromises();
-    // status stayed null → the whole card (v-if="status") never renders.
-    expect(wrapper.find('[data-testid="pandoc-status"]').exists()).toBe(false);
-    expect(logWarning).toHaveBeenCalledWith(
-      expect.stringContaining("detect_pandoc failed"),
-    );
-  });
 });
 
 describe("RecordMode — Import Document", () => {
@@ -299,7 +307,9 @@ describe("RecordMode — Import Document", () => {
     ).toBe(true);
   });
 
-  it("disables the button and warns when detect_pandoc fails on mount", async () => {
+  it("keeps the button enabled and warns when detect_pandoc fails on mount", async () => {
+    // A failed probe blocks import, but the button stays clickable so it can
+    // route to Settings (the recovery surface) rather than dead-ending.
     mocks.invoke.mockImplementation((cmd: string) => {
       if (cmd === "detect_pandoc") return Promise.reject(new Error("io error"));
       if (cmd === "get_capture_config") return Promise.resolve({});
@@ -310,23 +320,29 @@ describe("RecordMode — Import Document", () => {
     await flushPromises();
 
     const button = wrapper.get('[data-testid="import-document"]');
-    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
     expect(logWarning).toHaveBeenCalledWith(
       expect.stringContaining("detect_pandoc failed"),
     );
   });
 
-  it("disables the button with an install hint when Pandoc is not installed", async () => {
+  it("routes a blocked click to Settings (not installed) instead of dead-ending", async () => {
     routeRecordMode({ pandoc: NOT_INSTALLED });
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
     await flushPromises();
 
     const button = wrapper.get('[data-testid="import-document"]');
-    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
     expect(wrapper.text()).toContain("Install Pandoc in Settings to import documents");
+    await button.trigger("click");
+    await flushPromises();
+    // Jumped to Settings; never opened the file picker or convert.
+    expect(useVaultsStore().view).toBe("settings");
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.invoke.mock.calls.some((c) => c[0] === "convert_document")).toBe(false);
   });
 
-  it("disables the button with an update hint when Pandoc is too old for the sandbox", async () => {
+  it("routes a blocked click to Settings when Pandoc is too old for the sandbox", async () => {
     routeRecordMode({
       pandoc: installed({ version: "pandoc 2.14", sandboxSupported: false }),
     });
@@ -334,8 +350,11 @@ describe("RecordMode — Import Document", () => {
     await flushPromises();
 
     const button = wrapper.get('[data-testid="import-document"]');
-    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect((button.element as HTMLButtonElement).disabled).toBe(false);
     expect(wrapper.text()).toContain("Update Pandoc (2.15+ needed)");
+    await button.trigger("click");
+    await flushPromises();
+    expect(useVaultsStore().view).toBe("settings");
   });
 
   it("does nothing when the picker is cancelled", async () => {

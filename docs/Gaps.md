@@ -44,19 +44,21 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
-### GAP-55 · Low · A document dropped during an in-flight import is silently discarded
+### GAP-55 · Low (mitigated) · A document dropped during an in-flight import
 `src/components/ImportVaultPicker.vue` (`pick`) + `src/stores/vaults.ts`
-(`begin_document_import` → `refresh()` re-arms `pendingImportPath`;
-`showList()` clears it). If a second document is dropped on the buddy while
-the first conversion is still running, `begin_document_import` overwrites
-`pendingImportPath` with the new path; when the first `pick()` promise
-resolves it calls `showList()`, which clears `pendingImportPath` — so the
-second drop is dropped with no toast or error. Narrow (requires a drop
-during an in-flight conversion, and imports are serialized by `ImportLock`
-so only one runs at a time anyway) and non-destructive (nothing is written;
-the user simply re-drops). **Fix, if pursued:** queue pending import paths
-instead of a single-slot stash, or refuse a drop while an import is in
-flight with a "one at a time" toast. Surfaced by the Task 9 review.
+(`begin_document_import` → `refresh()` re-arms `pendingImportPath`). If a
+second document is dropped while the first conversion is still running,
+`begin_document_import` re-points `pendingImportPath` to the new path.
+Originally the first `pick()` then called `showList()` unconditionally,
+clearing `pendingImportPath` and silently discarding the second drop.
+**Mitigated** (polish pass): `pick()` snapshots the path it converts and only
+`showList()`s if `pendingImportPath` still equals that snapshot — otherwise it
+leaves the picker on the newly-dropped document, so the second drop survives
+and the user just picks a vault for it. Still single-slot, so a THIRD drop
+landing before the second is picked would overwrite the second; a full queue
+is the only complete fix, but disproportionate for a narrow, non-destructive
+window (imports are serialized by `ImportLock`; nothing is ever written for a
+dropped-then-lost path). Surfaced by the Task 9 review.
 
 ### GAP-54 · Low · Document-import media publish has a non-atomic crash window
 `src-tauri/core/src/document_import.rs` (`publish_inner`, the media
