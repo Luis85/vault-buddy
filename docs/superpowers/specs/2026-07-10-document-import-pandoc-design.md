@@ -194,38 +194,61 @@ A new "Document Import" section in Buddy settings, structurally a peer of
    can't half-publish. (The temp dir is dot-prefixed and its basename is
    excluded from the recordings/tasks/search walks, so it's never
    surfaced even in the window between staging and publish.)
-2. Invokes Pandoc against that in-vault **temp working directory**, never
-   the final path: `pandoc <source> -f <docx|odt|rtf> -t gfm --sandbox
-   --extract-media=<tempWorkDir>/<reservedMediaName> -o
-   <tempWorkDir>/<reservedNoteName>.md`. `--sandbox` is not optional: the
-   source document is untrusted (it came from email, a download, or the
-   web), and Pandoc's readers can be steered to *read arbitrary local
-   files or fetch remote resources* while resolving linked media —
-   `--sandbox` restricts I/O to the given input/output, so a malicious
-   `.docx`/`.odt`/`.rtf` can't exfiltrate a local file into the vault or
-   trigger network access during what the user was told is a purely local
-   import. `detect_pandoc` records the Pandoc version, and
-   `convert_document` gates on `--sandbox` being supported (Pandoc ≥ 2.15;
-   some minimal builds lacking embedded data files degrade it) — if the
-   detected Pandoc can't honor `--sandbox`, the feature reports that in
-   settings and refuses the conversion rather than running unsandboxed on
-   untrusted input. Both outputs are staged under the *same* temp parent,
-   using the *exact* names and the *exact* sibling relationship (media
-   folder named after and next to the note) they'll have in their final
-   vault location. This matters for two reasons: (a) staging the media
-   directory outside the final tree means a non-zero exit or timeout can
-   never leave a partial media folder at the published path, since Pandoc
-   creates `--extract-media`'s target directory and writes into it as it
-   runs; (b) Pandoc rewrites the markdown's image links to point at
-   wherever `--extract-media` put the files, so if the temp media folder's
-   name or its relative position to the note differed from the final
-   layout, those rewritten links would break the moment the files landed
-   at the published path. Because the relative relationship is identical
-   in both places, step 3's move changes only the *shared parent*
-   directory, and the relative links Pandoc wrote stay correct with no
-   rewriting needed. GFM (GitHub-Flavored Markdown) is the output target
-   rather than Pandoc's native Markdown dialect, because Obsidian's
-   renderer is much closer to GFM than to Pandoc's extension-heavy default
+2. Invokes Pandoc **with its working directory set to `tempWorkDir`** and
+   every output argument given as a **plain relative name**, never an
+   absolute path:
+   ```
+   cwd = <tempWorkDir>
+   pandoc <source> -f <docx|odt|rtf> -t gfm --sandbox \
+     --extract-media=<reservedMediaName> \
+     -o <reservedNoteName>.md \
+     +RTS -M512M -RTS
+   ```
+   The relative `--extract-media` target is load-bearing, not cosmetic:
+   Pandoc rewrites the markdown's image links to whatever string it was
+   handed as the extraction target, so passing an absolute
+   `<tempWorkDir>/<reservedMediaName>` would bake the staging path into
+   every image link and those links would still point back into the temp
+   dir after the file is published. Running with `cwd = tempWorkDir` and a
+   bare relative `--extract-media=<reservedMediaName>` makes Pandoc write
+   links relative to the note (`<reservedMediaName>/…`), which stay correct
+   unchanged once the note and its sibling media folder are moved into the
+   vault together (step 3 relocates only the shared parent). `<source>` is
+   still passed as its real absolute path — only the *outputs* are
+   relativized.
+   - `--sandbox` is not optional: the source document is untrusted (email,
+     a download, the web), and Pandoc's readers can be steered to *read
+     arbitrary local files or fetch remote resources* while resolving
+     linked media. `--sandbox` restricts I/O to the given input/output, so
+     a malicious `.docx`/`.odt`/`.rtf` can't exfiltrate a local file into
+     the vault or trigger network access during what the user was told is
+     a purely local import. `detect_pandoc` records the version and
+     `convert_document` gates on `--sandbox` support (Pandoc ≥ 2.15; some
+     minimal builds lacking embedded data files degrade it) — an
+     unsupporting Pandoc is reported in settings and the conversion is
+     refused, never run unsandboxed on untrusted input.
+   - `+RTS -M512M -RTS` caps Pandoc's GHC-runtime heap. A wall-clock
+     timeout alone does not bound *memory*: Pandoc's own security note
+     warns of pathological parser performance, and a crafted or merely
+     enormous document can allocate enough to freeze the desktop or hit
+     OOM well before the timeout fires. The heap cap makes Pandoc die with
+     a memory error (caught as a normal non-zero exit → toast, nothing
+     published) instead of taking the machine down. The timeout remains as
+     the orthogonal bound on *time*.
+
+   Both outputs are staged under the *same* temp parent, using the *exact*
+   names and the *exact* sibling relationship (media folder named after
+   and next to the note) they'll have in their final vault location. This
+   matters for two reasons: (a) staging the media directory outside the
+   final tree means a non-zero exit or timeout can never leave a partial
+   media folder at the published path, since Pandoc creates
+   `--extract-media`'s target directory and writes into it as it runs; (b)
+   the relative-link property above only holds because that relationship
+   is identical in both places, so step 3's move changes only the *shared
+   parent* directory and the links Pandoc wrote stay correct with no
+   rewriting. GFM (GitHub-Flavored Markdown) is the output target rather
+   than Pandoc's native Markdown dialect, because Obsidian's renderer is
+   much closer to GFM than to Pandoc's extension-heavy default
    (footnote/definition-list/etc. syntax Obsidian doesn't understand).
 3. Only once Pandoc exits successfully: Vault Buddy prepends the
    frontmatter block to the temp markdown, then publishes both the note
