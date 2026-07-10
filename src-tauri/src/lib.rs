@@ -185,6 +185,8 @@ pub fn run() {
         }))
         // Recording saved/failed toasts.
         .plugin(tauri_plugin_notification::init())
+        // Native file pickers: Pandoc-path Browse + document-import file open.
+        .plugin(tauri_plugin_dialog::init())
         // Persist to a rotating file in the app log dir — the bare `.build()`
         // logged only to stdout, which is invisible in a release GUI build,
         // so crashes left no trail. `targets` REPLACES the plugin defaults
