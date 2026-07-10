@@ -738,17 +738,16 @@ pub fn clean_stale_staging_at(
     };
     // Real subdir whose canonical path stays under canon_root — resolves BOTH
     // symlinks and Windows junctions, so neither can redirect the walk out.
+    // Returns the CANONICAL path so a real in-place child canonicalizes to
+    // itself (the leaf uses that self-equality to reject a symlink/junction
+    // named like a staging dir).
     let contained_subdirs = |dir: &Path| -> Vec<PathBuf> {
         std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.canonicalize()
-                    .map(|c| c.is_dir() && c.starts_with(&canon_root))
-                    .unwrap_or(false)
-            })
+            .filter_map(|e| e.path().canonicalize().ok())
+            .filter(|c| c.is_dir() && c.starts_with(&canon_root))
             .collect()
     };
     // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
@@ -756,20 +755,26 @@ pub fn clean_stale_staging_at(
         for month in contained_subdirs(&year) {
             let Ok(entries) = std::fs::read_dir(&month) else { continue };
             for entry in entries.flatten() {
-                let path = entry.path();
+                let path = entry.path(); // <month_canon>/<name>
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if !is_import_staging_dir(&name) {
                     continue;
                 }
-                // Canonical containment before ANY delete — a reparse dir named
-                // like a staging dir must not let remove_dir_all escape.
+                // Delete ONLY a REAL owned in-place staging dir — never a link's
+                // target (Codex review). An owned staging dir is a real dir we
+                // created, so it canonicalizes to ITSELF (its parent `month` is
+                // canonical). A symlink/junction named like one canonicalizes
+                // ELSEWHERE — the containment check would still pass for an
+                // in-vault target, so remove_dir_all on the resolved target
+                // would erase real vault data. `canon == path` rejects it, and
+                // we remove `path` (the entry in place), never a resolved target.
                 let Ok(canon) = path.canonicalize() else { continue };
-                if !canon.is_dir() || !canon.starts_with(&canon_root) {
-                    continue;
+                if canon != path || !canon.is_dir() {
+                    continue; // symlink/junction/reparse redirect → skip
                 }
-                // Staleness: age from mtime, guarding a future mtime (clock jump).
-                let stale = entry
-                    .metadata()
+                // Staleness from the entry's own mtime (no-follow), guarding a
+                // future mtime (clock jump).
+                let stale = std::fs::symlink_metadata(&path)
                     .and_then(|m| m.modified())
                     .map(|mtime| match now.duration_since(mtime) {
                         Ok(age) => age >= stale_after,
@@ -777,8 +782,8 @@ pub fn clean_stale_staging_at(
                     })
                     .unwrap_or(false);
                 if stale {
-                    if std::fs::remove_dir_all(&canon).is_ok() {
-                        sweep.removed.push(canon);
+                    if std::fs::remove_dir_all(&path).is_ok() {
+                        sweep.removed.push(path);
                     }
                 } else {
                     sweep.pending += 1; // fresh orphan → caller reschedules

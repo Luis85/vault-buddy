@@ -149,6 +149,14 @@ pub struct StagingSweep {
 /// under the canonicalized `documents_root`; anything that fails to canonicalize
 /// or escapes is skipped. The caller (the shell janitor) additionally
 /// canonical-checks `documents_root` is inside the vault before calling.
+///
+/// **Delete only an owned in-place staging dir, never a link's target** (Codex
+/// review): a stale entry named like a staging dir but which is actually a
+/// symlink/junction would, if followed, make `remove_dir_all` erase whatever it
+/// points at — real vault data still *inside* the vault, so the containment
+/// check wouldn't catch it. An owned staging dir is a real directory we created,
+/// so it canonicalizes to itself; the leaf is deleted only when `canon == path`
+/// and the ORIGINAL entry path is removed (never a resolved target).
 pub fn clean_stale_staging_at(
     documents_root: &Path,
     now: std::time::SystemTime,
@@ -160,17 +168,16 @@ pub fn clean_stale_staging_at(
     };
     // Real subdir whose canonical path stays under canon_root — resolves BOTH
     // symlinks and Windows junctions, so neither can redirect the walk out.
+    // Returns the CANONICAL path so a real in-place child below canonicalizes
+    // to itself (that self-equality is how the leaf tells an owned staging dir
+    // apart from a symlink/junction named like one).
     let contained_subdirs = |dir: &Path| -> Vec<PathBuf> {
         std::fs::read_dir(dir)
             .into_iter()
             .flatten()
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.canonicalize()
-                    .map(|c| c.is_dir() && c.starts_with(&canon_root))
-                    .unwrap_or(false)
-            })
+            .filter_map(|e| e.path().canonicalize().ok())
+            .filter(|c| c.is_dir() && c.starts_with(&canon_root))
             .collect()
     };
     // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
@@ -180,22 +187,32 @@ pub fn clean_stale_staging_at(
                 continue;
             };
             for entry in entries.flatten() {
-                let path = entry.path();
+                let path = entry.path(); // <month_canon>/<name>
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if !is_import_staging_dir(&name) {
                     continue;
                 }
-                // Canonical containment before ANY delete — a reparse dir named
-                // like a staging dir must not let remove_dir_all escape.
+                // Delete ONLY a REAL, owned, in-place staging directory — never
+                // the target a symlink/junction resolves to (Codex review). An
+                // owned staging dir is one we created as a real directory, so
+                // it canonicalizes to ITSELF (its parent `month` is already
+                // canonical). A symlink/junction named like a staging dir
+                // canonicalizes to a DIFFERENT path — the containment check
+                // alone would still pass for an in-vault target, so
+                // remove_dir_all on the resolved target would erase real vault
+                // data. The `canon == path` self-equality test rejects it, and
+                // we remove `path` (the entry in place), not any resolved
+                // target.
                 let Ok(canon) = path.canonicalize() else {
                     continue;
                 };
-                if !canon.is_dir() || !canon.starts_with(&canon_root) {
-                    continue;
+                if canon != path || !canon.is_dir() {
+                    continue; // symlink/junction/reparse redirect → skip
                 }
                 // Staleness: age from mtime, guarding a future mtime (clock jump).
-                let stale = entry
-                    .metadata()
+                // symlink_metadata (no-follow) is correct here — path is a real
+                // dir, but never resolve a link for the age check either.
+                let stale = std::fs::symlink_metadata(&path)
                     .and_then(|m| m.modified())
                     .map(|mtime| match now.duration_since(mtime) {
                         Ok(age) => age >= stale_after,
@@ -203,8 +220,8 @@ pub fn clean_stale_staging_at(
                     })
                     .unwrap_or(false);
                 if stale {
-                    if std::fs::remove_dir_all(&canon).is_ok() {
-                        sweep.removed.push(canon);
+                    if std::fs::remove_dir_all(&path).is_ok() {
+                        sweep.removed.push(path);
                     }
                 } else {
                     sweep.pending += 1; // fresh orphan → caller reschedules
@@ -487,6 +504,36 @@ mod tests {
         assert!(sweep.removed.is_empty());
         assert_eq!(sweep.pending, 1); // fresh orphan seen → caller must reschedule
         assert!(fresh.exists());
+    }
+
+    // A stale entry NAMED like a staging dir but which is actually a symlink to
+    // real vault data must be skipped, and its target left intact — deleting
+    // the resolved target would erase vault data even though it's in-vault
+    // (Codex review). Unix-only: symlink creation needs the std::os::unix API.
+    #[cfg(unix)]
+    #[test]
+    fn janitor_skips_symlink_named_like_staging_and_keeps_its_target() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let month = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&month).unwrap();
+        // Real vault data the symlink points at.
+        let real = month.join("Important Notes");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("keep.md"), "precious").unwrap();
+        // A symlink whose NAME matches the staging marker, pointing at the data.
+        let link = month.join(".evil.9-9.vault-buddy.tmp.import");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // now = far future so it would be "stale" if the janitor deleted it.
+        let sweep = clean_stale_staging_at(
+            &tmp.path().join("Documents"),
+            SystemTime::now() + Duration::from_secs(3600),
+            Duration::from_secs(60),
+        );
+        assert!(sweep.removed.is_empty()); // nothing deleted
+        assert!(real.join("keep.md").exists()); // target data intact
+        assert!(link.exists()); // the link itself left alone too
     }
 
     #[test]
