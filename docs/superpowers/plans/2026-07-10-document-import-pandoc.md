@@ -703,24 +703,46 @@ pub fn is_import_staging_dir(name: &str) -> bool {
 /// dirs live). Staleness-gated with an injected `now` so a clock jump giving
 /// a live dir a future mtime can't make it look stale (mirrors capture's
 /// `is_stale_at`). Returns the dirs removed, for logging.
+///
+/// **No-follow at every level** (Codex review): a symlinked/junctioned dated
+/// subfolder (`Documents/2026`, `2026/07`) or a symlink named like a staging
+/// dir must never let the sweep descend or delete outside the vault. Each
+/// level is filtered by `file_type().is_dir() && !is_symlink()` — a symlink is
+/// skipped, never traversed or removed. The caller (the shell janitor) also
+/// canonical-checks `documents_root` is inside the vault before calling.
 pub fn clean_stale_staging_at(
     documents_root: &Path,
     now: std::time::SystemTime,
     stale_after: std::time::Duration,
 ) -> Vec<PathBuf> {
     let mut removed = Vec::new();
-    // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
-    let years = match std::fs::read_dir(documents_root) {
-        Ok(rd) => rd,
-        Err(_) => return removed, // no Documents folder yet → nothing to do
+    // A real (non-symlink) subdirectory only — no-follow.
+    let real_subdirs = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| {
+                e.file_type()
+                    .map(|t| t.is_dir() && !t.is_symlink())
+                    .unwrap_or(false)
+            })
+            .map(|e| e.path())
+            .collect()
     };
-    for year in years.flatten().filter(|e| e.path().is_dir()) {
-        let Ok(months) = std::fs::read_dir(year.path()) else { continue };
-        for month in months.flatten().filter(|e| e.path().is_dir()) {
-            let Ok(entries) = std::fs::read_dir(month.path()) else { continue };
+    // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
+    for year in real_subdirs(documents_root) {
+        for month in real_subdirs(&year) {
+            let Ok(entries) = std::fs::read_dir(&month) else { continue };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_dir() {
+                // Real dir only — never a symlink named like a staging dir
+                // (removing through it could escape the vault).
+                let is_real_dir = entry
+                    .file_type()
+                    .map(|t| t.is_dir() && !t.is_symlink())
+                    .unwrap_or(false);
+                if !is_real_dir {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -1228,6 +1250,13 @@ fn convert_blocking(
     // media-folder name into image links, so it can't be decided at publish
     // time (Codex review).
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare import: {e}"))?;
+    // Re-validate the FULLY DATED dir after creating it — the folder-root
+    // check above is lexical and can't see a `Documents/2026` or `2026/07`
+    // symlink/junction that escapes the vault. `start_capture` guards its
+    // dated folder the same way after create_dir_all (Codex review): a
+    // canonical containment check on the concrete path so staging + publish
+    // can't land outside the vault through a nested date-folder link.
+    vault_buddy_core::capture_paths::assert_path_inside_vault(vault_root, &dir)?;
     let raw = document_import::document_basename(stem, today);
     let basename = document_import::reserve_basename(&dir, &raw);
     let plan = document_import::plan_staging(&dir, &basename, unique);
@@ -1356,13 +1385,20 @@ pub fn run_import_recovery(app: &AppHandle) {
             for vault in discovery::discover_vaults() {
                 let v = capture_config::vault_config(&cfg, &vault.id);
                 let folder = v.documents_root();
-                let Ok(root) = capture_paths::safe_recording_root(
-                    std::path::Path::new(&vault.path),
-                    folder,
-                ) else {
+                let vault_root = std::path::Path::new(&vault.path);
+                let Ok(root) = capture_paths::safe_recording_root(vault_root, folder) else {
                     continue;
                 };
                 if !root.is_dir() {
+                    continue;
+                }
+                // Canonical containment before we DELETE anything: the
+                // safe_recording_root check is lexical, so a symlinked
+                // Documents folder could point the sweep outside the vault.
+                // (clean_stale_staging_at additionally never follows a
+                // symlinked dated subdir — no-follow at every level.)
+                if capture_paths::assert_path_inside_vault(vault_root, &root).is_err() {
+                    log::warn!("import-recovery: skipping root outside vault: {root:?}");
                     continue;
                 }
                 let removed = vault_buddy_core::document_import::clean_stale_staging_at(

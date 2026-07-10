@@ -413,8 +413,14 @@ active** (it tries the same `ImportLock`; if it can't take the lock, a
 conversion is running and its fresh staging dir must not be touched — retry
 later) and **staleness-gated** (a clock jump giving a live dir a future
 mtime must not make it look stale, mirroring capture recovery's exact
-guard). This is the one place these owned temp dirs are *not* excluded from
-recovery — they are its whole subject.
+guard). Because it *deletes*, it is also **vault-boundary-guarded exactly
+like the write paths**: a canonical containment check on the Documents root
+before the sweep, plus no-follow traversal at every dated level (a
+symlinked `Documents/2026` or `2026/07`, or a symlink merely named like a
+staging dir, is skipped, never descended into or removed) — so a
+hand-edited folder or a planted junction can never make startup delete
+outside the vault. This is the one place these owned temp dirs are *not*
+excluded from recovery — they are its whole subject.
 
 ## Testing (for the implementation phase)
 
