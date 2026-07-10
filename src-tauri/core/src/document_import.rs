@@ -153,6 +153,21 @@ fn is_month_dir(name: &str) -> bool {
         && matches!(name.parse::<u8>(), Ok(1..=12))
 }
 
+/// True iff `dir` is the REAL, in-place `<documents_root>/<year>/<month>` —
+/// no symlink/junction redirects any dated component. Import checks this before
+/// staging and the recovery sweeper enforces it (`canon == path`), so the two
+/// agree on which dated dirs the importer owns: without it, an import could
+/// stage through a symlinked `Documents/2026` that recovery then refuses to
+/// clean, stranding a crash-orphaned staging dir (Codex review). Both paths
+/// must exist (import creates `dir` first). A symlinked Documents ROOT is fine —
+/// both sides canonicalize it — only the dated levels must be real in-place.
+pub fn is_real_dated_dir(documents_root: &Path, dir: &Path, year: &str, month: &str) -> bool {
+    match (documents_root.canonicalize(), dir.canonicalize()) {
+        (Ok(root), Ok(canon_dir)) => canon_dir == root.join(year).join(month),
+        _ => false,
+    }
+}
+
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
 /// Documents folder (walking its `YYYY/MM` subtree — that's where staging
 /// dirs live). Staleness-gated with an injected `now` so a clock jump giving
@@ -661,6 +676,30 @@ mod tests {
         assert!(!is_month_dir("13"));
         assert!(!is_month_dir("99"));
         assert!(!is_month_dir("7")); // wrong length
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_real_dated_dir_rejects_a_symlinked_dated_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let docs = tmp.path().join("Documents");
+        // A real in-place dated dir passes.
+        std::fs::create_dir_all(docs.join("2025/07")).unwrap();
+        assert!(is_real_dated_dir(
+            &docs,
+            &docs.join("2025/07"),
+            "2025",
+            "07"
+        ));
+        // `Documents/2026` -> Projects (in-vault): 2026/07 resolves elsewhere.
+        std::fs::create_dir_all(docs.join("Projects/07")).unwrap();
+        std::os::unix::fs::symlink(docs.join("Projects"), docs.join("2026")).unwrap();
+        assert!(!is_real_dated_dir(
+            &docs,
+            &docs.join("2026/07"),
+            "2026",
+            "07"
+        ));
     }
 
     #[test]

@@ -20,13 +20,20 @@ const error = ref<string | null>(null);
 // a stale status showing.
 const saving = ref(false);
 
+// Monotonic ticket so out-of-order detect responses can't regress the status:
+// a slow initial probe must not overwrite the fresher result of a save/browse
+// re-detect that resolved first (same idiom as Search's request ticket).
+let detectTicket = 0;
+
 async function detect() {
+  const ticket = ++detectTicket;
   try {
-    status.value = await invoke<PandocStatus>("detect_pandoc");
+    const s = await invoke<PandocStatus>("detect_pandoc");
+    if (ticket === detectTicket) status.value = s;
   } catch (e) {
     // Not running under Tauri (unit tests) or IPC failure — leave the card
     // empty, same degraded-but-continuing pattern as McpSettings/CaptureSettings.
-    error.value = String(e);
+    if (ticket === detectTicket) error.value = String(e);
     logWarning(`document import settings: detect_pandoc failed: ${String(e)}`);
   }
 }

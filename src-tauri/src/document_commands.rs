@@ -160,6 +160,17 @@ fn convert_blocking(
     // and `create_dir_all` (a dated symlink swapped in between the two).
     // `start_capture` guards its dated folder the same way after create.
     capture_paths::assert_path_inside_vault(vault_root, &dir)?;
+    // Require the dated path to be REAL in-place (no symlink/junction redirecting
+    // a dated level, even one pointing elsewhere IN the vault). Containment above
+    // permits such a link, but the recovery sweeper only descends real in-place
+    // dated dirs — so staging through a link would strand an unrecoverable
+    // orphan on a crash. Keeping import and recovery to the same layout closes
+    // that gap (Codex review).
+    if !document_import::is_real_dated_dir(&safe, &dir, year, month) {
+        return Err(
+            "Import destination resolves through a link; use a real Documents folder.".into(),
+        );
+    }
     let raw = document_import::document_basename(stem, today);
     let basename = document_import::reserve_basename(&dir, &raw);
     let plan = document_import::plan_staging(&dir, &basename, unique);

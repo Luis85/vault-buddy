@@ -178,6 +178,37 @@ describe("DocumentImportSettings", () => {
     ).toBe("C:/picked/pandoc.exe");
   });
 
+  it("ignores a slow initial detect that resolves after a newer one", async () => {
+    // The on-mount probe hangs; a Recheck fires a newer probe that resolves
+    // first (installed). When the stale initial probe finally resolves
+    // (not-installed), it must NOT regress the status.
+    let resolveFirstDetect: (v: unknown) => void = () => {};
+    let detectCalls = 0;
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "detect_pandoc") {
+        detectCalls += 1;
+        if (detectCalls === 1) {
+          return new Promise((r) => {
+            resolveFirstDetect = r;
+          });
+        }
+        return Promise.resolve(installed());
+      }
+      return Promise.resolve(undefined);
+    });
+    const wrapper = mount(DocumentImportSettings);
+    await flushPromises(); // first probe pending
+    await wrapper.get('[data-testid="pandoc-recheck"]').trigger("click");
+    await flushPromises(); // newer probe resolved → installed
+    expect(wrapper.get('[data-testid="pandoc-status"]').text()).toContain("3.1.9");
+
+    resolveFirstDetect(NOT_INSTALLED); // stale response arrives last
+    await flushPromises();
+    // Status must still reflect the newer probe, not the stale one.
+    expect(wrapper.get('[data-testid="pandoc-status"]').text()).toContain("3.1.9");
+    expect(wrapper.get('[data-testid="pandoc-status"]').text()).not.toContain("Not installed");
+  });
+
   it("shows the too-old warning when sandbox is unsupported", async () => {
     routeInvoke({
       detect: [installed({ version: "pandoc 2.14", sandboxSupported: false })],
