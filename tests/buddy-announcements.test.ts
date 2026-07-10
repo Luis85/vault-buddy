@@ -1,8 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { defineComponent } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+
+// Capture the mcp:write handler useBuddyAnnouncements registers, so a test
+// can fire it the way Rust's mcp:write emit would (mirrors bubble-root.test.ts
+// / panel-root.test.ts / mcp-settings.test.ts's identical pattern).
+const listeners: Record<string, (e: { payload: unknown }) => void> = {};
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, cb: (e: { payload: unknown }) => void) => {
+    listeners[name] = cb;
+    return Promise.resolve(() => delete listeners[name]);
+  },
+}));
+
 import { useBuddyAnnouncements } from "../src/composables/useBuddyAnnouncements";
 import { useCaptureStore } from "../src/stores/capture";
 import { useSettingsStore } from "../src/stores/settings";
@@ -19,6 +31,7 @@ describe("useBuddyAnnouncements", () => {
   beforeEach(() => {
     localStorage.clear();
     setActivePinia(createPinia());
+    for (const key of Object.keys(listeners)) delete listeners[key];
     spoken = [];
     mockIPC((cmd, args) => {
       if (cmd === "announce") spoken.push((args as { text: string }).text);
@@ -222,6 +235,28 @@ describe("useBuddyAnnouncements", () => {
     const capture = useCaptureStore();
     capture.status = "recording";
     const wrapper = mount(Host);
+    await wrapper.vm.$nextTick();
+    expect(spoken).toEqual([]);
+  });
+
+  it("announces an mcp write through the buddy-messages gate", async () => {
+    const wrapper = mount(Host);
+    await wrapper.vm.$nextTick();
+    listeners["mcp:write"]?.({
+      payload: { kind: "addTask", title: "Buy milk", vaultName: "Notes" },
+    });
+    await wrapper.vm.$nextTick();
+    expect(
+      spoken.some((t) => t.includes("Buy milk") && t.includes("Notes")),
+    ).toBe(true);
+
+    // announce() itself applies the Buddy-messages gate — the mcp:write
+    // listener still fires, but nothing new should be spoken once it's off.
+    spoken.length = 0;
+    useSettingsStore().buddyMessagesEnabled = false;
+    listeners["mcp:write"]?.({
+      payload: { kind: "setTaskStatus", title: "Buy milk", vaultName: "Notes" },
+    });
     await wrapper.vm.$nextTick();
     expect(spoken).toEqual([]);
   });

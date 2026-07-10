@@ -57,3 +57,16 @@ function truncate(s: string, n: number): string {
 export function failureMessage(reason?: string): string {
   return reason ? `Hmm — ${truncate(reason, 60)} 😕` : "Hmm, that didn't work 😕";
 }
+
+/** What an AI client just did in a vault, spoken by the buddy. */
+export function mcpWriteMessage(payload: {
+  kind: string;
+  title: string;
+  vaultName: string;
+}): string {
+  const { kind, title, vaultName } = payload;
+  if (kind === "addTask") return `Added task "${title}" to ${vaultName}`;
+  if (kind === "setTaskStatus") return `Updated task "${title}" in ${vaultName}`;
+  if (kind === "createDailyNote") return `Created today's note in ${vaultName}`;
+  return `An AI client updated ${vaultName}`;
+}
