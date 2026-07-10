@@ -20,14 +20,16 @@ const OPTIONS = [
 ] as const;
 
 // Gates persist() (not rendering) until the vault's real config has landed
-// (set in loadConfig's `finally`, so it also flips on a failed read — see
-// below). TranscriptionSettings renders immediately against the defaults
+// (set ONLY on a successful read — a failed read never unlocks persistence,
+// or one toggle would rewrite the vault's real settings with the defaults;
+// GAP-30). TranscriptionSettings renders immediately against the defaults
 // below so recording is never blocked on the read, but a toggle made before
 // the read resolves must only update the local control, not hit disk: the
 // default-seeded `config` would otherwise persist() over the vault's real
 // recordingFolder/bitrateKbps/devices/createNote/followUpTemplate, and the
 // in-flight read would then clobber the toggle right back out of
-// `config.value` anyway. Mirrors CaptureSettings.vue's loading/finally gate.
+// `config.value` anyway. Mirrors CaptureSettings.vue's tasksFolderLoaded
+// success-only gate.
 const loaded = ref(false);
 
 // Full vault capture config, seeded with the same fallback values
