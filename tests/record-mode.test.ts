@@ -271,4 +271,25 @@ describe("RecordMode", () => {
       cfg: { ...cfg, transcribe: true },
     });
   });
+
+  it("does not persist after a failed config load (GAP-30)", async () => {
+    // loadConfig's finally set loaded=true even on failure, so one
+    // transcription toggle persisted the default-seeded config — wiping the
+    // vault's real recordingFolder/bitrate/devices on disk.
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "get_capture_config") throw new Error("read failed");
+      if (cmd === "list_recordings") return [];
+    });
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+
+    // Flip the transcription toggle after the failed config read.
+    await wrapper.get('[data-testid="transcribe-toggle"]').setValue(true);
+    await flushPromises();
+
+    // Should not have persisted the default-seeded config.
+    expect(calls).not.toContain("set_capture_config");
+  });
 });

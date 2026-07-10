@@ -105,16 +105,15 @@ async function persist() {
 
 async function loadConfig() {
   // A config read failure must never block recording — config keeps the
-  // defaults above, so the transcription settings stay editable too.
+  // defaults above, so the toggles stay usable for THIS session. But a
+  // failed read must never unlock persistence: one toggle would rewrite
+  // the vault's real settings with the default-seeded object (GAP-30 —
+  // the tasksFolderLoaded gate pattern in CaptureSettings).
   try {
     config.value = await invoke<CaptureConfig>("get_capture_config", { id: props.vaultId });
-  } catch {
-    // stale config never blocks recording — mirror the backend's rule
-  } finally {
-    // Set on BOTH success and failure: a read failure must still let the
-    // user save against the defaults (documented above), so persistence
-    // unblocks here either way — only the source of `config` differs.
     loaded.value = true;
+  } catch (e) {
+    logWarning(`get_capture_config failed (vault ${props.vaultId}): ${String(e)}`);
   }
 }
 

@@ -305,16 +305,10 @@ watcher calls the new `dismissRenameIfStale()` instead of an unconditional
 `dismissRename()`, so a prompt younger than `RENAME_PROMPT_MS` survives a
 reopen.
 
-### GAP-30 · Medium · After a failed config read, one transcription toggle rewrites the vault's capture config to defaults
-`src/components/RecordMode.vue:105-118, 87`.
-`loadConfig`'s `finally` sets `loaded = true` even on failure; the
-`transcription` setter then `persist()`s the default-seeded config
-(recordingFolder null, bitrate 128, devices null…) via
-`set_capture_config`, overwriting the user's settings on disk.
-CaptureSettings' `tasksFolderLoaded` gate shows the careful pattern.
-**Fix:** on read failure persist only the four transcription fields, or
-require an explicit save. (Pairs with GAP-02 — the Rust side makes the
-blast radius all vaults.)
+### GAP-30 · ~~Medium~~ FIXED 2026-07-10 · After a failed config read, one transcription toggle rewrites the vault's capture config to defaults
+`loaded` now flips only inside the try block (success path); a failed read
+leaves it false, so no toggle persists the default-seeded config. The
+failure is logged via `logWarning`.
 
 ### GAP-31 · Medium · No IME-composition guard on the add-task Enter — a vault write
 `src/components/Tasks.vue:139`.
