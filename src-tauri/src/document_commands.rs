@@ -5,8 +5,10 @@
 //! search_vaults). Spec:
 //! docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md
 
+use std::path::Path;
 use std::process::Command;
-use vault_buddy_core::capture_config;
+use std::time::Duration;
+use vault_buddy_core::{capture_config, capture_paths, discovery, document_import};
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +160,201 @@ fn resolve_working_pandoc() -> Option<(String, u32, u32, String)> {
     None
 }
 
+/// Pandoc argument vector (program excluded). Source is added by the caller as
+/// an absolute path; every OUTPUT here is relative (Pandoc runs with cwd =
+/// work dir) so rewritten image links stay valid after publish.
+fn pandoc_args(reader: &str, media_name: &str, note_name: &str) -> Vec<String> {
+    vec![
+        "-f".into(),
+        reader.into(),
+        "-t".into(),
+        "gfm".into(),
+        "--sandbox".into(),
+        format!("--extract-media={media_name}"),
+        "-o".into(),
+        note_name.into(),
+        // GHC RTS heap cap: a timeout bounds time, not memory; a crafted doc
+        // could OOM before it fires. Pandoc dies with a memory error instead.
+        "+RTS".into(),
+        "-M512M".into(),
+        "-RTS".into(),
+    ]
+}
+
+/// Max wall-clock for a single conversion before the child is killed.
+const CONVERT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Process-wide serialization for imports. A `try_lock` (not blocking) so a
+/// second concurrent import fails fast instead of racing step 1's
+/// exists-reservation into a corrupt/partial publish. The inner mutex is an
+/// `Arc` so its guard can be held on the `spawn_blocking` thread (Tauri
+/// `State` itself can't cross that boundary). Registered as app state in
+/// lib.rs beside ConfigWriteLock: `.manage(ImportLock::default())`.
+#[derive(Default, Clone)]
+pub struct ImportLock(pub std::sync::Arc<std::sync::Mutex<()>>);
+
+/// Monotonic per-invocation token so two same-date imports can't collide on
+/// the staging dir name even across the (lock-serialized) boundary.
+static IMPORT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[tauri::command]
+pub async fn convert_document(
+    lock: tauri::State<'_, ImportLock>,
+    id: String,
+    source_path: String,
+) -> Result<String, String> {
+    // Take the process-wide import lock BEFORE spawning the blocking job. A
+    // failed try_lock means another import is mid-flight — fail fast rather
+    // than race. The guard is moved into the blocking closure so it's held
+    // for the whole convert-and-publish body and dropped when it returns.
+    // (State can't cross the spawn_blocking boundary, so clone the inner Arc
+    // via a dedicated Arc<Mutex<()>> — see the lib.rs wiring note below.)
+    let today = chrono::Local::now().date_naive();
+    let today_str = today.format("%Y-%m-%d").to_string();
+    let year = today.format("%Y").to_string();
+    let month = today.format("%m").to_string();
+    let seq = IMPORT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let unique = format!("{}-{}", std::process::id(), seq);
+
+    // The lock is an Arc<Mutex<()>> so its guard can live on the blocking
+    // thread; ImportLock stores that Arc (see the struct note).
+    let mutex = lock.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = match mutex.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Err("An import is already in progress.".to_string()),
+        };
+        convert_blocking(&id, &source_path, &today_str, &year, &month, &unique)
+    })
+    .await
+    .map_err(|e| {
+        log::warn!("convert_document: task failed: {e}");
+        "Import failed — see the logs for details.".to_string()
+    })?
+}
+
+fn convert_blocking(
+    id: &str,
+    source_path: &str,
+    today: &str,
+    year: &str,
+    month: &str,
+    unique: &str,
+) -> Result<String, String> {
+    let src = Path::new(source_path);
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .ok_or("Unsupported file — expected .docx, .odt, or .rtf")?;
+    let format = document_import::DocFormat::from_extension(ext)
+        .ok_or("Unsupported file — expected .docx, .odt, or .rtf")?;
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Could not read the file name")?;
+
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+
+    // Resolve Pandoc synchronously here (we're already on a blocking thread):
+    // override first, then PATH — a stale override must not hide a valid PATH
+    // Pandoc (Codex review). This is the SAME resolution detect_pandoc uses.
+    let (program, major, minor, _) = resolve_working_pandoc()
+        .ok_or("Pandoc is not installed. Install it from Settings → Document Import.")?;
+    if !sandbox_supported(major, minor) {
+        return Err(
+            "Your Pandoc is too old to import safely (need 2.15+). Please update it.".into(),
+        );
+    }
+
+    let cfg = capture_config::vault_config(&capture_config::load_config(), id);
+    let documents_folder = cfg.documents_root().to_string();
+    // Re-validate containment even though set_documents_config already did:
+    // config.json is hand-editable, so a `../…` or symlink-escaping folder
+    // must be caught here too before any staging dir is created (Codex
+    // review). Same lexical + canonical check the save path uses.
+    let vault_root = Path::new(&vault.path);
+    let safe = capture_paths::safe_recording_root(vault_root, &documents_folder)?;
+    capture_paths::assert_path_inside_vault(vault_root, &safe)?;
+    let dir = document_import::target_dir(vault_root, &documents_folder, year, month);
+    // Resolve the ` (N)` suffix for BOTH note and media folder up front — the
+    // target dir must exist for the existence checks, and Pandoc bakes the
+    // media-folder name into image links, so it can't be decided at publish
+    // time (Codex review).
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare import: {e}"))?;
+    // Re-validate the FULLY DATED dir after creating it — the folder-root
+    // check above is lexical and can't see a `Documents/2026` or `2026/07`
+    // symlink/junction that escapes the vault. `start_capture` guards its
+    // dated folder the same way after create_dir_all (Codex review): a
+    // canonical containment check on the concrete path so staging + publish
+    // can't land outside the vault through a nested date-folder link.
+    capture_paths::assert_path_inside_vault(vault_root, &dir)?;
+    let raw = document_import::document_basename(stem, today);
+    let basename = document_import::reserve_basename(&dir, &raw);
+    let plan = document_import::plan_staging(&dir, &basename, unique);
+
+    // Fresh staging dir.
+    document_import::cleanup_staging(&plan.work_dir);
+    std::fs::create_dir_all(&plan.work_dir)
+        .map_err(|e| format!("Could not prepare import: {e}"))?;
+
+    let args = pandoc_args(format.reader(), &plan.media_name, &plan.note_name);
+    let mut cmd = pandoc_command(&program);
+    cmd.current_dir(&plan.work_dir)
+        .arg(src) // absolute source
+        .args(&args);
+
+    let run = run_with_timeout(cmd, CONVERT_TIMEOUT);
+    match run {
+        Ok(true) => {}
+        Ok(false) => {
+            document_import::cleanup_staging(&plan.work_dir);
+            return Err("Pandoc could not convert this document.".into());
+        }
+        Err(e) => {
+            document_import::cleanup_staging(&plan.work_dir);
+            log::warn!("convert_document: pandoc run failed: {e}");
+            return Err("Pandoc could not convert this document.".into());
+        }
+    }
+
+    let meta = document_import::DocMeta {
+        source_path: source_path.to_string(),
+        imported: today.to_string(),
+        format,
+    };
+    let frontmatter = document_import::render_frontmatter(&meta);
+    let note = document_import::publish(&plan, &dir, &frontmatter)
+        .map_err(|e| format!("Could not save the imported note: {e}"))?;
+
+    // Vault-relative path for the caller (best-effort; absolute on failure).
+    let rel = note
+        .strip_prefix(&vault.path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| note.to_string_lossy().to_string());
+    Ok(rel)
+}
+
+/// Spawn + wait with a wall-clock kill. Returns Ok(true) on success exit,
+/// Ok(false) on non-zero/killed, Err on spawn failure.
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<bool> {
+    let mut child = cmd.spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status.success());
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Detect Pandoc on demand (settings-open + Recheck). Async + spawn_blocking:
 /// spawning a subprocess is blocking I/O and must stay off the main thread.
 #[tauri::command]
@@ -224,6 +421,24 @@ mod tests {
         assert!(merged.contains("/opt/pandoc"));
         // existing entry not duplicated
         assert_eq!(merged.matches("/usr/bin").count(), 1);
+    }
+
+    #[test]
+    fn pandoc_args_are_sandboxed_relative_and_heap_capped() {
+        let args = pandoc_args("docx", "2026-07-10 Report", "2026-07-10 Report.md");
+        // reader
+        assert!(args.windows(2).any(|w| w == ["-f", "docx"]));
+        assert!(args.windows(2).any(|w| w == ["-t", "gfm"]));
+        // sandbox always present
+        assert!(args.iter().any(|a| a == "--sandbox"));
+        // relative extract-media + output (no temp path baked in)
+        assert!(args
+            .iter()
+            .any(|a| a == "--extract-media=2026-07-10 Report"));
+        assert!(args.windows(2).any(|w| w == ["-o", "2026-07-10 Report.md"]));
+        // heap cap
+        let joined = args.join(" ");
+        assert!(joined.contains("+RTS -M512M -RTS"));
     }
 
     #[test]
