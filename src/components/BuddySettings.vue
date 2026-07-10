@@ -7,6 +7,7 @@ import { logWarning } from "../logging";
 import { type MessageDuration,useSettingsStore } from "../stores/settings";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import DiagnosticsSettings from "./DiagnosticsSettings.vue";
+import McpSettings from "./McpSettings.vue";
 import SelectMenu from "./SelectMenu.vue";
 import UpdateSettings from "./UpdateSettings.vue";
 
@@ -227,5 +228,6 @@ async function toggleAutostart(event: Event) {
     </section>
     <UpdateSettings />
     <DiagnosticsSettings />
+    <McpSettings />
   </div>
 </template>

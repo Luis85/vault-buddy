@@ -1,0 +1,439 @@
+use subtle::ConstantTimeEq;
+
+/// Hard cap on request bodies (1 MiB): tool calls are small JSON; anything
+/// bigger is a misbehaving client.
+pub const MAX_BODY_BYTES: u64 = 1_048_576;
+
+/// Verdict for a request's body bound. POST is the only body-carrying MCP
+/// method, so it must present a parseable Content-Length within the cap —
+/// otherwise a chunked body (no Content-Length) would bypass the limit
+/// entirely. GET/DELETE carry no body and pass without a header.
+pub enum BodyBound {
+    Ok,
+    /// Body-carrying method without a Content-Length → 411.
+    MissingLength,
+    /// Oversize or unparseable Content-Length → 413.
+    TooLarge,
+}
+
+pub fn body_bound(method: &str, content_length: Option<&str>) -> BodyBound {
+    let needs_bound = method.eq_ignore_ascii_case("POST");
+    match content_length {
+        None if needs_bound => BodyBound::MissingLength,
+        None => BodyBound::Ok,
+        Some(v) => match v.parse::<u64>() {
+            Ok(n) if n <= MAX_BODY_BYTES => BodyBound::Ok,
+            _ => BodyBound::TooLarge,
+        },
+    }
+}
+
+/// MCP-spec DNS-rebinding defense: no Origin (CLI clients) or a localhost
+/// origin passes; any web origin is rejected before auth work.
+pub fn origin_ok(origin: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    let rest = if let Some(r) = origin.strip_prefix("http://") {
+        r
+    } else if let Some(r) = origin.strip_prefix("https://") {
+        r
+    } else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or("");
+    // Strip a port; [::1] needs the bracket form kept intact.
+    let host = if let Some(h) = host.strip_prefix('[') {
+        h.split(']').next().unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// Constant-time bearer check. An empty configured token never matches —
+/// "not yet generated" must not mean "open".
+pub fn auth_ok(header: Option<&str>, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let Some(presented) = header.and_then(|h| h.strip_prefix("Bearer ")) else {
+        return false;
+    };
+    presented.as_bytes().ct_eq(token.as_bytes()).into()
+}
+
+use std::sync::Arc;
+
+use axum::extract::State;
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use rmcp::transport::streamable_http_server::{
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+};
+use tokio_util::sync::CancellationToken;
+
+use crate::service::{Deps, VaultBuddyMcp};
+
+#[derive(Clone)]
+struct Guard {
+    token: Arc<String>,
+}
+
+fn header_str(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
+    headers.get(name).and_then(|v| v.to_str().ok())
+}
+
+async fn guard(
+    State(g): State<Guard>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let headers = req.headers();
+    // Kept as the original HeaderValue so CORS responses echo exactly the
+    // value origin_ok validated — never a wildcard, never a re-parse. An
+    // Origin that isn't visible ASCII behaves as absent (same as
+    // `header_str` always treated it): it can't match a localhost form, and
+    // it earns no CORS headers.
+    let origin = headers
+        .get(header::ORIGIN)
+        .filter(|v| v.to_str().is_ok())
+        .cloned();
+    if !origin_ok(origin.as_ref().and_then(|v| v.to_str().ok())) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    // CORS preflight (Codex catch): a browser-hosted localhost MCP client
+    // (the spec's MCP Inspector target) sends OPTIONS WITHOUT Authorization —
+    // browsers never attach credentials to preflights — so answering it must
+    // come BEFORE the auth gate or the real POST never happens. It sits
+    // AFTER the origin gate on purpose: a non-localhost Origin was already
+    // 403'd above, so this arm can only ever echo an origin origin_ok
+    // admitted. Non-browser OPTIONS (no Origin) falls through to auth
+    // exactly as before. Hand-rolled rather than a CORS layer dependency so
+    // the whole admission story stays auditable next to origin_ok.
+    //
+    // Security posture: CORS here NARROWS nothing and OPENS nothing.
+    // origin_ok remains the only admission decision, and the bearer token is
+    // still required on every actual request — these headers just let an
+    // already-allowed localhost browser complete its handshake and read the
+    // Mcp-Session-Id it needs to continue its session.
+    if req.method() == Method::OPTIONS {
+        if let Some(origin) = origin {
+            let mut resp = Response::new(axum::body::Body::empty());
+            *resp.status_mut() = StatusCode::NO_CONTENT;
+            let h = resp.headers_mut();
+            h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET, POST, DELETE"),
+            );
+            h.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static(
+                    "authorization, content-type, mcp-session-id, mcp-protocol-version, last-event-id",
+                ),
+            );
+            h.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                HeaderValue::from_static("86400"),
+            );
+            h.insert(header::VARY, HeaderValue::from_static("Origin"));
+            return Ok(resp);
+        }
+    }
+    if !auth_ok(header_str(headers, header::AUTHORIZATION), &g.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    match body_bound(
+        req.method().as_str(),
+        header_str(headers, header::CONTENT_LENGTH),
+    ) {
+        BodyBound::Ok => {}
+        BodyBound::MissingLength => return Err(StatusCode::LENGTH_REQUIRED),
+        BodyBound::TooLarge => return Err(StatusCode::PAYLOAD_TOO_LARGE),
+    }
+    let mut response = next.run(req).await;
+    // The actual (non-preflight) response for a browser request: reflect the
+    // admitted origin and expose Mcp-Session-Id — without it, browser JS can
+    // make the request but cannot READ the session id header, so the session
+    // dies after initialize. No Origin present (every non-browser client) →
+    // no CORS headers, byte-for-byte the old behavior.
+    if let Some(origin) = origin {
+        let h = response.headers_mut();
+        h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        h.insert(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("mcp-session-id"),
+        );
+        h.append(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    Ok(response)
+}
+
+/// How long in-flight connections get to drain after a shutdown request
+/// before the runtime is torn down out from under them. Bounds
+/// `RunningServer::stop()` by construction — the disable/regenerate path
+/// must be able to PROVE the old socket (and old token) are gone before
+/// reporting success. Note the LISTENER is not what this waits on: axum
+/// drops it the moment the cancel signal fires (see the shutdown comment in
+/// `start`); this grace is for the accepted connections still being served.
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long teardown waits for in-flight blocking-pool work (tool handlers
+/// offload every synchronous section there — `VaultBuddyMcp::offload`) after
+/// the drain. Together these bound `stop()`: total ≤ DRAIN_GRACE +
+/// SHUTDOWN_TIMEOUT + epsilon (the roundtrip suite asserts < 8s, leaving 3s
+/// slack). A blocking task still running when this expires is LEAKED, not
+/// awaited — see the `shutdown_timeout` call site for the consequence.
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A live server: the bound port plus the handles to stop it. Dropping
+/// without `stop()` leaves the thread running until process exit — fine for
+/// app shutdown (the OS reclaims the listener), wrong for a settings change.
+pub struct RunningServer {
+    pub port: u16,
+    cancel: CancellationToken,
+    join: std::thread::JoinHandle<()>,
+}
+
+impl RunningServer {
+    /// Cancel + join. The join is bounded by DRAIN_GRACE + SHUTDOWN_TIMEOUT
+    /// by construction: the serve select falls through after the grace,
+    /// `block_on` returns, and the thread tears its per-`start` runtime down
+    /// with `shutdown_timeout` — killing remaining connection tasks and
+    /// waiting at most SHUTDOWN_TIMEOUT for offloaded blocking work (see the
+    /// shutdown comment in `start`). So this returns promptly even while a
+    /// tool call is stuck in slow vault I/O, and only once the listener AND
+    /// every accepted connection are actually gone.
+    pub fn stop(self) {
+        self.cancel.cancel();
+        if self.join.join().is_err() {
+            log::error!("mcp-server thread panicked during shutdown");
+        }
+    }
+}
+
+/// Bind 127.0.0.1:`port` (0 = ephemeral) and serve MCP on a dedicated named
+/// thread with its own current-thread tokio runtime. Returns only after the
+/// bind outcome is known, so "port already in use" is a synchronous,
+/// user-visible error — never a silently dead server.
+pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, String> {
+    let cancel = CancellationToken::new();
+    let ct = cancel.clone();
+    // std channel: the caller is synchronous (a Tauri command / setup), the
+    // sender is inside the runtime — a oneshot over threads.
+    let (bind_tx, bind_rx) = std::sync::mpsc::channel::<Result<u16, String>>();
+
+    let join = std::thread::Builder::new()
+        .name("mcp-server".into())
+        .spawn(move || {
+            // INVARIANT: one runtime per start(), owned by this thread and
+            // torn down (shutdown_timeout below) when this closure ends. The
+            // bounded-stop guarantee DEPENDS on that teardown: it is what
+            // kills any connection task the graceful drain couldn't finish
+            // (see the shutdown comment at the select below). Reusing a
+            // shared or persistent runtime here would silently let a pinned
+            // connection outlive stop() and keep honoring the old token.
+            // `thread_name` names the runtime's BLOCKING-pool threads (the
+            // only threads a current-thread runtime spawns; tool handlers
+            // offload their sync work there) — the repo's every-thread-named
+            // diagnostics invariant.
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .thread_name("mcp-blocking")
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = bind_tx.send(Err(format!("tokio runtime: {e}")));
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        let _ = bind_tx.send(Err(format!("could not bind 127.0.0.1:{port}: {e}")));
+                        return;
+                    }
+                };
+                let actual = match listener.local_addr() {
+                    Ok(a) => a.port(),
+                    Err(e) => {
+                        let _ = bind_tx.send(Err(format!("local_addr: {e}")));
+                        return;
+                    }
+                };
+                let service = StreamableHttpService::new(
+                    move || Ok(VaultBuddyMcp::new(deps.clone())),
+                    LocalSessionManager::default().into(),
+                    StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
+                );
+                let router = axum::Router::new().nest_service("/mcp", service).layer(
+                    middleware::from_fn_with_state(
+                        Guard {
+                            token: Arc::new(token),
+                        },
+                        guard,
+                    ),
+                );
+                let _ = bind_tx.send(Ok(actual));
+                log::info!("mcp: serving on 127.0.0.1:{actual}/mcp");
+                let shutdown = ct.clone();
+                let serve = axum::serve(listener, router)
+                    .with_graceful_shutdown(async move { shutdown.cancelled().await });
+                let forced = ct.clone();
+                // How shutdown really works (traced through the vendored
+                // sources — do not "simplify" this back to a claim that
+                // dropping the serve future closes anything). Cancelling `ct`
+                // propagates three ways at once:
+                //   1. axum's graceful shutdown breaks the accept loop and
+                //      drops the LISTENER immediately — before waiting on
+                //      connections (axum-0.8.9 serve/mod.rs,
+                //      WithGracefulShutdown::run). The port is free from that
+                //      moment, regardless of which select arm wins.
+                //   2. rmcp ends every SSE response body: each is built with
+                //      `take_until(child_token.cancelled())`
+                //      (rmcp sse_stream_response), so streams close and their
+                //      connection tasks can finish — the normal path, where
+                //      `serve` completes and the first arm wins.
+                //   3. hyper's per-connection graceful_shutdown stops NEW
+                //      requests on kept-alive connections, but does NOT cut a
+                //      response still in flight.
+                // The second arm bounds the stragglers: accepted connections
+                // run on DETACHED tokio::spawn tasks, so dropping the `serve`
+                // future kills nothing by itself — it only abandons axum's
+                // wait on them. What actually kills a connection that outlives
+                // the grace is falling out of this block_on: the runtime
+                // teardown below (`shutdown_timeout`) shuts down every
+                // remaining task, closing their sockets. stop() joins the
+                // thread, so it returns only after that teardown — a client
+                // pinning a stream open cannot keep the old endpoint (and old
+                // token) alive past it.
+                // For this select to be able to FIRE, the reactor must keep
+                // polling — which is why every tool handler offloads its
+                // synchronous work (registry reads, walks, fsync writes, the
+                // launch call) to the blocking pool via
+                // `VaultBuddyMcp::offload`: one blocking call run inline on
+                // this current-thread runtime would starve the select, and
+                // stop() would silently be bounded by (slowest vault I/O +
+                // grace) instead of by construction.
+                tokio::select! {
+                    result = serve => {
+                        if let Err(e) = result {
+                            log::error!("mcp: server exited with error: {e}");
+                        }
+                    }
+                    _ = async {
+                        forced.cancelled().await;
+                        tokio::time::sleep(DRAIN_GRACE).await;
+                    } => {
+                        log::warn!("mcp: graceful drain timed out; forcing close");
+                    }
+                }
+                log::info!("mcp: server stopped");
+            });
+            // Bounded teardown — MANDATORY shutdown_timeout, never an
+            // implicit drop: `Runtime::drop` waits INDEFINITELY for in-flight
+            // spawn_blocking work (tokio BlockingPool::drop → shutdown(None)),
+            // which would silently reintroduce the unbounded join through
+            // teardown the moment an offloaded tool call wedges on slow vault
+            // I/O. shutdown_timeout kills the remaining async tasks
+            // (connections) and waits at most SHUTDOWN_TIMEOUT for blocking
+            // tasks; one still running after that is LEAKED — its
+            // "mcp-blocking" thread finishes on its own, and since the closure
+            // holds Deps clones, a very late completion can still fire
+            // launch/on_write after stop() reported success. Accepted,
+            // deliberately: the write/launch genuinely happened, and an honest
+            // late announce beats an unbounded stop().
+            rt.shutdown_timeout(SHUTDOWN_TIMEOUT);
+        })
+        .map_err(|e| format!("could not spawn mcp-server thread: {e}"))?;
+
+    match bind_rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(Ok(port)) => Ok(RunningServer { port, cancel, join }),
+        Ok(Err(e)) => {
+            // The thread sent its error and is exiting — a plain join is prompt.
+            let _ = join.join();
+            Err(e)
+        }
+        Err(_) => {
+            // The thread is delayed, not necessarily dead (Codex review catch):
+            // without this, it could finish binding LATER and serve as an
+            // orphan no RunningServer handle can ever stop. Cancel now — the
+            // serve stage sees an already-cancelled token and shuts straight
+            // down (bounded by DRAIN_GRACE + SHUTDOWN_TIMEOUT) — and reap the join on a named
+            // helper so this error path returns promptly instead of blocking
+            // on a wedged thread.
+            cancel.cancel();
+            let reap = std::thread::Builder::new()
+                .name("mcp-server-reaper".into())
+                .spawn(move || {
+                    if join.join().is_err() {
+                        log::error!("mcp-server thread panicked after bind-report timeout");
+                    }
+                });
+            if let Err(e) = reap {
+                log::warn!("could not spawn mcp-server-reaper: {e}");
+            }
+            Err("mcp-server did not report its bind status within 10s".to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_absent_or_localhost_passes_everything_else_fails() {
+        assert!(origin_ok(None)); // CLI clients send no Origin
+        for ok in [
+            "http://localhost",
+            "http://localhost:5173",
+            "https://localhost:1234",
+            "http://127.0.0.1:8080",
+            "http://[::1]:9000",
+        ] {
+            assert!(origin_ok(Some(ok)), "{ok} should pass");
+        }
+        for bad in [
+            "http://evil.test",
+            "https://localhost.evil.test",
+            "null",
+            "file://x",
+        ] {
+            assert!(!origin_ok(Some(bad)), "{bad} should fail");
+        }
+    }
+
+    #[test]
+    fn auth_requires_the_exact_bearer_token() {
+        assert!(auth_ok(Some("Bearer sekret"), "sekret"));
+        assert!(!auth_ok(Some("Bearer wrong"), "sekret"));
+        assert!(!auth_ok(Some("sekret"), "sekret")); // scheme required
+        assert!(!auth_ok(None, "sekret"));
+        assert!(!auth_ok(Some("Bearer "), "sekret"));
+        assert!(!auth_ok(Some("Bearer sekret"), "")); // empty token never matches
+    }
+
+    #[test]
+    fn post_bodies_must_carry_a_parseable_in_cap_content_length() {
+        // A chunked POST (no Content-Length) must NOT bypass the cap.
+        assert!(matches!(body_bound("POST", None), BodyBound::MissingLength));
+        assert!(matches!(body_bound("post", None), BodyBound::MissingLength));
+        assert!(matches!(body_bound("POST", Some("1048576")), BodyBound::Ok));
+        assert!(matches!(
+            body_bound("POST", Some("1048577")),
+            BodyBound::TooLarge
+        ));
+        assert!(matches!(
+            body_bound("POST", Some("not-a-number")),
+            BodyBound::TooLarge
+        ));
+        // GET (the SSE stream) and DELETE carry no body — no length required.
+        assert!(matches!(body_bound("GET", None), BodyBound::Ok));
+        assert!(matches!(body_bound("DELETE", None), BodyBound::Ok));
+    }
+}

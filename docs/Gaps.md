@@ -684,6 +684,24 @@ LGPL static linking.
   inference would bound memory for very long meetings; out of scope until
   it hurts.
 
+### GAP-53 · Low · MCP polish bundle (from the increment's final review)
+Deferred-by-triage follow-ups for the embedded MCP server, best done as one
+small slice (all Minor; none merge-blocking — see the final whole-branch
+review in the PR-43 ledger):
+- Export the service error-message *prefixes* as core constants consumed by
+  both `services` and `outcome_label` — the audit labels are copy-coupled
+  today, and drift silently degrades a label to `error` without failing the
+  `outcome_labels_are_static` test (it hardcodes its own copies).
+- Add a dedicated `path-escape` audit label (security observability; those
+  rejections currently log as generic `error` plus the detailed warn).
+- `status_of` should notice a dead server (`is_finished()` on the join
+  handle) instead of reporting `running` until the next settings change.
+- `get_mcp_config` is a sync command that can contend on the state mutex
+  held across `start()`'s ≤10 s bind wait — make it async or narrow the
+  lock (take it only to store the handle, with a `starting` flag).
+- `McpSettings.vue`: guard the `mcp:status` listener registration against
+  unmount-before-resolve (one leaked listener per fast settings visit).
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md

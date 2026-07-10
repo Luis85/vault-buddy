@@ -1,0 +1,54 @@
+[package]
+name = "vault_buddy_mcp"
+version = "0.1.0"
+edition = "2021"
+# Unpublished workspace member, like its siblings — cargo-deny's license
+# gate skips private crates (deny.toml `private.ignore`) only when this is
+# set.
+publish = false
+
+[dependencies]
+vault_buddy_core = { path = "../core" }
+rmcp = { version = "2.2", features = [
+    "server",
+    "macros",
+    "transport-streamable-http-server",
+] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt", "net", "macros", "time"] }
+tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Must match rmcp's schemars major — verify with `cargo tree -p rmcp | grep schemars`.
+schemars = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+log = "0.4"
+getrandom = "0.3"
+base64 = "0.22"
+subtle = "2"
+
+[dev-dependencies]
+# "reqwest" alone only pulls rmcp's optional reqwest dep + a TLS backend
+# (rmcp-2.2.0/Cargo.toml: reqwest = ["__reqwest", "reqwest?/rustls"]); the
+# `impl StreamableHttpClient for reqwest::Client` used by
+# StreamableHttpClientTransport::with_client lives in a module gated
+# separately behind "transport-streamable-http-client-reqwest"
+# (rmcp-2.2.0/src/transport/common/reqwest.rs). Without it, `with_client`
+# fails to compile with "the trait StreamableHttpClient is not implemented
+# for reqwest::Client" even though reqwest itself builds fine.
+rmcp = { version = "2.2", features = [
+    "client",
+    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
+    "reqwest",
+] }
+# Must match the reqwest major rmcp's own "reqwest" feature pulls in (see
+# rmcp-2.2.0/Cargo.toml [dependencies.reqwest]) — the client transport's
+# `with_client` requires our reqwest::Client to be the SAME type rmcp's
+# StreamableHttpClient impl targets; a mismatched major here type-errors as
+# a trait-not-satisfied on with_client, not a version warning.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
+bytes = "1"
+futures-util = "0.3"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }

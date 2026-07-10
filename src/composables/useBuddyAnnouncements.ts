@@ -1,8 +1,10 @@
+import { listen } from "@tauri-apps/api/event";
 import { watch } from "vue";
 
 import { announce } from "../announce";
 import {
   failureMessage,
+  mcpWriteMessage,
   recordingPausedMessage,
   recordingResumedMessage,
   recordingSavedMessage,
@@ -91,5 +93,14 @@ export function useBuddyAnnouncements(): void {
     (err, prev) => {
       if (err && err !== prev) announce(failureMessage(err));
     },
+  );
+
+  // MCP writes: Rust emits mcp:write after an AI client's sanctioned vault
+  // write. Announced here (buddy window only — same exactly-once rule as the
+  // capture watchers above); `announce` itself applies the Buddy-messages
+  // setting.
+  void listen<{ kind: string; title: string; vaultName: string }>(
+    "mcp:write",
+    (event) => announce(mcpWriteMessage(event.payload)),
   );
 }

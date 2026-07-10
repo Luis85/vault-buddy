@@ -121,9 +121,40 @@ impl VaultCaptureConfig {
     }
 }
 
+/// Default port for the embedded MCP server: 0x5642 = ASCII "VB".
+pub const DEFAULT_MCP_PORT: u16 = 22082;
+
+/// App-global settings for the embedded MCP server (spec:
+/// docs/superpowers/specs/2026-07-09-local-mcp-server-design.md). Stored as
+/// a top-level `mcp` section beside `vaults`; parsing is per-field defensive
+/// for the same reason the vault entries are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpConfig {
+    pub enabled: bool,
+    pub port: u16,
+    /// Bearer token clients must send. Empty until first enable; the shell
+    /// self-heals an enabled-but-tokenless config by generating one.
+    pub token: String,
+    /// The "Allow vault writes" grant: add_task, set_task_status, and the
+    /// daily-note create branch.
+    pub allow_writes: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: DEFAULT_MCP_PORT,
+            token: String::new(),
+            allow_writes: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AppConfig {
     pub vaults: HashMap<String, VaultCaptureConfig>,
+    pub mcp: McpConfig,
 }
 
 /// Per-field parsing through serde_json::Value: the file is hand-edited,
@@ -140,7 +171,8 @@ pub fn parse_config(json: &str) -> AppConfig {
             vaults.insert(id.clone(), vault_entry(entry));
         }
     }
-    AppConfig { vaults }
+    let mcp = value.get("mcp").map(mcp_entry).unwrap_or_default();
+    AppConfig { vaults, mcp }
 }
 
 fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
@@ -200,6 +232,34 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
     }
 }
 
+fn mcp_entry(entry: &serde_json::Value) -> McpConfig {
+    let defaults = McpConfig::default();
+    McpConfig {
+        enabled: entry
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.enabled),
+        port: entry
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u16::try_from(v).ok())
+            // Same range the settings command enforces (1024–65535). A
+            // hand-edited 0 would bind an ephemeral port while the persisted
+            // config and client snippets still say 0 — default it instead.
+            .filter(|p| *p >= 1024)
+            .unwrap_or(defaults.port),
+        token: entry
+            .get("token")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_default(),
+        allow_writes: entry
+            .get("allowWrites")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.allow_writes),
+    }
+}
+
 pub fn vault_config(cfg: &AppConfig, vault_id: &str) -> VaultCaptureConfig {
     cfg.vaults.get(vault_id).cloned().unwrap_or_default()
 }
@@ -217,21 +277,35 @@ pub fn config_path() -> Option<PathBuf> {
     app_config_dir().map(|d| d.join("config.json"))
 }
 
-pub fn load_config() -> AppConfig {
-    let Some(path) = config_path() else {
-        return AppConfig::default();
-    };
+pub fn load_config_from(path: &Path) -> AppConfig {
     match std::fs::read_to_string(path) {
         Ok(json) => parse_config(&json),
         Err(_) => AppConfig::default(),
     }
 }
 
+pub fn load_config() -> AppConfig {
+    let Some(path) = config_path() else {
+        return AppConfig::default();
+    };
+    load_config_from(&path)
+}
+
 /// Serialize to the same schema `parse_config` reads. Vault ids are
 /// sorted and optional fields omitted so the hand-editable file stays
-/// stable and minimal across saves.
+/// stable and minimal across saves. The mcp section is included only
+/// when non-default, so users who never enable MCP never see it.
 pub fn serialize_config(cfg: &AppConfig) -> String {
     use serde_json::{json, Map, Value};
+    let mut root = Map::new();
+    if cfg.mcp != McpConfig::default() {
+        let mut mcp = Map::new();
+        mcp.insert("enabled".to_string(), json!(cfg.mcp.enabled));
+        mcp.insert("port".to_string(), json!(cfg.mcp.port));
+        mcp.insert("token".to_string(), json!(cfg.mcp.token));
+        mcp.insert("allowWrites".to_string(), json!(cfg.mcp.allow_writes));
+        root.insert("mcp".to_string(), Value::Object(mcp));
+    }
     let mut vaults = Map::new();
     let mut ids: Vec<&String> = cfg.vaults.keys().collect();
     ids.sort();
@@ -268,8 +342,9 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         }
         vaults.insert(id.clone(), Value::Object(entry));
     }
-    let root = json!({ "vaults": Value::Object(vaults) });
-    let mut out = serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string());
+    root.insert("vaults".to_string(), Value::Object(vaults));
+    let mut out =
+        serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_else(|_| "{}".to_string());
     out.push('\n');
     out
 }
@@ -318,6 +393,15 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
     let path = config_path().ok_or("Cannot resolve the config directory")?;
     update_vault_config_at(&path, vault_id, v)
         .map_err(|e| format!("Could not save capture settings: {e}"))
+}
+
+/// Read-modify-write for the app-global mcp section, mirroring
+/// update_vault_config_at (same no-own-lock rule: IPC callers serialize
+/// behind ConfigWriteLock).
+pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> {
+    let mut cfg = load_config_from(path);
+    cfg.mcp = mcp;
+    write_config(path, &cfg)
 }
 
 #[cfg(test)]
@@ -635,5 +719,88 @@ mod tests {
         cfg2.vaults
             .insert("v2".to_string(), VaultCaptureConfig::default());
         assert!(!serialize_config(&cfg2).contains("tasksFolder"));
+    }
+
+    #[test]
+    fn mcp_config_defaults_when_absent_or_malformed() {
+        let cfg = parse_config(r#"{ "vaults": {} }"#);
+        assert_eq!(cfg.mcp, McpConfig::default());
+        assert!(!cfg.mcp.enabled);
+        assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT);
+        // One malformed field defaults only itself — the file is hand-editable.
+        let cfg = parse_config(
+            r#"{ "mcp": { "enabled": true, "port": "not-a-number", "token": 5, "allowWrites": true } }"#,
+        );
+        assert!(cfg.mcp.enabled);
+        assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT);
+        assert_eq!(cfg.mcp.token, "");
+        assert!(cfg.mcp.allow_writes);
+        // Out-of-range ports (hand-edited) fall back too: the parser enforces
+        // the same 1024–65535 range the settings command does, or startup
+        // would bind port 0 (ephemeral!) while the snippets say otherwise.
+        for bad in ["0", "80", "1023", "70000"] {
+            let cfg = parse_config(&format!(r#"{{ "mcp": {{ "port": {bad} }} }}"#));
+            assert_eq!(cfg.mcp.port, DEFAULT_MCP_PORT, "port {bad} must default");
+        }
+        let cfg = parse_config(r#"{ "mcp": { "port": 1024 } }"#);
+        assert_eq!(cfg.mcp.port, 1024);
+    }
+
+    #[test]
+    fn mcp_config_round_trips_through_serialize() {
+        let cfg = AppConfig {
+            mcp: McpConfig {
+                enabled: true,
+                port: 4321,
+                token: "abc_-123".to_string(),
+                allow_writes: true,
+            },
+            ..Default::default()
+        };
+        let reparsed = parse_config(&serialize_config(&cfg));
+        assert_eq!(reparsed.mcp, cfg.mcp);
+    }
+
+    #[test]
+    fn default_mcp_section_is_omitted_from_the_file() {
+        // The hand-editable file stays minimal: users who never enable MCP
+        // never see the section.
+        let json = serialize_config(&AppConfig::default());
+        assert!(!json.contains("mcp"), "got: {json}");
+    }
+
+    // Regression: serialize_config used to emit ONLY the vaults section, so a
+    // capture/tasks settings save would silently DELETE an mcp section.
+    #[test]
+    fn saving_a_vault_config_preserves_the_mcp_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{ "mcp": { "enabled": true, "port": 22082, "token": "tok", "allowWrites": false }, "vaults": {} }"#,
+        )
+        .unwrap();
+        update_vault_config_at(&path, "vault1", VaultCaptureConfig::default()).unwrap();
+        let cfg = load_config_from(&path);
+        assert!(cfg.mcp.enabled);
+        assert_eq!(cfg.mcp.token, "tok");
+        assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    #[test]
+    fn update_mcp_config_at_preserves_vaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        update_vault_config_at(&path, "vault1", VaultCaptureConfig::default()).unwrap();
+        let mcp = McpConfig {
+            enabled: true,
+            port: DEFAULT_MCP_PORT,
+            token: "tok".to_string(),
+            allow_writes: false,
+        };
+        update_mcp_config_at(&path, mcp.clone()).unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(cfg.mcp, mcp);
+        assert!(cfg.vaults.contains_key("vault1"));
     }
 }

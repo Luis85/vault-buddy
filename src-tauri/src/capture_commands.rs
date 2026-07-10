@@ -5,8 +5,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use vault_buddy_capture::session::{CaptureSession, Control, Outcome, SessionParams};
+use vault_buddy_core::services::{self, RecordingDto, ServicePaths};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_paths, discovery, recordings, transcript, uri};
+use vault_buddy_core::{capture_config, capture_paths, discovery, transcript, uri};
 
 use crate::transcription::{enqueue_transcription, TranscriptionJob};
 
@@ -278,19 +279,6 @@ pub fn list_audio_devices() -> DeviceListDto {
     }
 }
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordingDto {
-    pub mp3: String,
-    pub title: String,
-    pub recorded_at: String,
-    pub duration: Option<String>,
-    // `type` is a Rust keyword — expose the camelCase `type` the frontend wants.
-    #[serde(rename = "type")]
-    pub recording_type: Option<String>,
-    pub transcript_status: String,
-}
-
 /// Read-only list of a vault's past recordings for the Recordings view.
 /// Scans the vault's recording roots (custom folder, or both mode defaults)
 /// and reads each recording's companion note for type/duration. An unknown
@@ -298,34 +286,7 @@ pub struct RecordingDto {
 /// discovery's degrade-to-empty rule). Never writes into the vault.
 #[tauri::command]
 pub fn list_recordings(id: String) -> Vec<RecordingDto> {
-    let Some(vault) = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-    else {
-        return Vec::new();
-    };
-    let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
-    // No swallowed error: a rejected (unsafe) folder is skipped WITH a warning,
-    // matching run_recovery/scan_and_enqueue — a silent filter_map would hide it.
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for folder in cfg.recording_roots() {
-        let Ok(root) = capture_paths::safe_recording_root(Path::new(&vault.path), folder) else {
-            log::warn!("list_recordings: skipping unsafe recording folder {folder:?}");
-            continue;
-        };
-        roots.push(root);
-    }
-    recordings::list_recordings(&roots)
-        .into_iter()
-        .map(|e| RecordingDto {
-            mp3: e.mp3_path.to_string_lossy().into_owned(),
-            title: e.title,
-            recorded_at: e.recorded_at,
-            duration: e.duration,
-            recording_type: e.recording_type,
-            transcript_status: e.transcript_status.as_dto_str().to_string(),
-        })
-        .collect()
+    services::list_recordings(&ServicePaths::real(), &id)
 }
 
 #[tauri::command]
