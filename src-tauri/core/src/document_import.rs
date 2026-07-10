@@ -117,6 +117,9 @@ pub fn cleanup_staging(work_dir: &Path) {
 
 /// The owned staging-dir marker. Matched by the janitor so it removes ONLY
 /// our own crash-orphaned temp dirs, never another tool's dot-directory.
+/// MUST equal `<NOTE_TMP_SUFFIX>.import` — the tail `plan_staging` mints — or
+/// the janitor stops recognizing (and cleaning) the dirs the importer creates.
+/// `staging_marker_matches_plan_staging_output` locks that coupling.
 const STAGING_MARKER: &str = ".vault-buddy.tmp.import";
 
 pub fn is_import_staging_dir(name: &str) -> bool {
@@ -402,6 +405,32 @@ mod tests {
         assert_ne!(plan.work_dir, other.work_dir);
         assert_eq!(plan.media_name, "2026-07-10 Report");
         assert_eq!(plan.note_name, "2026-07-10 Report.md");
+    }
+
+    // The whole recovery path depends on the janitor recognizing the dirs the
+    // importer creates. `plan_staging` mints the name and `is_import_staging_dir`
+    // matches it, but the two derive the tail independently — this ties them so
+    // changing NOTE_TMP_SUFFIX can't silently orphan every future staging dir.
+    #[test]
+    fn staging_marker_matches_plan_staging_output() {
+        // Derivation lock: the const is the suffix the producer actually appends.
+        assert_eq!(STAGING_MARKER, format!("{NOTE_TMP_SUFFIX}.import"));
+        // Producer → matcher round-trip: whatever plan_staging mints is matched.
+        let plan = plan_staging(
+            Path::new("/vault/Documents/2026/07"),
+            "2026-07-10 Report",
+            "u1",
+        );
+        let name = plan
+            .work_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            is_import_staging_dir(&name),
+            "janitor must recognize plan_staging's own output: {name}"
+        );
     }
 
     #[test]

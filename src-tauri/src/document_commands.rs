@@ -91,6 +91,22 @@ fn registry_path_entries() -> Vec<String> {
     Vec::new()
 }
 
+/// The process PATH augmented with the fresh registry entries, or `None` when
+/// there are no registry extras (non-Windows, or nothing to add) so the caller
+/// leaves the inherited PATH untouched. Single source for the base+registry
+/// merge so `path_pandoc_executables` (enumeration) and `pandoc_command`
+/// (spawn) don't each re-read the registry and re-run `merged_path`.
+fn augmented_path() -> Option<String> {
+    let extra = registry_path_entries();
+    if extra.is_empty() {
+        return None;
+    }
+    Some(merged_path(
+        &std::env::var("PATH").unwrap_or_default(),
+        &extra,
+    ))
+}
+
 /// Ordered pandoc candidates to try: the configured override FIRST (if
 /// non-empty), then each concrete pandoc executable found across PATH, then a
 /// bare `pandoc` final fallback — deduped, preserving order. Pure so it's
@@ -132,13 +148,7 @@ fn path_pandoc_executables() -> Vec<String> {
     } else {
         "pandoc"
     };
-    let base = std::env::var("PATH").unwrap_or_default();
-    let extra = registry_path_entries();
-    let merged = if extra.is_empty() {
-        base
-    } else {
-        merged_path(&base, &extra)
-    };
+    let merged = augmented_path().unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
     let mut out = Vec::new();
     for dir in merged.split(sep) {
         if dir.is_empty() {
@@ -169,40 +179,32 @@ fn pandoc_candidates() -> Vec<String> {
 /// fresh install.
 fn pandoc_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
-    let base = std::env::var("PATH").unwrap_or_default();
-    let extra = registry_path_entries();
-    if !extra.is_empty() {
-        cmd.env("PATH", merged_path(&base, &extra));
+    if let Some(path) = augmented_path() {
+        cmd.env("PATH", path);
     }
     cmd
 }
 
 /// Probe one candidate: run `<program> --version`. On success, return the
-/// program string with its parsed (major, minor). None if it can't run or
-/// exits non-zero (so the caller falls through to the next candidate).
-fn probe_pandoc(program: &str) -> Option<(String, u32, u32)> {
+/// program string, its parsed (major, minor), AND the first `--version` line
+/// for display — all from the SAME spawn. None if it can't run or exits
+/// non-zero (so the caller falls through to the next candidate).
+fn probe_pandoc(program: &str) -> Option<(String, u32, u32, String)> {
     let out = pandoc_command(program).arg("--version").output().ok()?;
     if !out.status.success() {
         return None;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let (major, minor) = parse_pandoc_version(&stdout)?;
-    Some((program.to_string(), major, minor))
-}
-
-/// The first `--version` line of a program known to run, for display.
-fn pandoc_version_line(program: &str) -> String {
-    pandoc_command(program)
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .next()
-                .map(|l| l.trim().to_string())
-        })
-        .unwrap_or_default()
+    // Reuse the version output we already have for the display line — a second
+    // spawn (and, on Windows, a second registry PATH read) just to re-read the
+    // first line would be wasteful.
+    let line = stdout
+        .lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .unwrap_or_default();
+    Some((program.to_string(), major, minor, line))
 }
 
 /// Resolve a pandoc to use across the ordered candidates (override → PATH),
@@ -219,22 +221,18 @@ fn pandoc_version_line(program: &str) -> String {
 /// `detect_pandoc` can still report an accurate "installed but too old"
 /// status (and `convert_document` still rejects it — nothing usable exists).
 fn resolve_working_pandoc() -> Option<(String, u32, u32, String)> {
-    let mut too_old: Option<(String, u32, u32)> = None;
+    let mut too_old: Option<(String, u32, u32, String)> = None;
     for program in pandoc_candidates() {
-        if let Some((prog, major, minor)) = probe_pandoc(&program) {
-            if sandbox_supported(major, minor) {
-                let line = pandoc_version_line(&prog);
-                return Some((prog, major, minor, line));
+        if let Some(hit) = probe_pandoc(&program) {
+            if sandbox_supported(hit.1, hit.2) {
+                return Some(hit);
             }
             // Runnable but too old — remember the FIRST such one and keep
             // looking for a newer candidate.
-            too_old.get_or_insert((prog, major, minor));
+            too_old.get_or_insert(hit);
         }
     }
-    too_old.map(|(prog, major, minor)| {
-        let line = pandoc_version_line(&prog);
-        (prog, major, minor, line)
-    })
+    too_old
 }
 
 /// Pandoc argument vector (program excluded). Source is added by the caller as
@@ -410,9 +408,18 @@ fn convert_blocking(
 
     let run = run_with_timeout(cmd, CONVERT_TIMEOUT);
     match run {
-        Ok(true) => {}
-        Ok(false) => {
+        Ok((true, _)) => {}
+        Ok((false, stderr)) => {
             document_import::cleanup_staging(&plan.work_dir);
+            // Log WHY (bounded so a crafted doc can't flood the log); the
+            // user-facing string stays generic. "No swallowed error" convention.
+            let detail = stderr.trim();
+            if detail.is_empty() {
+                log::warn!("convert_document: pandoc exited non-zero (no stderr)");
+            } else {
+                let slice: String = detail.chars().take(500).collect();
+                log::warn!("convert_document: pandoc failed: {slice}");
+            }
             return Err("Pandoc could not convert this document.".into());
         }
         Err(e) => {
@@ -439,22 +446,48 @@ fn convert_blocking(
     Ok(rel)
 }
 
-/// Spawn + wait with a wall-clock kill. Returns Ok(true) on success exit,
-/// Ok(false) on non-zero/killed, Err on spawn failure.
-fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<bool> {
+/// Spawn + wait with a wall-clock kill. Returns `(success, stderr)`: `success`
+/// is true on a zero-exit, false on non-zero/killed; `stderr` is Pandoc's
+/// captured error output (empty when none) so a field failure is debuggable —
+/// a Windows GUI build has no console for inherited stderr, so without this a
+/// failed conversion would be a black box. `Err` only on spawn failure.
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> std::io::Result<(bool, String)> {
+    use std::io::Read;
+    use std::process::Stdio;
+    // Pandoc writes its output to the `-o` file, so stdout is noise — null it.
+    // Pipe stderr and DRAIN it on a named worker: a chatty child could fill the
+    // pipe buffer and block on write while our loop only polls for exit, so a
+    // reader must run concurrently rather than after the wait.
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
+    let drain = child.stderr.take().and_then(|mut s| {
+        std::thread::Builder::new()
+            .name("pandoc-stderr".into())
+            .spawn(move || {
+                let mut buf = Vec::new();
+                let _ = s.read_to_end(&mut buf);
+                buf
+            })
+            .ok()
+    });
     let start = std::time::Instant::now();
-    loop {
+    let success = loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(status.success());
+            break status.success();
         }
         if start.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Ok(false);
+            break false;
         }
         std::thread::sleep(Duration::from_millis(50));
-    }
+    };
+    // Child has exited or been killed → its stderr is closed, so the drain ends.
+    let stderr = drain
+        .and_then(|h| h.join().ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    Ok((success, stderr))
 }
 
 /// Detect Pandoc on demand (settings-open + Recheck). Async + spawn_blocking:
