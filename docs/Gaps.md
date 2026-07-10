@@ -44,6 +44,25 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
+### GAP-54 · Low · Document-import media publish has a non-atomic crash window
+`src-tauri/core/src/document_import.rs` (`publish_inner`, the media
+`rename` before the note `write_note_atomic`). Publishing moves the media
+folder out of the staging dir first, then commits the note. If the process
+is killed / loses power in that ~two-rename window, the media folder is
+already published but no note exists, and `run_import_recovery` only sweeps
+`.vault-buddy.tmp.import` staging dirs — not the published-but-unreferenced
+media folder. Result: a stray media folder (our OWN extracted files — no
+user data loss) that a later same-name import suffixes around (` (2)`).
+**Accepted as a documented limitation** (comment at the site): a
+crash-atomic fix needs two-phase commit across two filesystem objects
+(unavailable) or a permanent per-import marker file in every media folder —
+disproportionate to a microsecond window whose worst case is a cosmetic
+leftover folder. **Fix, if ever pursued:** the staging dir name encodes the
+basename and still exists on crash, so the janitor could parse it and remove
+a matching `<basename>/` media folder that has no sibling `<basename>.md`
+note (provably our orphan, since the basename comes from our owned staging
+dir).
+
 ### GAP-01 · High · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
 `src-tauri/src/transcription.rs:581` (`owning_vault_id`), used by
 `transcribe_recording_now` and `retranscribe`.

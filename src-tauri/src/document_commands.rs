@@ -41,14 +41,21 @@ fn sandbox_supported(major: u32, minor: u32) -> bool {
     (major, minor) >= (2, 15)
 }
 
-/// Append `extra` PATH entries not already present (case-insensitive on the
-/// separator platform). Keeps the process PATH first.
+/// Merge the freshly-read registry PATH (`extra`) with the process PATH
+/// (`base`), **registry entries FIRST** — deduped case-insensitively. The
+/// registry is preferred because `base` is the process's launch-time PATH
+/// snapshot, which is STALE: when a Windows user upgrades or relocates Pandoc
+/// while Vault Buddy is running, the new location lands in the registry but not
+/// in the process env. Searching the stale process PATH first would keep
+/// resolving the OLD `pandoc.exe`, so Recheck would report the stale/unsupported
+/// version until restart (Codex review). Registry-first fixes that; any
+/// process-only entries (session additions not in the registry) still follow.
 fn merged_path(base: &str, extra: &[String]) -> String {
     let sep = if cfg!(windows) { ';' } else { ':' };
-    let mut out: Vec<String> = base.split(sep).map(str::to_string).collect();
-    for e in extra {
-        if !out.iter().any(|p| p.eq_ignore_ascii_case(e)) {
-            out.push(e.clone());
+    let mut out: Vec<String> = extra.to_vec();
+    for p in base.split(sep) {
+        if !p.is_empty() && !out.iter().any(|e| e.eq_ignore_ascii_case(p)) {
+            out.push(p.to_string());
         }
     }
     out.join(&sep.to_string())
@@ -581,10 +588,12 @@ mod tests {
     }
 
     #[test]
-    fn merged_path_appends_registry_entries_without_dupes() {
-        let merged = merged_path("/usr/bin:/bin", &["/usr/bin".into(), "/opt/pandoc".into()]);
-        assert!(merged.contains("/opt/pandoc"));
-        // existing entry not duplicated
+    fn merged_path_prefers_registry_over_stale_process_path_without_dupes() {
+        // Registry entries (extra) come FIRST so a just-upgraded Pandoc wins
+        // over the stale process-PATH snapshot; process-only entries follow;
+        // no duplicates.
+        let merged = merged_path("/usr/bin:/bin", &["/opt/pandoc".into(), "/usr/bin".into()]);
+        assert_eq!(merged, "/opt/pandoc:/usr/bin:/bin");
         assert_eq!(merged.matches("/usr/bin").count(), 1);
     }
 

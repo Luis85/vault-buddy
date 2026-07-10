@@ -275,6 +275,17 @@ fn publish_inner(
         }
         std::fs::rename(&staged_media, &dest)?;
         published_media = Some(dest);
+        // KNOWN LIMITATION (docs/Gaps.md): if the process is killed / loses
+        // power in the ~two-rename window between here and the note write
+        // below, the media folder is already published but no note exists, and
+        // the startup janitor only sweeps `.vault-buddy.tmp.import` staging
+        // dirs — not this published-but-unreferenced media folder. The result
+        // is a stray media folder (our OWN extracted files — no user data
+        // loss) that a later same-name import suffixes around (` (2)`).
+        // Accepted: a crash-atomic fix would need two-phase commit across two
+        // filesystem objects (unavailable) or a permanent per-import marker
+        // file in every media folder; disproportionate to a microsecond window
+        // whose worst case is a cosmetic leftover folder.
     }
 
     // Write the note at the EXACT reserved name (non-replacing). NOT
