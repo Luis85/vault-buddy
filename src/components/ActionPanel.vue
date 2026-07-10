@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
+import AppIcon from "./AppIcon.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import NotificationHost from "./NotificationHost.vue";
@@ -143,24 +144,14 @@ watch(
           data-testid="search-toggle"
           @click="store.openSearch()"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <AppIcon>
             <circle
               cx="11"
               cy="11"
               r="8"
             />
             <path d="m21 21-4.35-4.35" />
-          </svg>
+          </AppIcon>
         </button>
         <button
           v-if="view === 'list'"
@@ -171,17 +162,7 @@ watch(
           data-testid="settings-toggle"
           @click="store.openSettings()"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <AppIcon>
             <circle
               cx="12"
               cy="12"
@@ -190,7 +171,7 @@ watch(
             <path
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
-          </svg>
+          </AppIcon>
         </button>
         <button
           v-else
@@ -201,19 +182,9 @@ watch(
           data-testid="back-button"
           @click="store.back()"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <AppIcon>
             <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
+          </AppIcon>
         </button>
       </div>
     </div>
@@ -325,20 +296,10 @@ watch(
         aria-label="All tasks across every vault"
         @click="store.openAllTasks()"
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
+        <AppIcon>
           <path d="M9 11l3 3 8-8" />
           <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
-        </svg>
+        </AppIcon>
         <span class="min-w-0 flex-1 truncate">All tasks</span>
         <span
           v-if="totalOpenTasks > 0"
