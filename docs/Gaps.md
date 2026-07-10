@@ -400,12 +400,10 @@ since it has no tag to fall back to.)
 ### GAP-36 · ~~Medium~~ FIXED 2026-07-10 · CI exposes the signing secrets to same-repo PR branch builds; no `permissions:` block
 `ci.yml` now has a top-level `permissions: contents: read` block and the `windows-app` job's signing env is empty on all PR events (only populated on push) — the existing keyless fallback builds unsigned artifacts for every PR.
 
-### GAP-37 · Medium · `bump-version.yml` interpolates the dispatch input into shell
-`.github/workflows/bump-version.yml:37` — `${{ inputs.version }}` lands
-directly in a `run:` line (and later in the branch name): a workflow-command
-/shell injection vector for write-access users, with a token holding
-`contents: write` + `pull-requests: write`.
-**Fix:** pass the input via `env:` and reference `"$VERSION"`.
+### GAP-37 · ~~Medium~~ FIXED 2026-07-10 · `bump-version.yml` interpolates the dispatch input into shell
+The input and the ref-name error path now travel via `env:` (REQUESTED_VERSION,
+REF_NAME) and are quoted in the run line; downstream steps already used the
+script's resolved version.
 
 ### GAP-38 · Low · Capability breadth vs its own comment
 `src-tauri/capabilities/default.json` — the description claims "no
