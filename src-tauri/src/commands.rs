@@ -556,6 +556,16 @@ pub fn open_logs_folder(app: tauri::AppHandle) {
     crate::diagnostics::open_log_dir(&app);
 }
 
+/// Suppress the panel's focus-out auto-hide while a native OS dialog (file
+/// picker / Pandoc Browse) is in flight. The frontend calls this `true` before
+/// `open()` and `false` in its `finally`, so the dialog stealing OS focus can't
+/// hide the panel (and its in-progress import state) out from under the user.
+/// Sync → main thread, where the focus-out check that reads it also runs.
+#[tauri::command]
+pub fn set_dialog_active(active: bool) {
+    crate::set_dialog_active(active);
+}
+
 /// Open an external `https://` link in the OS default browser. The frontend
 /// never navigates the panel webview to an external URL directly — in a Tauri
 /// v2 webview a raw `target="_blank"` either no-ops or replaces the app UI —

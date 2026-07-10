@@ -75,6 +75,25 @@ fn panel_pinned_open() -> bool {
     )
 }
 
+/// Set while a native OS dialog (file picker / Browse) opened from the panel is
+/// in flight. Such a dialog takes OS focus, blurring the panel — and the
+/// focus-out check treats only `main`/`panel` as in-app, so it would hide the
+/// panel out from under the dialog, leaving the import's `Converting…`/toast
+/// state (rendered in the panel window) invisible after the user picks a file.
+/// The frontend sets this true before `open()` and false in its `finally`; the
+/// check declines to hide while it is set (like the Ctrl-open pin). A bool, not
+/// a timed pin, because a dialog can stay open arbitrarily long. Set by a sync
+/// command and read by the focus-out check — both main thread.
+static DIALOG_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_dialog_active(active: bool) {
+    DIALOG_ACTIVE.store(active, Ordering::Relaxed);
+}
+
+fn dialog_active() -> bool {
+    DIALOG_ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Hide the panel once focus has really left the app. Clicking from the panel
 /// to the buddy (or back) fires the source window's blur BEFORE the
 /// destination's focus lands, so a check run at blur time would see neither
@@ -114,6 +133,14 @@ fn schedule_focus_out_check(app: &tauri::AppHandle) {
                     // multi-open. (Only-hide invariant intact: a pin never
                     // shows anything.)
                     if panel_pinned_open() {
+                        return;
+                    }
+                    // A native OS dialog (file picker / Browse) opened from the
+                    // panel is what stole focus — declining the hide keeps the
+                    // panel (and its Converting…/toast state) alive underneath.
+                    // Cleared in the frontend's `finally`, so a later real
+                    // click-away still hides. (Only-hide invariant intact.)
+                    if dialog_active() {
                         return;
                     }
                     if let Some(panel) = checked.get_webview_window("panel") {
@@ -323,6 +350,7 @@ pub fn run() {
             commands::show_buddy_menu,
             commands::open_logs_folder,
             commands::open_external_url,
+            commands::set_dialog_active,
             commands::rearm_crash_detection,
             commands::get_autostart,
             commands::set_autostart,

@@ -9,6 +9,7 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { CaptureConfig, PandocStatus, Recording } from "../types";
 import { basename } from "../utils/basename";
+import { withDialogSuppressed } from "../utils/nativeDialog";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -207,10 +208,12 @@ function onImportClick() {
 async function importDocument() {
   if (importing.value) return;
   try {
-    const path = await open({
-      multiple: false,
-      filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
-    });
+    const path = await withDialogSuppressed(() =>
+      open({
+        multiple: false,
+        filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
+      }),
+    );
     if (typeof path !== "string") return; // cancelled — no-op
     // Flip busy only after the picker resolves, so a cancel doesn't strand it.
     importing.value = true;

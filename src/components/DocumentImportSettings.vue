@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
 import type { PandocStatus } from "../types";
+import { withDialogSuppressed } from "../utils/nativeDialog";
 
 const status = ref<PandocStatus | null>(null);
 const pathOverride = ref("");
@@ -66,10 +67,12 @@ async function browse() {
   saving.value = true;
   error.value = null;
   try {
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: "Pandoc", extensions: ["exe", ""] }],
-    });
+    const selected = await withDialogSuppressed(() =>
+      open({
+        multiple: false,
+        filters: [{ name: "Pandoc", extensions: ["exe", ""] }],
+      }),
+    );
     if (typeof selected === "string") {
       pathOverride.value = selected;
       // savePath() self-guards on `saving`; release it first so its own

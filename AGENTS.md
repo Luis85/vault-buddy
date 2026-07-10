@@ -237,12 +237,12 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 51 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 52 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
-| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture`, `stop_capture`, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings`, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks` |
@@ -415,7 +415,14 @@ Invariants:
   blur being sampled; without the pin the multi-open flow the user
   explicitly requested would collapse after the first result. The pin
   expires on its own and never shows anything, so the only-hide invariant
-  stands.
+  stands. A second sanctioned exception: a **native-dialog flag**
+  (`DIALOG_ACTIVE`, set via `set_dialog_active` — the frontend's
+  `withDialogSuppressed` wraps every `tauri-plugin-dialog` `open()`) makes the
+  check decline the hide while an OS file picker / Pandoc Browse is up. Such a
+  dialog steals OS focus and would otherwise hide the panel (and the in-flight
+  import's `Converting…`/toast state, which render in the panel window) out
+  from under the user. Unlike the timed pin it's a plain bool (a dialog stays
+  open arbitrarily long), cleared in the frontend's `finally`; still only-hide.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
