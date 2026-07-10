@@ -44,6 +44,22 @@ jobs:
             echo "::error::Tag $TAG does not match tauri.conf.json ($EXPECTED) — a mismatch ships a latest.json whose version disagrees with the tag (GAP-41)"
             exit 1
           fi
+      - name: Released commit must be on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          # The dispatch guard above pins only the dispatch path to main; a
+          # pushed v* tag can point at ANY commit, and a matching version
+          # plus a green PR-branch CI run would publish that branch's code
+          # (Codex, PR #46 — the GAP-41 fix's remaining hole). Ancestry via
+          # the compare API (no checkout depth games): "identical"/"behind"
+          # means the tag target is contained in main.
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status 2>/dev/null || echo "")
+          if [ "$STATUS" != "identical" ] && [ "$STATUS" != "behind" ]; then
+            echo "::error::Released commit $SHA is not on main (compare status: '${STATUS:-none}') — tag a commit that main contains"
+            exit 1
+          fi
       - name: Require green CI for this commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
