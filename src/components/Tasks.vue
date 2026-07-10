@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
-import type { TaskItem, TaskPatch } from "../types";
+import type { TaskItem, TaskPatch, Vault } from "../types";
 
 // Split a free-text tags field on commas/whitespace, strip leading `#`s,
 // drop empties, dedupe case-insensitively keeping the first casing.
@@ -47,12 +47,20 @@ const isOverdue = (t: TaskItem): boolean => {
   return d !== null && !t.done && d < localToday();
 };
 
-const props = defineProps<{ vaultId: string }>();
+const props = defineProps<{ vaultId: string | null }>();
+// Aggregate mode: one merged view across every vault (vaultId === null).
+const isAggregate = computed(() => props.vaultId === null);
+
+// A task enriched with its owning vault — the ONE internal shape for both
+// modes, so every action reads task.vaultId and needs no mode branches.
+type AggTask = TaskItem & { vaultId: string; vaultName: string };
+
 const notifications = useNotificationsStore();
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
-const tasks = ref<TaskItem[]>([]);
+const tasks = ref<AggTask[]>([]);
+const allVaults = ref<Vault[]>([]);
 const filter = ref("");
 const newTitle = ref("");
 const adding = ref(false);
@@ -115,15 +123,20 @@ function sortInPlace() {
     (a, b) =>
       Number(a.done) - Number(b.done) ||
       (a.done
-        ? b.created.localeCompare(a.created) || a.title.localeCompare(b.title)
+        ? b.created.localeCompare(a.created) ||
+          a.title.localeCompare(b.title) ||
+          a.vaultName.localeCompare(b.vaultName) ||
+          a.path.localeCompare(b.path)
         : dueKey(a).localeCompare(dueKey(b)) ||
           rank(a) - rank(b) ||
           b.created.localeCompare(a.created) ||
-          a.title.localeCompare(b.title)),
+          a.title.localeCompare(b.title) ||
+          a.vaultName.localeCompare(b.vaultName) ||
+          a.path.localeCompare(b.path)),
   );
 }
 
-type Bucket = { key: string; label: string | null; tasks: TaskItem[] };
+type Bucket = { key: string; label: string | null; tasks: AggTask[] };
 
 // Component-local; every panel visit starts back on dates (YAGNI: no
 // persistence this slice).
@@ -135,9 +148,9 @@ const buckets = computed<Bucket[]>(() => {
     // EACH of its tags — Obsidian tag-pane semantics; then No tags, then
     // Done. Headers always render in tag mode. Order within sections is
     // the global sort, untouched.
-    const byTag = new Map<string, { label: string; tasks: TaskItem[] }>();
-    const notags: TaskItem[] = [];
-    const done: TaskItem[] = [];
+    const byTag = new Map<string, { label: string; tasks: AggTask[] }>();
+    const notags: AggTask[] = [];
+    const done: AggTask[] = [];
     for (const t of filteredTasks.value) {
       if (t.done) {
         done.push(t);
@@ -162,7 +175,7 @@ const buckets = computed<Bucket[]>(() => {
     return sections;
   }
   const today = localToday();
-  const groups: Record<string, TaskItem[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
+  const groups: Record<string, AggTask[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
   for (const t of filteredTasks.value) {
     if (t.done) groups.done.push(t);
     else {
@@ -190,7 +203,40 @@ const buckets = computed<Bucket[]>(() => {
 
 onMounted(async () => {
   try {
-    tasks.value = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
+    if (props.vaultId !== null) {
+      const items = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
+      const id = props.vaultId;
+      tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
+    } else {
+      // Aggregate: fan out over every vault, best-effort per vault — the
+      // same posture as the store's taskCounts load. A failed vault
+      // contributes nothing and is named in ONE toast; the blocking banner
+      // is reserved for list_vaults failing or EVERY vault failing.
+      const vaults = await invoke<Vault[]>("list_vaults");
+      allVaults.value = vaults;
+      const failed: string[] = [];
+      const results = await Promise.all(
+        vaults.map(async (v) => {
+          try {
+            const items = await invoke<TaskItem[]>("list_tasks", { id: v.id });
+            return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));
+          } catch (e) {
+            failed.push(v.name);
+            logWarning(`list_tasks failed for vault ${v.id}: ${String(e)}`);
+            return [];
+          }
+        }),
+      );
+      if (vaults.length > 0 && failed.length === vaults.length) {
+        loadError.value = "Couldn't load tasks from any vault.";
+      } else {
+        tasks.value = results.flat();
+        sortInPlace();
+        if (failed.length > 0) {
+          notifications.error(`Couldn't load tasks from ${failed.join(", ")}.`);
+        }
+      }
+    }
   } catch (e) {
     loadError.value = String(e);
   } finally {
@@ -199,6 +245,10 @@ onMounted(async () => {
 });
 
 async function add() {
+  // The add row is gated behind !isAggregate for now (Task 3 adds the vault
+  // picker and lifts this guard); a null vaultId here would mean the row
+  // rendered when it shouldn't have.
+  if (props.vaultId === null) return;
   const title = newTitle.value.trim();
   if (!title || adding.value) return;
   adding.value = true;
@@ -209,7 +259,7 @@ async function add() {
     const tags = parseTagsInput(addTags.value);
     if (tags.length > 0) args.tags = tags;
     const created = await invoke<TaskItem>("add_task", args);
-    tasks.value.unshift(created);
+    tasks.value.unshift({ ...created, vaultId: props.vaultId, vaultName: "" });
     sortInPlace();
     newTitle.value = "";
     addDue.value = "";
@@ -224,7 +274,7 @@ async function add() {
   }
 }
 
-async function toggle(task: TaskItem) {
+async function toggle(task: AggTask) {
   // Ignore a re-action while this row's write is still pending — otherwise two
   // concurrent set_task_status writes for the same task can land out of order.
   if (busy.value.has(task.path)) return;
@@ -235,7 +285,7 @@ async function toggle(task: TaskItem) {
   sortInPlace();
   busy.value.add(task.path);
   try {
-    await invoke("set_task_status", { id: props.vaultId, path: task.path, status: task.status });
+    await invoke("set_task_status", { id: task.vaultId, path: task.path, status: task.status });
   } catch (e) {
     task.done = !done;
     task.status = done ? "new" : "done";
@@ -247,7 +297,7 @@ async function toggle(task: TaskItem) {
   }
 }
 
-async function archive(task: TaskItem) {
+async function archive(task: AggTask) {
   if (busy.value.has(task.path)) return;
   busy.value.add(task.path);
   // Optimistic: remove from the list; re-insert at the same spot + notify on
@@ -255,7 +305,7 @@ async function archive(task: TaskItem) {
   const index = tasks.value.findIndex((t) => t.path === task.path);
   const removed = tasks.value.splice(index, 1)[0];
   try {
-    await invoke("set_task_status", { id: props.vaultId, path: task.path, status: "archived" });
+    await invoke("set_task_status", { id: task.vaultId, path: task.path, status: "archived" });
   } catch (e) {
     tasks.value.splice(index, 0, removed);
     notifications.error(String(e));
@@ -265,9 +315,9 @@ async function archive(task: TaskItem) {
   }
 }
 
-async function openInObsidian(task: TaskItem) {
+async function openInObsidian(task: AggTask) {
   try {
-    await invoke("open_task", { id: props.vaultId, path: task.path });
+    await invoke("open_task", { id: task.vaultId, path: task.path });
     // Obsidian takes over — get the panel out of the way. Panel visibility is
     // owned by Rust (close_panel), best-effort, mirroring the vault-open and
     // recording-open flows. A failed launch falls through to the catch and
@@ -284,7 +334,7 @@ async function openInObsidian(task: TaskItem) {
 // Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
 // two tag sections (Task 7) opens its editor on only the clicked row.
 const editingKey = ref<string | null>(null);
-const rowKey = (bucketKey: string, task: TaskItem) => `${bucketKey}:${task.path}`;
+const rowKey = (bucketKey: string, task: AggTask) => `${bucketKey}:${task.path}`;
 const editTitle = ref("");
 const editDue = ref("");
 const editPriority = ref("normal");
@@ -293,7 +343,7 @@ const editTags = ref("");
 const normalizedPriority = (t: TaskItem) =>
   t.priority === "high" || t.priority === "low" ? t.priority : "normal";
 
-function startEdit(task: TaskItem, bucketKey: string) {
+function startEdit(task: AggTask, bucketKey: string) {
   editingKey.value = rowKey(bucketKey, task);
   editTitle.value = task.title;
   editDue.value = dueOf(task) ?? "";
@@ -305,7 +355,7 @@ function cancelEdit() {
   editingKey.value = null;
 }
 
-async function saveEdit(task: TaskItem) {
+async function saveEdit(task: AggTask) {
   if (busy.value.has(task.path)) return;
   const patch: TaskPatch = {};
   const title = editTitle.value.trim();
@@ -329,7 +379,7 @@ async function saveEdit(task: TaskItem) {
   sortInPlace();
   busy.value.add(task.path);
   try {
-    await invoke("update_task", { id: props.vaultId, path: task.path, patch });
+    await invoke("update_task", { id: task.vaultId, path: task.path, patch });
   } catch (e) {
     Object.assign(task, before);
     sortInPlace();
@@ -386,7 +436,7 @@ async function saveEdit(task: TaskItem) {
       </button>
     </div>
 
-    <div class="flex items-center gap-1">
+    <div v-if="!isAggregate" class="flex items-center gap-1">
       <input
         v-model="newTitle"
         data-testid="task-input"
@@ -419,7 +469,7 @@ async function saveEdit(task: TaskItem) {
       </button>
     </div>
 
-    <div v-if="showAddOptions" class="flex items-center gap-1">
+    <div v-if="!isAggregate && showAddOptions" class="flex items-center gap-1">
       <input
         v-model="addDue"
         data-testid="task-add-due"

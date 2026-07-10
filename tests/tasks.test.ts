@@ -6,6 +6,33 @@ import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import type { TaskItem } from "../src/types";
 
+const vaultsFixture = [
+  { id: "va", name: "Alpha", path: "C:/va", open: false },
+  { id: "vb", name: "Beta", path: "C:/vb", open: false },
+];
+const aggTask = (vault: "va" | "vb", title: string, created: string, extra: Partial<TaskItem> = {}): TaskItem => ({
+  path: `C:/${vault}/Tasks/${title.replace(/\s+/g, "-")}.md`,
+  title, status: "new", created, done: false, due: null, priority: null, tags: [], ...extra,
+});
+
+function mountAggregate(handlers: Partial<Record<string, (args: unknown) => unknown>> = {}) {
+  const calls: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    calls.push({ cmd, args });
+    if (handlers[cmd]) return handlers[cmd]!(args);
+    if (cmd === "list_vaults") return vaultsFixture;
+    if (cmd === "list_tasks") {
+      const id = (args as { id: string }).id;
+      return id === "va"
+        ? [aggTask("va", "Alpha task", "2026-07-08")]
+        : [aggTask("vb", "Beta task", "2026-07-09")];
+    }
+    if (cmd === "set_task_status") return null;
+  });
+  const wrapper = mount(Tasks, { props: { vaultId: null } });
+  return { wrapper, calls };
+}
+
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 const many = (n: number): TaskItem[] =>
@@ -706,6 +733,75 @@ describe("Tasks", () => {
     expect(wrapper.findAll('[data-testid="task-bucket-header"]').length).toBeGreaterThan(0);
     await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
     expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
+  });
+
+  it("aggregate mode merges every vault's tasks in global sort order", async () => {
+    const { wrapper, calls } = mountAggregate();
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "list_tasks").map((c) => (c.args as { id: string }).id).sort()).toEqual(["va", "vb"]);
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    // Newest created first: Beta task (07-09) before Alpha task (07-08).
+    expect(rows[0].text()).toContain("Beta task");
+    expect(rows[1].text()).toContain("Alpha task");
+  });
+
+  it("orders otherwise-equal tasks by vault name for cross-vault stability", async () => {
+    const { wrapper, calls } = mountAggregate({
+      list_tasks: (args) =>
+        [(args as { id: string }).id === "va"
+          ? aggTask("va", "Same", "2026-07-08")
+          : aggTask("vb", "Same", "2026-07-08")],
+    });
+    await flushPromises();
+    // Titles/created equal → vaultName tiebreak puts Alpha's copy first;
+    // observable through which vault the first row's toggle hits.
+    await wrapper.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_status")?.args).toMatchObject({ id: "va" });
+  });
+
+  it("a failing vault degrades to a toast naming it, the rest render", async () => {
+    const notifications = useNotificationsStore();
+    const { wrapper } = mountAggregate({
+      list_tasks: (args) => {
+        if ((args as { id: string }).id === "vb") throw new Error("boom");
+        return [aggTask("va", "Alpha task", "2026-07-08")];
+      },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Alpha task");
+    expect(notifications.items.some((n) => n.kind === "error" && n.message.includes("Beta"))).toBe(true);
+    // No blocking banner — partial results render.
+    expect(wrapper.text()).not.toContain("boom");
+  });
+
+  it("shows the blocking banner only when every vault fails", async () => {
+    const { wrapper } = mountAggregate({
+      list_tasks: () => {
+        throw new Error("all gone");
+      },
+    });
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(0);
+    expect(wrapper.text()).toContain("Couldn't load tasks from any vault");
+  });
+
+  it("row actions carry the ROW's vault id in aggregate mode", async () => {
+    const { wrapper, calls } = mountAggregate();
+    await flushPromises();
+    // First row is Beta task (vb): open + archive must hit vb, not va.
+    await wrapper.get('[data-testid="task-open"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "open_task")?.args).toMatchObject({ id: "vb", path: "C:/vb/Tasks/Beta-task.md" });
+    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_status")?.args).toMatchObject({ id: "vb", status: "archived" });
+  });
+
+  it("aggregate mode hides the add row until the picker lands", async () => {
+    const { wrapper } = mountAggregate();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-input"]').exists()).toBe(false);
   });
 
 });
