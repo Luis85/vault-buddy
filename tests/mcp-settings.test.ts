@@ -62,26 +62,50 @@ describe("McpSettings", () => {
     expect(wrapper.text()).toContain("tok123");
   });
 
-  it("serializes saves: controls disable while a save is in flight", async () => {
+  it("serializes saves: a second toggle mid-save fires no second set_mcp_config", async () => {
     // Two quick toggles would otherwise race: the second request is built
     // from a pre-response snapshot and can undo the first (Codex review
-    // catch). With controls disabled during a save, the stale-snapshot
-    // request can never be issued.
+    // catch). Asserting the disabled attributes is NOT discriminating — the
+    // guard is defense-in-depth for an event that lands before the disabled
+    // re-render paints, and test-utils' setValue/trigger politely SKIP
+    // disabled elements (BaseWrapper.isDisabled), so a setValue here would
+    // exercise the attribute, never the guard. The mid-save toggle therefore
+    // dispatches the change event on the raw element, and the discriminating
+    // assertion is the set_mcp_config call count: deleting save()'s
+    // in-flight early-return makes it 2.
+    let setCalls = 0;
     let resolveSet: (v: unknown) => void = () => {};
     mockIPC((cmd) => {
       if (cmd === "get_mcp_config") return { ...baseConfig };
-      if (cmd === "set_mcp_config")
+      if (cmd === "set_mcp_config") {
+        setCalls += 1;
         return new Promise((res) => {
           resolveSet = res;
         });
+      }
       return undefined;
     });
     const wrapper = mount(McpSettings);
     await flushPromises();
+    // Sets checked directly and dispatches change like the browser would —
+    // deliberately not setValue, so the disabled attribute can't mask a
+    // missing guard (and the checked-prop write can't be silently skipped).
+    const fireWritesChange = (checked: boolean) => {
+      const el = wrapper.find('[data-testid="mcp-writes"]')
+        .element as HTMLInputElement;
+      el.checked = checked;
+      el.dispatchEvent(new Event("change"));
+      return flushPromises();
+    };
     await wrapper.find('[data-testid="mcp-enabled"]').setValue(true);
+    expect(setCalls).toBe(1);
     expect(
       wrapper.find('[data-testid="mcp-writes"]').attributes("disabled"),
     ).toBeDefined();
+    // Second toggle while the first save is pending: only the guard stands
+    // between this and a second, stale-snapshot request.
+    await fireWritesChange(true);
+    expect(setCalls).toBe(1);
     resolveSet({
       ...baseConfig,
       enabled: true,
@@ -92,6 +116,17 @@ describe("McpSettings", () => {
     expect(
       wrapper.find('[data-testid="mcp-writes"]').attributes("disabled"),
     ).toBeUndefined();
+    // The guard must reset once the save resolves — a toggle now goes through.
+    await fireWritesChange(true);
+    expect(setCalls).toBe(2);
+    resolveSet({
+      ...baseConfig,
+      enabled: true,
+      allowWrites: true,
+      token: "tok123",
+      status: { state: "running", port: 22082, message: null },
+    });
+    await flushPromises();
   });
 
   it("regenerate calls the command and mcp:status pushes update the badge", async () => {

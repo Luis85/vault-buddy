@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { logError } from "../logging";
+import { logWarning } from "../logging";
 
 type McpStatus = { state: string; port: number | null; message: string | null };
 type McpConfig = {
@@ -27,15 +27,18 @@ onMounted(async () => {
   try {
     cfg.value = await invoke<McpConfig>("get_mcp_config");
   } catch (e) {
-    // not running under Tauri (unit tests) or IPC failure — leave the card empty
-    logError(`mcp settings: get_mcp_config failed: ${String(e)}`);
+    // not running under Tauri (unit tests) or IPC failure — leave the card
+    // empty. Warn-level like every other degraded-but-continuing component
+    // path (CaptureSettings/Tasks); logError is reserved for main.ts's
+    // uncaught-vue-error hook.
+    logWarning(`mcp settings: get_mcp_config failed: ${String(e)}`);
   }
   try {
     unlisten = await listen<McpStatus>("mcp:status", (event) => {
       if (cfg.value) cfg.value.status = event.payload;
     });
   } catch (e) {
-    logError(`mcp settings: listen failed: ${String(e)}`);
+    logWarning(`mcp settings: listen failed: ${String(e)}`);
   }
 });
 onUnmounted(() => unlisten?.());
@@ -53,7 +56,11 @@ async function save(patch: Partial<Pick<McpConfig, "enabled" | "port" | "allowWr
   try {
     cfg.value = await invoke<McpConfig>("set_mcp_config", { input });
   } catch (e) {
+    // Surfaced in the card's error line AND logged — the "no swallowed
+    // error" rule wants a file trace even for user-visible failures
+    // (mirrors CaptureSettings.vue's save()).
     error.value = String(e);
+    logWarning(`mcp settings: set_mcp_config failed: ${String(e)}`);
   } finally {
     saving.value = false;
   }
@@ -67,13 +74,18 @@ async function regenerate() {
     cfg.value = await invoke<McpConfig>("regenerate_mcp_token");
   } catch (e) {
     error.value = String(e);
+    logWarning(`mcp settings: regenerate_mcp_token failed: ${String(e)}`);
   } finally {
     saving.value = false;
   }
 }
 
 function copy(text: string) {
-  void navigator.clipboard?.writeText(text).catch(() => {});
+  // A failed copy has no UI feedback, so the log line is the only trace a
+  // silently-dead Copy button leaves.
+  void navigator.clipboard
+    ?.writeText(text)
+    .catch((e) => logWarning(`mcp settings: clipboard copy failed: ${String(e)}`));
 }
 
 const statusLabel = computed(() => {
