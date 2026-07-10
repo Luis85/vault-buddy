@@ -559,11 +559,20 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   own `vault_walk.rs` header warns about exactly this drift class.
 
 ### GAP-47 · Frontend
-- Inline SVG icon paths are copy-pasted (the identical gear in
+- ~~Inline SVG icon paths are copy-pasted (the identical gear in
   `ActionPanel.vue` and `VaultList.vue`; X-marks in three components) — a
-  tiny `<Icon name>` component would end it.
-- `Search.vue` (494 LOC) and `stores/capture.ts` (602 LOC) are the two
-  oversized files; split when next touched.
+  tiny `<Icon name>` component would end it.~~ PARTIALLY FIXED 2026-07-10
+  (polish sub-pass E) — `AppIcon.vue` now wraps the standard stroked
+  line-icon `<svg>`; the ActionPanel/VaultList icon buttons were converted,
+  dissolving both fallow clone groups (cloneGroups 3→1, duplicatedLines
+  100→22). The X-marks in other components can adopt `AppIcon` on next
+  touch; two non-standard VaultList icons (omitting `stroke-linejoin`) were
+  left raw to keep that pass move-only.
+- `Search.vue` (494 LOC) and `stores/capture.ts` (~646 LOC) are the two
+  oversized files; split when next touched. (The `tasks.rs` and `Tasks.vue`
+  LOC-allowlist split obligations were both retired in polish sub-pass E:
+  `tasks.rs`→`doc/parse/writer/list/disk` modules, `Tasks.vue`→
+  `TaskRow`/`TaskEditor`/`TaskComposer`.)
 - `transcribe_recording_now` is registered but never invoked from the
   frontend — `Recordings.vue:92-101` routes *all* retries (including plain
   `failed` rows) through force `retranscribe`, which bypasses the vault's
