@@ -3,7 +3,7 @@
     "frontend": 500,
     "rust": 800
   },
-  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
+  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs \u2014 higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
   "allowlist": {
     "src-tauri/src/capture_commands.rs": {
       "loc": 952,
@@ -24,6 +24,14 @@
     "src/stores/capture.ts": {
       "loc": 596,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
+    },
+    "src-tauri/core/src/tasks.rs": {
+      "loc": 1225,
+      "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Half is the inline #[cfg(test)] module. Shrink only; split (parse/writer/list seams) when next touched."
+    },
+    "src/components/Tasks.vue": {
+      "loc": 760,
+      "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Shrink only; split (list vs editor/composer) when next touched."
     }
   }
 }
