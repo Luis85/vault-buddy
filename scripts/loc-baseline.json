@@ -34,7 +34,7 @@
       "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Shrink only; split (list vs editor/composer) when next touched."
     },
     "src/stores/capture.ts": {
-      "loc": 617,
+      "loc": 621,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
     }
   }

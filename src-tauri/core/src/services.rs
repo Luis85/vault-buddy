@@ -216,7 +216,11 @@ pub fn add_task(
     // path (+ Tasks) and write a task into a directory that is no longer a
     // real vault. `start_capture` guards its recording write the same way.
     if !vault_path.is_dir() {
-        return Err(format!("Vault folder not found: {}", vault_path.display()));
+        // The absolute vault path stays in the log only — it once reached the
+        // panel toast and MCP clients verbatim (GAP-26 remainder); the
+        // user-facing copy now matches start_capture_blocking's own pattern.
+        log::warn!("add_task: vault folder missing: {}", vault_path.display());
+        return Err("Vault folder not found — was it moved or deleted?".to_string());
     }
     // Validate the folder resolves inside the vault BEFORE creating it: this
     // canonicalizes the nearest existing ancestor, so a symlink/junction at any
@@ -506,17 +510,24 @@ mod tests {
         // the IPC command).
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture(dir.path(), "MyVault");
+        let vault_str = vault.to_string_lossy().into_owned();
         std::fs::remove_dir_all(&vault).unwrap();
-        assert!(add_task(
+        let err = add_task(
             &paths,
             "deadbeef01234567",
             "x",
             "2026-07-09",
             None,
             None,
-            &[]
+            &[],
         )
-        .is_err());
+        .err()
+        .expect("missing vault dir must fail");
+        // GAP-26 remainder: the user-facing message must not leak the
+        // absolute vault path (it reaches the panel toast and MCP clients
+        // verbatim) and must match the shell's own start_capture copy.
+        assert_eq!(err, "Vault folder not found — was it moved or deleted?");
+        assert!(!err.contains(&vault_str), "got: {err}");
     }
 
     #[test]

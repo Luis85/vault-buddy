@@ -575,6 +575,10 @@ export const useCaptureStore = defineStore("capture", {
     dismissRenameIfStale() {
       if (!this.lastSaved) return;
       if (this.lastSavedAtMs != null && Date.now() - this.lastSavedAtMs < RENAME_PROMPT_MS) return;
+      // A live prompt with no timestamp is a can't-happen (lastSavedAtMs is
+      // always armed alongside lastSaved) — falling through to dismiss
+      // degrades to the pre-GAP-29 behavior instead of risking a prompt that
+      // can never be judged stale and so pins itself open forever.
       this.dismissRename();
     },
     async rename(title: string) {

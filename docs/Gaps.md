@@ -289,8 +289,10 @@ check, `open_recording_note`'s outside-its-vault error in
 `capture_commands.rs`, `open_task`'s outside-its-vault error in
 `task_commands.rs`) now log the path via `log::warn!` and return a
 path-free, user-worded `Err`. `services::find_vault` itself (the MCP
-contract) and the `add_task` vault-folder check that already lives in
-`core::services` were left untouched — out of this pass's scope.
+contract) was left untouched — out of this pass's scope. The `add_task`
+vault-folder check in `core::services` (initially left for the same reason)
+was closed out in a later pass: it now logs the path via `log::warn!` and
+returns the same path-free copy as `start_capture_blocking`.
 
 ## 4. Frontend defects & races
 
