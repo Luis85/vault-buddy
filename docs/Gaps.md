@@ -397,13 +397,8 @@ and `bump-version.yml` now pin a full commit SHA resolved live via
 `dtolnay/rust-toolchain@stable` pins the branch head with a dated comment
 since it has no tag to fall back to.)
 
-### GAP-36 · Medium · CI exposes the signing secrets to same-repo PR branch builds; no `permissions:` block
-`.github/workflows/ci.yml` (top level, and `windows-app` env). No
-`permissions:` block means the default `GITHUB_TOKEN` scope; the signing
-secrets are present during `npm ci`/`build.rs` on any same-repo branch PR
-(fork PRs are safe — secrets are empty and handled).
-**Fix:** add `permissions: contents: read`; consider signing only on push
-to `main`/release.
+### GAP-36 · ~~Medium~~ FIXED 2026-07-10 · CI exposes the signing secrets to same-repo PR branch builds; no `permissions:` block
+`ci.yml` now has a top-level `permissions: contents: read` block and the `windows-app` job's signing env is empty on all PR events (only populated on push) — the existing keyless fallback builds unsigned artifacts for every PR.
 
 ### GAP-37 · Medium · `bump-version.yml` interpolates the dispatch input into shell
 `.github/workflows/bump-version.yml:37` — `${{ inputs.version }}` lands

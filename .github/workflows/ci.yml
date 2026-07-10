@@ -1,5 +1,10 @@
 name: CI
 
+# Least privilege: every job only reads the repo. Nothing in CI pushes,
+# comments, or releases (GAP-36).
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -132,12 +137,13 @@ jobs:
       - name: Build Tauri app and installers
         shell: bash
         env:
-          # createUpdaterArtifacts needs the signing key at build time, but
-          # forked PRs (and repos before the secrets exist) don't have it —
-          # skip updater artifacts there instead of failing the build. The
-          # release workflow always signs.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Signing material only on push builds (main): a same-repo PR
+          # branch must not have the updater key in its environment while
+          # running the branch's own npm ci / build.rs (GAP-36). Forked PRs
+          # were already keyless; this makes ALL PR builds keyless. The
+          # empty-key fallback below then skips updater artifacts.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "no signing key available — building without updater artifacts"
