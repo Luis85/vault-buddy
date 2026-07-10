@@ -812,6 +812,7 @@ pub fn resume_capture(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn rename_capture(
+    app: AppHandle,
     state: tauri::State<CaptureState>,
     mp3: String,
     title: String,
@@ -821,6 +822,14 @@ pub fn rename_capture(
     // directory a live session is writing into.
     if lock_ignoring_poison(&state.0).is_some() {
         return Err("Cannot rename while a recording is running.".to_string());
+    }
+    // Codex PR #46: the worker holds this exact path open mid-decode and its
+    // terminal write (the sidecar) targets it. Renaming underneath an ACTIVE
+    // job would leave the worker completing into the now-orphaned old path
+    // while the renamed note embeds a placeholder that never resolves —
+    // refuse outright rather than try to retarget work already in flight.
+    if crate::transcription::is_active_transcription(&app, Path::new(&mp3)) {
+        return Err("Cannot rename while this recording is being transcribed.".to_string());
     }
     if !Path::new(&mp3).is_file() {
         return Err("Recording file not found — was it moved?".to_string());
@@ -853,6 +862,23 @@ pub fn rename_capture(
         });
     }
     let outcome = vault_buddy_capture::rename::execute(&plan)?;
+    // Codex PR #46: a job still QUEUED for the pre-rename path must follow
+    // the file, or the worker later writes its terminal sidecar under a name
+    // the renamed note no longer embeds, leaving the note's (moved) pending
+    // placeholder stuck until the next launch's backfill re-runs inference.
+    // `outcome.mp3` (not `mp3`/`plan`) is the actual landed name — it may
+    // carry a collision suffix (` (2)`) the plan didn't predict.
+    if crate::transcription::retarget_pending_transcription(
+        &app,
+        Path::new(&mp3),
+        outcome.mp3.clone(),
+    ) {
+        log::info!(
+            "transcribe: retargeted queued transcription from {} to {}",
+            mp3,
+            outcome.mp3.display()
+        );
+    }
     Ok(RenamedPayload {
         mp3: outcome.mp3.to_string_lossy().into_owned(),
         note: outcome.note.map(|p| p.to_string_lossy().into_owned()),
