@@ -16,15 +16,35 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: () => Promise.resolve(() => {}),
 }));
 
+// `getCurrentWebview().onDragDropEvent` is stubbed here (not left to the
+// "no Tauri runtime" catch every other listener falls into) so the
+// buddy-drop tests below can drive the handler directly and assert what it
+// does with drop/non-drop payloads and supported/unsupported extensions.
+type DragDropPayload =
+  | { type: "drop"; paths: string[] }
+  | { type: "over" | "cancel"; paths?: string[] };
+type DragDropHandler = (event: { payload: DragDropPayload }) => void;
+const dragDropMocks = vi.hoisted(() => ({
+  onDragDropEvent: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: dragDropMocks.onDragDropEvent }),
+}));
+
 const calls: string[] = [];
+const argsLog: { cmd: string; args: unknown }[] = [];
 
 describe("BuddyRoot", () => {
   beforeEach(() => {
     localStorage.clear();
     setActivePinia(createPinia());
     calls.length = 0;
-    mockIPC((cmd) => {
+    argsLog.length = 0;
+    dragDropMocks.onDragDropEvent.mockReset();
+    dragDropMocks.onDragDropEvent.mockResolvedValue(() => {});
+    mockIPC((cmd, args) => {
       calls.push(cmd);
+      argsLog.push({ cmd, args });
       if (cmd === "start_buddy_drag") return true;
     });
   });
@@ -84,5 +104,66 @@ describe("BuddyRoot", () => {
     // flips (it no longer pushes a stored facing setting to Rust).
     expect(calls).toContain("get_buddy_facing");
     expect(calls).not.toContain("set_buddy_facing");
+  });
+
+  describe("document drag-drop", () => {
+    let handler: DragDropHandler | undefined;
+
+    beforeEach(() => {
+      handler = undefined;
+      dragDropMocks.onDragDropEvent.mockImplementation((cb: DragDropHandler) => {
+        handler = cb;
+        return Promise.resolve(() => {});
+      });
+    });
+
+    it("begins an import for a supported dropped document", async () => {
+      mount(BuddyRoot);
+      await flushPromises();
+      handler?.({
+        payload: { type: "drop", paths: ["C:/x/Notes.txt", "C:/x/Report.DOCX"] },
+      });
+      await flushPromises();
+      expect(calls).toContain("begin_document_import");
+      // Extension match is case-insensitive; the first supported path wins —
+      // no toggle_panel and no event emit (begin_document_import shows the
+      // panel itself, see AGENTS.md's "why not emit-then-toggle").
+      expect(
+        argsLog.find((c) => c.cmd === "begin_document_import")?.args,
+      ).toEqual({ path: "C:/x/Report.DOCX" });
+      expect(calls).not.toContain("toggle_panel");
+    });
+
+    it("ignores a drop with no supported document extension", async () => {
+      mount(BuddyRoot);
+      await flushPromises();
+      handler?.({ payload: { type: "drop", paths: ["C:/x/image.png"] } });
+      await flushPromises();
+      expect(calls).not.toContain("begin_document_import");
+    });
+
+    it("ignores non-drop drag events (hover/cancel)", async () => {
+      mount(BuddyRoot);
+      await flushPromises();
+      handler?.({ payload: { type: "over", paths: ["C:/x/Report.docx"] } });
+      handler?.({ payload: { type: "cancel" } });
+      await flushPromises();
+      expect(calls).not.toContain("begin_document_import");
+    });
+
+    it("unregisters the drop listener on unmount", async () => {
+      const unlisten = vi.fn();
+      dragDropMocks.onDragDropEvent.mockResolvedValue(unlisten);
+      const wrapper = mount(BuddyRoot);
+      await flushPromises();
+      wrapper.unmount();
+      expect(unlisten).toHaveBeenCalled();
+    });
+
+    it("degrades quietly when onDragDropEvent is unavailable", async () => {
+      dragDropMocks.onDragDropEvent.mockRejectedValue(new Error("no runtime"));
+      expect(() => mount(BuddyRoot)).not.toThrow();
+      await flushPromises();
+    });
   });
 });

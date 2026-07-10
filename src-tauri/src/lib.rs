@@ -243,6 +243,7 @@ pub fn run() {
         .manage(capture_commands::ConfigWriteLock::default())
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
+        .manage(document_commands::DocumentImportPending::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -355,6 +356,8 @@ pub fn run() {
             document_commands::get_documents_config,
             document_commands::set_documents_config,
             document_commands::set_pandoc_path,
+            document_commands::begin_document_import,
+            document_commands::take_pending_import,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

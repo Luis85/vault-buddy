@@ -553,6 +553,42 @@ pub fn set_pandoc_path(
     })
 }
 
+/// One-shot pending buddy-drop import path, consumed by the panel's refresh.
+/// Rust-owned (not an emit-then-toggle) because the buddy and panel windows
+/// have SEPARATE Pinia stores — the buddy can't set the panel store
+/// directly, and `toggle_panel` would HIDE an already-open panel instead of
+/// routing it to the picker. Registered as app state in lib.rs beside
+/// ImportLock: `.manage(DocumentImportPending::default())`.
+#[derive(Default)]
+pub struct DocumentImportPending(pub std::sync::Mutex<Option<String>>);
+
+/// A buddy drop: stash the path, then SHOW the panel (idempotent — never
+/// toggles it hidden) so the panel's `refresh()` lands and consumes the
+/// pending import via `take_pending_import`. Sync command → runs on the main
+/// thread, where the window getters/show/focus are valid (same rule as
+/// `toggle_panel`). Reuses `commands::show_panel`, the panel-show helper
+/// factored out of `toggle_panel`'s show branch, so this doesn't duplicate
+/// window logic.
+#[tauri::command]
+pub fn begin_document_import(app: tauri::AppHandle, path: String) {
+    {
+        let state = app.state::<DocumentImportPending>();
+        *lock_ignoring_poison(&state.0) = Some(path);
+    }
+    crate::commands::show_panel(&app);
+}
+
+/// Take (and clear) the pending buddy-drop import path. The panel's
+/// `refresh()` calls this on every open and routes to the import picker
+/// when it returns `Some` — a one-shot consume, same idiom as the
+/// `pendingView` request the failed-update-install reopen uses.
+#[tauri::command]
+pub fn take_pending_import(app: tauri::AppHandle) -> Option<String> {
+    let state = app.state::<DocumentImportPending>();
+    let mut guard = lock_ignoring_poison(&state.0);
+    guard.take()
+}
+
 /// Staleness floor: only sweep staging dirs older than this, so a live
 /// conversion's fresh dir is never touched even if the ImportLock check
 /// somehow raced. 10 min is comfortably longer than any real conversion.

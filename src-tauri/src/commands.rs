@@ -145,25 +145,24 @@ pub(crate) fn primary_button_down() -> bool {
     (unsafe { GetKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
 }
 
-/// Show/hide the panel window. A sync command, so it runs on the main thread
-/// (where window show/hide and the placement getters are valid). Positioned
-/// while still hidden, then shown — the panel window never resizes and is
-/// only moved, so there is no WebView2 stale-frame flash. Opening hides the
-/// greeting bubble.
-#[tauri::command]
-pub fn toggle_panel(app: tauri::AppHandle) {
+/// Position (while hidden), show, focus the panel window, tell the panel
+/// webview it was just revealed, and hide the greeting bubble. Idempotent —
+/// safe to call on an already-visible panel (a harmless re-show/re-focus/
+/// re-emit, no flicker, since the panel only ever moves, never resizes).
+///
+/// Factored out of `toggle_panel`'s show branch so `begin_document_import`
+/// can reuse it: a buddy drop must always SHOW the panel, never toggle it —
+/// toggling would HIDE an already-open panel instead of routing it to the
+/// import picker.
+pub(crate) fn show_panel(app: &tauri::AppHandle) {
     use tauri::{Emitter, Manager};
     let Some(panel) = app.get_webview_window("panel") else {
-        log::warn!("toggle_panel: no panel window");
+        log::warn!("show_panel: no panel window");
         return;
     };
-    if panel.is_visible().unwrap_or(false) {
-        let _ = panel.hide();
-        return;
-    }
-    position_panel(&app);
+    position_panel(app);
     if let Err(e) = panel.show() {
-        log::warn!("toggle_panel: show failed: {e}");
+        log::warn!("show_panel: show failed: {e}");
     }
     let _ = panel.set_focus();
     // Tell the panel webview it was just revealed: it re-runs vault discovery
@@ -174,6 +173,25 @@ pub fn toggle_panel(app: tauri::AppHandle) {
     if let Some(bubble) = app.get_webview_window("bubble") {
         let _ = bubble.hide();
     }
+}
+
+/// Show/hide the panel window. A sync command, so it runs on the main thread
+/// (where window show/hide and the placement getters are valid). Positioned
+/// while still hidden, then shown — the panel window never resizes and is
+/// only moved, so there is no WebView2 stale-frame flash. Opening hides the
+/// greeting bubble (via `show_panel`).
+#[tauri::command]
+pub fn toggle_panel(app: tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(panel) = app.get_webview_window("panel") else {
+        log::warn!("toggle_panel: no panel window");
+        return;
+    };
+    if panel.is_visible().unwrap_or(false) {
+        let _ = panel.hide();
+        return;
+    }
+    show_panel(&app);
 }
 
 /// Hide the panel window. Idempotent; called by Escape, drag start, a launched

@@ -361,4 +361,55 @@ describe("vaults store", () => {
     store.back();
     expect(store.view).toBe("list");
   });
+
+  it("openImportPicker sets the pending path and view", () => {
+    const store = useVaultsStore();
+    store.openImportPicker("C:/x/Report.docx");
+    expect(store.view).toBe("importPicker");
+    expect(store.pendingImportPath).toBe("C:/x/Report.docx");
+  });
+
+  it("showList clears the pending import path", () => {
+    const store = useVaultsStore();
+    store.openImportPicker("C:/x/Report.docx");
+    store.showList();
+    expect(store.view).toBe("list");
+    expect(store.pendingImportPath).toBeNull();
+  });
+
+  it("refresh routes to the import picker when Rust has a pending import", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") return "C:/x/Report.docx";
+      if (cmd === "list_vaults") return [];
+      if (cmd === "count_open_tasks") return 0;
+      return undefined;
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.view).toBe("importPicker");
+    expect(store.pendingImportPath).toBe("C:/x/Report.docx");
+  });
+
+  it("refresh falls back to the vault list when there is no pending import", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") return null;
+      if (cmd === "list_vaults") return [];
+      return undefined;
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.view).toBe("list");
+    expect(store.pendingImportPath).toBeNull();
+  });
+
+  it("refresh treats a failed take_pending_import as no pending import", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") throw "ipc unavailable";
+      if (cmd === "list_vaults") return [];
+      return undefined;
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.view).toBe("list");
+  });
 });
