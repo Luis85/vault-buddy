@@ -31,3 +31,4 @@ Within the *existing* Audio provider, the Knowledge Intake PRD's Recording Modes
 ## Related use-cases
 
 - [Meeting Recording](meeting-recording.md) / [Voice Note Recording](voice-note-recording.md) (the one shipped provider)
+- [Document Import via Pandoc](document-import-pandoc.md) — a second Capture Provider, but fully specified and tracked separately from this backlog's still-placeholder "File Import" item
