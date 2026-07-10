@@ -383,7 +383,7 @@ GAP-01/GAP-07.
 **Fix:** set a restrictive CSP (e.g. `default-src 'self'; style-src 'self'
 'unsafe-inline'`).
 
-### GAP-35 · Medium · GitHub Actions pinned by mutable tag, including the one that holds the updater signing key
+### GAP-35 · ~~Medium~~ FIXED 2026-07-10 · GitHub Actions pinned by mutable tag, including the one that holds the updater signing key
 All three workflows: `actions/checkout@v4`, `actions/setup-node@v4`,
 `Swatinem/rust-cache@v2`, `actions/upload-artifact@v4`,
 `tauri-apps/tauri-action@v0` (a floating major-0), and
@@ -391,6 +391,11 @@ All three workflows: `actions/checkout@v4`, `actions/setup-node@v4`,
 feeds `TAURI_SIGNING_PRIVATE_KEY` into `tauri-action` — a compromised tag
 on that action exfiltrates the key that can ship updates to every user.
 **Fix:** pin all third-party actions to full commit SHAs.
+(FIXED 2026-07-10 — all 22 `uses:` lines across `ci.yml`, `release.yml`,
+and `bump-version.yml` now pin a full commit SHA resolved live via
+`git ls-remote`, with the original tag/branch kept as a trailing comment;
+`dtolnay/rust-toolchain@stable` pins the branch head with a dated comment
+since it has no tag to fall back to.)
 
 ### GAP-36 · Medium · CI exposes the signing secrets to same-repo PR branch builds; no `permissions:` block
 `.github/workflows/ci.yml` (top level, and `windows-app` env). No
