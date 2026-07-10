@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use vault_buddy_core::services::{self, ServicePaths, TaskDto};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
-use vault_buddy_core::{capture_config, capture_note, capture_paths, discovery, tasks, uri};
+use vault_buddy_core::{capture_config, capture_note, capture_paths, tasks, uri};
 
 use crate::capture_commands::ConfigWriteLock;
 
@@ -31,10 +31,7 @@ pub fn set_tasks_config(
     id: String,
     tasks_folder: Option<String>,
 ) -> Result<(), String> {
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let vault = crate::commands::find_vault(&id)?;
     let folder = tasks_folder
         .as_deref()
         .map(str::trim)
@@ -61,10 +58,7 @@ pub fn set_tasks_config(
 /// private); the canonical escape check is applied per-command since it
 /// needs the folder to exist.
 fn tasks_root_for(id: &str) -> Result<(PathBuf, PathBuf), String> {
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let vault = crate::commands::find_vault(id)?;
     let cfg = capture_config::vault_config(&capture_config::load_config(), id);
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
     Ok((PathBuf::from(&vault.path), root))
@@ -273,8 +267,10 @@ pub fn open_task(id: String, path: String) -> Result<(), String> {
     }
     let canon_vault = std::fs::canonicalize(&vault_path)
         .map_err(|e| format!("Cannot resolve vault folder: {e}"))?;
-    let rel = uri::vault_relative_no_ext(&canon_path, &canon_vault)
-        .ok_or_else(|| format!("task is outside its vault: {path}"))?;
+    let rel = uri::vault_relative_no_ext(&canon_path, &canon_vault).ok_or_else(|| {
+        log::warn!("open_task: {path} resolved outside its vault");
+        "Task is outside its vault.".to_string()
+    })?;
     uri::launch(&uri::open_file_uri(&id, &rel))
 }
 

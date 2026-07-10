@@ -207,10 +207,7 @@ pub fn set_capture_config(
     }
     // Validate the folder against the real vault path BEFORE writing —
     // an invalid folder is an inline field error, nothing gets written.
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let vault = crate::commands::find_vault(&id)?;
     let folder = cfg
         .recording_folder
         .as_deref()
@@ -326,13 +323,11 @@ fn start_capture_blocking(
     // Everything fallible-but-cheap (discovery, config, path validation)
     // runs BEFORE the state lock is touched — the mutex must never be held
     // across file I/O or device setup.
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let vault = crate::commands::find_vault(&id)?;
     let vault_path = PathBuf::from(&vault.path);
     if !vault_path.is_dir() {
-        return Err(format!("Vault folder not found: {}", vault.path));
+        log::warn!("start_capture: vault folder missing: {}", vault.path);
+        return Err("Vault folder not found — was it moved or deleted?".to_string());
     }
 
     let mut cfg = capture_config::vault_config(&capture_config::load_config(), &id);
@@ -1160,8 +1155,13 @@ fn open_recording_note(path: &str) -> Result<(), String> {
     };
     // Both sides canonical, so strip_prefix agrees on Windows' \\?\ form
     // (the open_task precedent).
-    let rel = uri::vault_relative_no_ext(&target, &owned.vault_canonical)
-        .ok_or_else(|| format!("recording is outside its vault: {}", target.display()))?;
+    let rel = uri::vault_relative_no_ext(&target, &owned.vault_canonical).ok_or_else(|| {
+        log::warn!(
+            "open_recording_note: {} resolved outside its vault",
+            target.display()
+        );
+        "Recording is outside its vault.".to_string()
+    })?;
     uri::launch(&uri::open_file_uri(&owned.vault.id, &rel))
 }
 

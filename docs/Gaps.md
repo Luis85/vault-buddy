@@ -277,14 +277,20 @@ keep `.expect`.
   that saw the job in `transcription_queue_status` never learns its fate
   (polling self-corrects). Emit `capture:transcribeSkipped`.
 
-### GAP-26 · Low · Inconsistent error strings; paths leak into user-facing errors
-`commands.rs:510` (`"vault not found: {id}"`) vs the user-worded
-`"Vault not found — was it removed from Obsidian?"`
-(`capture_commands.rs:344`, `task_commands.rs:36`); several errors embed
-absolute local paths (`capture_commands.rs:347/980`,
-`task_commands.rs:130`). Cosmetic on a local desktop app.
-**Fix:** unify on the user-worded form via one shared vault lookup (the
-`discover_vaults().find(..)` lookup is duplicated 6× — see GAP-45).
+### GAP-26 · ~~Low~~ FIXED 2026-07-10 · Inconsistent error strings; paths leak into user-facing errors
+The four hand-rolled `discovery::discover_vaults().into_iter().find(|v| v.id
+== id)` lookups in `capture_commands.rs` (`set_capture_config`,
+`start_capture_blocking`) and `task_commands.rs` (`set_tasks_config`,
+`tasks_root_for`) now delegate to `crate::commands::find_vault` — the same
+`services::find_vault` user-worded copy the panel and MCP already share, so
+there is exactly one vault-not-found message left. The user-facing errors
+that embedded absolute local paths (`start_capture_blocking`'s vault-folder
+check, `open_recording_note`'s outside-its-vault error in
+`capture_commands.rs`, `open_task`'s outside-its-vault error in
+`task_commands.rs`) now log the path via `log::warn!` and return a
+path-free, user-worded `Err`. `services::find_vault` itself (the MCP
+contract) and the `add_task` vault-folder check that already lives in
+`core::services` were left untouched — out of this pass's scope.
 
 ## 4. Frontend defects & races
 
@@ -531,8 +537,9 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 - `start_capture_blocking` (the async command's moved body, sub-pass B) is
   ~330 lines with four inline thread bodies (`capture_commands.rs:321-655`);
   `process_transcription` ~186 lines.
-- The `discover_vaults().find(|v| v.id == id)` lookup is duplicated 6×
-  across three files with two error styles (GAP-26).
+- ~~The `discover_vaults().find(|v| v.id == id)` lookup is duplicated 6×
+  across three files with two error styles~~ FIXED 2026-07-10 — the four
+  shell-side lookups now delegate to `commands::find_vault` (GAP-26).
 - The roots loop (`recording_roots` → `safe_recording_root` →
   `assert_root_inside_vault`) appears 3× (`list_recordings`,
   `run_recovery`, `scan_and_enqueue`); the owning-vault-by-prefix matcher
