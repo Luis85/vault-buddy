@@ -456,16 +456,31 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
     // too) — so blank-separated block entries are a known, degenerate-input
     // limitation.
     let mut skip_list_items = false;
+    // Comment-only lines seen while consuming a block list. INTERIOR comments
+    // (more items follow) belong to the replaced value and are dropped with
+    // it — the reader scans past them the same way — but a comment TRAILING
+    // the last item is the user's frontmatter (Codex, PR #46: a tags edit was
+    // deleting it), so the decision is deferred until the next non-comment
+    // line shows whether the block continues.
+    let mut pending_comments: Vec<&str> = Vec::new();
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if skip_list_items {
             let starts_indented = line.starts_with([' ', '\t']);
             let t = trimmed.trim_start();
-            // Comment-only lines ride with the block they annotate — the
-            // reader scans past them (see parse_tags_key), so the writer
-            // must consume them too or an edit would orphan them.
-            if starts_indented || t.starts_with("- ") || t.starts_with('#') {
-                continue; // item, its indented continuation, or a comment
+            if t.starts_with('#') {
+                pending_comments.push(line);
+                continue;
+            }
+            if starts_indented || t.starts_with("- ") {
+                // Item or its indented continuation — any buffered comments
+                // were interior after all; they go with the value.
+                pending_comments.clear();
+                continue;
+            }
+            // Block over. Buffered comments trailed the list — keep them.
+            for c in pending_comments.drain(..) {
+                out.push_str(c);
             }
             skip_list_items = false;
         }
@@ -1426,6 +1441,27 @@ mod tests {
         assert_eq!(
             note_tags("---\ntype: Task\ntags:\n- work\n# midway\n- home\ntitle: \"T\"\n---\n"),
             vec!["work", "home"]
+        );
+    }
+
+    #[test]
+    fn set_fields_preserves_a_comment_trailing_a_block_list() {
+        // Codex review, PR #46: a standalone comment AFTER the last item
+        // (`tags:` / `- work` / `# keep this note` / `due: …`) is the user's
+        // frontmatter, not part of the replaced value — the consumption loop
+        // was deleting it. Interior comments (followed by more items) still
+        // ride with the block; only trailing ones survive.
+        let doc =
+            "---\ntype: Task\nstatus: new\ntags:\n- work\n# keep this note\ndue: 2026-07-10\n---\n";
+        let out = set_fields(doc, &[("tags", Some("[crafts]"))]).unwrap();
+        assert!(out.contains("tags: [crafts]\n"));
+        assert!(!out.contains("- work"));
+        assert!(out.contains("# keep this note\n"));
+        assert!(out.contains("due: 2026-07-10\n"));
+        let out = set_fields(doc, &[("tags", None)]).unwrap();
+        assert_eq!(
+            out,
+            "---\ntype: Task\nstatus: new\n# keep this note\ndue: 2026-07-10\n---\n"
         );
     }
 
