@@ -1,7 +1,7 @@
 # Vault Buddy — Product Requirements Document (PRD)
 
 - **Version:** 1.0 (Vision Draft)
-- **Status:** Shipping — v0.3.0 released (Windows MVP: vault access, meeting/voice recording, local transcription)
+- **Status:** Shipping — v0.5.x (Windows MVP: vault access, meeting/voice recording, local transcription, cross-vault keyword search, per-vault & cross-vault tasks, plus an opt-in local MCP server for AI clients shipped in v0.6.0's first slice)
 - **Product:** Vault Buddy
 - **Platform:** Windows (MVP)
 - **Technology Stack:** Tauri 2 · Vue 3 · TypeScript · Rust

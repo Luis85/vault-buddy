@@ -11,7 +11,7 @@ context switching. Your knowledge stays yours: everything runs locally.
 - **Platform:** Windows (MVP)
 - **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · local offline transcription · local MCP server for AI clients
 
-See the [Product Requirements Document](PRD%20-%20Product%20Vision.md) for the full vision,
+See the [Product Requirements Document](docs/PRD.md) for the full vision,
 principles, capabilities, and roadmap.
 
 ## Install

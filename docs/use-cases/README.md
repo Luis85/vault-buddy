@@ -54,9 +54,9 @@ main PRD's former Non-Functional Requirements section.
 
 | Use case | Domain | Shipped in | Source PRD |
 | --- | --- | --- | --- |
-| [Desktop Companion](desktop-companion.md) | Desktop Companion | v0.3.0 | [PRD](../PRD%20-%20Product%20Vision.md) |
-| [Vault Discovery, Listing & Opening](vault-discovery-and-open.md) | Vault Management | v0.3.0 | [PRD](../PRD%20-%20Product%20Vision.md) |
-| [Daily Note: Open & Create](daily-note.md) | Vault Management | v0.3.0 | [PRD](../PRD%20-%20Product%20Vision.md) |
+| [Desktop Companion](desktop-companion.md) | Desktop Companion | v0.3.0 | [PRD](../PRD.md) |
+| [Vault Discovery, Listing & Opening](vault-discovery-and-open.md) | Vault Management | v0.3.0 | [PRD](../PRD.md) |
+| [Daily Note: Open & Create](daily-note.md) | Vault Management | v0.3.0 | [PRD](../PRD.md) |
 | [Software Auto-Update](software-auto-update.md) | Platform | v0.3.0 | [Platform & Cross-Cutting](../prds/platform-and-cross-cutting.md) |
 | [Diagnostics, Crash Reporting & Recovery](diagnostics-and-crash-reporting.md) | Platform | v0.3.0 | [Platform & Cross-Cutting](../prds/platform-and-cross-cutting.md) |
 | [Meeting Recording](meeting-recording.md) | Knowledge Intake | v0.3.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
@@ -68,7 +68,7 @@ main PRD's former Non-Functional Requirements section.
 | [Rename Recording](rename-recording.md) ⚠ not in PRD text | Knowledge Intake | v0.4.0 | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Per-Vault Task List](per-vault-task-list.md) | Task Management | v0.5.0 (extended through v0.5.3: due/priority/buckets/editor/open/filter/tags) | [Task Management](../prds/task-management.md) |
 | [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md) ⚠ aggregated view only | Task Management | v0.5.4 (lists/modal/bulk/search remain planned) | [Task Management](../prds/task-management.md) |
-| [Knowledge Search & Retrieval](knowledge-search-and-retrieval.md) ⚠ keyword slice | Knowledge Retrieval | main (unreleased) | [PRD](../PRD%20-%20Product%20Vision.md) |
+| [Knowledge Search & Retrieval](knowledge-search-and-retrieval.md) ⚠ keyword slice | Knowledge Retrieval | main (unreleased) | [PRD](../PRD.md) |
 
 ## Planned (named in a PRD roadmap, not yet built)
 
@@ -78,22 +78,22 @@ main PRD's former Non-Functional Requirements section.
 | [Additional Capture Providers](additional-capture-providers.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Task Tags & Todos](task-tags-and-todos.md) | Task Management | [Task Management](../prds/task-management.md) |
 | [AI-Assisted Task Management](ai-assisted-task-management.md) | Task Management | [Task Management](../prds/task-management.md) |
-| [Workflow Automation Engine](workflow-automation-engine.md) | Workflow Engine | [PRD](../PRD%20-%20Product%20Vision.md) |
-| [Natural Language Interface](natural-language-interface.md) | NL Interface | [PRD](../PRD%20-%20Product%20Vision.md) |
+| [Workflow Automation Engine](workflow-automation-engine.md) | Workflow Engine | [PRD](../PRD.md) |
+| [Natural Language Interface](natural-language-interface.md) | NL Interface | [PRD](../PRD.md) |
 
 ## Vision / Draft (foundational architecture PRDs, longer horizon)
 
 | Use case | Domain | Source PRD |
 | --- | --- | --- |
 | [Vault Buddy Runtime & Embedded MCP Server](mcp-server-and-runtime.md) | AI Platform | [AI Platform & Agent Runtime](../prds/ai-platform.md) |
-| [Plugin Platform & Specialized AI Agents](plugin-and-agent-platform.md) | AI Platform | [PRD](../PRD%20-%20Product%20Vision.md) |
+| [Plugin Platform & Specialized AI Agents](plugin-and-agent-platform.md) | AI Platform | [PRD](../PRD.md) |
 | [Local MCP Hub Assistant](local-mcp-hub-assistant.md) | AI Platform | [Local MCP Hub](../prds/local-mcp-hub.md) |
 
 ---
 
 ## By source PRD
 
-- [Vault Buddy PRD (Product Vision)](../PRD%20-%20Product%20Vision.md) — Desktop Companion, Vault Discovery & Open, Daily Note, Knowledge Search & Retrieval, Workflow Automation Engine, Natural Language Interface, Plugin Platform & Specialized AI Agents.
+- [Vault Buddy PRD (Product Vision)](../PRD.md) — Desktop Companion, Vault Discovery & Open, Daily Note, Knowledge Search & Retrieval, Workflow Automation Engine, Natural Language Interface, Plugin Platform & Specialized AI Agents.
 - [Knowledge Intake](../prds/knowledge-intake.md) — Meeting Recording, Voice Note Recording, Local Speech-to-Text Transcription, Companion Note & Follow-up Template, Recordings Browser, Re-transcription, Rename Recording, AI-Enriched Meeting Notes, Additional Capture Providers.
 - [Task Management](../prds/task-management.md) — Per-Vault Task List, Task Tags & Todos, Aggregated Task Dashboard & Lists, AI-Assisted Task Management.
 - [The Knowledge Lifecycle](../prds/knowledge-lifecycle.md) — vision framing for Knowledge Search & Retrieval and Workflow Automation Engine; no capability of its own beyond what those PRDs specify.

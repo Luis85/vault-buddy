@@ -102,9 +102,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # our `tauri` npm script is an alias for `tauri dev`; the action's
-          # default `npm run tauri build` would expand to `tauri dev build`,
-          # which dev-builds and then LAUNCHES the app on the runner forever
+          # invoke the Tauri CLI directly via npx, never through the action's
+          # default `npm run tauri build` npm-script indirection (which risks
+          # expanding to an unintended subcommand and launching the app on the
+          # runner)
           tauriScript: npx tauri
           # we ship both MSI and NSIS but the release notes tell users to
           # install the NSIS setup.exe; without this latest.json points

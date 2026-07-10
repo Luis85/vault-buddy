@@ -3,7 +3,7 @@ type: UseCase
 status: shipped
 domain: vault-management
 shipped_in: v0.3.0
-source_prd: "docs/PRD - Product Vision.md"
+source_prd: "docs/PRD.md"
 tags: [use-case, vault-management, foundation]
 ---
 
@@ -13,7 +13,7 @@ tags: [use-case, vault-management, foundation]
 
 ## Source
 
-Main PRD, [§14 Functional Requirements → Vault Management](../PRD%20-%20Product%20Vision.md) (detect installed Obsidian, discover vaults, open vault, switch vault) and [§11 Core Capabilities → Obsidian Integration → Vault discovery / Vault switching](../PRD%20-%20Product%20Vision.md). Listed shipped in Phase 1 — Foundation ("Obsidian CLI ✓ (via `obsidian://` URIs)", "Vault Detection ✓").
+Main PRD, [§14 Functional Requirements → Vault Management](../PRD.md) (detect installed Obsidian, discover vaults, open vault, switch vault) and [§11 Core Capabilities → Obsidian Integration → Vault discovery / Vault switching](../PRD.md). Listed shipped in Phase 1 — Foundation ("Obsidian CLI ✓ (via `obsidian://` URIs)", "Vault Detection ✓").
 
 ## Status: Shipped (v0.3.0)
 

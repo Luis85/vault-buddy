@@ -498,11 +498,12 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   space-delimited false positive.
 
 **Capture / transcribe crates**
-- `devices.rs`: only "never panics" smoke tests can run on device-less CI
-  runners — the format-dispatch arms, the error-callback → `Lost` path, and
-  the entire `#[cfg(windows)]` loopback block are never *executed* by any
-  test on device-capable runners (fixed for core/capture/transcribe crates
-  on Windows CI, 2026-07-10).
+- `devices.rs`: only "never panics" smoke tests run in CI. The Windows
+  `cargo test` step (2026-07-10) now compiles and smoke-runs the
+  format-dispatch arms and the `#[cfg(windows)]` loopback block on the
+  Windows runner, but hosted Windows runners are device-less — so that code,
+  and the error-callback → `Lost` path, is still never *executed against a
+  real audio device* by any test.
 - `session.rs`: mid-recording encode/write/flush failure and best-effort
   finalize; `plan_tick` (GAP-05) is unit-tested but the suspend path itself
   cannot be exercised end-to-end (`Instant` is unmockable) — the loop
@@ -661,35 +662,34 @@ itself (broken PRD link, missing `cancel_transcription` /
 the IPC list, missing `linux-app` job, wrong whisper-CI claim, CONTEXT.md
 unreferenced). What remains lives in the *other* docs:
 
-### GAP-49 · Medium · Broken/stale references in the human-facing docs
-- `README.md:14` — the PRD link targets `PRD%20-%20Product%20Vision.md` at
-  the repo root; the file is under `docs/`. The front-page product link
-  404s on GitHub.
-- `docs/DEVELOPMENT.md:76-91` — "Tests and checks" omits the transcribe
-  crate from the clippy/test commands CI actually runs, and the prose says
-  "split into three crates" (there are four).
-- `docs/DEVELOPMENT.md:159` — says the signing secrets are needed "to
-  build"; CI explicitly builds without them.
-- `.github/pull_request_template.md` — claims Windows-only shell changes
-  "can't compile in this container" (the Linux compile gate exists) and
-  lists the CI gates as `frontend` → `rust-core` → `windows-app`, omitting
-  `linux-app` and implying sequence.
-- `docs/PRD - Product Vision.md:4,580,602` — status says "Shipping —
-  v0.3.0" and "except Search and Tasks"; the repo is at 0.5.1 with both
-  shipped. The use-cases README says to re-run reconciliation on each
-  release; it wasn't.
-- `.github/workflows/release.yml:47-49` — comment still claims the `tauri`
-  npm script aliases `tauri dev`; `package.json` fixed that (the override
-  is harmless, the justification stale).
-- `src-tauri/transcribe/Cargo.toml:8-10` — comment says the Windows job is
-  the whisper compile gate; the Linux `rust-core` job builds *and tests*
-  the feature.
+### GAP-49 · ~~Medium~~ FIXED 2026-07-10 · Broken/stale references in the human-facing docs
+Every catalogued reference was corrected:
+- The PRD was renamed to `docs/PRD.md` (GAP-50) and all 15 referrers'
+  link/frontmatter targets were repointed — the README front-page link,
+  the AGENTS.md doc map, `docs/DEVELOPMENT.md`, both per-domain PRDs, every
+  `docs/use-cases/` page, and the dated increment-1 spec — so none 404s.
+- `docs/DEVELOPMENT.md` now names the four member crates plus the shell
+  (was "three crates") and its "Tests and checks" command list includes the
+  transcribe + mcp clippy/test commands CI actually runs; the updater-signing
+  note now says CI builds unsigned by design on PR events rather than
+  "needs the secrets to build" (GAP-36).
+- `.github/pull_request_template.md` drops the stale "can't compile in this
+  container" claim (the Linux compile gate exists) and names all four CI
+  jobs (`frontend`, `rust-core`, `linux-app`, `windows-app`) without
+  implying a sequence.
+- `docs/PRD.md`'s status line reads the shipped v0.5.x reality (Search +
+  Tasks shipped, plus the opt-in local MCP server).
+- `.github/workflows/release.yml`'s stale `tauri`-npm-script comment and
+  `src-tauri/transcribe/Cargo.toml`'s wrong "Windows is the whisper compile
+  gate" comment (the Linux `rust-core` job builds *and tests* the feature)
+  were both corrected.
 
 ### GAP-50 · Low · Naming and structure
-- `docs/PRD - Product Vision.md` — spaces in the filename force `%20`
-  links, which is what produced the broken references. Rename to
-  `docs/PRD.md` and fix the three referrers (README, DEVELOPMENT, and the
-  AGENTS.md doc map).
+- ~~`docs/PRD - Product Vision.md` — spaces in the filename force `%20`
+  links, which is what produced the broken references.~~ FIXED 2026-07-10 —
+  renamed to `docs/PRD.md`; the 15 referrers (README, AGENTS.md doc map,
+  DEVELOPMENT, both per-domain PRDs, every use-cases page, and the dated
+  increment-1 spec) were repointed to the new path.
 - No CHANGELOG; release bodies are boilerplate. No SECURITY.md (updater
   key rotation/compromise procedure). See GAP-44.
 

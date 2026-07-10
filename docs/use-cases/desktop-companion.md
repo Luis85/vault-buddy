@@ -3,7 +3,7 @@ type: UseCase
 status: shipped
 domain: desktop-companion
 shipped_in: v0.3.0
-source_prd: "docs/PRD - Product Vision.md"
+source_prd: "docs/PRD.md"
 related_specs:
   - "docs/superpowers/specs/2026-07-03-increment-1-companion-daily-note-design.md"
   - "docs/superpowers/specs/2026-07-04-increment-3-greeting-speech-bubble-design.md"
@@ -20,7 +20,7 @@ tags: [use-case, desktop-companion, foundation]
 
 ## Source
 
-Main PRD, [§10 User Experience Vision](../PRD%20-%20Product%20Vision.md) and [§11 Core Capabilities → Desktop Companion](../PRD%20-%20Product%20Vision.md): animated character, emotional states, drag & drop, transparent window, always-on-top, multi-monitor, system tray, startup with Windows. Listed as shipped in Phase 1 — Foundation.
+Main PRD, [§10 User Experience Vision](../PRD.md) and [§11 Core Capabilities → Desktop Companion](../PRD.md): animated character, emotional states, drag & drop, transparent window, always-on-top, multi-monitor, system tray, startup with Windows. Listed as shipped in Phase 1 — Foundation.
 
 ## Status: Shipped (v0.3.0, refined through v0.5.0)
 

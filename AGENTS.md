@@ -73,7 +73,7 @@ here is deliberately only the shipped increments.
 | [CLAUDE.md](CLAUDE.md) | Thin pointer at this file for Claude Code |
 | [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Contributor setup, build prerequisites, CI/release pipelines, logs & crash reporting, capture config reference |
-| [docs/PRD - Product Vision.md](docs/PRD%20-%20Product%20Vision.md) | Vision, principles, capability roadmap |
+| [docs/PRD.md](docs/PRD.md) | Vision, principles, capability roadmap |
 | [docs/prds/](docs/prds/) | Per-domain PRDs (knowledge intake, task management, …) |
 | [docs/use-cases/](docs/use-cases/) | One file per use case, reconciled against reality on each release |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
@@ -1070,7 +1070,7 @@ round-trip.
 | `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
 | `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over the member crates, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`) |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
-| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; skips updater signing when secrets are absent (forks); + `cargo test` for core/capture/transcribe (incl. `--features whisper`) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
+| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe (incl. `--features whisper`) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
 
 ## Releases
 
@@ -1088,8 +1088,9 @@ dispatch path exists because remote agent sessions can push branches but
 not tags (the git proxy 403s tag refs); `tauri-action` creates the tag and
 the GitHub release itself either way. The workflow signs updater artifacts
 (`TAURI_SIGNING_PRIVATE_KEY` secrets) and attaches `latest.json`, which
-installed apps poll from Settings → Updates. CI builds without updater
-artifacts when the signing secrets are absent (forked PRs) instead of
+installed apps poll from Settings → Updates. CI builds unsigned artifacts
+on every PR event by design — the signing secrets are populated only on push
+to `main` and by this release workflow, never on PRs (GAP-36) — instead of
 failing. A `validate` job gates the build: it requires the dispatch path to
 come from `main`, checks the tag matches `tauri.conf.json`'s version,
 requires the released commit to be an ancestor of `main` (compare API —

@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-03
 - **Status:** Approved
-- **Source:** First increment cut from [docs/PRD.md](PRD%20-%20Product%20Vision.md) (Phase 1 — Foundation)
+- **Source:** First increment cut from [docs/PRD.md](../../PRD.md) (Phase 1 — Foundation)
 
 ## Goal
 

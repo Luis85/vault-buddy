@@ -2,7 +2,7 @@
 
 Contributor documentation: building from source, tests, the CI/release
 pipelines, and the agentic development setup. For what the product is and
-where it's going, see the [PRD - Product Vision](PRD%20-%20Product%20Vision.md).
+where it's going, see the [PRD](PRD.md).
 
 ## Run it from source
 
@@ -73,22 +73,28 @@ npm run build                      # vue-tsc typecheck + production build
 # from src-tauri/ — mirrors the CI "Rust core" job (Linux needs ALSA's
 # headers first: sudo apt-get install -y libasound2-dev)
 cargo fmt --check
-cargo clippy -p vault_buddy_core -p vault_buddy_capture --all-targets -- -D warnings
-cargo test -p vault_buddy_core -p vault_buddy_capture
+cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
+cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp
+cargo test -p vault_buddy_transcribe --features whisper   # the only place the whisper FFI tests run
 ```
 
-The Rust code is split into three crates: `src-tauri/core/` (`vault_buddy_core`)
-is a pure crate with all Obsidian logic (config parsing, daily-note
-resolution, URI building) and no GUI or audio dependencies — it tests on any
-machine, including CI containers. `src-tauri/capture/` (`vault_buddy_capture`)
-is the audio engine — device capture via `cpal`, MP3 encoding via LAME
-(`mp3lame-encoder`) — and also tests anywhere, though on Linux it needs
-ALSA's development headers to build: `sudo apt-get install -y
-libasound2-dev`. `src-tauri/` itself is the thin Tauri shell (window, tray,
-command wrappers) and needs platform WebView libraries to compile — on
-Windows that works out of the box; on Linux it needs the WebView/GTK/tray
-system libraries (see the compile-gate section below), which is why the
-*release* build runs on a Windows runner.
+The Rust workspace is split into four member crates plus the shell.
+`src-tauri/core/` (`vault_buddy_core`) is a pure crate with all Obsidian
+logic (config parsing, daily-note resolution, URI building) and no GUI or
+audio dependencies — it tests on any machine, including CI containers.
+`src-tauri/capture/` (`vault_buddy_capture`) is the audio engine — device
+capture via `cpal`, MP3 encoding via LAME (`mp3lame-encoder`) — and also
+tests anywhere, though on Linux it needs ALSA's development headers to
+build: `sudo apt-get install -y libasound2-dev`. `src-tauri/transcribe/`
+(`vault_buddy_transcribe`) is the local speech-to-text pipeline (Symphonia
+decode + whisper.cpp behind the `whisper` feature); its FFI regression
+tests run on Linux under `--features whisper`. `src-tauri/mcp/`
+(`vault_buddy_mcp`) is the Tauri-free embedded MCP server; its unit and
+real-socket integration tests run on Linux too. `src-tauri/` itself is the
+thin Tauri shell (window, tray, command wrappers) and needs platform
+WebView libraries to compile — on Windows that works out of the box; on
+Linux it needs the WebView/GTK/tray system libraries (see the compile-gate
+section below), which is why the *release* build runs on a Windows runner.
 
 ### Build the shell on Linux (compile gate for agents/CI)
 
@@ -248,9 +254,13 @@ against a dedicated updater keypair (independent of Windows code signing):
 - the **public key** lives in `src-tauri/tauri.conf.json` under
   `plugins.updater.pubkey`
 - the **private key** must exist as the repository secrets
-  `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` —
-  both CI and the release workflow need them to build
-  (`bundle.createUpdaterArtifacts` signs at build time)
+  `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, which
+  the release workflow and the push-to-`main` CI run use to sign the updater
+  artifacts (`bundle.createUpdaterArtifacts` signs at build time). CI does
+  **not** need them to *build*: every PR-event build runs the keyless
+  fallback and produces unsigned installers by design (secrets are injected
+  only on push to `main` and by the release workflow — GAP-36), so forks and
+  PR branches still build green
 
 Generate a keypair once with `npx tauri signer generate -w <path>` and keep
 the private key safe: whoever holds it can ship updates to every user. The
