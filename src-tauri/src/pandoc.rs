@@ -266,6 +266,12 @@ pub(crate) enum Capture {
 /// block — critically while `ImportLock` is held.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
+/// Max bytes `run_capturing` STORES from the captured stream. We only ever use
+/// the first `--version` line or a 500-char stderr slice, so 64 KiB is ample;
+/// it exists to bound memory against a child that floods the pipe for the whole
+/// timeout window. Excess is drained but discarded.
+const CAPTURE_CAP: usize = 64 * 1024;
+
 /// Spawn `cmd`, wait with a wall-clock kill at `timeout`, and return
 /// `(success, captured)`: `success` is true on a zero-exit, false on
 /// non-zero/killed; `captured` is the chosen stream's output (empty when none).
@@ -304,14 +310,31 @@ pub(crate) fn run_capturing(
     // channel. Reading concurrently keeps a chatty child from filling the pipe
     // buffer and deadlocking the poll loop below; the channel lets us BOUND how
     // long we wait for it (see the recv_timeout at the end) instead of an
-    // unbounded join.
+    // unbounded join. We STORE at most CAPTURE_CAP bytes but keep reading past
+    // it (discarding) — the timeout bounds wall-clock, not bytes, so a noisy or
+    // malicious executable streaming for the whole window could otherwise grow
+    // this Vec until OOM (Codex review). Draining the excess (rather than
+    // stopping) keeps the pipe from backing up and blocking the child.
     let rx = stream.map(|mut s| {
         let (tx, rx) = mpsc::channel();
         let _ = std::thread::Builder::new()
             .name("pandoc-io".into())
             .spawn(move || {
                 let mut buf = Vec::new();
-                let _ = s.read_to_end(&mut buf);
+                let mut scratch = [0u8; 8192];
+                loop {
+                    match s.read(&mut scratch) {
+                        Ok(0) | Err(_) => break, // EOF or read error
+                        Ok(n) => {
+                            if buf.len() < CAPTURE_CAP {
+                                let take = (CAPTURE_CAP - buf.len()).min(n);
+                                buf.extend_from_slice(&scratch[..take]);
+                            }
+                            // bytes beyond the cap are read (pipe stays drained)
+                            // but not stored.
+                        }
+                    }
+                }
                 let _ = tx.send(buf); // no-op if we've already stopped waiting
             });
         rx
@@ -408,6 +431,18 @@ mod tests {
             start.elapsed() < Duration::from_secs(20),
             "must give up on the held pipe near DRAIN_GRACE, not wait out the descendant"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_capturing_caps_a_flood_of_output() {
+        // A child that streams far more than the cap must not grow the buffer
+        // without bound — we store at most CAPTURE_CAP and drain the rest.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "head -c 200000 /dev/zero"]);
+        let (ok, out) = run_capturing(cmd, Duration::from_secs(10), Capture::Stdout).unwrap();
+        assert!(ok);
+        assert_eq!(out.len(), CAPTURE_CAP, "stored output must be capped");
     }
 
     #[test]
