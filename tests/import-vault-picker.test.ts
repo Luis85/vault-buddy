@@ -96,6 +96,33 @@ describe("ImportVaultPicker", () => {
     expect(wrapper.find('[data-testid="import-picker-vault"]').exists()).toBe(false);
   });
 
+  it("shows a checking state before detect_pandoc resolves, not the install gate", async () => {
+    // Hold the probe pending: the picker must show "Checking Pandoc…" rather
+    // than the install gate, so a valid Pandoc install isn't flashed as missing
+    // (and a quick click can't land on Settings) during the pre-probe window.
+    let resolveDetect: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") {
+        return new Promise((r) => {
+          resolveDetect = r;
+        });
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.openImportPicker("C:/x/Report.docx");
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="import-picker-checking"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="import-picker-gate-hint"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="import-picker-vault"]').exists()).toBe(false);
+
+    resolveDetect(installed());
+    await flushPromises();
+    expect(wrapper.find('[data-testid="import-picker-checking"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-testid="import-picker-vault"]')).toHaveLength(2);
+  });
+
   it("routes to settings from the install hint", async () => {
     mockIPC((cmd) => {
       if (cmd === "detect_pandoc") return NOT_INSTALLED;
