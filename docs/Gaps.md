@@ -634,9 +634,14 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   `transcribe` gate. Either wire the gate-respecting retry for non-complete
   rows or delete the command; today it is dead IPC surface plus a behavior
   drift from the documented design.
-- `tsconfig.json` lists `"node"` types but `@types/node` is not a
-  devDependency (resolves via a transitive hoist today; a bump that drops
-  it breaks `vue-tsc`). Add it explicitly.
+- Three unused exports flagged by the fallow ratchet baseline
+  (`scripts/quality-baseline.json`, deadCodeIssues=3):
+  `RENAME_PROMPT_MS` (`src/stores/capture.ts`), `Notification`
+  (`src/stores/notifications.ts`), `UpdatePhase` (`src/stores/updates.ts`).
+  Inline or de-export them and re-lock the baseline.
+- ~~`tsconfig.json` lists `"node"` types but `@types/node` is not a
+  devDependency~~ — fixed 2026-07-10: `@types/node` added explicitly with
+  the quality-pipeline adoption.
 
 ### GAP-48 · Accepted debt (tracked, no action now)
 - `whisper-rs` pinned at 0.16 with hand-wired abort/progress trampolines

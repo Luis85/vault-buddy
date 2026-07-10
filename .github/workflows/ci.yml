@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (typecheck, tests, build)
+    name: Frontend (lint, quality gates, typecheck, tests, build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +28,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run test
+      # Quality gates (docs/DEVELOPMENT.md § Quality pipeline). Ordering
+      # matters: check:quality must run while no coverage/ directory exists —
+      # a stray coverage report flips fallow's complexity weighting from
+      # static estimation to coverage-weighted CRAP — so test:coverage
+      # (which creates coverage/) runs last.
+      - run: npm run lint
+      - run: npm run check:loc
+      - run: npm run check:quality
       - run: npm run build
+      - run: npm run test:coverage
 
   rust-core:
     name: Rust core (fmt, clippy, tests)

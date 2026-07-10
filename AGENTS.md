@@ -150,12 +150,26 @@ npm run dev                         # Vite dev server only
 npm run test-build                  # `tauri dev` — full app, Windows only
 npx tauri build                     # real installer build (Windows only)
 
+# Frontend quality gates — CI runs these in this order; check:quality must
+# run with NO coverage/ dir present, so test:coverage goes last (see
+# docs/DEVELOPMENT.md § Quality pipeline for the gate + ratchet policy)
+npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage
+
 cd src-tauri && cargo fmt --check   # rustfmt gate (whole workspace)
 cd src-tauri/core && cargo clippy --all-targets -- -D warnings
 cd src-tauri/core && cargo test
 # capture and transcribe test the same way (capture needs libasound2-dev
 # on Linux); transcribe's whisper tests: cargo test --features whisper
 ```
+
+Gate mechanics in brief: ESLint severity is staged (backlogged rules sit at
+`warn`, promoted to `error` at zero — never blanket-disabled); the LOC
+guard (`scripts/loc-baseline.json`) and fallow quality ratchet
+(`scripts/quality-baseline.json`) are shrink-only baselines — when your
+change improves a metric, re-run the gate with `--update` and commit the
+baseline in the same PR; coverage floors in `vite.config.ts` rise the same
+way. Loosening any baseline is a reviewed decision that needs a
+justification in the PR.
 
 Gotcha: in anything automated, invoke the tauri CLI as `npx tauri <cmd>`,
 never through npm script indirection — a past `tauri` script aliased
@@ -817,7 +831,7 @@ round-trip.
 
 | Job | Runner | Gates |
 | --- | --- | --- |
-| `frontend` | Linux | Vitest suite, `vue-tsc` typecheck, production build |
+| `frontend` | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
 | `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe` — including `--features whisper` (the only place the whisper FFI tests execute) |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate only, never released |
 | `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; skips updater signing when secrets are absent (forks) |

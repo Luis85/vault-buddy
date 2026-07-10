@@ -118,10 +118,55 @@ CI runs on every push to `main` and every pull request
 
 | Job | Runner | What it gates |
 | --- | --- | --- |
-| Frontend | Linux | Vitest tests, `vue-tsc` typecheck, production build |
+| Frontend | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + production build, Vitest with coverage floors |
 | Rust core | Linux | `cargo fmt --check`, `clippy -D warnings`, core unit tests |
 | Linux app | Linux | `tauri build --no-bundle` compile gate (no installer, never released) |
 | Windows app | Windows | Full Tauri compile + MSI/NSIS installers, uploaded as artifacts (14-day retention) |
+
+### Frontend quality gates
+
+The frontend job runs four gates beyond the test suite, mirrored locally by:
+
+```bash
+npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage
+```
+
+Ordering matters: `check:quality` must run while no `coverage/` directory
+exists (a stray coverage report flips fallow's complexity weighting from
+static estimation to coverage-weighted CRAP), so `test:coverage` — which
+creates `coverage/` — always runs last. Delete `coverage/` before re-running
+the ratchet locally.
+
+- **ESLint** (`npm run lint`, config in `eslint.config.mjs`) — flat config:
+  JS + typescript-eslint recommended, `eslint-plugin-vue` flat/recommended
+  for SFCs, import sorting, the vitest plugin for `tests/`, and a src-only
+  safety gate (`no-console` funneling diagnostics through `src/logging.ts`,
+  bans on `innerHTML`/`v-html` — vault-derived strings are an XSS vector).
+  **Severity policy:** a rule with an existing backlog is staged at `warn`
+  (tracked, non-blocking — CI passes no `--max-warnings`); burn the backlog
+  down, then promote the rule to `error` and note the promotion in the
+  config. Never blanket-disable to get green; a genuinely unavoidable case
+  takes a narrow `// eslint-disable-next-line <rule>` with a justification.
+- **LOC guard** (`npm run check:loc`, `scripts/check-loc.mjs`) — no
+  `src/**` `.ts`/`.vue` file may exceed 500 nonblank lines. Existing
+  hotspots are grandfathered in `scripts/loc-baseline.json` and may shrink
+  but never grow (a shrink-only ratchet); new oversized files fail.
+- **Quality ratchet** (`npm run check:quality`, `scripts/check-quality.mjs`)
+  — runs [fallow](https://www.npmjs.com/package/fallow) (`.fallowrc.json`)
+  and compares dead code, circular dependencies, duplication, and
+  complexity against `scripts/quality-baseline.json`. Counters may shrink
+  but not grow; average maintainability may rise but not drop. `npm run
+  quality` prints the full advisory report; `npm run quality:audit` reviews
+  changed files before a PR.
+- **Coverage floors** (`npm run test:coverage`) — Vitest + Istanbul with
+  rise-only thresholds in `vite.config.ts` (statements/branches/functions/
+  lines, floored from the adoption run).
+
+**Locking improvements in:** when a gated metric improves, re-baseline in
+the same PR (`npm run check:loc -- --update`, `npm run check:quality --
+--update`, raise the coverage floors) and commit the diff — an unlocked
+gain can silently regress. Bumping a baseline in the *loosening* direction
+is a reviewed, justified decision, never a side effect.
 
 The Windows and Linux app jobs both run after the two fast jobs pass (in
 parallel with each other). Desktop behavior that

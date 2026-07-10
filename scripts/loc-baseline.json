@@ -1,0 +1,10 @@
+{
+  "maxLoc": 500,
+  "description": "Grandfathered source files above maxLoc nonblank LOC. Entries may shrink but not grow; new files above maxLoc are rejected. Regenerate with `npm run check:loc -- --update`.",
+  "allowlist": {
+    "src/stores/capture.ts": {
+      "loc": 596,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
+    }
+  }
+}
