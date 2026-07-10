@@ -188,6 +188,29 @@ fn dedupe_tags(items: impl IntoIterator<Item = String>) -> Vec<String> {
     out
 }
 
+/// Cut an inline YAML comment off a tags value or block item. A `#` preceded
+/// by whitespace starts a comment (YAML's rule). A `#` at the very start is
+/// kept as a lenient `#`-prefixed tag UNLESS followed by whitespace/end —
+/// `#work` stays a tag, `# note` is a pure comment. Codex review, PR #46: a
+/// hand-authored `tags: work # private note` was tokenizing the comment text
+/// into phantom tags that then rendered, filtered, and persisted on rewrite.
+fn strip_inline_comment(rest: &str) -> &str {
+    let b = rest.as_bytes();
+    for i in 0..b.len() {
+        if b[i] != b'#' {
+            continue;
+        }
+        if i == 0 {
+            if b.len() == 1 || b[1].is_ascii_whitespace() {
+                return "";
+            }
+        } else if b[i - 1].is_ascii_whitespace() {
+            return rest[..i].trim_end();
+        }
+    }
+    rest
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.
@@ -206,7 +229,10 @@ fn parse_tags_key(content: &str, key: &str) -> Option<Vec<String>> {
         let Some(rest) = line.strip_prefix(&prefix) else {
             continue;
         };
-        let rest = rest.trim();
+        // Strip a trailing YAML comment BEFORE the empty-value check, so
+        // `tags: # comment` correctly falls into the block-list branch below
+        // rather than being read as a (nonexistent) inline value.
+        let rest = strip_inline_comment(rest.trim()).trim();
         let raw_items: Vec<&str> = if rest.is_empty() {
             // Block style: consume the following `- item` lines.
             let mut items = Vec::new();
@@ -217,7 +243,7 @@ fn parse_tags_key(content: &str, key: &str) -> Option<Vec<String>> {
                 let Some(item) = next.trim_start().strip_prefix("- ") else {
                     break;
                 };
-                items.push(item);
+                items.push(strip_inline_comment(item.trim()).trim());
                 lines.next();
             }
             items
@@ -1274,6 +1300,33 @@ mod tests {
         // No space after the colon.
         assert_eq!(
             note_tags("---\ntype: Task\ntags:[work]\n---\n"),
+            vec!["work"]
+        );
+    }
+
+    #[test]
+    fn note_tags_strips_inline_yaml_comments() {
+        // Codex review (PR #46): comment words after ` #` must not become
+        // phantom tags that render, filter, and persist on the next rewrite.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: work # private note\n---\n"),
+            vec!["work"]
+        );
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: [work, home] # q3\n---\n"),
+            vec!["work", "home"]
+        );
+        // A pure-comment value is a present-but-empty tags key (still shadows
+        // the tag: alias, same as `tags:` with nothing at all).
+        assert!(note_tags("---\ntype: Task\ntags: # none yet\n---\n").is_empty());
+        // Block items with trailing comments.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags:\n- work # main\n---\n"),
+            vec!["work"]
+        );
+        // A bare #-prefixed value stays a lenient tag, not a comment.
+        assert_eq!(
+            note_tags("---\ntype: Task\ntags: #work\n---\n"),
             vec!["work"]
         );
     }
