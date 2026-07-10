@@ -4,6 +4,7 @@
 //! the arbiter, and a note failure after a successful mp3 move degrades
 //! to a warning (the note is repairable by hand; the audio is not).
 
+use std::path::Path;
 use std::path::PathBuf;
 use vault_buddy_core::capture_note::retarget_embed;
 use vault_buddy_core::capture_note::write_note_collision_safe;
@@ -13,6 +14,26 @@ pub struct RenameOutcome {
     pub mp3: PathBuf,
     pub note: Option<PathBuf>,
     pub warning: Option<String>,
+}
+
+/// Move the transcript sidecar onto the reserved base, degrading any
+/// failure to a warning string (GAP-04: audio-first — a transcript-side
+/// failure must never fail the rename, never clobber, and must leave the
+/// old sidecar + old embed intact). Returns (moved, warning).
+fn move_transcript_sidecar(from: &Path, to: &Path) -> (bool, Option<String>) {
+    if !from.is_file() {
+        return (false, None);
+    }
+    match vault_buddy_core::capture_paths::rename_noreplace(from, to) {
+        Ok(()) => (true, None),
+        Err(e) => (
+            false,
+            Some(format!(
+                "the transcript could not be moved ({}): {e}",
+                from.display()
+            )),
+        ),
+    }
 }
 
 pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
@@ -57,17 +78,8 @@ pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
     // transcript_path(new mp3). Audio-first: never fails the rename.
     let transcript_from = vault_buddy_core::transcript::transcript_path(&plan.mp3_from);
     let transcript_to = vault_buddy_core::transcript::transcript_path(&mp3_to);
-    let (transcript_moved, transcript_error) = if transcript_from.is_file() {
-        match vault_buddy_core::capture_paths::rename_noreplace(&transcript_from, &transcript_to) {
-            Ok(()) => (true, None),
-            Err(e) => (
-                false,
-                Some(format!("the transcript could not be moved: {e}")),
-            ),
-        }
-    } else {
-        (false, None)
-    };
+    let (transcript_moved, transcript_error) =
+        move_transcript_sidecar(&transcript_from, &transcript_to);
 
     let (note, note_error) = match note_read {
         Ok(Some(text)) => {
@@ -232,10 +244,17 @@ mod tests {
     }
 
     #[test]
-    fn transcript_collision_degrades_to_warning_and_keeps_old_embed() {
-        // Never-clobber: a file that appeared at the new transcript name
-        // after reservation wins; the transcript stays at its OLD name and
-        // the note keeps pointing at it (a retargeted embed would dangle).
+    fn reservation_advances_past_squatted_transcript_slots() {
+        // NOT the degradation branch: reserve_final checks .transcript.md
+        // availability during pair reservation, so squatting a transcript
+        // slot is enough to push the WHOLE PAIR to the next suffix before
+        // execute() ever attempts a transcript move — the move below lands
+        // on a slot reservation already guaranteed free, and succeeds. This
+        // pins that advancement behavior; the true degradation branch (an
+        // occupied destination reached despite reservation, e.g. a
+        // mid-rename race) is pinned directly by
+        // transcript_move_collision_degrades_and_never_clobbers below, since
+        // it is unreachable through execute() in a single-threaded test.
         let dir = tempfile::tempdir().unwrap();
         let (mp3, _note) = seed(dir.path());
         let transcript = dir.path().join("2026-07-04 1405 Meeting.transcript.md");
@@ -252,7 +271,7 @@ mod tests {
         // NOTE: the squatter also blocks the plain base at reservation time
         // (reserve_final checks .transcript.md), so the PAIR advances to
         // " (2)" — and "(2).transcript.md" is free, so the move succeeds.
-        // Force the collision instead by squatting the suffixed name too:
+        // Force a second advance by squatting the suffixed name too:
         std::fs::write(
             dir.path().join("2026-07-04 1405 Standup (2).transcript.md"),
             "squatter 2",
@@ -261,11 +280,13 @@ mod tests {
         let plan = rename_plan(&mp3, "Standup").unwrap();
         let outcome = execute(&plan).unwrap();
         // The pair reserves a base whose transcript slot is free, so with
-        // both squats the mp3 lands at " (3)" and the transcript moves.
+        // both squats the mp3 lands at " (3)" and the transcript moves —
+        // the move succeeds at the advanced base, so no warning is raised.
         assert_eq!(
             outcome.mp3,
             dir.path().join("2026-07-04 1405 Standup (3).mp3")
         );
+        assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
         assert!(dir
             .path()
             .join("2026-07-04 1405 Standup (3).transcript.md")
@@ -276,6 +297,57 @@ mod tests {
             "squatter",
             "never clobbers"
         );
+    }
+
+    #[test]
+    fn transcript_move_collision_degrades_and_never_clobbers() {
+        // GAP-04 degradation contract: reserve_final pre-screens the transcript
+        // slot, so execute() can only hit this branch via a mid-rename race —
+        // unreachable from a test through execute(). Pin the branch directly:
+        // an occupied destination degrades to a warning naming the source, the
+        // squatter survives byte-for-byte, and the source stays in place.
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("2026-07-04 1405 Meeting.transcript.md");
+        let to = dir.path().join("2026-07-04 1405 Standup.transcript.md");
+        std::fs::write(&from, "ours").unwrap();
+        std::fs::write(&to, "squatter").unwrap();
+        let (moved, warning) = move_transcript_sidecar(&from, &to);
+        assert!(!moved);
+        let warning = warning.expect("collision must surface a warning");
+        assert!(warning.contains("Meeting.transcript.md"), "{warning}");
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "squatter");
+        assert_eq!(std::fs::read_to_string(&from).unwrap(), "ours");
+    }
+
+    #[test]
+    fn transcript_move_missing_source_is_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (moved, warning) = move_transcript_sidecar(
+            &dir.path().join("2026-07-04 1405 A.transcript.md"),
+            &dir.path().join("2026-07-04 1405 B.transcript.md"),
+        );
+        assert!(!moved);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn transcript_without_note_moves_with_the_mp3() {
+        // Reverse of mp3_without_note: the transcript block must not depend on
+        // note presence.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("2026-07-04 1405 Voice Note.mp3");
+        std::fs::write(&mp3, "mp3 bytes").unwrap();
+        let transcript = dir.path().join("2026-07-04 1405 Voice Note.transcript.md");
+        std::fs::write(&transcript, "words").unwrap();
+        let plan = rename_plan(&mp3, "Idea").unwrap();
+        let outcome = execute(&plan).unwrap();
+        assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
+        assert!(dir
+            .path()
+            .join("2026-07-04 1405 Idea.transcript.md")
+            .is_file());
+        assert!(!transcript.exists());
+        assert!(outcome.note.is_none());
     }
 
     #[test]
