@@ -117,6 +117,14 @@ async fn guard(
 /// `start`); this grace is for the accepted connections still being served.
 const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How long teardown waits for in-flight blocking-pool work (tool handlers
+/// offload every synchronous section there — `VaultBuddyMcp::offload`) after
+/// the drain. Together these bound `stop()`: total ≤ DRAIN_GRACE +
+/// SHUTDOWN_TIMEOUT + epsilon (the roundtrip suite asserts < 8s, leaving 3s
+/// slack). A blocking task still running when this expires is LEAKED, not
+/// awaited — see the `shutdown_timeout` call site for the consequence.
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A live server: the bound port plus the handles to stop it. Dropping
 /// without `stop()` leaves the thread running until process exit — fine for
 /// app shutdown (the OS reclaims the listener), wrong for a settings change.
@@ -127,11 +135,13 @@ pub struct RunningServer {
 }
 
 impl RunningServer {
-    /// Cancel + join. The join is bounded by DRAIN_GRACE by construction:
-    /// the serve select falls through after the grace, `block_on` returns,
-    /// and the thread drops its per-`start` runtime — whose teardown shuts
-    /// down every connection task still alive (see the shutdown comment in
-    /// `start`). So this returns promptly, and only once the listener AND
+    /// Cancel + join. The join is bounded by DRAIN_GRACE + SHUTDOWN_TIMEOUT
+    /// by construction: the serve select falls through after the grace,
+    /// `block_on` returns, and the thread tears its per-`start` runtime down
+    /// with `shutdown_timeout` — killing remaining connection tasks and
+    /// waiting at most SHUTDOWN_TIMEOUT for offloaded blocking work (see the
+    /// shutdown comment in `start`). So this returns promptly even while a
+    /// tool call is stuck in slow vault I/O, and only once the listener AND
     /// every accepted connection are actually gone.
     pub fn stop(self) {
         self.cancel.cancel();
@@ -156,13 +166,18 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
         .name("mcp-server".into())
         .spawn(move || {
             // INVARIANT: one runtime per start(), owned by this thread and
-            // dropped when this closure ends. The bounded-stop guarantee
-            // DEPENDS on that drop: runtime teardown is what kills any
-            // connection task the graceful drain couldn't finish (see the
-            // shutdown comment at the select below). Reusing a shared or
-            // persistent runtime here would silently let a pinned connection
-            // outlive stop() and keep honoring the old token.
+            // torn down (shutdown_timeout below) when this closure ends. The
+            // bounded-stop guarantee DEPENDS on that teardown: it is what
+            // kills any connection task the graceful drain couldn't finish
+            // (see the shutdown comment at the select below). Reusing a
+            // shared or persistent runtime here would silently let a pinned
+            // connection outlive stop() and keep honoring the old token.
+            // `thread_name` names the runtime's BLOCKING-pool threads (the
+            // only threads a current-thread runtime spawns; tool handlers
+            // offload their sync work there) — the repo's every-thread-named
+            // diagnostics invariant.
             let rt = match tokio::runtime::Builder::new_current_thread()
+                .thread_name("mcp-blocking")
                 .enable_all()
                 .build()
             {
@@ -227,13 +242,20 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
                 // run on DETACHED tokio::spawn tasks, so dropping the `serve`
                 // future kills nothing by itself — it only abandons axum's
                 // wait on them. What actually kills a connection that outlives
-                // the grace is falling out of this block_on: the per-`start`
-                // current-thread runtime is dropped at the end of the thread
-                // closure, and tokio's Runtime::drop shuts down every
-                // remaining task (close_and_shutdown_all), closing their
-                // sockets. stop() joins the thread, so it returns only after
-                // that teardown — a client pinning a stream open cannot keep
-                // the old endpoint (and old token) alive past it.
+                // the grace is falling out of this block_on: the runtime
+                // teardown below (`shutdown_timeout`) shuts down every
+                // remaining task, closing their sockets. stop() joins the
+                // thread, so it returns only after that teardown — a client
+                // pinning a stream open cannot keep the old endpoint (and old
+                // token) alive past it.
+                // For this select to be able to FIRE, the reactor must keep
+                // polling — which is why every tool handler offloads its
+                // synchronous work (registry reads, walks, fsync writes, the
+                // launch call) to the blocking pool via
+                // `VaultBuddyMcp::offload`: one blocking call run inline on
+                // this current-thread runtime would starve the select, and
+                // stop() would silently be bounded by (slowest vault I/O +
+                // grace) instead of by construction.
                 tokio::select! {
                     result = serve => {
                         if let Err(e) = result {
@@ -249,6 +271,20 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
                 }
                 log::info!("mcp: server stopped");
             });
+            // Bounded teardown — MANDATORY shutdown_timeout, never an
+            // implicit drop: `Runtime::drop` waits INDEFINITELY for in-flight
+            // spawn_blocking work (tokio BlockingPool::drop → shutdown(None)),
+            // which would silently reintroduce the unbounded join through
+            // teardown the moment an offloaded tool call wedges on slow vault
+            // I/O. shutdown_timeout kills the remaining async tasks
+            // (connections) and waits at most SHUTDOWN_TIMEOUT for blocking
+            // tasks; one still running after that is LEAKED — its
+            // "mcp-blocking" thread finishes on its own, and since the closure
+            // holds Deps clones, a very late completion can still fire
+            // launch/on_write after stop() reported success. Accepted,
+            // deliberately: the write/launch genuinely happened, and an honest
+            // late announce beats an unbounded stop().
+            rt.shutdown_timeout(SHUTDOWN_TIMEOUT);
         })
         .map_err(|e| format!("could not spawn mcp-server thread: {e}"))?;
 
@@ -264,7 +300,7 @@ pub fn start(deps: Deps, port: u16, token: String) -> Result<RunningServer, Stri
             // without this, it could finish binding LATER and serve as an
             // orphan no RunningServer handle can ever stop. Cancel now — the
             // serve stage sees an already-cancelled token and shuts straight
-            // down (bounded by DRAIN_GRACE) — and reap the join on a named
+            // down (bounded by DRAIN_GRACE + SHUTDOWN_TIMEOUT) — and reap the join on a named
             // helper so this error path returns promptly instead of blocking
             // on a wedged thread.
             cancel.cancel();

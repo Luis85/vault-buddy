@@ -171,6 +171,33 @@ impl VaultBuddyMcp {
     fn today() -> chrono::NaiveDate {
         chrono::Local::now().date_naive()
     }
+
+    /// Run a handler's ENTIRE synchronous section on the blocking pool.
+    /// This service lives on a single current-thread runtime (http::start):
+    /// any registry read, process scan, directory walk, fsync'd write, or
+    /// `launch` call run inline would block the only thread — nothing else
+    /// polls while it runs, so concurrent MCP requests serialize and, worse,
+    /// the drain select in `http::start` can't see a cancel: `stop()` would
+    /// be bounded by (slowest vault I/O + grace) instead of by construction.
+    /// Every tool handler must funnel ALL its blocking work — including
+    /// `find_vault` and the launch closure, not just the walks — through
+    /// here; one inline call reopens the starvation window.
+    async fn offload<T: Send + 'static>(
+        tool: &'static str,
+        work: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        match tokio::task::spawn_blocking(work).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                // A join failure (panic/cancellation in the pool) is OUR
+                // bug, never client input: log the real error, hand the
+                // client a static message (audited as the generic "error"
+                // class by the caller's normal audit flow).
+                log::error!("mcp: {tool} blocking task failed to join: {e}");
+                Err("Internal error running the tool; check the Vault Buddy logs.".to_string())
+            }
+        }
+    }
 }
 
 #[tool_router(router = read_tools_router, vis = "pub")]
@@ -181,9 +208,22 @@ impl VaultBuddyMcp {
     )]
     pub async fn list_vaults(&self) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let vaults = services::list_vaults(&self.deps.paths);
-        Self::audit("list_vaults", "-", &Ok(()), started);
-        Self::ok_json(&vaults)
+        // Offloaded: list_vaults runs the sysinfo full process scan.
+        let deps = self.deps.clone();
+        let outcome = Self::offload("list_vaults", move || {
+            Ok(services::list_vaults(&deps.paths))
+        })
+        .await;
+        Self::audit(
+            "list_vaults",
+            "-",
+            &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
+        );
+        match outcome {
+            Ok(vaults) => Self::ok_json(&vaults),
+            Err(e) => Self::tool_error(e),
+        }
     }
 
     #[tool(
@@ -195,9 +235,23 @@ impl VaultBuddyMcp {
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let tasks = services::list_tasks(&self.deps.paths, &p.vault_id);
-        Self::audit("list_tasks", &p.vault_id, &Ok(()), started);
-        Self::ok_json(&tasks)
+        // Offloaded: a recursive walk of the vault's tasks folder.
+        let deps = self.deps.clone();
+        let vault_id = p.vault_id.clone();
+        let outcome = Self::offload("list_tasks", move || {
+            Ok(services::list_tasks(&deps.paths, &vault_id))
+        })
+        .await;
+        Self::audit(
+            "list_tasks",
+            &p.vault_id,
+            &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
+        );
+        match outcome {
+            Ok(tasks) => Self::ok_json(&tasks),
+            Err(e) => Self::tool_error(e),
+        }
     }
 
     #[tool(
@@ -209,9 +263,24 @@ impl VaultBuddyMcp {
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let recordings = services::list_recordings(&self.deps.paths, &p.vault_id);
-        Self::audit("list_recordings", &p.vault_id, &Ok(()), started);
-        Self::ok_json(&recordings)
+        // Offloaded: walks the dated capture folders and reads every
+        // companion note's frontmatter.
+        let deps = self.deps.clone();
+        let vault_id = p.vault_id.clone();
+        let outcome = Self::offload("list_recordings", move || {
+            Ok(services::list_recordings(&deps.paths, &vault_id))
+        })
+        .await;
+        Self::audit(
+            "list_recordings",
+            &p.vault_id,
+            &outcome.as_ref().map(|_| ()).map_err(Clone::clone),
+            started,
+        );
+        match outcome {
+            Ok(recordings) => Self::ok_json(&recordings),
+            Err(e) => Self::tool_error(e),
+        }
     }
 
     #[tool(description = "Open a vault in Obsidian (focuses/launches the Obsidian app).")]
@@ -220,7 +289,14 @@ impl VaultBuddyMcp {
         Parameters(p): Parameters<VaultIdParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let outcome = services::open_vault(&self.deps.paths, &p.vault_id, &*self.deps.launch);
+        // Offloaded: registry read (find_vault inside) + the launch call,
+        // which shells out to the OS URI handler.
+        let deps = self.deps.clone();
+        let vault_id = p.vault_id.clone();
+        let outcome = Self::offload("open_vault", move || {
+            services::open_vault(&deps.paths, &vault_id, &*deps.launch)
+        })
+        .await;
         Self::audit("open_vault", &p.vault_id, &outcome, started);
         match outcome {
             Ok(()) => Self::ok_json(&serde_json::json!({ "opened": true })),
@@ -237,27 +313,27 @@ impl VaultBuddyMcp {
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
         let allow_create = self.writes_allowed();
-        let date = Self::today();
-        // Looked up only for the vault NAME (the on_write payload); the
-        // service does its own lookup for the launch.
-        let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
-            Ok(v) => v,
-            Err(e) => {
-                Self::audit("open_daily_note", &p.vault_id, &Err(e.clone()), started);
-                return Self::tool_error(e);
-            }
-        };
-        // The service reports whether it CREATED the note (took the
-        // obsidian://new branch) — a separate pre-call existence peek could
-        // disagree with the service's own exists check under a race and
-        // mis-fire on_write / the `created` flag.
-        let outcome = services::open_daily_note(
-            &self.deps.paths,
-            &p.vault_id,
-            date,
-            allow_create,
-            &*self.deps.launch,
-        );
+        // Offloaded: registry read for the vault NAME (the on_write payload),
+        // the note-existence probe, and the launch call. The service reports
+        // whether it CREATED the note (took the obsidian://new branch) — a
+        // separate pre-call existence peek could disagree with the service's
+        // own exists check under a race and mis-fire on_write / the
+        // `created` flag.
+        let deps = self.deps.clone();
+        let vault_id = p.vault_id.clone();
+        let outcome = Self::offload("open_daily_note", move || {
+            let vault = services::find_vault(&deps.paths, &vault_id)?;
+            let date = Self::today();
+            let created = services::open_daily_note(
+                &deps.paths,
+                &vault_id,
+                date,
+                allow_create,
+                &*deps.launch,
+            )?;
+            Ok((vault.name, date.format("%Y-%m-%d").to_string(), created))
+        })
+        .await;
         Self::audit(
             "open_daily_note",
             &p.vault_id,
@@ -265,12 +341,12 @@ impl VaultBuddyMcp {
             started,
         );
         match outcome {
-            Ok(created) => {
+            Ok((vault_name, title, created)) => {
                 if created {
                     (self.deps.on_write)(WriteEvent {
                         kind: WriteKind::CreateDailyNote,
-                        title: date.format("%Y-%m-%d").to_string(),
-                        vault_name: vault.name,
+                        title,
+                        vault_name,
                     });
                 }
                 Self::ok_json(&serde_json::json!({ "opened": true, "created": created }))
@@ -303,15 +379,18 @@ impl VaultBuddyMcp {
             );
             return Self::tool_error(WRITES_DISABLED);
         }
-        let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
-            Ok(v) => v,
-            Err(e) => {
-                Self::audit("add_task", &p.vault_id, &Err(e.clone()), started);
-                return Self::tool_error(e);
-            }
-        };
-        let today = Self::today().format("%Y-%m-%d").to_string();
-        let outcome = services::add_task(&self.deps.paths, &p.vault_id, &p.title, &today);
+        // Offloaded: registry read (find_vault, for the vault NAME in the
+        // on_write payload) + the fsync'd task-document write.
+        let deps = self.deps.clone();
+        let vault_id = p.vault_id.clone();
+        let title = p.title.clone();
+        let outcome = Self::offload("add_task", move || {
+            let vault = services::find_vault(&deps.paths, &vault_id)?;
+            let today = Self::today().format("%Y-%m-%d").to_string();
+            let task = services::add_task(&deps.paths, &vault_id, &title, &today)?;
+            Ok((vault.name, task))
+        })
+        .await;
         Self::audit(
             "add_task",
             &p.vault_id,
@@ -319,11 +398,11 @@ impl VaultBuddyMcp {
             started,
         );
         match outcome {
-            Ok(task) => {
+            Ok((vault_name, task)) => {
                 (self.deps.on_write)(WriteEvent {
                     kind: WriteKind::AddTask,
                     title: task.title.clone(),
-                    vault_name: vault.name,
+                    vault_name,
                 });
                 Self::ok_json(&task)
             }
@@ -350,14 +429,18 @@ impl VaultBuddyMcp {
             );
             return Self::tool_error(WRITES_DISABLED);
         }
-        let vault = match services::find_vault(&self.deps.paths, &p.vault_id) {
-            Ok(v) => v,
-            Err(e) => {
-                Self::audit("set_task_status", &p.vault_id, &Err(e.clone()), started);
-                return Self::tool_error(e);
-            }
-        };
-        let outcome = services::set_task_status(&self.deps.paths, &p.vault_id, &p.path, &p.status);
+        // Offloaded: registry read (find_vault, for the vault NAME in the
+        // on_write payload) + the surgical fsync'd status rewrite.
+        let deps = self.deps.clone();
+        let vault_id = p.vault_id.clone();
+        let path = p.path.clone();
+        let status = p.status.clone();
+        let outcome = Self::offload("set_task_status", move || {
+            let vault = services::find_vault(&deps.paths, &vault_id)?;
+            let title = services::set_task_status(&deps.paths, &vault_id, &path, &status)?;
+            Ok((vault.name, title))
+        })
+        .await;
         Self::audit(
             "set_task_status",
             &p.vault_id,
@@ -365,11 +448,11 @@ impl VaultBuddyMcp {
             started,
         );
         match outcome {
-            Ok(title) => {
+            Ok((vault_name, title)) => {
                 (self.deps.on_write)(WriteEvent {
                     kind: WriteKind::SetTaskStatus,
                     title: title.clone(),
-                    vault_name: vault.name,
+                    vault_name,
                 });
                 Self::ok_json(
                     &serde_json::json!({ "path": p.path, "status": p.status, "title": title }),

@@ -250,6 +250,17 @@ describe("useBuddyAnnouncements", () => {
       spoken.some((t) => t.includes("Buy milk") && t.includes("Notes")),
     ).toBe(true);
 
+    // Client-provided titles are truncated (an AI can send an unbounded
+    // one; the 260px bubble must not have to render it).
+    spoken.length = 0;
+    listeners["mcp:write"]?.({
+      payload: { kind: "addTask", title: "x".repeat(200), vaultName: "Notes" },
+    });
+    await wrapper.vm.$nextTick();
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0]).toContain(`${"x".repeat(60)}…`);
+    expect(spoken[0]).not.toContain("x".repeat(61));
+
     // announce() itself applies the Buddy-messages gate — the mcp:write
     // listener still fires, but nothing new should be spoken once it's off.
     spoken.length = 0;

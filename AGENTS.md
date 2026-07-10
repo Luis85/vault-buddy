@@ -471,13 +471,22 @@ Invariants — each exists because a review found the failure it prevents:
   lookups (audit-before-deny). The full message goes only to the client.
 - **Shutdown proves the socket is gone.** `RunningServer::stop()` = cancel +
   bounded join: cancelling drops the listener (axum), ends SSE bodies
-  (rmcp's `take_until`), and the per-`start()` runtime teardown is the
-  backstop that kills pinned connections — **one runtime per `start()` is
-  the invariant** (a shared runtime would let a stale connection keep
-  honoring an old token; a session-bound pinned-stream integration test
-  pins this). A bind-report timeout cancels and reaps on a named thread so
-  a late-binding server can't serve as an orphan. Threads: `"mcp-server"`,
-  `"mcp-server-reaper"`.
+  (rmcp's `take_until`), and the per-`start()` runtime teardown kills
+  stragglers — **one runtime per `start()` is the invariant** (a shared
+  runtime would let a stale connection keep honoring an old token; a
+  session-bound pinned-stream integration test pins this). Two supports
+  make the bound real: tool handlers offload ALL synchronous work
+  (registry reads, the process scan, walks, fsync'd writes, the `launch`
+  call) to the blocking pool via `spawn_blocking` — run inline on the
+  single-threaded runtime it would starve the drain select and stop()
+  would wait on vault I/O — and teardown is `shutdown_timeout`-bounded,
+  never an implicit `Runtime::drop` (which waits indefinitely for
+  in-flight blocking work). A blocking task that outlives the timeout is
+  LEAKED — it may fire launch/on_write late; accepted and commented. A
+  slow-launch integration test pins stop() ≤ DRAIN_GRACE +
+  SHUTDOWN_TIMEOUT. A bind-report timeout cancels and reaps on a named
+  thread so a late-binding server can't serve as an orphan. Threads:
+  `"mcp-server"`, `"mcp-server-reaper"`, blocking pool `"mcp-blocking"`.
 - **Startup never fails on MCP.** `start_if_enabled` logs + surfaces
   `error` status on bind failure; an enabled config with no token
   self-heals by generating one (32 bytes, base64url, in `config.json`).

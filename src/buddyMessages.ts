@@ -64,7 +64,12 @@ export function mcpWriteMessage(payload: {
   title: string;
   vaultName: string;
 }): string {
-  const { kind, title, vaultName } = payload;
+  const { kind, vaultName } = payload;
+  // The title is CLIENT-provided (an AI can send an unbounded one) —
+  // truncate like failureMessage does, so it can't blow out the bubble.
+  // vaultName is the user's own folder name and stays uncapped like the
+  // rest of the file's copy.
+  const title = truncate(payload.title, 60);
   if (kind === "addTask") return `Added task "${title}" to ${vaultName}`;
   if (kind === "setTaskStatus") return `Updated task "${title}" in ${vaultName}`;
   if (kind === "createDailyNote") return `Created today's note in ${vaultName}`;

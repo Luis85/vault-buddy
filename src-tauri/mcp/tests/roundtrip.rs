@@ -3,7 +3,7 @@
 //! over streamable HTTP against a temp-dir vault, and the task file actually
 //! lands on disk.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
@@ -317,6 +317,87 @@ async fn stop_terminates_a_session_bound_sse_stream_within_the_drain_bound() {
         terminated.is_ok(),
         "pinned session stream still alive after stop() — a stale connection would keep honoring the old token"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_does_not_wait_for_in_flight_blocking_tool_work() {
+    // Final-review catch (executor starvation): tool handlers used to run
+    // their synchronous work — registry reads, walks, fsync writes, the
+    // launch closure — INLINE on the runtime's only thread. While any of it
+    // ran, nothing polled: the drain select couldn't see a cancel, and
+    // stop() was bounded by (slowest vault I/O + grace) instead of by
+    // construction. Handlers now offload that work to the blocking pool and
+    // teardown is shutdown_timeout-bounded, so stop() must return within
+    // DRAIN_GRACE + SHUTDOWN_TIMEOUT + slack even while a tool call is stuck
+    // inside a launch that outlives them both — the wedged task is LEAKED
+    // (documented decision in http.rs), never awaited.
+    let dir = tempfile::tempdir().unwrap();
+    let mut deps = fixture_deps(dir.path(), false);
+    let launch_entered = Arc::new(AtomicBool::new(false));
+    let entered = launch_entered.clone();
+    // Sleeps longer than DRAIN_GRACE (3s) + SHUTDOWN_TIMEOUT (2s) combined —
+    // and longer than the stop() assert bound below, so a stop() that waits
+    // for tool-work completion cannot sneak under it.
+    deps.launch = Arc::new(move |_uri: &str| {
+        entered.store(true, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_secs(12));
+        Ok(())
+    });
+    let server = start(deps, 0, TOKEN.to_string()).unwrap();
+    let port = server.port;
+    let url = format!("http://127.0.0.1:{port}/mcp");
+
+    let transport = StreamableHttpClientTransport::with_client(
+        authed_http_client(),
+        rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(url),
+    );
+    let client_info = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("starvation-test", "0.0.0"),
+    );
+    let client = client_info.serve(transport).await.expect("initialize");
+    // Fire open_vault but do NOT await its completion — the call sits inside
+    // the sleeping launch closure server-side for the rest of the test.
+    let call = tokio::spawn(async move {
+        let _ = client
+            .call_tool(
+                CallToolRequestParams::new("open_vault").with_arguments(
+                    serde_json::json!({ "vaultId": "deadbeef01234567" })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                ),
+            )
+            .await;
+        client // keep the session alive for the duration of the call
+    });
+    // Wait until the launch closure has actually STARTED — the in-flight
+    // state this test is about — bounded so a broken path can't hang the
+    // suite.
+    let entered_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !launch_entered.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < entered_deadline,
+            "open_vault never reached the launch closure"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let started = std::time::Instant::now();
+    tokio::task::spawn_blocking(move || server.stop())
+        .await
+        .unwrap();
+    // Derived bound: DRAIN_GRACE (3s) + SHUTDOWN_TIMEOUT (2s) + slack = 8s.
+    // The launch sleeps 12s, so passing PROVES stop() is independent of tool
+    // work completing.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(8),
+        "stop() waited on in-flight blocking tool work ({} ms)",
+        started.elapsed().as_millis()
+    );
+    let rebind = tokio::net::TcpListener::bind(("127.0.0.1", port)).await;
+    assert!(rebind.is_ok(), "old listener still owns the port");
+    call.abort();
 }
 
 #[test]

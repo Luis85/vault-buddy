@@ -77,8 +77,11 @@ features that write into a vault** (plus AI clients over MCP, but only
 after you flip the separate vault-writes switch): recordings save audio, an
 optional companion note, and (if enabled) a transcript sidecar into a dated
 folder you choose; tasks are single Markdown documents in a folder you
-pick. Nothing ever overwrites or edits files you already have. Everything
-stays on your machine — no account, nothing uploaded.
+pick. Checking a task off (in the panel or by an allowed AI client) edits
+only that task document's `status:` line; beyond the task files and
+transcript sidecars Vault Buddy itself manages, your existing notes are
+never edited or overwritten — new files never clobber an existing name.
+Everything stays on your machine — no account, nothing uploaded.
 
 ## Contributing
 

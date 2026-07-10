@@ -61,7 +61,9 @@ The **shell crate owns only lifecycle and settings**: a managed
 `McpServerState` (current status + running handle), start on setup when
 enabled, start/stop/restart from the settings commands, and the
 announce-on-write callback. The server runs on **one named thread
-(`"mcp-server"`)** hosting a small tokio runtime; axum shuts down via a
+(`"mcp-server"`)** hosting a small tokio runtime (its blocking pool —
+where tool handlers offload their synchronous work — is named
+`"mcp-blocking"`); axum shuts down via a
 cancellation token when the user disables the feature or changes any
 contract-bearing setting (port/token/allow-writes — restart with a
 bounded drain, below).
@@ -283,9 +285,22 @@ Nothing in this feature may hurt the core app:
   in-flight connections run on detached tasks and are killed when the
   per-`start()` tokio runtime is torn down as the server thread exits —
   the ~3 s `DRAIN_GRACE` select bounds how long the thread waits before
-  that teardown. The join is therefore bounded, `stop()` returns only
-  after the thread — and thus the socket and every pinned connection —
-  is gone, and the async settings command awaits it off the main thread.
+  that teardown. Two supports make the bound real (final whole-branch
+  review catch): tool handlers offload every synchronous section —
+  registry reads, the process scan, walks, fsync'd writes, the `launch`
+  call — to the blocking pool (threads named `mcp-blocking`), because one
+  blocking call run inline on the single-threaded runtime would starve
+  the drain select and `stop()` would wait on vault I/O; and the teardown
+  is `shutdown_timeout`-bounded (~2 s), never an implicit runtime drop,
+  which waits indefinitely for in-flight blocking work. A blocking task
+  still running when the timeout expires is deliberately LEAKED — its
+  thread finishes on its own and may fire launch/announce after `stop()`
+  reported success (the write genuinely happened) — so `stop()` ≤
+  DRAIN_GRACE + SHUTDOWN_TIMEOUT by construction; a slow-launch
+  integration test pins that bound. The join is therefore bounded,
+  `stop()` returns only after the thread — and thus the socket and every
+  pinned connection — is gone, and the async settings command awaits it
+  off the main thread.
   **Invariant: one runtime per `start()`** — reusing a shared runtime
   across start/stop cycles would let pinned connections outlive `stop()`
   and keep honoring the old token; a session-bound pinned-stream
