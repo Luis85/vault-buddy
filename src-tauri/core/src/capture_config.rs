@@ -327,6 +327,20 @@ pub fn load_config_from(path: &Path) -> AppConfig {
     }
 }
 
+/// Read the config for a read-modify-write UPDATE. A MISSING file is fine (first
+/// run) → default; any OTHER read error (the file EXISTS but can't be read — a
+/// permission / AV / indexing hiccup) is propagated so the caller ABORTS the
+/// save instead of writing a default that silently drops every other vault/MCP
+/// section (Codex review — the save side of GAP-02). Readable-but-corrupt JSON
+/// still degrades per-field via `parse_config`, the same as every read path.
+fn load_config_for_update(path: &Path) -> std::io::Result<AppConfig> {
+    match std::fs::read_to_string(path) {
+        Ok(json) => Ok(parse_config(&json)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn load_config() -> AppConfig {
     let Some(path) = config_path() else {
         return AppConfig::default();
@@ -434,10 +448,7 @@ pub fn update_vault_config_at(
     vault_id: &str,
     v: VaultCaptureConfig,
 ) -> std::io::Result<()> {
-    let mut cfg = match std::fs::read_to_string(path) {
-        Ok(json) => parse_config(&json),
-        Err(_) => AppConfig::default(),
-    };
+    let mut cfg = load_config_for_update(path)?;
     cfg.vaults.insert(vault_id.to_string(), v);
     write_config(path, &cfg)
 }
@@ -452,7 +463,7 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
 /// update_vault_config_at (same no-own-lock rule: IPC callers serialize
 /// behind ConfigWriteLock).
 pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> {
-    let mut cfg = load_config_from(path);
+    let mut cfg = load_config_for_update(path)?;
     cfg.mcp = mcp;
     write_config(path, &cfg)
 }
@@ -464,7 +475,7 @@ pub fn update_document_import_config_at(
     path: &Path,
     di: DocumentImportConfig,
 ) -> std::io::Result<()> {
-    let mut cfg = load_config_from(path);
+    let mut cfg = load_config_for_update(path)?;
     cfg.document_import = di;
     write_config(path, &cfg)
 }
@@ -712,6 +723,38 @@ mod tests {
         let kept = vault_config(&cfg, "keep");
         assert_eq!(kept.mode, RecordingMode::VoiceNote);
         assert_eq!(kept.bitrate_kbps, 160);
+    }
+
+    // A read error other than "missing file" must ABORT the save, not default
+    // and clobber every other section (GAP-02, save side). A directory at the
+    // config path forces a non-NotFound read error deterministically — even as
+    // root, unlike a permission bit.
+    #[test]
+    fn update_aborts_on_a_non_missing_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config-is-a-dir");
+        std::fs::create_dir(&path).unwrap();
+        let di = DocumentImportConfig {
+            pandoc_path: Some("C:/pandoc.exe".into()),
+        };
+        assert!(update_document_import_config_at(&path, di).is_err());
+        // Nothing was written over the directory.
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn update_defaults_and_saves_when_the_config_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json"); // does not exist yet
+        let di = DocumentImportConfig {
+            pandoc_path: Some("C:/pandoc.exe".into()),
+        };
+        update_document_import_config_at(&path, di).unwrap();
+        let cfg = parse_config(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(
+            cfg.document_import.pandoc_path.as_deref(),
+            Some("C:/pandoc.exe")
+        );
     }
 
     #[test]

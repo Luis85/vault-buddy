@@ -101,17 +101,20 @@ The same lexical matcher in `open_recording_note`
 path before the prefix match, and require a capture-pattern basename like
 the rename path does.
 
-### GAP-02 · Medium · A transient config read failure during save wipes every other vault's settings
-`src-tauri/core/src/capture_config.rs:309-314` (`update_vault_config_at`).
-Any `read_to_string` error — not just NotFound — maps to
-`AppConfig::default()`, then `write_config` replaces the whole file with
-only the edited vault. A momentarily locked/unreadable `config.json`
-(Windows AV, indexer) while saving vault A silently drops vaults B..N; a
-voice-note vault reverts to Meeting mode, re-enabling desktop-audio
-loopback on its next recording — exactly the flip the per-field parser
-exists to prevent.
-**Fix:** default only on `ErrorKind::NotFound`; propagate (and log) other
-read errors.
+### GAP-02 · ~~Medium~~ FIXED · A transient config read failure during save wiped every other vault's settings
+`src-tauri/core/src/capture_config.rs` (`update_vault_config_at`,
+`update_mcp_config_at`, `update_document_import_config_at`).
+Previously any `read_to_string` error — not just NotFound — mapped to
+`AppConfig::default()`, then `write_config` replaced the whole file with
+only the edited section. A momentarily locked/unreadable `config.json`
+(Windows AV, indexer) while saving one section silently dropped the others;
+a voice-note vault could revert to Meeting mode, re-enabling desktop-audio
+loopback — exactly the flip the per-field parser exists to prevent.
+**Fixed:** all three read-modify-write update paths now go through
+`load_config_for_update`, which defaults only on `ErrorKind::NotFound` and
+propagates (aborts the save on) any other read error. Regression tests:
+`update_aborts_on_a_non_missing_read_error`,
+`update_defaults_and_saves_when_the_config_is_missing`.
 
 ### GAP-03 · Medium · Transcript ownership markers match anywhere in the file, not the frontmatter
 `src-tauri/core/src/transcript.rs:44, 186, 242-245`.
