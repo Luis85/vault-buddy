@@ -160,6 +160,15 @@ cd src-tauri/core && cargo clippy --all-targets -- -D warnings
 cd src-tauri/core && cargo test
 # capture and transcribe test the same way (capture needs libasound2-dev
 # on Linux); transcribe's whisper tests: cargo test --features whisper
+
+# Rust quality gates (CI: machete/coverage/deny in rust-core; workspace
+# clippy + shell tests in linux-app — the shell needs `npm run setup:linux`
+# and a built ../dist first; see docs/DEVELOPMENT.md § Rust quality gates)
+cd src-tauri && cargo machete .
+cd src-tauri && cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+cd src-tauri && cargo deny check
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
+cd src-tauri && cargo test -p vault-buddy --lib
 ```
 
 Gate mechanics in brief: ESLint severity is staged (backlogged rules sit at
@@ -801,9 +810,9 @@ round-trip.
   (`src-tauri/src/transcription.rs` carries the queue's tests); keep new
   logic in the core crate whenever it doesn't need Tauri types, precisely
   so it's testable everywhere. (`capture` needs `libasound2-dev` on Linux
-  for cpal — CI installs it.) Note: CI currently runs the member crates'
-  tests but **not** the shell crate's — run those locally (see
-  docs/Gaps.md).
+  for cpal — CI installs it.) The member crates' tests run in the
+  `rust-core` CI job; the shell crate's own tests run in `linux-app` (they
+  need the GUI libs and a built `dist/`).
 - This repo practices TDD via the vendored superpowers skills
   (`.claude/skills/`, injected by a SessionStart hook): failing test first,
   then the fix. Regression tests name the failure mode in a comment.
@@ -831,13 +840,12 @@ round-trip.
 
 | Job | Runner | Gates |
 | --- | --- | --- |
-| `frontend` | Linux | ESLint, LOC guard, fallow quality ratchet, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
-| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe` — including `--features whisper` (the only place the whisper FFI tests execute) |
-| `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate only, never released |
+| `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
+| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over the member crates, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`) |
+| `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
 | `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; skips updater signing when secrets are absent (forks) |
 
-Not covered by CI (see docs/Gaps.md): the shell crate's own unit tests and
-clippy, and any `cargo test` on Windows.
+Not covered by CI (see docs/Gaps.md): any `cargo test` on Windows.
 
 ## Releases
 

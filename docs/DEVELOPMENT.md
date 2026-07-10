@@ -168,6 +168,55 @@ the same PR (`npm run check:loc -- --update`, `npm run check:quality --
 gain can silently regress. Bumping a baseline in the *loosening* direction
 is a reviewed, justified decision, never a side effect.
 
+### Rust quality gates
+
+The Rust side mirrors the same harness. In the `rust-core` job:
+
+- `cargo fmt --check` (whole workspace) and clippy `-D warnings` + tests on
+  the three member crates, including the `whisper` feature pass (unchanged).
+- **Unused dependencies** — `cargo machete src-tauri` (the fallow dead-deps
+  analogue).
+- **Coverage floor** — `cargo llvm-cov -p vault_buddy_core -p
+  vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94`,
+  floored from the adoption run (94.32% lines; default features — the
+  whisper FFI path is exercised by its dedicated test step). Rise-only,
+  same policy as the frontend floors.
+- **Dependency audit** — `cargo deny check` against `src-tauri/deny.toml`:
+  RustSec advisories, license allow-list, and registry/source policy. The
+  advisories DB is fetched at run time, so a newly published CVE can fail
+  CI on an unchanged tree — that is the gate working as intended; fix by
+  upgrading the affected crate (or, for a vetted false positive, an
+  `[advisories.ignore]` entry with a justification comment).
+
+In the `linux-app` job (which has the WebView/GTK libs the shell needs, and
+runs after `npx tauri build --no-bundle` has produced `../dist` for
+`generate_context!`):
+
+- **Workspace clippy** — `cargo clippy --workspace --all-targets -D
+  warnings` finally lints the shell crate itself.
+- **Shell unit tests** — `cargo test -p vault-buddy --lib` runs the shell's
+  own tests (the transcription queue's regression tests included), which
+  previously ran in no CI job.
+
+Locally (the shell steps need `npm run setup:linux` once, plus a current
+stable toolchain — `rustup update stable`):
+
+```bash
+cd src-tauri
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p vault-buddy --lib
+cargo machete .
+cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+cargo deny check          # cargo install cargo-deny (also: cargo-machete, cargo-llvm-cov)
+```
+
+The file-size ratchet covers Rust too: `scripts/check-loc.mjs` caps `.rs`
+files at 800 nonblank lines (higher than the frontend's 500 because unit
+tests live inline in the same file, per the repo convention), with the
+audit's known hotspots grandfathered shrink-only in
+`scripts/loc-baseline.json`.
+
 The Windows and Linux app jobs both run after the two fast jobs pass (in
 parallel with each other). Desktop behavior that
 can't be asserted in CI (transparency, tray, drag, the real Obsidian

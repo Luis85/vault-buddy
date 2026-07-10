@@ -495,14 +495,12 @@ vanish if that changes.
 
 ## 6. CI & release engineering
 
-### GAP-40 · High · The shell crate's unit tests never run in any CI job
-`.github/workflows/ci.yml` — `rust-core` tests only
-`core`/`capture`/`transcribe`; both app jobs run `tauri build`, never
-`cargo test`. The shell's 11 `#[test]`s include the
-`catch_job_survives_a_panicking_job` regression test guarding "a panicking
-job silently stops all future transcriptions" (`transcription.rs:841`).
-**Fix:** add `cargo test -p vault-buddy --lib` to the `linux-app` job (the
-shell already compiles there).
+### GAP-40 · ~~High~~ FIXED 2026-07-10 · The shell crate's unit tests never ran in any CI job
+The `linux-app` job now runs `cargo test -p vault-buddy --lib` (and
+workspace clippy) after the tauri build produces the `dist/` that
+`generate_context!` embeds. Kept as a tombstone because the constraint is
+non-obvious: the shell's tests cannot move to `rust-core` — they need the
+WebView/GTK system libs and a built `dist/`.
 
 ### GAP-41 · High · The release dispatch path is unvalidated
 `.github/workflows/release.yml:11-15`.
@@ -520,24 +518,26 @@ no dependency on CI success for the SHA; a tag on a broken commit publishes
 and is immediately offered to every installed app via the updater.
 **Fix:** gate the release job on the CI workflow's success for that SHA.
 
-### GAP-43 · Medium · Clippy never runs on the shell crate; no Rust tests run on Windows
-`.github/workflows/ci.yml:50` — clippy's `-p` flags cover only the three
-member crates, so shell-side lint regressions pass CI. Separately, the most
-platform-sensitive code (process detection, `GetKeyState`, whisper on MSVC,
-WASAPI loopback) is Windows-only, yet `windows-app` is build-only.
-**Fix:** workspace clippy in `linux-app`; a `cargo test` step (core +
-capture + transcribe `--features whisper`) in the Windows job.
+### GAP-43 · Medium · No Rust tests run on Windows (clippy half FIXED 2026-07-10)
+The workspace-clippy half is fixed: `linux-app` now runs
+`cargo clippy --workspace --all-targets -- -D warnings`, covering the
+shell. Still open: the most platform-sensitive code (process detection,
+`GetKeyState`, whisper on MSVC, WASAPI loopback) is Windows-only, yet
+`windows-app` is build-only.
+**Fix:** a `cargo test` step (core + capture + transcribe
+`--features whisper`) in the Windows job.
 
 ### GAP-44 · Low · Release/bump edges
-- No CI job runs `node scripts/bump-version.mjs --check`
-  (`bump-version.mjs:125`), so the five version files can drift undetected
-  until the next bump attempt. Add it to the `frontend` job.
+- ~~No CI job runs `node scripts/bump-version.mjs --check`~~ — fixed
+  2026-07-10: the `frontend` job runs it before the build.
 - `scripts/bump-version.mjs:107-110` — accepts a new version equal to or
   lower than current; equal input later fails at `git commit` with a
   confusing "nothing to commit". Reject `newVersion <= current`.
-- No `cargo audit`/`npm audit` step and no Dependabot/Renovate config,
-  despite deliberate pins (whisper-rs 0.16) that need a tracked upgrade
-  path.
+- ~~No `cargo audit` step~~ — fixed 2026-07-10: `cargo deny check`
+  (advisories + licenses + sources, `src-tauri/deny.toml`) runs in
+  `rust-core`. Still open: no `npm audit` step and no Dependabot/Renovate
+  config, despite deliberate pins (whisper-rs 0.16) that need a tracked
+  upgrade path.
 - No SECURITY.md / key-rotation procedure for the updater keypair
   ("whoever holds it can ship updates to every user" — DEVELOPMENT.md) and
   no CHANGELOG (release bodies are boilerplate install instructions).
@@ -582,10 +582,11 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   handling is the one untested link (delegated to ureq).
 
 **Shell crate**
-- All 11 unit tests exist but run in no CI job (GAP-40). Everything
-  window-/thread-/event-related (focus-out check, pin, metronome
-  backpressure, drag guard, tray, hide chokepoint) is manually verified
-  per the Windows checklists in `docs/superpowers/specs/` only.
+- The 11 unit tests now run in the `linux-app` CI job (GAP-40, fixed
+  2026-07-10). Everything window-/thread-/event-related (focus-out check,
+  pin, metronome backpressure, drag guard, tray, hide chokepoint) remains
+  manually verified per the Windows checklists in
+  `docs/superpowers/specs/` only.
 
 **Frontend**
 - `src/main.ts` — the Vue `errorHandler` and unexpected-label fallback are
@@ -642,6 +643,31 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 - ~~`tsconfig.json` lists `"node"` types but `@types/node` is not a
   devDependency~~ — fixed 2026-07-10: `@types/node` added explicitly with
   the quality-pipeline adoption.
+
+### GAP-51 · Low · minimp3 (dev-only test decoder) carries an ignored RustSec vulnerability
+`src-tauri/capture/Cargo.toml` (dev-dependencies) + `src-tauri/deny.toml`.
+`minimp3` pulls `slice-ring-buffer` 0.3.4 (RUSTSEC-2025-0044, multiple
+double-frees via safe APIs). It is compiled only into the capture crate's
+tests, never into a shipped binary, so the advisory is ignored in
+`deny.toml` with that justification — but the ignore should not live
+forever.
+**Fix:** decode test MP3s with Symphonia (already a workspace dependency
+via the transcribe crate) and drop minimp3; then remove the `deny.toml`
+ignore entry.
+
+### GAP-52 · Low · LGPL-3.0 static-linking compliance for the LAME encoder is undocumented
+`src-tauri/capture/Cargo.toml` (`mp3lame-encoder`/`mp3lame-sys`,
+LGPL-3.0) — the one copyleft production dependency, allowed in
+`deny.toml`. `mp3lame-sys` builds and statically links libmp3lame;
+LGPL §4(d) requires that users be able to relink against a modified
+library (or that object files be made available), which a statically
+linked proprietary-licensed binary must arrange for and this repo does not
+document (the repo's own LICENSE applies to the app). Distribution is
+public GitHub releases, so exposure is real but low.
+**Fix:** document the combination in a NOTICE/README section (source is
+public, which satisfies the spirit), or switch the LAME linkage to dynamic
+on Windows, or state the app's own license terms in a way compatible with
+LGPL static linking.
 
 ### GAP-48 · Accepted debt (tracked, no action now)
 - `whisper-rs` pinned at 0.16 with hand-wired abort/progress trampolines

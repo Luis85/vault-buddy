@@ -4,17 +4,19 @@
  *
  * Why this exists: agentic contributors optimize for finishing the requested
  * change, which quietly grows already-large modules and creates new oversized
- * ones. The 2026-07-10 audit flagged the two current hotspots (Search.vue,
- * stores/capture.ts — docs/Gaps.md GAP-47) and CI had no objective gate for
- * file-size drift.
+ * ones. The 2026-07-10 audit flagged the current hotspots (docs/Gaps.md
+ * GAP-45/GAP-47) and CI had no objective gate for file-size drift.
  *
  * Policy (a ratchet, not a freeze):
- *   - Any `src/**` `.ts` or `.vue` file <= MAX_LOC nonblank lines is always fine.
- *   - New files above MAX_LOC fail. Split them or earn an allowlist entry.
+ *   - Frontend: any .ts/.vue file under src/ <= 500 nonblank lines is fine.
+ *   - Rust: any .rs file under an src-tauri crate's src/ <= 800 nonblank
+ *     lines is fine — the higher cap exists because the repo convention
+ *     keeps unit tests inline (#[cfg(test)] modules) in the same file.
+ *   - New files above their cap fail. Split them or earn an allowlist entry.
  *   - Known hotspots are grandfathered in scripts/loc-baseline.json with the
  *     LOC measured at baseline time. They may shrink freely but may NOT grow
  *     past their recorded ceiling — existing debt can only get better.
- *   - A baselined file that drops to <= MAX_LOC (or is deleted) makes its
+ *   - A baselined file that drops to <= its cap (or is deleted) makes its
  *     entry stale; the guard fails so the baseline stays honest and minimal.
  *
  * Usage:
@@ -32,12 +34,29 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
-const SRC_DIR = join(ROOT, "src");
 const BASELINE_PATH = join(__dirname, "loc-baseline.json");
 
+// One entry per language surface. `filter` sees the repo-relative posix path.
+const SURFACES = [
+  {
+    name: "frontend",
+    dir: "src",
+    defaultCap: 500,
+    filter: (p) => p.endsWith(".ts") || p.endsWith(".vue"),
+  },
+  {
+    name: "rust",
+    dir: "src-tauri",
+    defaultCap: 800,
+    // Only crate sources; never build output.
+    filter: (p) => p.endsWith(".rs") && p.includes("/src/"),
+    skipDirs: new Set(["target", "gen", "icons", "capabilities"]),
+  },
+];
+
 const DEFAULT_REASON =
-  "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when " +
-  "next touched.";
+  "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split " +
+  "when next touched.";
 
 const args = process.argv.slice(2);
 const update = args.includes("--update");
@@ -57,16 +76,15 @@ function countLoc(absPath) {
   return count;
 }
 
-function collectSourceFiles(dir, acc = []) {
+function collectFiles(surface, dir, acc = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) {
-      collectSourceFiles(abs, acc);
-    } else if (
-      entry.isFile() &&
-      (entry.name.endsWith(".ts") || entry.name.endsWith(".vue"))
-    ) {
-      acc.push(abs);
+      if (surface.skipDirs?.has(entry.name)) continue;
+      collectFiles(surface, abs, acc);
+    } else if (entry.isFile()) {
+      const rel = toPosix(relative(ROOT, abs));
+      if (surface.filter(rel)) acc.push({ path: rel, loc: countLoc(abs) });
     }
   }
   return acc;
@@ -76,18 +94,25 @@ function readBaseline() {
   try {
     return JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
   } catch {
-    return { maxLoc: 500, description: "", allowlist: {} };
+    return { caps: {}, description: "", allowlist: {} };
   }
 }
 
 const baseline = readBaseline();
-const MAX_LOC = baseline.maxLoc ?? 500;
+const capFor = (surface) =>
+  baseline.caps?.[surface.name] ?? surface.defaultCap;
 
-const files = collectSourceFiles(SRC_DIR)
-  .map((abs) => ({ path: toPosix(relative(ROOT, abs)), loc: countLoc(abs) }))
-  .sort((a, b) => b.loc - a.loc);
-
-const overCap = files.filter((f) => f.loc > MAX_LOC);
+const overCap = [];
+let totalFiles = 0;
+for (const surface of SURFACES) {
+  const cap = capFor(surface);
+  const files = collectFiles(surface, join(ROOT, surface.dir));
+  totalFiles += files.length;
+  for (const f of files) {
+    if (f.loc > cap) overCap.push({ ...f, cap });
+  }
+}
+overCap.sort((a, b) => b.loc - a.loc);
 
 if (update) {
   const allowlist = {};
@@ -98,17 +123,21 @@ if (update) {
     };
   }
   const next = {
-    maxLoc: MAX_LOC,
+    caps: Object.fromEntries(
+      SURFACES.map((s) => [s.name, capFor(s)]),
+    ),
     description:
-      "Grandfathered source files above maxLoc nonblank LOC. Entries may " +
-      "shrink but not grow; new files above maxLoc are rejected. " +
-      "Regenerate with `npm run check:loc -- --update`.",
+      "Grandfathered source files above their surface's nonblank-LOC cap " +
+      "(frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher " +
+      "cap because unit tests live inline). Entries may shrink but not " +
+      "grow; new files above the cap are rejected. Regenerate with " +
+      "`npm run check:loc -- --update`.",
     allowlist,
   };
   writeFileSync(BASELINE_PATH, JSON.stringify(next, null, 2) + "\n");
   console.log(
     `Updated ${toPosix(relative(ROOT, BASELINE_PATH))}: ` +
-      `${overCap.length} file(s) above ${MAX_LOC} LOC.`,
+      `${overCap.length} file(s) above their cap.`,
   );
   process.exit(0);
 }
@@ -118,10 +147,10 @@ const newOverCap = [];
 const grown = [];
 const seen = new Set();
 
-for (const { path, loc } of overCap) {
+for (const { path, loc, cap } of overCap) {
   const entry = allowlist[path];
   if (!entry) {
-    newOverCap.push({ path, loc });
+    newOverCap.push({ path, loc, cap });
     continue;
   }
   seen.add(path);
@@ -131,7 +160,7 @@ for (const { path, loc } of overCap) {
 }
 
 // Stale entries: allowlisted files that no longer exist or no longer exceed
-// the cap. Keeping them would let the file silently regrow up to the stale
+// their cap. Keeping them would let the file silently regrow up to the stale
 // ceiling, so we force a baseline refresh instead.
 const overCapPaths = new Set(overCap.map((f) => f.path));
 const stale = Object.keys(allowlist).filter((p) => !overCapPaths.has(p));
@@ -139,10 +168,12 @@ const stale = Object.keys(allowlist).filter((p) => !overCapPaths.has(p));
 const problems = [];
 if (newOverCap.length > 0) {
   problems.push(
-    `New source file(s) above the ${MAX_LOC} LOC cap (split them, or ` +
-      `allowlist with a reason in scripts/loc-baseline.json):`,
+    "New source file(s) above their LOC cap (split them, or allowlist " +
+      "with a reason in scripts/loc-baseline.json):",
   );
-  for (const { path, loc } of newOverCap) problems.push(`  ${loc}  ${path}`);
+  for (const { path, loc, cap } of newOverCap) {
+    problems.push(`  ${loc} (cap ${cap})  ${path}`);
+  }
 }
 if (grown.length > 0) {
   problems.push(
@@ -155,23 +186,22 @@ if (grown.length > 0) {
 if (stale.length > 0) {
   problems.push(
     `Stale baseline entr${stale.length === 1 ? "y" : "ies"} (file is now ` +
-      `<= ${MAX_LOC} LOC or gone — run \`npm run check:loc -- --update\`):`,
+      "under its cap or gone — run `npm run check:loc -- --update`):",
   );
   for (const path of stale) problems.push(`  ${path}`);
 }
 
 if (problems.length === 0) {
+  const caps = SURFACES.map((s) => `${s.name} ${capFor(s)}`).join(", ");
   console.log(
-    `LOC guard OK: ${files.length} files, cap ${MAX_LOC}, ` +
+    `LOC guard OK: ${totalFiles} files (caps: ${caps}), ` +
       `${seen.size} grandfathered hotspot(s).`,
   );
   process.exit(0);
 }
 
 if (asJson) {
-  console.error(
-    JSON.stringify({ maxLoc: MAX_LOC, newOverCap, grown, stale }, null, 2),
-  );
+  console.error(JSON.stringify({ newOverCap, grown, stale }, null, 2));
 } else {
   console.error("LOC guard FAILED:\n" + problems.join("\n"));
 }

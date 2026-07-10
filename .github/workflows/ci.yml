@@ -36,6 +36,10 @@ jobs:
       - run: npm run lint
       - run: npm run check:loc
       - run: npm run check:quality
+      # The five version files must agree (package.json, tauri.conf.json,
+      # Cargo.toml + both lockfiles) — drift used to surface only at the
+      # next bump attempt (docs/Gaps.md GAP-44).
+      - run: node scripts/bump-version.mjs --check
       - run: npm run build
       - run: npm run test:coverage
 
@@ -77,6 +81,29 @@ jobs:
       - name: tests (transcribe crate, whisper feature)
         run: cargo test -p vault_buddy_transcribe --features whisper
         working-directory: src-tauri
+      - name: Install Rust quality tools (machete + llvm-cov, prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete,cargo-llvm-cov
+      - name: unused dependencies (cargo-machete)
+        run: cargo machete src-tauri
+      # Coverage floor over the pure member crates (default features — the
+      # whisper FFI path is exercised by the dedicated test step above).
+      # Rise-only ratchet, same policy as the frontend floors in
+      # vite.config.ts: when coverage rises, raise the floor in the same PR;
+      # lowering it is a reviewed decision. Floored from the 2026-07-10
+      # adoption run (see docs/DEVELOPMENT.md § Quality pipeline).
+      - name: coverage floor (core + capture + transcribe, cargo-llvm-cov)
+        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+        working-directory: src-tauri
+      # RustSec advisories + license/source policy (deny.toml). Uses the
+      # prebuilt cargo-deny binary; advisories DB is fetched at run time, so
+      # a newly published CVE can fail this step on an unchanged tree — that
+      # is the point of the gate.
+      - name: dependency audit (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
 
   windows-app:
     name: Windows app (build + installer)
@@ -149,3 +176,15 @@ jobs:
       # and in parallel with Windows. The Linux build is never released.
       - name: Compile the Tauri shell (no bundle)
         run: npx tauri build --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # The shell's own quality gates live here, not in rust-core: the shell
+      # crate needs the WebView/GTK system libs installed above, and
+      # generate_context! embeds ../dist, which the tauri build step just
+      # produced. Before this, the shell's 11 unit tests (including the
+      # catch_job_survives_a_panicking_job regression test) ran in NO CI job
+      # and clippy never saw the shell (docs/Gaps.md GAP-40/GAP-43).
+      - name: clippy (whole workspace, incl. shell)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: src-tauri
+      - name: tests (shell crate)
+        run: cargo test -p vault-buddy --lib
+        working-directory: src-tauri
