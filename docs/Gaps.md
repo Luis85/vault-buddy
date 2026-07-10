@@ -294,6 +294,11 @@ absolute local paths (`capture_commands.rs:347/980`,
 dispatches Escape on it, and asserts a `window` keydown listener is never
 called.
 
+### GAP-28 · ~~Medium~~ FIXED 2026-07-10 · A slow quiet update check can stomp a manual check or install
+`checkForUpdatesQuietly` now re-checks `phase === "idle"` after its
+`await check()` and discards the stale result otherwise, so it can never
+flip `phase`/`available` under a manual check or a mid-flight install.
+
 ### GAP-29 · Medium · The rename prompt is unreachable for saves that happen while the panel is closed
 `src/components/ActionPanel.vue:97-103`.
 The `shownNonce` watcher calls `capture.dismissRename()` on every
