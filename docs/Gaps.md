@@ -69,9 +69,14 @@ keeps the old embed (audio first, never clobber).
 
 ### GAP-05 · ~~Medium~~ FIXED 2026-07-10 · System suspend mid-recording appends the whole sleep gap as encoded silence
 The tick loop now runs a pure `plan_tick` policy: a wake >500 ms behind
-schedule resyncs `next_tick` to `now + TICK` (suspend gap never encoded);
-a wake before schedule (pause/resume control message) consumes nothing.
-Catch-up under 500 ms is unchanged (backpressure still averages out).
+schedule resyncs `next_tick` forward by up to the lag, capped to how much
+real audio is currently buffered — near-zero after a suspend (the sources
+were asleep too), so `next_tick` lands at ~`now + TICK` and the sleep gap
+is never encoded as silence, exactly as before. (A real I/O stall instead
+has a full buffer and gets full catch-up — see the Codex PR #46 fix noted
+in session.rs.) A wake before schedule (pause/resume control message)
+consumes nothing. Catch-up under 500 ms is unchanged (backpressure still
+averages out).
 
 ### GAP-06 · ~~Medium~~ FIXED 2026-07-10 · Never-clobber degrades to a racy fallback on filesystems without hard links
 On Windows the fallback is now MoveFileExW WITHOUT MOVEFILE_REPLACE_EXISTING
