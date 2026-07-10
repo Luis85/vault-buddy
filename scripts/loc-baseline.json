@@ -26,8 +26,8 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src/components/Tasks.vue": {
-      "loc": 819,
-      "reason": "Grew past the cap in the task-management increments (PR #46), in parallel with this gate landing on main. Round 2 (792->809): guarded the inline editor's Enter/Escape against IME composition (onEditTitleEnter/onEditTitleEsc), mirroring the GAP-31 add-path guard. Shrink only; split (list vs editor/composer) when next touched."
+      "loc": 564,
+      "reason": "Polish sub-pass E (E2): extracted TaskRow.vue (per-row display) and TaskEditor.vue (inline editor), with shared pure helpers in src/utils/taskFields.ts. The container keeps all state, filters, buckets, the optimistic mutations, and the cross-vault fan-out — genuinely container-level orchestration the split can't move — so it lands at 564, above the 500 cap. Re-recorded per the plan's Task E2 fallback (two children + re-record when the container can't reach 500). Shrink only."
     },
     "src/stores/capture.ts": {
       "loc": 646,

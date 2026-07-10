@@ -5,58 +5,15 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { TaskItem, TaskPatch, Vault } from "../types";
+import type { AggTask, TaskItem, TaskPatch, Vault } from "../types";
+import { dueOf, localToday, parseTagsInput } from "../utils/taskFields";
 import SelectMenu from "./SelectMenu.vue";
-
-// Split a free-text tags field on commas/whitespace, strip leading `#`s,
-// drop empties, dedupe case-insensitively keeping the first casing.
-// Client-side parsing is lenient; the shell strictly validates the charset
-// and errors on a bad token.
-function parseTagsInput(s: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of s.split(/[\s,]+/)) {
-    const t = raw.replace(/^#+/, "");
-    if (!t || seen.has(t.toLowerCase())) continue;
-    seen.add(t.toLowerCase());
-    out.push(t);
-  }
-  return out;
-}
-
-// A due only counts when it's a plain YYYY-MM-DD — a hand-authored value like
-// "tomorrow" degrades to no-date instead of erroring (defensive read).
-const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const dueOf = (t: TaskItem): string | null =>
-  t.due && DUE_RE.test(t.due) ? t.due : null;
-
-// LOCAL calendar date — never UTC/ISO slicing, matching add_task's local-date
-// rule; near midnight UTC-derived "today" would mis-bucket by a day.
-function localToday(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-// Deterministic short label (no locale dependence): "Jul 15".
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function dueLabel(d: string): string {
-  const [, m, day] = d.split("-");
-  const month = MONTHS[Number(m) - 1];
-  return month ? `${month} ${Number(day)}` : d;
-}
-const isOverdue = (t: TaskItem): boolean => {
-  const d = dueOf(t);
-  return d !== null && !t.done && d < localToday();
-};
+import TaskEditor from "./TaskEditor.vue";
+import TaskRow from "./TaskRow.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
 // Aggregate mode: one merged view across every vault (vaultId === null).
 const isAggregate = computed(() => props.vaultId === null);
-
-// A task enriched with its owning vault — the ONE internal shape for both
-// modes, so every action reads task.vaultId and needs no mode branches.
-type AggTask = TaskItem & { vaultId: string; vaultName: string };
 
 const notifications = useNotificationsStore();
 const vaultsStore = useVaultsStore();
@@ -375,70 +332,21 @@ async function openInObsidian(task: AggTask) {
 // Inline editor: one row at a time; opening another row discards unsaved
 // edits in the first (the file is the source of truth, edits are cheap).
 // Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
-// two tag sections (Task 7) opens its editor on only the clicked row.
+// two tag sections (Task 7) opens its editor on only the clicked row. The
+// draft field state and its IME-guarded key handlers live in TaskEditor; the
+// container keeps editingKey (which row is open) and the optimistic write.
 const editingKey = ref<string | null>(null);
 const rowKey = (bucketKey: string, task: AggTask) => `${bucketKey}:${task.path}`;
-const editTitle = ref("");
-const editDue = ref("");
-const editPriority = ref("normal");
-const editTags = ref("");
-
-const normalizedPriority = (t: TaskItem) =>
-  t.priority === "high" || t.priority === "low" ? t.priority : "normal";
 
 function startEdit(task: AggTask, bucketKey: string) {
   editingKey.value = rowKey(bucketKey, task);
-  editTitle.value = task.title;
-  editDue.value = dueOf(task) ?? "";
-  editPriority.value = normalizedPriority(task);
-  editTags.value = task.tags.join(", ");
 }
 
 function cancelEdit() {
   editingKey.value = null;
 }
 
-function onEditTitleEnter(task: AggTask, e: KeyboardEvent) {
-  // Mirrors onTitleEnter (GAP-31), which only covered the add-task input —
-  // Codex review, PR #46 round 2 found the inline editor's title field was
-  // missed: an IME candidate commit fires Enter with isComposing=true, which
-  // must select the candidate, not save/close the editor with a
-  // half-composed title.
-  if (e.isComposing) return;
-  // preventDefault lives HERE, after the guard — the template's `.prevent`
-  // modifier ran before this handler and cancelled the candidate-commit
-  // Enter's default, breaking IME selection (Codex, PR #46). A real Enter
-  // still suppresses any form/default action before saving.
-  e.preventDefault();
-  void saveEdit(task);
-}
-
-function onEditTitleEsc(e: KeyboardEvent) {
-  // Same guard for Escape: during composition, Escape cancels the IME
-  // CANDIDATE, not the edit — without this, cancelEdit would drop the
-  // in-progress (uncommitted) edit as a side effect of dismissing the
-  // candidate.
-  if (e.isComposing) return;
-  // Consume the key: without stopPropagation the same keydown bubbles to
-  // PanelRoot's window-level Escape and closes the WHOLE panel — the user
-  // asked to cancel the row edit, not to dismiss the panel (Codex, PR #46;
-  // same class as GAP-27's SelectMenu Escape).
-  e.stopPropagation();
-  cancelEdit();
-}
-
-async function saveEdit(task: AggTask) {
-  if (busy.value.has(task.path)) return;
-  const patch: TaskPatch = {};
-  const title = editTitle.value.trim();
-  if (title && title !== task.title) patch.title = title;
-  if (editDue.value !== (dueOf(task) ?? "")) {
-    if (editDue.value === "") patch.clearDue = true;
-    else patch.due = editDue.value;
-  }
-  if (editPriority.value !== normalizedPriority(task)) patch.priority = editPriority.value;
-  const parsedTags = parseTagsInput(editTags.value);
-  if (parsedTags.join(" ") !== task.tags.join(" ")) patch.tags = parsedTags;
+async function onEditorSave(task: AggTask, patch: TaskPatch) {
   editingKey.value = null;
   if (Object.keys(patch).length === 0) return;
   // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
@@ -659,197 +567,26 @@ async function saveEdit(task: AggTask) {
           {{ bucket.label }}
         </h3>
         <ul class="flex flex-col gap-1">
-          <li
+          <TaskRow
             v-for="task in bucket.tasks"
             :key="rowKey(bucket.key, task)"
-            data-testid="task-row"
-            class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
+            :task="task"
+            :busy="isBusy(task.path)"
+            :is-aggregate="isAggregate"
+            :editing="editingKey === rowKey(bucket.key, task)"
+            @toggle="toggle(task)"
+            @archive="archive(task)"
+            @edit="startEdit(task, bucket.key)"
+            @open="openInObsidian(task)"
+            @tag-click="tagFilter = $event"
           >
-            <div
-              v-if="editingKey === rowKey(bucket.key, task)"
-              class="flex min-w-0 flex-1 flex-col gap-1 py-0.5"
-            >
-              <input
-                v-model="editTitle"
-                data-testid="task-edit-title"
-                type="text"
-                aria-label="Task title"
-                class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
-                @keydown.enter="onEditTitleEnter(task, $event)"
-                @keydown.esc="onEditTitleEsc"
-              >
-              <div class="flex items-center gap-1">
-                <input
-                  v-model="editDue"
-                  data-testid="task-edit-due"
-                  type="date"
-                  aria-label="Due date"
-                  class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
-                >
-                <div
-                  class="flex gap-0.5"
-                  role="radiogroup"
-                  aria-label="Priority"
-                >
-                  <button
-                    v-for="p in ['high', 'normal', 'low']"
-                    :key="p"
-                    type="button"
-                    role="radio"
-                    :data-testid="`task-edit-priority-${p}`"
-                    :aria-checked="editPriority === p"
-                    class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-                    :class="
-                      editPriority === p
-                        ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-                    "
-                    @click="editPriority = p"
-                  >
-                    {{ p }}
-                  </button>
-                </div>
-              </div>
-              <input
-                v-model="editTags"
-                data-testid="task-edit-tags"
-                type="text"
-                placeholder="#tags"
-                aria-label="Tags"
-                class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-              >
-              <div class="flex items-center justify-end gap-1">
-                <button
-                  type="button"
-                  data-testid="task-edit-cancel"
-                  class="cursor-pointer rounded-lg px-2 py-0.5 text-xs text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-                  @click="cancelEdit"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  data-testid="task-edit-save"
-                  :disabled="isBusy(task.path)"
-                  class="cursor-pointer rounded-lg bg-violet-600/80 px-2 py-0.5 text-xs font-semibold text-white hover:bg-violet-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-                  @click="saveEdit(task)"
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-            <template v-else>
-              <input
-                type="checkbox"
-                data-testid="task-checkbox"
-                :checked="task.done"
-                :disabled="isBusy(task.path)"
-                :aria-label="`Mark ${task.title} ${task.done ? 'not done' : 'done'}`"
-                class="shrink-0 cursor-pointer accent-violet-500 disabled:cursor-default disabled:opacity-50"
-                @change="toggle(task)"
-              >
-              <button
-                type="button"
-                data-testid="task-open"
-                class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-                :aria-label="`Open ${task.title} in Obsidian`"
-                :title="`Open ${task.title} in Obsidian`"
-                @click="openInObsidian(task)"
-              >
-                <span
-                  v-if="isAggregate"
-                  data-testid="task-vault"
-                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-violet-600/80 text-[9px] font-bold text-white"
-                  :title="task.vaultName"
-                >{{ task.vaultName.charAt(0).toUpperCase() }}</span>
-                <span
-                  v-if="task.priority === 'high' || task.priority === 'low'"
-                  data-testid="task-priority"
-                  class="h-1.5 w-1.5 shrink-0 rounded-full"
-                  :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
-                  :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
-                  aria-hidden="true"
-                />
-                <span
-                  class="min-w-0 flex-1 truncate text-sm"
-                  :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
-                >
-                  {{ task.title }}
-                </span>
-                <span
-                  v-for="tag in task.tags"
-                  :key="tag"
-                  data-testid="task-tag"
-                  role="button"
-                  tabindex="0"
-                  :aria-label="`Filter by tag ${tag}`"
-                  class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-[10px] text-violet-200 transition-colors hover:bg-violet-500/30"
-                  @click.stop="tagFilter = tag"
-                  @keydown.enter.stop.prevent="tagFilter = tag"
-                  @keydown.space.stop.prevent="tagFilter = tag"
-                >#{{ tag }}</span>
-                <span
-                  v-if="dueOf(task)"
-                  data-testid="task-due"
-                  class="shrink-0 text-[10px] tabular-nums"
-                  :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
-                >{{ dueLabel(dueOf(task)!) }}</span>
-              </button>
-              <button
-                type="button"
-                data-testid="task-edit"
-                :disabled="isBusy(task.path)"
-                :aria-label="`Edit ${task.title}`"
-                title="Edit"
-                class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-                @click="startEdit(task, bucket.key)"
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                data-testid="task-archive"
-                :disabled="isBusy(task.path)"
-                :aria-label="`Archive ${task.title}`"
-                title="Archive"
-                class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-                @click="archive(task)"
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <rect
-                    x="3"
-                    y="4"
-                    width="18"
-                    height="4"
-                    rx="1"
-                  />
-                  <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
-                </svg>
-              </button>
-            </template>
-          </li>
+            <TaskEditor
+              :task="task"
+              :busy="isBusy(task.path)"
+              @save="onEditorSave(task, $event)"
+              @cancel="cancelEdit"
+            />
+          </TaskRow>
         </ul>
       </div>
     </template>

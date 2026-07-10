@@ -131,6 +131,11 @@ export interface TaskItem {
   tags: string[];
 }
 
+/** A TaskItem enriched with its owning vault — the ONE internal shape the
+ * Tasks views use for both per-vault and aggregate modes, so every row action
+ * reads the row's own vaultId and needs no mode branches. */
+export type AggTask = TaskItem & { vaultId: string; vaultName: string };
+
 /** Patch for the update_task command; only present fields are written. */
 export interface TaskPatch {
   title?: string;
