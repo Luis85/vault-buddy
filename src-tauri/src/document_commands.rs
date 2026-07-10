@@ -92,34 +92,76 @@ fn registry_path_entries() -> Vec<String> {
 }
 
 /// Ordered pandoc candidates to try: the configured override FIRST (if
-/// non-empty), then the bare `pandoc` PATH lookup, deduped. Pure so it's
-/// testable without touching the real config file — `pandoc_candidates`
-/// below is the impure wrapper that feeds it the real config.
-fn candidate_order(override_path: Option<&str>) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Some(p) = override_path {
-        if !p.trim().is_empty() {
-            out.push(p.to_string());
+/// non-empty), then each concrete pandoc executable found across PATH, then a
+/// bare `pandoc` final fallback — deduped, preserving order. Pure so it's
+/// testable without touching the real config or filesystem — `pandoc_candidates`
+/// below is the impure wrapper that feeds it the real config + PATH executables.
+///
+/// The concrete PATH executables matter (Codex review): a bare `pandoc` alone
+/// resolves only the FIRST PATH match, so a multi-install state (old pre-2.15
+/// pandoc earlier in PATH, a supported one later) would let detection report
+/// "too old" even though a valid Pandoc exists. Listing every PATH pandoc lets
+/// `resolve_working_pandoc` probe PAST an unsupported hit to a sandbox-capable
+/// one. Bare `pandoc` is kept as a final fallback so we never resolve WORSE
+/// than the plain lookup (e.g. if PATH enumeration misses a shell-resolved one).
+fn candidate_order(override_path: Option<&str>, path_execs: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        if !s.trim().is_empty() && !out.iter().any(|c| c.eq_ignore_ascii_case(&s)) {
+            out.push(s);
         }
+    };
+    if let Some(p) = override_path {
+        push(p.to_string());
     }
-    if !out.iter().any(|c| c == "pandoc") {
-        out.push("pandoc".to_string());
+    for e in path_execs {
+        push(e.clone());
+    }
+    push("pandoc".to_string());
+    out
+}
+
+/// Concrete `pandoc`/`pandoc.exe` executables across the registry-augmented
+/// PATH, in PATH order — so `resolve_working_pandoc` can probe past an old
+/// install to a supported one later in PATH (Codex review). Best-effort: a
+/// non-existent or unreadable dir is skipped.
+fn path_pandoc_executables() -> Vec<String> {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let exe = if cfg!(windows) {
+        "pandoc.exe"
+    } else {
+        "pandoc"
+    };
+    let base = std::env::var("PATH").unwrap_or_default();
+    let extra = registry_path_entries();
+    let merged = if extra.is_empty() {
+        base
+    } else {
+        merged_path(&base, &extra)
+    };
+    let mut out = Vec::new();
+    for dir in merged.split(sep) {
+        if dir.is_empty() {
+            continue;
+        }
+        let cand = std::path::Path::new(dir).join(exe);
+        // is_file() follows a symlink to a real file — a symlinked pandoc counts.
+        if cand.is_file() {
+            out.push(cand.to_string_lossy().to_string());
+        }
     }
     out
 }
 
-/// Ordered pandoc candidates to try: the configured override FIRST (if
-/// non-empty), then the bare `pandoc` PATH lookup. Both are probed in order so
-/// a stale/mistyped override does NOT hide a valid Pandoc on PATH — detection
-/// falls through to PATH before reporting Not Installed (the settings contract
-/// promises the override is checked first, *falling back* to PATH). Deduped so
-/// an override literally equal to `pandoc` isn't probed twice.
+/// Ordered pandoc candidates (see `candidate_order`), fed the real config
+/// override and the concrete PATH executables.
 fn pandoc_candidates() -> Vec<String> {
     candidate_order(
         capture_config::load_config()
             .document_import
             .pandoc_path
             .as_deref(),
+        &path_pandoc_executables(),
     )
 }
 
@@ -640,17 +682,43 @@ mod tests {
     }
 
     #[test]
-    fn candidates_try_override_then_path_deduped() {
-        // No override: just PATH.
-        assert_eq!(candidate_order(None), vec!["pandoc".to_string()]);
-        // Override present: override first, then PATH.
+    fn candidates_try_override_then_path_execs_then_bare_deduped() {
+        let no_execs: Vec<String> = vec![];
+        // No override, no PATH execs: just the bare-pandoc fallback.
+        assert_eq!(candidate_order(None, &no_execs), vec!["pandoc".to_string()]);
+        // Override first, then each concrete PATH exec, then bare fallback.
         assert_eq!(
-            candidate_order(Some("/custom/pandoc")),
-            vec!["/custom/pandoc".to_string(), "pandoc".to_string()]
+            candidate_order(
+                Some("/custom/pandoc"),
+                &[
+                    "/usr/bin/pandoc".to_string(),
+                    "/opt/pandoc/pandoc".to_string()
+                ]
+            ),
+            vec![
+                "/custom/pandoc".to_string(),
+                "/usr/bin/pandoc".to_string(),
+                "/opt/pandoc/pandoc".to_string(),
+                "pandoc".to_string(),
+            ]
         );
         // Blank override is treated as unset.
-        assert_eq!(candidate_order(Some("   ")), vec!["pandoc".to_string()]);
-        // Override literally "pandoc" is deduped, not probed twice.
-        assert_eq!(candidate_order(Some("pandoc")), vec!["pandoc".to_string()]);
+        assert_eq!(
+            candidate_order(Some("   "), &no_execs),
+            vec!["pandoc".to_string()]
+        );
+        // A PATH exec / override literally "pandoc" is deduped against the fallback.
+        assert_eq!(
+            candidate_order(Some("pandoc"), &["pandoc".to_string()]),
+            vec!["pandoc".to_string()]
+        );
+        // Duplicate PATH execs collapse (case-insensitive), order preserved.
+        assert_eq!(
+            candidate_order(
+                None,
+                &["/usr/bin/pandoc".to_string(), "/usr/bin/pandoc".to_string()]
+            ),
+            vec!["/usr/bin/pandoc".to_string(), "pandoc".to_string()]
+        );
     }
 }
