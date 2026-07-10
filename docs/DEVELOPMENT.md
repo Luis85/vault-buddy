@@ -179,7 +179,8 @@ is a reviewed, justified decision, never a side effect.
 The Rust side mirrors the same harness. In the `rust-core` job:
 
 - `cargo fmt --check` (whole workspace) and clippy `-D warnings` + tests on
-  the three member crates, including the `whisper` feature pass (unchanged).
+  the four member crates (core, capture, transcribe, mcp), including the
+  `whisper` feature pass.
 - **Unused dependencies** — `cargo machete src-tauri` (the fallow dead-deps
   analogue).
 - **Coverage floor** — `cargo llvm-cov -p vault_buddy_core -p
