@@ -60,7 +60,13 @@ pub fn discover_vaults() -> Vec<Vault> {
 pub fn discover_vaults_from(config_path: &Path) -> Vec<Vault> {
     match std::fs::read_to_string(config_path) {
         Ok(json) => parse_obsidian_config(&json),
-        Err(_) => Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            // GAP-23: an existing-but-unreadable obsidian.json showed the
+            // user "no vaults" with zero log trail.
+            log::warn!("discovery: cannot read {}: {e}", config_path.display());
+            Vec::new()
+        }
     }
 }
 
@@ -137,5 +143,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vaults = discover_vaults_from(&dir.path().join("nope.json"));
         assert_eq!(vaults, Vec::new());
+    }
+
+    #[test]
+    fn unreadable_registry_still_degrades_to_empty() {
+        // GAP-23 posture: the return value still degrades (never an error);
+        // the fix only adds a warn log for non-NotFound failures. Reading a
+        // DIRECTORY as the config file is the portable non-NotFound error.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(discover_vaults_from(dir.path()).is_empty());
     }
 }

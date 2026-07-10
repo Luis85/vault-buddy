@@ -252,15 +252,11 @@ locks).
 The repo's own invariant: *no swallowed error* — anything caught-and-hidden
 goes through `log::warn!`/`log::error!`. These sites violate it.
 
-### GAP-23 · Medium · Silent `Ok`-with-empty on unreadable single-file configs
-`core/src/discovery.rs:63` (existing-but-unreadable `obsidian.json` → empty
-vault list, user sees "no vaults", logs say nothing),
-`core/src/capture_config.rs:226` (`load_config`),
-`core/src/daily_notes.rs:46` (`load_settings`),
-`core/src/app_diagnostics.rs:27` (`check_previous_run`'s `_ =>` arm),
-`core/src/transcript.rs:189/247` (unreadable-sidecar arms). The vault-walk
-scan noise is a documented exception; these one-file reads are not.
-**Fix:** `log::warn!` on any error other than NotFound at each site.
+### GAP-23 · ~~Medium~~ FIXED 2026-07-10 · Silent `Ok`-with-empty on unreadable single-file configs
+All six arms (`discovery`, `capture_config::load_config_from`,
+`daily_notes::load_settings`, `app_diagnostics::check_previous_run`,
+`transcript::needs_transcription`/`transcript_status`) now `log::warn!` on
+any read error other than NotFound; return values still degrade unchanged.
 
 ### GAP-24 · Medium · `.expect` on thread spawn inside main-thread native callbacks
 `lib.rs:284` (`close-finalize` in the CloseRequested handler),

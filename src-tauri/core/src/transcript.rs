@@ -193,8 +193,12 @@ pub fn needs_transcription(mp3: &Path) -> bool {
     match std::fs::read_to_string(&path) {
         Ok(content) => marker(&content).as_deref() == Some("pending"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
-        // Unreadable (permissions/AV lock): don't spin on it this pass.
-        Err(_) => false,
+        // Unreadable (permissions/AV lock): don't spin on it this pass —
+        // but say so (GAP-23), or the skip is invisible.
+        Err(e) => {
+            log::warn!("transcribe: cannot read sidecar {}: {e}", path.display());
+            false
+        }
     }
 }
 
@@ -246,7 +250,8 @@ impl TranscriptStatus {
 /// marker, or a user's hand-edit) reads as `Complete` so the re-transcribe
 /// confirm fires before it is overwritten. Unreadable → `Missing` (best-effort).
 pub fn transcript_status(mp3: &Path) -> TranscriptStatus {
-    match std::fs::read_to_string(transcript_path(mp3)) {
+    let path = transcript_path(mp3);
+    match std::fs::read_to_string(&path) {
         Ok(content) => match marker(&content).as_deref() {
             Some("pending") => TranscriptStatus::Pending,
             Some("failed") => TranscriptStatus::Failed,
@@ -256,7 +261,10 @@ pub fn transcript_status(mp3: &Path) -> TranscriptStatus {
             _ => TranscriptStatus::Complete,
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => TranscriptStatus::Missing,
-        Err(_) => TranscriptStatus::Missing,
+        Err(e) => {
+            log::warn!("transcribe: cannot read sidecar {}: {e}", path.display());
+            TranscriptStatus::Missing
+        }
     }
 }
 
