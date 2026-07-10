@@ -446,14 +446,16 @@ closed (including on an API error) unless the most recent completed run is
 tombstone for the same reason as GAP-41 — untestable outside a real
 dispatch/tag push.
 
-### GAP-43 · Medium · No Rust tests run on Windows (clippy half FIXED 2026-07-10)
+### GAP-43 · ~~Medium~~ FIXED 2026-07-10 · No Rust tests run on Windows
 The workspace-clippy half is fixed: `linux-app` now runs
 `cargo clippy --workspace --all-targets -- -D warnings`, covering the
-shell. Still open: the most platform-sensitive code (process detection,
-`GetKeyState`, whisper on MSVC, WASAPI loopback) is Windows-only, yet
-`windows-app` is build-only.
-**Fix:** a `cargo test` step (core + capture + transcribe
-`--features whisper`) in the Windows job.
+shell. The test half is fixed: `windows-app` now runs `cargo test` for
+core, capture, and transcribe (including `--features whisper`) after the
+build step, so the most platform-sensitive code (process detection,
+`GetKeyState`, WASAPI loopback gates, MoveFileExW's non-replacing fallback,
+whisper on MSVC) executes in CI for the first time — including the GAP-06
+`cfg(windows)` MoveFileExW contract test and the GAP-08 startup-wedge
+predicate.
 
 ### GAP-44 · Low · Release/bump edges
 - ~~No CI job runs `node scripts/bump-version.mjs --check`~~ — fixed
@@ -482,8 +484,8 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 - `capture_paths.rs`: `rename_noreplace`'s link-succeeded-but-remove-failed
   warn path; `assert_root_inside_vault` with a missing vault path. (The
   GAP-06 non-decisive-error fallback itself is no longer untested: the
-  non-Windows arm has direct contract tests, and a `cfg(windows)` twin
-  awaits GAP-43's Windows `cargo test` CI step.)
+  non-Windows arm has direct contract tests, and the `cfg(windows)` twin
+  now executes on the Windows CI runner, fixed 2026-07-10.)
 - `capture_note.rs`: `write_atomic_replacing`'s numbered-temp squatter path
   and failure-cleanup branch (only `write_note_atomic`'s squatter is
   tested).
@@ -502,7 +504,8 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 - `devices.rs`: only "never panics" smoke tests can run on device-less CI
   runners — the format-dispatch arms, the error-callback → `Lost` path, and
   the entire `#[cfg(windows)]` loopback block are never *executed* by any
-  test anywhere (Windows CI never runs `cargo test`, GAP-43).
+  test on device-capable runners (fixed for core/capture/transcribe crates
+  on Windows CI, 2026-07-10).
 - `session.rs`: mid-recording encode/write/flush failure and best-effort
   finalize; `plan_tick` (GAP-05) is unit-tested but the suspend path itself
   cannot be exercised end-to-end (`Instant` is unmockable) — the loop
@@ -719,8 +722,8 @@ not regress:
   on dangling symlinks; `EmitThrottle`/`PositionCheckpointer` state
   machines; write-path TOCTOUs backstopped by exclusive-create or
   `rename_noreplace`, including the GAP-06 fallback (direct contract tests
-  on the non-Windows arm; the `cfg(windows)` twin awaits GAP-43's Windows
-  `cargo test` CI step).
+  on the non-Windows arm; the `cfg(windows)` twin now executes on Windows
+  CI, fixed 2026-07-10).
 - **Capture/transcribe**: exclusive `.part` create; pairwise reservation
   including the transcript name; recovery ownership/layout/staleness
   filters; pause-never-blocks-shutdown; rename keeps the date prefix and

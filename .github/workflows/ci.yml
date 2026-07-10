@@ -151,6 +151,16 @@ jobs:
           else
             npx tauri build
           fi
+      # The most platform-sensitive code (process detection, GetKeyState,
+      # WASAPI loopback gates, MoveFileExW's non-replacing fallback, whisper
+      # on MSVC) is Windows-only, yet this job was build-only — the
+      # cfg(windows) tests never executed anywhere (GAP-43).
+      - name: tests (core + capture + transcribe crates, Windows)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
+        working-directory: src-tauri
+      - name: tests (transcribe crate, whisper feature, Windows)
+        run: cargo test -p vault_buddy_transcribe --features whisper
+        working-directory: src-tauri
       - name: Upload Windows installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
