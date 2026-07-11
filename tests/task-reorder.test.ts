@@ -161,6 +161,26 @@ describe("manual reordering", () => {
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
 
+  it("blocks further reorders until an in-flight single-rank write lands (Codex #53 re-review)", async () => {
+    // While a midpoint write is pending, every handle must disappear (the
+    // view-level guard) so a second reorder can't be computed against the
+    // optimistic, not-yet-persisted order — which would diverge if the first
+    // write later fails and reverts.
+    let resolveWrite!: (v: unknown) => void;
+    const { wrapper } = mountManual([task("a", 1024), task("b", 2048), task("c", 3072)], {
+      update_task: () => new Promise((r) => (resolveWrite = r)),
+    });
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(3);
+    await wrapper.findAll('[data-testid="task-drag"]')[0].trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    // Guard engaged: no handle is reorderable until the write resolves.
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0);
+    resolveWrite(null);
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(3);
+  });
+
   it("keeps already-written ranks on a partial materialize failure (Codex #53 re-review)", async () => {
     // The batch writes b then c; fail the SECOND write. b already reached
     // disk, so its new rank must stay in memory (matching disk) — a blanket

@@ -173,6 +173,13 @@ async function writeSingleRank(task: AggTask, order: number) {
   task.order = order;
   sortInPlace();
   busy.value.add(task.path);
+  // The view-level guard (same one materialization uses) disables ALL handles
+  // until this write resolves — not just the per-path busy flag. A second
+  // reorder of a DIFFERENT row would compute its rank against this optimistic,
+  // not-yet-persisted position; if this write then fails and reverts, that
+  // second rank would be relative to a slot that never landed, diverging from
+  // what the user asked for. Serialize reorders view-wide instead.
+  reordering.value = true;
   try {
     await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order } });
   } catch (e) {
@@ -182,6 +189,7 @@ async function writeSingleRank(task: AggTask, order: number) {
     logWarning(`reorder failed: ${String(e)}`);
   } finally {
     busy.value.delete(task.path);
+    reordering.value = false;
   }
 }
 
