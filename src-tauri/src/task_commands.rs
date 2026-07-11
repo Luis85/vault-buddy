@@ -9,15 +9,22 @@ use crate::capture_commands::ConfigWriteLock;
 #[serde(rename_all = "camelCase")]
 pub struct TasksConfigDto {
     pub tasks_folder: Option<String>,
+    /// The lists settings object: where unpicked new tasks land (None → the
+    /// tasks root) and the display order for list sections/pickers.
+    pub default_list: Option<String>,
+    pub list_order: Vec<String>,
 }
 
 /// The vault's configured tasks folder (or None → the frontend shows the
-/// default "Tasks"). Unknown vaults return None — never an error.
+/// default "Tasks") plus the lists settings object. Unknown vaults return
+/// the defaults — never an error.
 #[tauri::command]
 pub fn get_tasks_config(id: String) -> TasksConfigDto {
     let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
     TasksConfigDto {
         tasks_folder: cfg.tasks_folder,
+        default_list: cfg.default_list,
+        list_order: cfg.list_order,
     }
 }
 
@@ -51,6 +58,83 @@ pub fn set_tasks_config(
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.tasks_folder = folder;
     capture_config::update_vault_config(&id, value)
+}
+
+/// Persist the vault's lists settings object (default list + list order),
+/// preserving the tasks folder and every other per-vault field via the same
+/// read-modify-write under ConfigWriteLock that set_tasks_config uses. Its
+/// own command — not a widened set_tasks_config — so a lists-config failure
+/// can't block the folder save and vice versa (the CaptureSettings pattern
+/// of independent field-level saves).
+///
+/// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
+#[tauri::command]
+pub async fn set_task_lists_config(
+    lock: tauri::State<'_, ConfigWriteLock>,
+    id: String,
+    default_list: Option<String>,
+    list_order: Vec<String>,
+) -> Result<(), String> {
+    crate::commands::find_vault(&id)?;
+    // Write-strict on the default list (the settings UI offers existing
+    // lists, so anything unsafe is bad input, not hand-edited config):
+    // normalize rejects `..`/absolute forms; empty → None (the tasks root).
+    let default_list = match default_list.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(l) => Some(tasks::normalize_list_rel(l)?).filter(|n| !n.is_empty()),
+    };
+    let list_order: Vec<String> = list_order
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
+    value.default_list = default_list;
+    value.list_order = list_order;
+    capture_config::update_vault_config(&id, value)
+}
+
+/// Read-only enumeration of a vault's list folders. Best-effort empty on an
+/// unknown vault / unsafe root, mirroring list_tasks. Never writes.
+///
+/// ASYNC (GAP-22): a directory walk — off the main thread.
+#[tauri::command]
+pub async fn list_task_lists(id: String) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::list_task_lists(&ServicePaths::real(), &id)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_task_lists: task failed: {e}");
+        Vec::new()
+    })
+}
+
+/// Create a list folder in the vault's tasks root; returns the created
+/// list's relative name. Write-strict validation lives in core/services.
+///
+/// ASYNC (GAP-22 class): directory creation on a possibly-slow vault.
+#[tauri::command]
+pub async fn create_task_list(id: String, name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::create_task_list(&ServicePaths::real(), &id, &name)
+    })
+    .await
+    .map_err(|e| format!("create_task_list: task failed: {e}"))?
+}
+
+/// Move a task file into another list's folder; returns the landed absolute
+/// path (which may carry a collision suffix the UI must adopt).
+///
+/// ASYNC (GAP-22 class): a vault file move (fsync-class I/O).
+#[tauri::command]
+pub async fn move_task_to_list(id: String, path: String, list: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::move_task_to_list(&ServicePaths::real(), &id, &path, &list)
+    })
+    .await
+    .map_err(|e| format!("move_task_to_list: task failed: {e}"))?
 }
 
 /// Resolve a vault id to (vault path, lexically-safe tasks root). The shell
@@ -137,6 +221,7 @@ pub async fn add_task(
     due: Option<String>,
     priority: Option<String>,
     tags: Option<Vec<String>>,
+    list: Option<String>,
 ) -> Result<TaskDto, String> {
     // Local calendar date (YYYY-MM-DD), matching every other date-sensitive
     // path in the app (capture uses chrono::Local::now().date_naive()). A UTC
@@ -149,6 +234,8 @@ pub async fn add_task(
     let due = validated_due(due)?;
     let priority = validated_priority(priority)?;
     let tags = validated_tags(tags.unwrap_or_default())?;
+    // The list is validated in services (normalize_list_rel — the same gate
+    // the move uses); None falls back to the vault's configured defaultList.
     tauri::async_runtime::spawn_blocking(move || {
         services::add_task(
             &ServicePaths::real(),
@@ -158,6 +245,7 @@ pub async fn add_task(
             due.as_deref(),
             priority.as_deref(),
             &tags,
+            list.as_deref(),
         )
     })
     .await
@@ -213,6 +301,10 @@ pub struct TaskPatchDto {
     pub priority: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Manual rank (the drag-to-reorder write). Nothing un-ranks a task this
+    /// slice, so there is no clear flag.
+    #[serde(default)]
+    pub order: Option<f64>,
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
@@ -242,6 +334,16 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
     }
     if patch.priority.is_some() {
         updates.push(("priority", validated_priority(patch.priority.clone())?));
+    }
+    if let Some(order) = patch.order {
+        // Finite only: NaN/inf would serialize as unparseable YAML and the
+        // lenient read would silently un-rank the task on the next list.
+        if !order.is_finite() {
+            return Err("Task order must be a finite number.".to_string());
+        }
+        // Rust's f64 Display is shortest-round-trip: 1536 not 1536.0, and
+        // 1536.5 stays 1536.5 — the frontmatter stays human-readable.
+        updates.push(("order", Some(format!("{order}"))));
     }
     if let Some(tags) = patch.tags {
         let tags = validated_tags(tags)?;
@@ -306,11 +408,19 @@ mod tests {
     use super::*;
 
     // GAP-22: list_tasks/count_open_tasks must be async — the recursive
-    // tasks-folder walk ran on the main thread on every panel open.
+    // tasks-folder walk ran on the main thread on every panel open. The
+    // lists commands walk/write the same folders, so they carry the same
+    // pin (set_task_lists_config is async by construction — its State
+    // parameter can't be built here).
     #[allow(dead_code)]
     fn task_list_commands_are_async() {
         fn is_future<F: std::future::Future>(_: fn(String) -> F) {}
+        fn is_future2<F: std::future::Future>(_: fn(String, String) -> F) {}
+        fn is_future3<F: std::future::Future>(_: fn(String, String, String) -> F) {}
         is_future(list_tasks);
         is_future(count_open_tasks);
+        is_future(list_task_lists);
+        is_future2(create_task_list);
+        is_future3(move_task_to_list);
     }
 }
