@@ -126,6 +126,9 @@ pub struct TaskDto {
     pub status: String,
     pub created: String,
     pub done: bool,
+    pub due: Option<String>,
+    pub priority: Option<String>,
+    pub tags: Vec<String>,
 }
 
 impl TaskDto {
@@ -136,6 +139,9 @@ impl TaskDto {
             status: t.status,
             created: t.created,
             done: t.done,
+            due: t.due,
+            priority: t.priority,
+            tags: t.tags,
         }
     }
 }
@@ -187,12 +193,18 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
 
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it. `today`
-/// (`YYYY-MM-DD`) is supplied by the caller — no clock in core.
+/// (`YYYY-MM-DD`) is supplied by the caller — no clock in core. `due`,
+/// `priority`, and `tags` are written only when present and are assumed
+/// ALREADY VALIDATED by the caller's gate (the IPC command validates
+/// strictly; a caller passing raw input would write it verbatim).
 pub fn add_task(
     paths: &ServicePaths,
     id: &str,
     title: &str,
     today: &str,
+    due: Option<&str>,
+    priority: Option<&str>,
+    tags: &[String],
 ) -> Result<TaskDto, String> {
     let title = title.trim();
     if title.is_empty() {
@@ -204,7 +216,11 @@ pub fn add_task(
     // path (+ Tasks) and write a task into a directory that is no longer a
     // real vault. `start_capture` guards its recording write the same way.
     if !vault_path.is_dir() {
-        return Err(format!("Vault folder not found: {}", vault_path.display()));
+        // The absolute vault path stays in the log only — it once reached the
+        // panel toast and MCP clients verbatim (GAP-26 remainder); the
+        // user-facing copy now matches start_capture_blocking's own pattern.
+        log::warn!("add_task: vault folder missing: {}", vault_path.display());
+        return Err("Vault folder not found — was it moved or deleted?".to_string());
     }
     // Validate the folder resolves inside the vault BEFORE creating it: this
     // canonicalizes the nearest existing ancestor, so a symlink/junction at any
@@ -213,7 +229,7 @@ pub fn add_task(
     // lexical safe_recording_root already rejected `..`/absolute components.
     capture_paths::assert_path_inside_vault(&vault_path, &root)?;
     std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
-    let path = tasks::create_task(&root, title, today)
+    let path = tasks::create_task(&root, title, today, due, priority, tags)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
@@ -221,6 +237,9 @@ pub fn add_task(
         status: "new".to_string(),
         created: today.to_string(),
         done: false,
+        due: due.map(str::to_string),
+        priority: priority.map(str::to_string),
+        tags: tags.to_vec(),
     })
 }
 
@@ -435,7 +454,16 @@ mod tests {
     fn add_list_and_toggle_tasks_through_the_service() {
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture(dir.path(), "MyVault");
-        let created = add_task(&paths, "deadbeef01234567", "Buy milk", "2026-07-09").unwrap();
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
         assert_eq!(created.title, "Buy milk");
         assert!(!created.done);
         assert!(vault.join("Tasks").is_dir());
@@ -451,11 +479,20 @@ mod tests {
     fn task_service_errors_mirror_the_command_layer() {
         let dir = tempfile::tempdir().unwrap();
         let (paths, _) = fixture(dir.path(), "MyVault");
-        assert!(add_task(&paths, "deadbeef01234567", "   ", "2026-07-09").is_err());
+        assert!(add_task(
+            &paths,
+            "deadbeef01234567",
+            "   ",
+            "2026-07-09",
+            None,
+            None,
+            &[]
+        )
+        .is_err());
         // The spec requires MCP/IPC failures to carry the same user-facing
         // message the panel shows ("was it removed from Obsidian?"), not a
         // terse internal one that leaks only a raw hex id.
-        let err = add_task(&paths, "unknown", "x", "2026-07-09")
+        let err = add_task(&paths, "unknown", "x", "2026-07-09", None, None, &[])
             .err()
             .expect("unknown vault must fail");
         assert!(err.contains("was it removed from Obsidian?"), "got: {err}");
@@ -473,8 +510,24 @@ mod tests {
         // the IPC command).
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture(dir.path(), "MyVault");
+        let vault_str = vault.to_string_lossy().into_owned();
         std::fs::remove_dir_all(&vault).unwrap();
-        assert!(add_task(&paths, "deadbeef01234567", "x", "2026-07-09").is_err());
+        let err = add_task(
+            &paths,
+            "deadbeef01234567",
+            "x",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+        )
+        .err()
+        .expect("missing vault dir must fail");
+        // GAP-26 remainder: the user-facing message must not leak the
+        // absolute vault path (it reaches the panel toast and MCP clients
+        // verbatim) and must match the shell's own start_capture copy.
+        assert_eq!(err, "Vault folder not found — was it moved or deleted?");
+        assert!(!err.contains(&vault_str), "got: {err}");
     }
 
     #[test]

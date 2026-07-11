@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import type { Vault } from "../types";
+import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
   vaults: Vault[];
@@ -183,20 +184,10 @@ const groups = computed(() => {
               data-testid="task-count"
               class="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-violet-500 px-1 text-center text-[9px] font-semibold leading-[14px] text-white"
             >{{ taskCounts[vault.id] }}</span>
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
+            <AppIcon>
               <path d="M9 11l3 3 8-8" />
               <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
-            </svg>
+            </AppIcon>
           </button>
           <button
             type="button"
@@ -234,17 +225,7 @@ const groups = computed(() => {
             title="Capture settings"
             @click="$emit('capture-settings', vault.id)"
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
+            <AppIcon>
               <circle
                 cx="12"
                 cy="12"
@@ -253,7 +234,7 @@ const groups = computed(() => {
               <path
                 d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
               />
-            </svg>
+            </AppIcon>
           </button>
         </div>
       </li>

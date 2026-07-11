@@ -387,7 +387,9 @@ impl VaultBuddyMcp {
         let outcome = Self::offload("add_task", move || {
             let vault = services::find_vault(&deps.paths, &vault_id)?;
             let today = Self::today().format("%Y-%m-%d").to_string();
-            let task = services::add_task(&deps.paths, &vault_id, &title, &today)?;
+            // The MCP tool's input schema is title-only this slice; due/
+            // priority/tags stay absent (the IPC command's widened surface).
+            let task = services::add_task(&deps.paths, &vault_id, &title, &today, None, None, &[])?;
             Ok((vault.name, task))
         })
         .await;

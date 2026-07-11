@@ -36,7 +36,7 @@ pub fn format_duration(secs: u64) -> String {
 /// newlines to spaces. Vault and device names are user/system input;
 /// unquoted they could break the frontmatter or inject fields — and an
 /// unquoted `1:02:03` duration even parses as YAML sexagesimal.
-pub(crate) fn yaml_quote(value: &str) -> String {
+pub fn yaml_quote(value: &str) -> String {
     let escaped = value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
@@ -73,7 +73,7 @@ pub fn note_field(content: &str, key: &str) -> Option<String> {
 /// Inverse of `yaml_quote` for the double-quoted form: strip the surrounding
 /// quotes and unescape `\"` then `\\` (reverse order of the escaping). An
 /// unquoted scalar (older/hand-edited note) is returned as-is.
-fn unquote_yaml(value: &str) -> String {
+pub(crate) fn unquote_yaml(value: &str) -> String {
     match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
         Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
         None => value.to_string(),

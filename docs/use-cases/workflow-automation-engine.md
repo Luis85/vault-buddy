@@ -2,7 +2,7 @@
 type: UseCase
 status: planned
 domain: workflow-engine
-source_prd: "docs/PRD - Product Vision.md"
+source_prd: "docs/PRD.md"
 tags: [use-case, workflow-engine]
 ---
 
@@ -12,7 +12,7 @@ tags: [use-case, workflow-engine]
 
 ## Source
 
-Main PRD, [§11 Core Capabilities → Workflow Automation](../PRD%20-%20Product%20Vision.md), [§14 Functional Requirements → Workflow Engine](../PRD%20-%20Product%20Vision.md) (visual workflows, triggers, actions, conditions, variables, reusable templates, scheduling), and [§18 Roadmap → Phase 2 — Productivity](../PRD%20-%20Product%20Vision.md). Knowledge Lifecycle PRD, [Lifecycle Stage 6 — Workflow Automation](../prds/knowledge-lifecycle.md) (Morning Routine, Meeting Preparation, Research Sessions, Release Planning, Daily Reviews, Inbox Processing, Documentation Generation, Knowledge Reviews). AI Platform PRD, [Workflow Integration](../prds/ai-platform.md) example ("Morning Routine": open daily note → show tasks → review calendar → summarize yesterday → generate focus plan).
+Main PRD, [§11 Core Capabilities → Workflow Automation](../PRD.md), [§14 Functional Requirements → Workflow Engine](../PRD.md) (visual workflows, triggers, actions, conditions, variables, reusable templates, scheduling), and [§18 Roadmap → Phase 2 — Productivity](../PRD.md). Knowledge Lifecycle PRD, [Lifecycle Stage 6 — Workflow Automation](../prds/knowledge-lifecycle.md) (Morning Routine, Meeting Preparation, Research Sessions, Release Planning, Daily Reviews, Inbox Processing, Documentation Generation, Knowledge Reviews). AI Platform PRD, [Workflow Integration](../prds/ai-platform.md) example ("Morning Routine": open daily note → show tasks → review calendar → summarize yesterday → generate focus plan).
 
 ## Status: Not started
 

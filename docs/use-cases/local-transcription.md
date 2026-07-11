@@ -18,7 +18,7 @@ tags: [use-case, knowledge-intake]
 
 ## Source
 
-Main PRD, [§18 Product Roadmap → Phase 3 — Intelligence](../PRD%20-%20Product%20Vision.md): *"Landed early: Local AI ✓ (on-device speech-to-text)... shipped in v0.3.0, ahead of Phase 2."* Knowledge Intake PRD, [Vault Settings → Transcription (shipped)](../prds/knowledge-intake.md): model tier, language/auto-detect, segment timestamps, follow-up template toggle.
+Main PRD, [§18 Product Roadmap → Phase 3 — Intelligence](../PRD.md): *"Landed early: Local AI ✓ (on-device speech-to-text)... shipped in v0.3.0, ahead of Phase 2."* Knowledge Intake PRD, [Vault Settings → Transcription (shipped)](../prds/knowledge-intake.md): model tier, language/auto-detect, segment timestamps, follow-up template toggle.
 
 ## Status: Shipped (v0.3.0), hardened through v0.5.0
 

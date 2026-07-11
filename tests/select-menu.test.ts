@@ -1,5 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import SelectMenu from "../src/components/SelectMenu.vue";
 
@@ -52,5 +52,48 @@ describe("SelectMenu", () => {
     expect(w.get('[data-testid="lang"]').attributes("aria-expanded")).toBe("false");
     await w.get('[data-testid="lang"]').trigger("click");
     expect(w.get('[data-testid="lang"]').attributes("aria-expanded")).toBe("true");
+  });
+
+  it("Escape closes the menu without reaching window listeners (GAP-27)", async () => {
+    // Dismissing a dropdown used to bubble Escape to window, where PanelRoot
+    // closes the whole panel.
+    const windowSpy = vi.fn();
+    window.addEventListener("keydown", windowSpy);
+    try {
+      const w = mountMenu("");
+      await w.get('[data-testid="lang"]').trigger("click");
+      const popup = document.body.querySelector('[role="listbox"]') as HTMLElement;
+      await popup.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      await flushPromises();
+      expect(document.body.querySelector('[role="option"]')).toBeNull();
+      expect(windowSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowSpy);
+    }
+  });
+
+  it("moves aria-activedescendant with the keyboard highlight (GAP-33)", async () => {
+    const w = mountMenu("");
+    await w.get('[data-testid="lang"]').trigger("click");
+    const ul = document.body.querySelector('[role="listbox"]') as HTMLElement;
+    ul.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await flushPromises();
+    const active = ul.getAttribute("aria-activedescendant");
+    expect(active).toBeTruthy();
+    expect(document.getElementById(active!)?.textContent).toContain("German");
+  });
+
+  it("Home and End jump to the first and last option (GAP-33)", async () => {
+    const w = mountMenu("");
+    await w.get('[data-testid="lang"]').trigger("click");
+    const ul = document.body.querySelector('[role="listbox"]') as HTMLElement;
+    ul.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    await flushPromises();
+    expect(ul.getAttribute("aria-activedescendant")).toMatch(/-opt-2$/);
+    ul.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    await flushPromises();
+    expect(ul.getAttribute("aria-activedescendant")).toMatch(/-opt-0$/);
   });
 });

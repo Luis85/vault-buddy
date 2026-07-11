@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { defineStore } from "pinia";
 
 import { announce } from "../announce";
-import { dailyNoteOpenedMessage,vaultOpenedMessage } from "../buddyMessages";
+import { dailyNoteOpenedMessage, vaultOpenedMessage } from "../buddyMessages";
 import { logWarning } from "../logging";
 import type { Vault } from "../types";
 
@@ -120,6 +120,18 @@ export const useVaultsStore = defineStore("vaults", {
       );
       this.taskCounts = Object.fromEntries(entries);
     },
+    /** Refresh ONE vault's open-task badge after a mutation (GAP-32 / Codex
+     * PR #46): panel-shown is too late for a badge the user is looking at.
+     * On failure keep the previous count — zeroing a badge because one
+     * mid-session refresh failed would misreport a vault that has tasks. */
+    async refreshTaskCount(id: string) {
+      try {
+        const count = await invoke<number>("count_open_tasks", { id });
+        this.taskCounts = { ...this.taskCounts, [id]: count };
+      } catch (e) {
+        logWarning(`count_open_tasks refresh failed for vault ${id}: ${String(e)}`);
+      }
+    },
     // Ask the next panel open to land on `view` instead of the vault list.
     // Reflected immediately (a still-open panel updates now) and stored as
     // pending so the panel-shown `refresh` re-applies it rather than resetting
@@ -198,6 +210,11 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = "tasks";
       this.tasksVaultId = vaultId;
     },
+    /** The cross-vault "All tasks" view — tasks view with no vault selected. */
+    openAllTasks() {
+      this.view = "tasks";
+      this.tasksVaultId = null;
+    },
     // Cross-vault, so no per-vault id to remember (unlike tasks/recordings).
     // back() needs no case: search falls through to the final else → showList.
     openSearch() {
@@ -223,6 +240,11 @@ export const useVaultsStore = defineStore("vaults", {
       } else if (this.view === "transcriptions") {
         return this.showList();
       } else if (this.view === "tasks") {
+        // Leaving the tasks view: a full reload (not just the one row a
+        // single mutation would refresh) covers bulk edits and the
+        // aggregate view's null vaultId, where there's no single vault to
+        // target with refreshTaskCount.
+        void this.loadTaskCounts();
         return this.showList();
       } else {
         this.showList();

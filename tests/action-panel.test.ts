@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
+import Tasks from "../src/components/Tasks.vue";
 import { useCaptureStore } from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useVaultsStore } from "../src/stores/vaults";
@@ -39,9 +40,45 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(10); // 2 vaults × (row + daily note + tasks + capture + gear)
+    // 2 vaults × (row + daily note + tasks + capture + gear) + All-tasks bar
+    expect(buttons).toHaveLength(11);
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
+  });
+
+  it("shows the All-tasks entry bar with the summed open count and opens aggregate mode", async () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.taskCounts = { d4e5f6: 2, a1b2c3: 3 };
+    const wrapper = mount(ActionPanel, { global: { stubs: { Tasks: true } } });
+    expect(wrapper.get('[data-testid="all-tasks-count"]').text()).toBe("5");
+    await wrapper.get('[data-testid="all-tasks"]').trigger("click");
+    expect(store.view).toBe("tasks");
+    expect(store.tasksVaultId).toBeNull();
+    expect(wrapper.text()).toContain("All tasks");
+    // Regression: the container guard must render the Tasks component in
+    // aggregate mode (tasksVaultId === null) — a truthy guard would fall
+    // through to the vault list while the header still said "All tasks".
+    expect(wrapper.findComponent(Tasks).exists()).toBe(true);
+  });
+
+  it("hides the count badge at zero", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.taskCounts = {};
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.get('[data-testid="all-tasks"]').text()).toContain("All tasks");
+    expect(wrapper.find('[data-testid="all-tasks-count"]').exists()).toBe(false);
+  });
+
+  it("hides the bar without vaults", () => {
+    const store = useVaultsStore();
+    store.vaults = [];
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="all-tasks"]').exists()).toBe(false);
   });
 
   it("dispatches open_daily_note with the vault id", async () => {
@@ -163,6 +200,19 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Vault 5"); // list unfiltered again
   });
 
+  it("filter Escape ignores IME composition (GAP-31)", async () => {
+    // An IME cancel arrives as Escape with isComposing: the vault filter must
+    // not clear while the user is composing.
+    const store = useVaultsStore();
+    store.vaults = manyVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    const filterInput = wrapper.find('input[type="search"]');
+    await filterInput.setValue("Vault 3");
+    await filterInput.trigger("keydown", { key: "Escape", isComposing: true });
+    expect((filterInput.element as HTMLInputElement).value).not.toBe("");
+  });
+
   it("shows the friendly empty state when no vaults were found", () => {
     const store = useVaultsStore();
     store.loaded = true;
@@ -190,8 +240,9 @@ describe("ActionPanel", () => {
     store.busyCommand = "open_vault";
     const wrapper = mount(ActionPanel);
     // vault action buttons only — the header's settings gear stays usable
+    // 2 vaults × (row + daily note + tasks + capture + gear) + All-tasks bar
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(10);
+    expect(buttons).toHaveLength(11);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );
@@ -381,6 +432,7 @@ describe("ActionPanel", () => {
     const wrapper = mount(ActionPanel);
     const capture = useCaptureStore();
     capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    capture.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("name this recording");
 
@@ -388,6 +440,24 @@ describe("ActionPanel", () => {
     store.shownNonce++; // the panel was reopened
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).not.toContain("name this recording");
+  });
+
+  it("keeps a fresh rename prompt when the panel is shown again (GAP-29)", async () => {
+    // Regression: this test used to fail with an unconditional
+    // `capture.dismissRename()` in the shownNonce watcher — a tray-stopped
+    // recording arms lastSaved while the panel is hidden, and the reopen
+    // reset killed the prompt before it ever rendered.
+    const wrapper = mount(ActionPanel);
+    const capture = useCaptureStore();
+    capture.lastSaved = { mp3: "/v/2026-07-04 1405 Meeting.mp3", note: null };
+    capture.lastSavedAtMs = Date.now() - 5_000; // well within RENAME_PROMPT_MS
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
+
+    const store = useVaultsStore();
+    store.shownNonce++; // the panel was reopened
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("name this recording");
   });
 
   it("renders the Recordings view with its title", async () => {

@@ -239,4 +239,18 @@ describe("updates store", () => {
     expect(mocks.check).not.toHaveBeenCalled();
     expect(store.phase).toBe("checking");
   });
+
+  it("quiet check discards a result that raced a manual check (GAP-28)", async () => {
+    // A slow quiet check resolving after the user manually checked/installed
+    // used to flip phase back to `available` mid-install.
+    let resolveCheck!: (u: unknown) => void;
+    mocks.check.mockReturnValueOnce(new Promise((r) => (resolveCheck = r)));
+    const store = useUpdatesStore();
+    const quiet = store.checkForUpdatesQuietly();
+    store.phase = "installing"; // a manual flow started while the quiet check hung
+    resolveCheck({ version: "9.9.9", download: vi.fn(), install: vi.fn() });
+    await quiet;
+    expect(store.phase).toBe("installing");
+    expect(store.available).toBeNull();
+  });
 });

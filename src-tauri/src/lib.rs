@@ -295,7 +295,7 @@ pub fn run() {
             }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
-                if capture_commands::is_recording(app) {
+                if capture_commands::recording_blocks_shutdown(app) {
                     // Alt+F4 / session shutdown bypass tray::quit — the
                     // recording must still finalize, but that wait is
                     // unbounded and this callback runs on the event loop:
@@ -304,7 +304,7 @@ pub fn run() {
                     // re-trigger it via the app handle.
                     api.prevent_close();
                     let app = app.clone();
-                    std::thread::Builder::new()
+                    let spawned = std::thread::Builder::new()
                         .name("close-finalize".into())
                         .spawn(move || {
                             capture_commands::finalize_if_recording(&app);
@@ -315,8 +315,14 @@ pub fn run() {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.close();
                             }
-                        })
-                        .expect("failed to spawn close-finalize thread");
+                        });
+                    if let Err(e) = spawned {
+                        // Never panic in a window-event handler (aborts across
+                        // the WebView2 FFI boundary, no crash record). The
+                        // close stays prevented: better an app that ignores
+                        // one Alt+F4 than one that exits stranding a .part.
+                        log::error!("could not spawn close-finalize thread: {e}");
+                    }
                 } else {
                     // Alt+F4 / session end: the window is about to be
                     // destroyed and the process exits with it.
@@ -376,6 +382,8 @@ pub fn run() {
             task_commands::add_task,
             task_commands::set_task_status,
             task_commands::count_open_tasks,
+            task_commands::open_task,
+            task_commands::update_task,
             search_commands::search_vaults,
             search_commands::open_search_result,
             mcp_commands::get_mcp_config,

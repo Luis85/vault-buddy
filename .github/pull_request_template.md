@@ -15,8 +15,9 @@
 - [ ] `npm run build` (vue-tsc typecheck + production build)
 - [ ] `cd src-tauri && cargo fmt --check`
 - [ ] `cd src-tauri/core && cargo clippy --all-targets -- -D warnings && cargo test`
-- [ ] Windows-only change (`src-tauri/src/*.rs`) — verified against
-      `windows-app` CI, since it can't compile in this container
+- [ ] Shell change (`src-tauri/src/*.rs`) compile-gated on Linux
+      (`npm run setup:linux` once, then `npx tauri build --no-bundle`);
+      `windows-app` CI remains the desktop-behavior/release gate
 - [ ] Manually exercised the feature end-to-end (UI/UX changes)
 
 ## Related
@@ -27,7 +28,8 @@
 
 ---
 
-CI gates: `frontend` (typecheck, tests, build) → `rust-core` (fmt, clippy,
-tests) → `windows-app` (build + installer). Every PR also gets an automated
-Codex review and GitGuardian secret scanning — treat their findings as real
-leads and resolve the thread once addressed.
+CI jobs: `frontend` (typecheck, tests, build), `rust-core` (fmt, clippy,
+member-crate tests), `linux-app` (shell compile gate + workspace clippy +
+shell unit tests), and `windows-app` (full build + MSI/NSIS installers). Every
+PR also gets an automated Codex review and GitGuardian secret scanning — treat
+their findings as real leads and resolve the thread once addressed.

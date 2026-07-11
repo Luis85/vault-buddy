@@ -41,9 +41,13 @@ pub fn parse_settings(json: &str) -> DailyNoteSettings {
 
 pub fn load_settings(vault_path: &Path) -> DailyNoteSettings {
     let path = vault_path.join(".obsidian").join("daily-notes.json");
-    match std::fs::read_to_string(path) {
+    match std::fs::read_to_string(&path) {
         Ok(json) => parse_settings(&json),
-        Err(_) => DailyNoteSettings::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DailyNoteSettings::default(),
+        Err(e) => {
+            log::warn!("daily-notes: cannot read {}: {e}", path.display());
+            DailyNoteSettings::default()
+        }
     }
 }
 

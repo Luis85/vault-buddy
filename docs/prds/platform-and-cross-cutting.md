@@ -2,7 +2,7 @@
 
 - **Status:** Draft
 - **Version:** 0.1
-- **Parent Product:** [Vault Buddy](../PRD%20-%20Product%20Vision.md)
+- **Parent Product:** [Vault Buddy](../PRD.md)
 
 Use cases extracted from this PRD, with shipping status: [Software
 Auto-Update](../use-cases/software-auto-update.md), [Diagnostics, Crash

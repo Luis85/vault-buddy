@@ -16,19 +16,77 @@ on:
 
 permissions:
   contents: write
+  # validate reads CI run conclusions for the released SHA (GAP-42)
+  actions: read
 
 jobs:
+  validate:
+    name: Validate tag, branch, and CI status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dispatch from main
+        # Tag pushes carry refs/tags/*; the branch guard applies to the
+        # dispatch path only (GAP-41 — dispatching from any branch used to
+        # release that branch's code under an arbitrary tag).
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Dispatch the release from main (was: $REF)"
+          exit 1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Tag must match tauri.conf.json's version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          EXPECTED="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Tag $TAG does not match tauri.conf.json ($EXPECTED) — a mismatch ships a latest.json whose version disagrees with the tag (GAP-41)"
+            exit 1
+          fi
+      - name: Released commit must be on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          # The dispatch guard above pins only the dispatch path to main; a
+          # pushed v* tag can point at ANY commit, and a matching version
+          # plus a green PR-branch CI run would publish that branch's code
+          # (Codex, PR #46 — the GAP-41 fix's remaining hole). Ancestry via
+          # the compare API (no checkout depth games): "identical"/"behind"
+          # means the tag target is contained in main.
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status 2>/dev/null || echo "")
+          if [ "$STATUS" != "identical" ] && [ "$STATUS" != "behind" ]; then
+            echo "::error::Released commit $SHA is not on main (compare status: '${STATUS:-none}') — tag a commit that main contains"
+            exit 1
+          fi
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          # A tag on a red or unvalidated commit must not publish (GAP-42):
+          # installed apps would be offered the broken build via the updater.
+          # Works identically for tag-push and dispatch — github.sha is the
+          # released commit either way.
+          CONCLUSION=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --commit "$SHA" --json conclusion,status --jq '[.[] | select(.status == "completed")] | first | .conclusion' 2>/dev/null || echo "")
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::No successful CI run found for $SHA (got: '${CONCLUSION:-none}') — run CI to green before releasing"
+            exit 1
+          fi
+
   windows-installer:
     name: Build and publish Windows installers
+    needs: validate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch, pinned 2026-07-10
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
           # restore the CI Windows job's cache (built on pushes to main) so
@@ -36,7 +94,7 @@ jobs:
           shared-key: windows-app
       - run: npm ci
       - name: Build app and publish release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # signs the updater artifacts and generates latest.json so
@@ -44,9 +102,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # our `tauri` npm script is an alias for `tauri dev`; the action's
-          # default `npm run tauri build` would expand to `tauri dev build`,
-          # which dev-builds and then LAUNCHES the app on the runner forever
+          # invoke the Tauri CLI directly via npx, never through the action's
+          # default `npm run tauri build` npm-script indirection (which risks
+          # expanding to an unintended subcommand and launching the app on the
+          # runner)
           tauriScript: npx tauri
           # we ship both MSI and NSIS but the release notes tell users to
           # install the NSIS setup.exe; without this latest.json points

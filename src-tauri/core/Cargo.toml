@@ -16,3 +16,8 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+# MoveFileExW for rename_noreplace's non-replacing fallback on filesystems
+# without hard links (GAP-06) — std::fs::rename replaces on every platform.
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

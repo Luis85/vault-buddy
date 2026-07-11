@@ -13,6 +13,12 @@ const DEFAULT_TTL: Record<NotifyKind, number | null> = {
 };
 
 let seq = 0; // monotonic id source — no Date.now needed
+// Live setTimeout handles keyed by notification id, so a dedupe-reuse can
+// restart the TTL and a dismiss can cancel a still-pending one (GAP-32:
+// neither used to happen — a re-raise moments before expiry read as
+// flicker, and a manually-dismissed id's timer still fired a no-op dismiss
+// later).
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
 interface NotifyOpts { ttlMs?: number | null; action?: NotifyAction; }
 
@@ -37,20 +43,36 @@ export const useNotificationsStore = defineStore("notifications", {
   state: () => ({ items: [] as Notification[] }),
   actions: {
     notify(kind: NotifyKind, message: string, opts?: NotifyOpts): number {
+      const ttlMs = ttlFor(kind, opts);
       const last = this.items[this.items.length - 1];
-      if (isRepeat(last, kind, message, opts)) return last!.id;
+      if (isRepeat(last, kind, message, opts)) {
+        // GAP-32: reusing the newest identical toast must also restart its
+        // TTL — a re-raise moments before expiry otherwise reads as flicker.
+        const t = timers.get(last!.id);
+        if (t) clearTimeout(t);
+        if (ttlMs != null) timers.set(last!.id, setTimeout(() => this.dismiss(last!.id), ttlMs));
+        return last!.id;
+      }
       const id = ++seq;
       this.items.push({ id, kind, message, action: opts?.action });
       if (this.items.length > MAX_ITEMS) this.items.splice(0, this.items.length - MAX_ITEMS);
-      const ttlMs = ttlFor(kind, opts);
-      if (ttlMs != null) setTimeout(() => this.dismiss(id), ttlMs);
+      if (ttlMs != null) timers.set(id, setTimeout(() => this.dismiss(id), ttlMs));
       return id;
     },
     error(message: string) { return this.notify("error", message); },
     warning(message: string) { return this.notify("warning", message); },
     success(message: string) { return this.notify("success", message); },
     info(message: string) { return this.notify("info", message); },
-    dismiss(id: number) { this.items = this.items.filter((i) => i.id !== id); },
-    clear() { this.items = []; },
+    dismiss(id: number) {
+      const t = timers.get(id);
+      if (t) clearTimeout(t);
+      timers.delete(id);
+      this.items = this.items.filter((i) => i.id !== id);
+    },
+    clear() {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+      this.items = [];
+    },
   },
 });

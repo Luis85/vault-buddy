@@ -202,4 +202,31 @@ describe("bump-version.mjs", () => {
     expect(result.stderr).toContain("Refusing to bump");
     expect(JSON.parse(readFixture(dir, "package.json")).version).toBe("1.2.3");
   });
+
+  it("rejects a version equal to the current one (GAP-44)", () => {
+    writeFixtures(dir, "0.5.1");
+    const result = runScript(dir, ["0.5.1"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/must be greater/i);
+    expect(result.stderr).toContain("0.5.1");
+    expect(JSON.parse(readFixture(dir, "package.json")).version).toBe("0.5.1");
+  });
+
+  it("rejects a version lower than the current one (GAP-44)", () => {
+    writeFixtures(dir, "0.5.1");
+    const result = runScript(dir, ["0.4.9"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/must be greater/i);
+    expect(result.stderr).toContain("0.5.1");
+    expect(result.stderr).toContain("0.4.9");
+    expect(JSON.parse(readFixture(dir, "package.json")).version).toBe("0.5.1");
+  });
+
+  it("accepts a higher version", () => {
+    writeFixtures(dir, "0.5.1");
+    const result = runScript(dir, ["0.6.0"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("0.5.1 -> 0.6.0");
+    expect(JSON.parse(readFixture(dir, "package.json")).version).toBe("0.6.0");
+  });
 });

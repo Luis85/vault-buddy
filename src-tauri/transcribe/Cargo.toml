@@ -7,8 +7,9 @@ publish = false
 [features]
 default = []
 # whisper.cpp is compiled and static-linked only with this feature on, so
-# Linux CI can build/test the crate without a C++ toolchain. The shell
-# enables it; the windows-app CI job is the compile gate.
+# Linux CI can build/test the crate without a C++ toolchain by default. The
+# shell always enables it; the Linux `rust-core` CI job builds AND runs the
+# whisper FFI tests (`--features whisper`) — the only place they execute.
 whisper = ["dep:whisper-rs"]
 
 [dependencies]

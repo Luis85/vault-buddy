@@ -2,7 +2,7 @@
 type: UseCase
 status: planned
 domain: nl-interface
-source_prd: "docs/PRD - Product Vision.md"
+source_prd: "docs/PRD.md"
 tags: [use-case, nl-interface]
 ---
 
@@ -12,7 +12,7 @@ tags: [use-case, nl-interface]
 
 ## Source
 
-Main PRD, [§11 Core Capabilities → Natural Language Interface](../PRD%20-%20Product%20Vision.md) and [§18 Roadmap → Phase 2 — Productivity](../PRD%20-%20Product%20Vision.md) ("Natural Language", "Quick Commands"). This is also the mechanism implied throughout §2 Product Vision ("users simply express intent... Vault Buddy translates intent into safe, contextual actions") and §17's High-Level Architecture diagram (`User → Natural Language → Intent Recognition → Permission & Safety → Workflow Orchestrator`).
+Main PRD, [§11 Core Capabilities → Natural Language Interface](../PRD.md) and [§18 Roadmap → Phase 2 — Productivity](../PRD.md) ("Natural Language", "Quick Commands"). This is also the mechanism implied throughout §2 Product Vision ("users simply express intent... Vault Buddy translates intent into safe, contextual actions") and §17's High-Level Architecture diagram (`User → Natural Language → Intent Recognition → Permission & Safety → Workflow Orchestrator`).
 
 ## Status: Not started
 
