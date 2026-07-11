@@ -21,6 +21,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 # generate_context! serializes the plugins config section via serde_json
@@ -37,6 +38,9 @@ crash-handler = "0.7.0"
 # crate to the build.
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+# Registry PATH read for Pandoc detection (document_commands::registry_path_entries)
+# so Recheck sees a just-installed Pandoc without an app restart.
+winreg = "0.52"
 
 [workspace]
 resolver = "2"

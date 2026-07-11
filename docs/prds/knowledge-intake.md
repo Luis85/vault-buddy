@@ -3,7 +3,7 @@
 - **Capability for:** Vault Buddy
 - **Status:** Version 1 shipped in Vault Buddy v0.3.0 (audio recording +
   on-device transcription); later versions planned — see the roadmap
-- **Version:** 1.1
+- **Version:** 1.2
 - **Parent Product:** [Vault Buddy](PRD%20-%20Product%20Vision.md)
 
 Use cases extracted from this PRD, with shipping status: [Meeting
@@ -14,10 +14,11 @@ Follow-up Template](../use-cases/companion-note-and-follow-up-template.md),
 [Recordings Browser](../use-cases/recordings-browser.md),
 [Re-transcription](../use-cases/re-transcription.md), [Rename
 Recording](../use-cases/rename-recording.md) (shipped, undocumented until
-now), [AI-Enriched Meeting Notes](../use-cases/ai-enriched-meeting-notes.md)
-and [Additional Capture
-Providers](../use-cases/additional-capture-providers.md) (planned). See
-[docs/use-cases/](../use-cases/README.md) for the full catalog.
+now), [AI-Enriched Meeting Notes](../use-cases/ai-enriched-meeting-notes.md),
+[Document Import via
+Pandoc](../use-cases/document-import-pandoc.md) (planned) and [Additional
+Capture Providers](../use-cases/additional-capture-providers.md) (planned).
+See [docs/use-cases/](../use-cases/README.md) for the full catalog.
 
 ---
 
@@ -119,10 +120,11 @@ on-device transcription as a post-capture step).
 Future providers include:
 
 - Audio
+- Document Import (Pandoc) — designed, not yet built; see below
 - Screenshot
 - Screen Recording
 - Clipboard
-- File Import
+- File Import (generic, unspecified — kept distinct from Document Import)
 - Browser Capture
 - Camera
 - Email
@@ -225,6 +227,15 @@ Every configured Vault receives its own Capture configuration.
 - Extract Tasks
 - Generate Meeting Note (AI-enriched)
 - Preferred LLM
+
+### Document Import (planned)
+
+- Documents Folder — per-vault, default `Documents`
+
+App-global (not per-vault, since Pandoc is one system-wide binary):
+
+- Pandoc Path — manual override for non-`PATH` installs
+- Pandoc Status — detected version, with a Recheck action
 
 ---
 
@@ -349,6 +360,41 @@ audio or the note.
 
 ---
 
+## Document Import via Pandoc (planned)
+
+A second Capture Provider, complementary to Audio Recording: turn a
+`.docx` / `.odt` / `.rtf` file into a vault note. Design complete, not yet
+built — see [Document Import via
+Pandoc](../use-cases/document-import-pandoc.md) and its [design
+spec](../superpowers/specs/2026-07-10-document-import-pandoc-design.md)
+for the full detail. Summary:
+
+- **Trigger**: drag-and-drop a supported file onto the buddy (opens a
+  vault picker, since the buddy icon isn't vault-specific), or a new
+  "Import Document" action in the record chooser (vault already known).
+- **Gate, not bundle**: Vault Buddy stays local-first and license-clean by
+  requiring a **user-installed Pandoc** rather than shipping one — Pandoc
+  is GPL-2 and a ~150–200MB Windows binary, neither of which fits an MIT,
+  lightweight-installer app. A new "Document Import" Buddy-settings
+  section detects Pandoc on `PATH` (or a manually configured path), shows
+  install status, a Recheck button, and a link to Pandoc's install page.
+  Both triggers are disabled until Pandoc is detected.
+- **Output**: `<vault>/<DocumentsFolder>/YYYY/MM/YYYY-MM-DD <Original
+  Name>.md`, `type: Document` / `tags: [vault-buddy-import]` frontmatter
+  recording source path, import date, and original format; embedded
+  images extract to a same-named sibling folder when present. Same
+  collision-safe atomic write discipline as every other sanctioned vault
+  write (Tasks, Recordings, Transcripts) — never clobbers.
+- **Failure handling**: a toast and nothing written to the vault on any
+  conversion error, mirroring `capture:failed`; success is a silent save
+  + toast, no auto-open.
+- **Not in this version**: batch import, formats beyond the three above,
+  bundling/auto-installing Pandoc, a watched Inbox folder, OS
+  file-association integration, or any AI pipeline step on the imported
+  content.
+
+---
+
 ## Functional Requirements
 
 ### Audio Capture
@@ -443,12 +489,15 @@ Obsidian is only responsible for consuming the resulting files.
 - Summaries
 - Task Extraction
 - AI-enriched Meeting Notes (decisions, action items, open questions)
+- Document Import via Pandoc (docx / odt / rtf → Markdown; design
+  complete, see [Document Import via
+  Pandoc](../use-cases/document-import-pandoc.md))
 
 ### Version 3
 
 - Screenshot Capture
 - Clipboard Capture
-- File Import
+- File Import (generic, unspecified — distinct from Document Import above)
 
 ### Version 4
 

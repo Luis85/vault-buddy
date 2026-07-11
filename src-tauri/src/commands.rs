@@ -145,25 +145,24 @@ pub(crate) fn primary_button_down() -> bool {
     (unsafe { GetKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
 }
 
-/// Show/hide the panel window. A sync command, so it runs on the main thread
-/// (where window show/hide and the placement getters are valid). Positioned
-/// while still hidden, then shown — the panel window never resizes and is
-/// only moved, so there is no WebView2 stale-frame flash. Opening hides the
-/// greeting bubble.
-#[tauri::command]
-pub fn toggle_panel(app: tauri::AppHandle) {
+/// Position (while hidden), show, focus the panel window, tell the panel
+/// webview it was just revealed, and hide the greeting bubble. Idempotent —
+/// safe to call on an already-visible panel (a harmless re-show/re-focus/
+/// re-emit, no flicker, since the panel only ever moves, never resizes).
+///
+/// Factored out of `toggle_panel`'s show branch so `begin_document_import`
+/// can reuse it: a buddy drop must always SHOW the panel, never toggle it —
+/// toggling would HIDE an already-open panel instead of routing it to the
+/// import picker.
+pub(crate) fn show_panel(app: &tauri::AppHandle) {
     use tauri::{Emitter, Manager};
     let Some(panel) = app.get_webview_window("panel") else {
-        log::warn!("toggle_panel: no panel window");
+        log::warn!("show_panel: no panel window");
         return;
     };
-    if panel.is_visible().unwrap_or(false) {
-        let _ = panel.hide();
-        return;
-    }
-    position_panel(&app);
+    position_panel(app);
     if let Err(e) = panel.show() {
-        log::warn!("toggle_panel: show failed: {e}");
+        log::warn!("show_panel: show failed: {e}");
     }
     let _ = panel.set_focus();
     // Tell the panel webview it was just revealed: it re-runs vault discovery
@@ -174,6 +173,25 @@ pub fn toggle_panel(app: tauri::AppHandle) {
     if let Some(bubble) = app.get_webview_window("bubble") {
         let _ = bubble.hide();
     }
+}
+
+/// Show/hide the panel window. A sync command, so it runs on the main thread
+/// (where window show/hide and the placement getters are valid). Positioned
+/// while still hidden, then shown — the panel window never resizes and is
+/// only moved, so there is no WebView2 stale-frame flash. Opening hides the
+/// greeting bubble (via `show_panel`).
+#[tauri::command]
+pub fn toggle_panel(app: tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(panel) = app.get_webview_window("panel") else {
+        log::warn!("toggle_panel: no panel window");
+        return;
+    };
+    if panel.is_visible().unwrap_or(false) {
+        let _ = panel.hide();
+        return;
+    }
+    show_panel(&app);
 }
 
 /// Hide the panel window. Idempotent; called by Escape, drag start, a launched
@@ -536,6 +554,31 @@ pub fn open_daily_note(id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_logs_folder(app: tauri::AppHandle) {
     crate::diagnostics::open_log_dir(&app);
+}
+
+/// Suppress the panel's focus-out auto-hide while a native OS dialog (file
+/// picker / Pandoc Browse) is in flight. The frontend calls this `true` before
+/// `open()` and `false` in its `finally`, so the dialog stealing OS focus can't
+/// hide the panel (and its in-progress import state) out from under the user.
+/// Sync → main thread, where the focus-out check that reads it also runs.
+#[tauri::command]
+pub fn set_dialog_active(active: bool) {
+    crate::set_dialog_active(active);
+}
+
+/// Open an external `https://` link in the OS default browser. The frontend
+/// never navigates the panel webview to an external URL directly — in a Tauri
+/// v2 webview a raw `target="_blank"` either no-ops or replaces the app UI —
+/// so links (e.g. the Pandoc install page) route through here. Restricted to
+/// `https://` so the frontend can't launch arbitrary schemes (`file:`, custom
+/// handlers); `uri::launch` logs it as the same audit trail every launched
+/// URI gets.
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("refusing to open non-https URL".into());
+    }
+    uri::launch(&url)
 }
 
 /// The frontend calls this when an update install fails after

@@ -22,7 +22,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "recordMode"
       | "transcriptions"
       | "tasks"
-      | "search",
+      | "search"
+      | "importPicker",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -31,6 +32,10 @@ export const useVaultsStore = defineStore("vaults", {
     recordModeVaultId: null as string | null,
     // Which vault the tasks view lists.
     tasksVaultId: null as string | null,
+    // The dropped document's path, armed by a Rust-owned buddy drop
+    // (`take_pending_import`, consumed in `refresh`) and read by
+    // ImportVaultPicker to drive `convert_document`.
+    pendingImportPath: null as string | null,
     // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
@@ -67,7 +72,21 @@ export const useVaultsStore = defineStore("vaults", {
     // cached result) and pick the view. Defaults to the vault list on every
     // open, unless a one-shot `requestView` asked for somewhere else.
     async refresh() {
-      if (this.pendingView) {
+      // Consume the Rust-owned pending buddy-drop import FIRST: it always
+      // wins over the pendingView/list default, because the drop is the
+      // reason this exact refresh is happening (see the module comment on
+      // `pendingImportPath` and document_commands::begin_document_import).
+      const dropped = await invoke<string | null>(
+        "take_pending_import",
+      ).catch(() => null);
+      if (dropped) {
+        this.openImportPicker(dropped);
+        // A drop supersedes any armed one-shot view (e.g. the startup update
+        // check's "settings"): clear it so a LATER panel-shown refresh doesn't
+        // consume it stale and navigate away after the import returns to list.
+        this.pendingView = null;
+        this.pendingCaptureVaultId = null;
+      } else if (this.pendingView) {
         this.view = this.pendingView;
         this.captureSettingsVaultId = this.pendingCaptureVaultId;
         this.pendingView = null;
@@ -154,6 +173,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
       this.tasksVaultId = null;
+      this.pendingImportPath = null;
     },
     openSettings() {
       this.view = "settings";
@@ -181,6 +201,13 @@ export const useVaultsStore = defineStore("vaults", {
     // back() needs no case: search falls through to the final else → showList.
     openSearch() {
       this.view = "search";
+    },
+    // Rust-owned buddy drop lands here (via `refresh`'s take_pending_import
+    // consume). back() needs no case: it falls through to the final else →
+    // showList, which also clears pendingImportPath.
+    openImportPicker(path: string) {
+      this.view = "importPicker";
+      this.pendingImportPath = path;
     },
     /** Back to the current view's fixed parent (no history stack). */
     back() {

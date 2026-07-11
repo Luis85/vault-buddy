@@ -7,6 +7,7 @@ pub mod companion_placement;
 pub mod crash;
 pub mod daily_notes;
 pub mod discovery;
+pub mod document_import;
 pub mod process;
 pub mod recordings;
 pub mod search;

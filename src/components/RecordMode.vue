@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { CaptureConfig, Recording } from "../types";
+import type { CaptureConfig, PandocStatus, Recording } from "../types";
+import { basename } from "../utils/basename";
+import { withDialogSuppressed } from "../utils/nativeDialog";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -59,6 +62,38 @@ const browseLabel = computed(() =>
     ? "Browse past recordings"
     : `Browse past recordings (${recordingCount.value} in this vault)`,
 );
+
+// App-global Pandoc install status, null until detect_pandoc resolves (or
+// forever on a failed/absent Tauri runtime — see detectPandoc below). A null
+// status is treated the same as "not installed": the Import button stays
+// disabled rather than optimistically enabled against unknown state.
+const pandoc = ref<PandocStatus | null>(null);
+// True until the FIRST detect_pandoc resolves. Before F1 a blocked button was
+// disabled, so a click during this window was a harmless no-op; now a blocked
+// click routes to Settings, so a click before the probe finishes would wrongly
+// jump to Settings even with a valid Pandoc. Gate the button on this so the
+// pre-probe state can't take the wrong flow (Codex review).
+const checking = ref(true);
+
+// Single computed (not two) so the "not installed" check isn't duplicated
+// between a blocked-flag computed and a hint-text computed. `blocked` (Pandoc
+// missing/too old) does NOT disable the button — a disabled button that says
+// "go to Settings" is a dead end, so a blocked click routes to Settings
+// instead (matching ImportVaultPicker). The button only truly disables while a
+// conversion is in flight.
+const importStatus = computed(() => {
+  if (!pandoc.value?.installed) {
+    return { blocked: true, hint: "Install Pandoc in Settings to import documents" };
+  }
+  if (!pandoc.value.sandboxSupported) {
+    return { blocked: true, hint: "Update Pandoc (2.15+ needed)" };
+  }
+  return { blocked: false, hint: "Convert a Word, ODT, or RTF file into a note" };
+});
+
+// True while a conversion is running — Pandoc can take several seconds, so the
+// button disables and shows a "Converting…" hint rather than looking inert.
+const importing = ref(false);
 
 // Bundles the four transcription fields for TranscriptionSettings' v-model.
 // The setter merges the change back into the FULL loaded config (preserving
@@ -129,16 +164,70 @@ async function loadRecordingCount() {
   }
 }
 
+async function detectPandoc() {
+  // Swallowed like every other guarded read here: an unavailable Tauri
+  // runtime or a detection failure just leaves `pandoc` null, which
+  // `importStatus` treats as "not installed" — the button degrades to
+  // disabled rather than block the rest of the view.
+  try {
+    pandoc.value = await invoke<PandocStatus>("detect_pandoc");
+  } catch (e) {
+    logWarning(`detect_pandoc failed (vault ${props.vaultId}): ${String(e)}`);
+  } finally {
+    // Probe done (either way) — the button can now trust `importStatus`.
+    checking.value = false;
+  }
+}
+
 onMounted(() => {
   // Independent reads: a hung/failed config read must not block the count
   // and vice versa, so neither awaits the other.
   void loadConfig();
   void loadRecordingCount();
+  void detectPandoc();
 });
 
 function start(mode: "meeting" | "voice-note") {
   void capture.start(props.vaultId, mode);
   store.showList(); // recording bar shows on the list view
+}
+
+// A blocked click (Pandoc missing/old) jumps to Settings — the one place to
+// fix it — instead of dead-ending; otherwise open the file picker + convert.
+function onImportClick() {
+  // The button is disabled while checking, but guard anyway so a probe still
+  // in flight never routes to Settings on a state that isn't settled yet.
+  if (checking.value) return;
+  if (importStatus.value.blocked) {
+    store.openSettings();
+    return;
+  }
+  void importDocument();
+}
+
+async function importDocument() {
+  if (importing.value) return;
+  try {
+    const path = await withDialogSuppressed(() =>
+      open({
+        multiple: false,
+        filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
+      }),
+    );
+    if (typeof path !== "string") return; // cancelled — no-op
+    // Flip busy only after the picker resolves, so a cancel doesn't strand it.
+    importing.value = true;
+    const notePath = await invoke<string>("convert_document", {
+      id: props.vaultId,
+      sourcePath: path,
+    });
+    notifications.success(`Imported ${basename(notePath)}`);
+  } catch (e) {
+    logWarning(`convert_document failed (vault ${props.vaultId}): ${String(e)}`);
+    notifications.error(`Couldn't import document: ${String(e)}`);
+  } finally {
+    importing.value = false;
+  }
 }
 </script>
 
@@ -173,6 +262,23 @@ function start(mode: "meeting" | "voice-note") {
           data-testid="recording-count"
           class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
         >{{ recordingCount }}</span>
+      </button>
+      <button
+        type="button"
+        data-testid="import-document"
+        aria-label="Import a document into this vault"
+        class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+        :disabled="importing || checking"
+        @click="onImportClick"
+      >
+        <span class="block text-sm font-medium text-slate-100">Import Document</span>
+        <span class="block text-xs text-slate-400">{{
+          checking
+            ? "Checking Pandoc…"
+            : importing
+              ? "Converting… this can take a few seconds"
+              : importStatus.hint
+        }}</span>
       </button>
     </div>
     <div class="flex flex-col gap-3 border-t border-white/10 pt-3">
