@@ -48,6 +48,16 @@ const transcribing = computed(() => capture.activeTranscription !== null);
 // anything else is ignored rather than routed to the picker, where it would
 // only fail at convert_document with a confusing error.
 const SUPPORTED_DOC_EXTENSIONS = ["docx", "odt", "rtf"];
+const isSupportedDoc = (p: string) => {
+  const ext = p.split(".").pop()?.toLowerCase();
+  return ext ? SUPPORTED_DOC_EXTENSIONS.includes(ext) : false;
+};
+
+// True while a droppable document hovers over the buddy — drives the
+// character's drop-target highlight so the drop visibly "registers" before
+// the user lets go. Only a SUPPORTED doc lights it up, matching what the drop
+// handler will actually act on (an unsupported drop is silently ignored).
+const dragActive = ref(false);
 
 let unlistenAnimation: (() => void) | undefined;
 let unlistenDragging: (() => void) | undefined;
@@ -83,13 +93,22 @@ onMounted(async () => {
     // directly, and toggle_panel would HIDE an already-open panel instead
     // of routing it to the picker.
     unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type !== "drop") return;
-      const path = event.payload.paths.find((p) => {
-        const ext = p.split(".").pop()?.toLowerCase();
-        return ext ? SUPPORTED_DOC_EXTENSIONS.includes(ext) : false;
-      });
-      if (!path) return; // unsupported drop — ignore
-      invokeQuiet("begin_document_import", { path });
+      const payload = event.payload;
+      if (payload.type === "drop") {
+        dragActive.value = false; // the hover is over either way
+        const path = payload.paths.find(isSupportedDoc);
+        if (!path) return; // unsupported drop — ignore
+        invokeQuiet("begin_document_import", { path });
+        return;
+      }
+      // `enter` carries the paths; `over` repeats with position only, so the
+      // enter-time verdict is held until the drag leaves or drops. Highlight
+      // only when a SUPPORTED doc is present — the same files the drop acts on.
+      if (payload.type === "enter" || payload.type === "over") {
+        if ("paths" in payload) dragActive.value = payload.paths.some(isSupportedDoc);
+        return;
+      }
+      dragActive.value = false; // leave / cancel — the hover ended
     });
   } catch {
     // not under Tauri (tests)
@@ -119,6 +138,7 @@ onUnmounted(() => {
       :recording="capture.status === 'recording' || capture.status === 'saving'"
       :paused="capture.paused"
       :transcribing="transcribing"
+      :drop-target="dragActive"
       @toggle="onToggle"
       @drag-start="onDragStart"
     />
