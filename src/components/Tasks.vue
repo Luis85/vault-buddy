@@ -270,6 +270,13 @@ const buckets = computed<Bucket[]>(() => {
   return dateBuckets(filteredTasks.value, localToday());
 });
 
+// Per-vault list folders exist even before any task lands in them. The view
+// must stay reachable so a fresh empty list is visible (via the Lists
+// grouping) instead of hidden behind "No tasks yet" until the first task is
+// added — the aggregate deliberately omits empty lists (Codex, PR #53
+// re-review).
+const hasDisplayableLists = computed(() => !isAggregate.value && knownLists.value.length > 0);
+
 onMounted(async () => {
   try {
     if (props.vaultId !== null) {
@@ -437,7 +444,7 @@ async function add(payload: AddPayload) {
     />
 
     <TaskViewControls
-      v-if="!loading && !loadError && tasks.length > 0"
+      v-if="!loading && !loadError && (tasks.length > 0 || hasDisplayableLists)"
       :grouping="grouping"
       :sort-pref="sortPref"
       @update:grouping="grouping = $event"
@@ -458,13 +465,13 @@ async function add(payload: AddPayload) {
       {{ loadError }}
     </p>
     <p
-      v-else-if="tasks.length === 0"
+      v-else-if="tasks.length === 0 && buckets.length === 0"
       class="text-xs text-slate-400"
     >
       No tasks yet.
     </p>
     <p
-      v-else-if="filteredTasks.length === 0"
+      v-else-if="buckets.length === 0"
       class="text-xs text-slate-400"
     >
       No tasks match{{ tagFilter ? ` #${tagFilter}` : "" }}{{ showFilter && filter ? ` "${filter}"` : "" }}.

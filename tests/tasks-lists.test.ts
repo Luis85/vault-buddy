@@ -57,6 +57,24 @@ describe("Tasks — lists & sorting", () => {
       const rows = wrapper.findAll('[data-testid="task-row"]');
       expect(rows).toHaveLength(2);
     });
+
+    it("shows a fresh empty list when the vault has list folders but no tasks (Codex #53 re-review)", async () => {
+      // includeEmpty surfaces a task-less list folder — but the view used to
+      // short-circuit to "No tasks yet" when tasks.length was 0, hiding both
+      // the grouping control and the empty list. The control now stays
+      // reachable and the empty section renders in Lists mode.
+      const { wrapper } = mountView({
+        list_tasks: () => [],
+        list_task_lists: () => ["Someday"],
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [] }),
+      });
+      await flushPromises();
+      // The grouping control is available despite zero tasks.
+      await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+      await flushPromises();
+      const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+      expect(headers).toContain("Someday");
+    });
   });
 
   describe("composer list picker", () => {

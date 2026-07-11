@@ -249,37 +249,37 @@ pub fn add_task(
         log::warn!("add_task: vault folder missing: {}", vault_path.display());
         return Err("Vault folder not found — was it moved or deleted?".to_string());
     }
+    // Create + validate the tasks ROOT first, then validate the list subdir
+    // against the RESOLVED root BEFORE creating it, so a list nested through a
+    // symlink/junction that escapes the tasks root is rejected before
+    // create_dir_all can follow the link and mkdir a stray folder outside the
+    // root — not merely before the task file is written (vault is sacred). A
+    // list can stay inside the vault yet escape the configured tasks root; the
+    // read-side walkers (task_lists / list_tasks) canonicalize and skip such
+    // folders, so a task written there would silently vanish from the view.
+    // safe_recording_root already rejected `..`/absolute components lexically;
+    // this mirrors move_task_to_list's create-then-canonicalize-then-check
+    // order (Codex, PR #53 re-review).
+    capture_paths::assert_path_inside_vault(&vault_path, &root)?;
+    std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
+    // Post-create assert closes the swap-in race on the root itself.
+    capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    let canon_root =
+        std::fs::canonicalize(&root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
     let target_root = if effective_list.is_empty() {
         root.clone()
     } else {
-        root.join(&effective_list)
+        let dir = root.join(&effective_list);
+        // Pre-create: the nearest existing ancestor of the list dir must
+        // resolve inside the tasks root — a symlink/junction at any ancestor is
+        // caught before create_dir_all can follow it and mkdir outside the root.
+        capture_paths::assert_path_inside_vault(&canon_root, &dir)?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Could not create the list folder: {e}"))?;
+        // Post-create closes the swap-in race (a junction planted mid-flight).
+        capture_paths::assert_root_inside_vault(&canon_root, &dir)?;
+        dir
     };
-    // Validate the folder resolves inside the vault BEFORE creating it: this
-    // canonicalizes the nearest existing ancestor, so a symlink/junction at any
-    // ancestor is caught even when the leaf doesn't exist yet — create_dir_all
-    // then can't create a directory (or write a task) outside the vault. The
-    // lexical safe_recording_root already rejected `..`/absolute components.
-    capture_paths::assert_path_inside_vault(&vault_path, &target_root)?;
-    std::fs::create_dir_all(&target_root)
-        .map_err(|e| format!("Could not create tasks folder: {e}"))?;
-    // Post-create canonical assert closes the swap-in race (the
-    // document-import discipline) — a junction planted between the check and
-    // the create must not receive the task file.
-    capture_paths::assert_root_inside_vault(&vault_path, &target_root)?;
-    // The list must resolve inside the tasks ROOT, not merely the vault. The
-    // checks above only bound target_root by the vault, so a list folder that
-    // is a symlink/junction under the tasks root but resolves to ANOTHER folder
-    // in the same vault would pass — and create_task would write the task there,
-    // outside the configured tasks root. The read-side walkers (task_lists /
-    // list_tasks) canonicalize and skip any folder escaping the tasks root, so
-    // such an add would silently succeed yet the task would never appear in the
-    // Tasks view (a write/read mismatch). move_task_to_list validates against
-    // the root the same way. Only a non-empty list can escape — an empty list
-    // writes at the root itself, already asserted above (Codex, PR #53
-    // re-review).
-    if !effective_list.is_empty() {
-        capture_paths::assert_root_inside_vault(&root, &target_root)?;
-    }
     let path = tasks::create_task(&target_root, title, today, due, priority, tags)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
@@ -697,6 +697,43 @@ mod tests {
         assert!(
             std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
             "no task may be written outside the tasks root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_task_rejects_a_nested_list_through_an_escaping_link_without_mkdir() {
+        // Tasks/Link → <vault>/Elsewhere (a symlink inside the vault, outside
+        // the tasks root). Adding to "Link/Sub" must be rejected BEFORE
+        // create_dir_all can follow the link and mkdir "Sub" outside the tasks
+        // root — the nearest existing ancestor is validated against the tasks
+        // root pre-create, so no stray folder is created (vault is sacred; the
+        // post-create check alone would reject the task but leave the mkdir'd
+        // folder behind). (Codex, PR #53 re-review.)
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        let tasks = vault.join("Tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        let elsewhere = vault.join("Elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, tasks.join("Link")).unwrap();
+        let res = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Nested",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Link/Sub"),
+        );
+        assert!(
+            res.is_err(),
+            "a nested list escaping the tasks root must be rejected"
+        );
+        assert!(
+            !elsewhere.join("Sub").exists(),
+            "no directory may be created outside the tasks root"
         );
     }
 
