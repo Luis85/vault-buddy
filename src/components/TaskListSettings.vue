@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 
 import { logWarning } from "../logging";
 import type { TasksConfig } from "../types";
@@ -22,6 +22,15 @@ const defaultList = ref("");
 const order = ref<string[]>([]);
 const saveState = ref<"idle" | "saving" | "saved">("idle");
 const error = ref<string | null>(null);
+
+// Any edit after a save clears the "Saved" acknowledgement — otherwise the UI
+// keeps showing "Saved" over an unpersisted change (default-list pick OR a
+// reorder), so a user could navigate away thinking it was saved. Covers both
+// fields uniformly; the onMounted assignment fires this while saveState is
+// already "idle", a harmless no-op.
+watch([defaultList, order], () => {
+  if (saveState.value === "saved") saveState.value = "idle";
+});
 
 onMounted(async () => {
   try {
@@ -48,8 +57,7 @@ function move(index: number, delta: -1 | 1) {
   if (target < 0 || target >= order.value.length) return;
   const next = [...order.value];
   [next[index], next[target]] = [next[target], next[index]];
-  order.value = next;
-  if (saveState.value === "saved") saveState.value = "idle";
+  order.value = next; // the [defaultList, order] watcher clears a stale "Saved"
 }
 
 async function save() {

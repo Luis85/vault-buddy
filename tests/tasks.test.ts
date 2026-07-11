@@ -53,7 +53,7 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
     await wrapper.get('[data-testid="task-add"]').trigger("click");
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it", list: "" } });
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
     expect(wrapper.text()).toContain("Ship it");
   });
 
@@ -201,7 +201,7 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
     await wrapper.get('[data-testid="task-input"]').trigger("keydown.enter");
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it", list: "" } });
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
   });
 
   it("ignores Enter while composing an IME candidate (GAP-31)", async () => {
@@ -217,7 +217,7 @@ describe("Tasks", () => {
     // After composition ends, normal Enter works.
     await titleInput.trigger("keydown", { key: "Enter", isComposing: false });
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "候選", list: "" } });
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "候選" } });
   });
 
   it("opens a task in Obsidian when its title is clicked and closes the panel", async () => {
@@ -343,7 +343,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Big one", due: "2026-07-20", priority: "high", list: "" },
+      args: { id: "v1", title: "Big one", due: "2026-07-20", priority: "high" },
     });
   });
 
@@ -355,7 +355,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Plain", list: "" },
+      args: { id: "v1", title: "Plain" },
     });
   });
 
@@ -740,7 +740,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Tagged one", tags: ["work", "home/errands"], list: "" },
+      args: { id: "v1", title: "Tagged one", tags: ["work", "home/errands"] },
     });
   });
 
@@ -758,7 +758,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Double hash", tags: ["work", "home"], list: "" },
+      args: { id: "v1", title: "Double hash", tags: ["work", "home"] },
     });
   });
 

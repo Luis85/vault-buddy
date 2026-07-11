@@ -284,7 +284,9 @@ type AddPayload = {
   due: string;
   priority: string;
   tags: string[];
-  list: string;
+  // undefined = the composer had no explicit pick and its default hadn't
+  // loaded — let the backend apply the configured default (see the composer).
+  list: string | undefined;
   vaultId: string | null;
 };
 
@@ -300,10 +302,11 @@ async function add(payload: AddPayload) {
     if (payload.due) args.due = payload.due;
     if (payload.priority !== "normal") args.priority = payload.priority;
     if (payload.tags.length > 0) args.tags = payload.tags;
-    // Always explicit ("" = the tasks root): the composer displayed the
-    // effective target, so a picked No list overrides a configured default
-    // instead of falling back to it.
-    args.list = payload.list;
+    // A defined list (incl. "" = an explicit No list override) is sent as-is;
+    // undefined is omitted so the backend applies the vault's configured
+    // default — the composer only omits it before its default has loaded, so
+    // a quick add during that window still lands in the default list.
+    if (payload.list !== undefined) args.list = payload.list;
     const created = await invoke<TaskItem>("add_task", args);
     tasks.value.unshift({
       ...created,

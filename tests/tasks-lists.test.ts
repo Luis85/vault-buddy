@@ -72,6 +72,26 @@ describe("Tasks — lists & sorting", () => {
       expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Inbox" });
     });
 
+    it("omits list on a quick add before the default has loaded (Codex #53)", async () => {
+      // The composer is usable before get_tasks_config resolves, so an
+      // untouched picker still shows "" while the real default is unknown. A
+      // quick add must NOT send "" (the backend would read it as an explicit
+      // No-list override and drop the task in the tasks root) — it omits list
+      // so the backend applies the configured default freshly.
+      let resolveCfg!: (v: unknown) => void;
+      const { wrapper, calls } = mountView({
+        get_tasks_config: () => new Promise((r) => (resolveCfg = r)),
+        list_task_lists: () => ["Inbox"],
+      });
+      // Deliberately NOT flushing the config promise — add during the window.
+      await wrapper.get('[data-testid="task-input"]').setValue("Quick");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      const call = calls.find((c) => c.cmd === "add_task");
+      expect(call?.args).not.toHaveProperty("list");
+      resolveCfg({ tasksFolder: null, defaultList: "Inbox", listOrder: [] });
+    });
+
     it("picking No list overrides the configured default", async () => {
       const { wrapper, calls } = mountView({
         get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: [] }),

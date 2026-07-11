@@ -66,6 +66,21 @@ describe("TaskListSettings", () => {
     });
   });
 
+  it("clears the Saved acknowledgement when the default list changes (Codex #53)", async () => {
+    // After a save, editing the default must drop "Saved" so the user can't
+    // navigate away thinking the new (unpersisted) default was saved.
+    const { wrapper } = mountSettings();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-lists-save"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Saved");
+    await wrapper.get('[data-testid="default-list"]').trigger("click");
+    await flushPromises();
+    (document.body.querySelector('[data-testid="default-list-option-Waiting"]') as HTMLElement).click();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Saved");
+  });
+
   it("shows a field-level error when the save fails", async () => {
     const { wrapper } = mountSettings({
       set_task_lists_config: () => {
