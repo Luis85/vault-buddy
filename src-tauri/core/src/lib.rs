@@ -55,6 +55,13 @@ pub fn daily_note_uri(vault_id: &str, vault_path: &Path, date: NaiveDate) -> Str
 /// something unexpected. The vault is never written — this only opens.
 pub fn imported_note_uri(vault_id: &str, vault_root: &Path, note: &str) -> Option<String> {
     let p = Path::new(note);
+    // Refuse a `..` segment: `vault_root.join("../x")` keeps the parent
+    // component, and `vault_relative_no_ext`'s strip_prefix is only lexical, so
+    // it would emit a `file=..%2Fx` URI that escapes the vault instead of the
+    // outside-vault rejection this command is meant to give (Codex review).
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return None;
+    }
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
@@ -103,6 +110,21 @@ mod tests {
     fn imported_note_uri_outside_the_vault_is_none() {
         assert_eq!(
             imported_note_uri("a1b2c3", Path::new("/vault"), "/elsewhere/Report.md"),
+            None,
+        );
+    }
+
+    #[test]
+    fn imported_note_uri_rejects_parent_traversal() {
+        // A `..` segment would let the lexical strip_prefix below emit a
+        // file=..%2F… URI that escapes the vault; it must be refused, not
+        // opened (Codex review).
+        assert_eq!(
+            imported_note_uri("a1b2c3", Path::new("/vault"), "../Other.md"),
+            None,
+        );
+        assert_eq!(
+            imported_note_uri("a1b2c3", Path::new("/vault"), "Documents/../../Other.md"),
             None,
         );
     }
