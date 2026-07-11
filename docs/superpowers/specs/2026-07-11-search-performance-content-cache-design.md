@@ -87,9 +87,17 @@ Rejected:
   just churns entries we need again the same search. We instead fill to the cap
   and stop inserting (below).
 
-## Rust — `core/src/search.rs` (pure, unit-tested on Linux)
+## Rust — `core/src/search.rs` + new `core/src/search_cache.rs` (pure, unit-tested on Linux)
 
-### The cache type
+The cache type and its primitive live in a **new `core/src/search_cache.rs`
+module**, re-exported from `search` (`pub use crate::search_cache::SearchCache;`)
+so callers still write `search::SearchCache`. This is both cleaner
+decomposition (the cache is one self-contained unit) and necessary: `search.rs`
+sits at 714/800 nonblank LOC, and the LOC gate rejects growth past the cap.
+`search.rs` keeps the matching/merge/walk-per-file logic and gains only the
+cache *parameter*, the new entry points, and `warm_vault`.
+
+### The cache type (in `search_cache.rs`)
 
 ```rust
 use std::sync::{Arc, Mutex};
@@ -226,16 +234,20 @@ competes with launch-critical work — mirroring how the greeting uses
 
 - discovers vaults (`discovery::discover_vaults`) and calls
   `search::warm_vault` for each, filling `search_cache()` up to the 256 MB cap;
-- **pauses while a recording is active** — disk I/O must not contend with the
-  capture MP3 stream's fsync; this reuses the same "postpone while a recording
-  is active" discipline as capture recovery. The shell owns the capture-active
-  state, which is why the thread lives here and not in pure `core`;
-- **yields between files** (a brief sleep every N files) so it never pegs a
-  core or saturates disk — the transcription worker's "yield while recording"
-  politeness, generalized to "stay low-priority";
-- observes a shutdown/cancellation `AtomicBool` (passed as `is_cancelled`) and
-  stops cleanly on quit; abandoning it mid-run is harmless — it only fills RAM
-  and never writes.
+- **pauses while a recording is active** — checked once per vault (the same
+  coarse `is_recording` gate `run_recovery` uses, not per file): while a
+  recording runs it sleeps and re-checks rather than warming, so it never
+  contends with the capture MP3 stream's fsync. The shell owns the
+  capture-active state, which is why the thread lives here and not in pure
+  `core`;
+- warms **one vault at a time with a brief sleep between vaults** to stay
+  low-priority; within a vault it runs at full speed (a short, one-time
+  read+lowercase burst — and never while recording, per the gate above);
+- is **reclaimed on process exit** like the metronome and `capture-recovery`
+  threads — those use no explicit shutdown flag, and abandoning this one
+  mid-run is harmless since it only fills RAM and never writes. `warm_vault`
+  still takes an `is_cancelled` predicate (the prewarm passes `|| false`) so
+  the core walk stays cancellable and unit-testable.
 
 It runs **once per launch**. Later edits are picked up lazily by the
 `(mtime,size)` check on the next search — no periodic re-warm (YAGNI). Running
