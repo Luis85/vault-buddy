@@ -86,7 +86,14 @@ async function pick(vaultId: string) {
       id: vaultId,
       sourcePath: source,
     });
-    notifications.success(`Imported ${basename(notePath)}`);
+    // Offer to open the freshly-imported note in the vault it landed in, rather
+    // than leaving the user to hunt for it after the picker returns to the list.
+    notifications.notify("success", `Imported ${basename(notePath)}`, {
+      action: {
+        label: "Open in Obsidian",
+        run: () => invoke("open_imported_document", { id: vaultId, path: notePath }),
+      },
+    });
     // Only return to the list if no newer drop arrived meanwhile — otherwise
     // leave the picker on the newly-dropped document instead of blanking it.
     if (store.pendingImportPath === source) store.showList();
@@ -141,9 +148,9 @@ async function pick(vaultId: string) {
         type="button"
         data-testid="import-picker-settings"
         class="w-fit cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300 hover:bg-white/10"
-        @click="store.openSettings()"
+        @click="store.openDocumentImport()"
       >
-        Install Pandoc in Settings
+        Set up Pandoc
       </button>
     </div>
     <p

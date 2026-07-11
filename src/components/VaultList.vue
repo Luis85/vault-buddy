@@ -194,7 +194,7 @@ const groups = computed(() => {
             class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
             :disabled="busyVaultId !== null || captureDisabled"
             :aria-label="`Capture knowledge in ${accessibleName(vault)}`"
-            title="Capture knowledge (record audio)"
+            title="Capture knowledge"
             @click="$emit('capture', vault.id)"
           >
             <svg

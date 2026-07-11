@@ -245,7 +245,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 54 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 55 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -256,7 +256,7 @@ Keep this table in sync when adding/removing commands.
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks` *(async)*, `add_task` *(async)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -660,12 +660,18 @@ because a review found the failure it prevents:
   reschedules for fresh orphans younger than the staleness window, mirroring
   capture's retry loop.
 - **Frontend**: app-global Pandoc status/path lives in
-  `DocumentImportSettings.vue` (Buddy settings; `detect_pandoc` /
+  `DocumentImportSettings.vue`, shown both as a Buddy-settings section AND as
+  the dedicated `documentImport` panel view (`detect_pandoc` /
   `set_pandoc_path` with a Browse picker), the per-vault Documents Folder in
   `CaptureSettings.vue` via the shared `VaultFolderSetting.vue`, the OS
-  drag-drop handled in `BuddyRoot.vue` (filters `docx/odt/rtf`) landing on the
-  Pandoc-gated vault chooser `ImportVaultPicker.vue`, and the record-chooser
-  action in `RecordMode.vue`. The `vaults` store carries the `importPicker`
+  drag-drop handled in `BuddyRoot.vue` (filters `docx/odt/rtf`, highlights the
+  buddy via `CompanionCharacter`'s `dropTarget` while a droppable doc hovers)
+  landing on the Pandoc-gated vault chooser `ImportVaultPicker.vue`, and the
+  record-chooser action in `RecordMode.vue`. A blocked Import (Pandoc
+  missing/too old) routes to the focused `documentImport` view
+  (`store.openDocumentImport()`), **not** the buried Buddy-settings card. A
+  successful conversion raises a success toast whose "Open in Obsidian" action
+  calls `open_imported_document`. The `vaults` store carries the `importPicker`
   view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
   **before** the list default so a drag-dropped path survives `panel-shown`.
   `tauri-plugin-dialog` (Cargo + `dialog:allow-open` capability) backs both
@@ -867,8 +873,10 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
   camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
   task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
-  prop; `null` is the aggregate mode, reached via the "All tasks" bar above
-  the vault list in `ActionPanel.vue` (badge = `store.taskCounts` summed) and
+  prop; `null` is the aggregate mode, reached via the "All tasks" header icon
+  button in `ActionPanel.vue` (the first of the list-view header icons —
+  before search and settings — carrying a corner count badge = `store.taskCounts`
+  summed, capped at `99+` so a large total can't widen the compact header) and
   the store's `openAllTasks()` action (`view = "tasks"`, `tasksVaultId =
   null`). Aggregate mode fans out `list_vaults` then a parallel per-vault
   `list_tasks`, best-effort per vault — a vault whose `list_tasks` call fails
@@ -1095,15 +1103,22 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks | search | importPicker`, with `captureSettingsVaultId` /
+transcriptions | tasks | search | importPicker | documentImport`, with
+`captureSettingsVaultId` /
 `recordingsVaultId` / `recordModeVaultId` / `tasksVaultId` /
 `pendingImportPath`) because that must
 survive the panel window being hidden. Views form a fixed one-parent-per-view
-tree (no history stack): the vault-row capture button `openRecordMode`s
-(Meeting / Voice Note / Browse recordings / Import Document), `openRecordings`
+tree (no history stack): the vault-row capture button `openRecordMode`s (titled
+"Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
+Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
 per-vault todo view, `importPicker` (parent: the list) is the drag-drop vault
-chooser, the header's magnifier `openSearch`es the cross-vault search view,
+chooser, `documentImport` (parent: the list) is the focused Pandoc setup screen
+the blocked Import gates (`RecordMode`'s Import action, `ImportVaultPicker`'s
+"Set up Pandoc") route to — `openDocumentImport`, rendering
+`DocumentImportSettings` — instead of dumping the user at the bottom of the
+Buddy-settings page, the header's magnifier `openSearch`es the cross-vault
+search view,
 and `back()` returns to the immediate parent (`recordings` → record view,
 everything else → the list) — the header renders the magnifier + cog (buddy
 settings) on the list and a ← back button on every other view.

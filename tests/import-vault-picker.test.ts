@@ -53,9 +53,11 @@ describe("ImportVaultPicker", () => {
     expect(wrapper.text()).toContain("Work");
   });
 
-  it("picking a vault converts the document, toasts success, and returns to the list", async () => {
+  it("picking a vault converts the document, offers to open it, and returns to the list", async () => {
     const convertArgs: unknown[] = [];
+    const calls: Array<{ cmd: string; args: unknown }> = [];
     mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
       if (cmd === "detect_pandoc") return installed();
       if (cmd === "convert_document") {
         convertArgs.push(args);
@@ -74,9 +76,17 @@ describe("ImportVaultPicker", () => {
       { id: "d4e5f6", sourcePath: "C:/x/Report.docx" },
     ]);
     const notes = useNotificationsStore();
-    expect(
-      notes.items.some((i) => i.kind === "success" && i.message.includes("Imported")),
-    ).toBe(true);
+    const toast = notes.items.find(
+      (i) => i.kind === "success" && i.message.includes("Imported"),
+    );
+    expect(toast?.action?.label).toBe("Open in Obsidian");
+    // Clicking Open launches the imported note in the vault it was imported to.
+    await toast!.action!.run();
+    const openCall = calls.find((c) => c.cmd === "open_imported_document");
+    expect(openCall?.args).toEqual({
+      id: "d4e5f6",
+      path: "Documents/2026/07/2026-07-10 Report.md",
+    });
     expect(store.view).toBe("list");
     expect(store.pendingImportPath).toBeNull();
   });
@@ -123,7 +133,7 @@ describe("ImportVaultPicker", () => {
     expect(wrapper.findAll('[data-testid="import-picker-vault"]')).toHaveLength(2);
   });
 
-  it("routes to settings from the install hint", async () => {
+  it("routes to the document-import setup view from the install hint", async () => {
     mockIPC((cmd) => {
       if (cmd === "detect_pandoc") return NOT_INSTALLED;
     });
@@ -132,7 +142,7 @@ describe("ImportVaultPicker", () => {
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     await wrapper.get('[data-testid="import-picker-settings"]').trigger("click");
-    expect(store.view).toBe("settings");
+    expect(store.view).toBe("documentImport");
   });
 
   it("shows an update hint when Pandoc is too old for the sandbox", async () => {

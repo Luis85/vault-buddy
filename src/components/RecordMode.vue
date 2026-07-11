@@ -85,7 +85,7 @@ const checking = ref(true);
 // conversion is in flight.
 const importStatus = computed(() => {
   if (!pandoc.value?.installed) {
-    return { blocked: true, hint: "Install Pandoc in Settings to import documents" };
+    return { blocked: true, hint: "Install Pandoc to import documents" };
   }
   if (!pandoc.value.sandboxSupported) {
     return { blocked: true, hint: "Update Pandoc (2.15+ needed)" };
@@ -193,14 +193,16 @@ function start(mode: "meeting" | "voice-note") {
   store.showList(); // recording bar shows on the list view
 }
 
-// A blocked click (Pandoc missing/old) jumps to Settings — the one place to
-// fix it — instead of dead-ending; otherwise open the file picker + convert.
+// A blocked click (Pandoc missing/old) jumps to the focused document-import
+// setup screen — the one place to fix it — instead of dead-ending or dumping
+// the user at the bottom of the long Buddy-settings page; otherwise open the
+// file picker + convert.
 function onImportClick() {
   // The button is disabled while checking, but guard anyway so a probe still
-  // in flight never routes to Settings on a state that isn't settled yet.
+  // in flight never routes away on a state that isn't settled yet.
   if (checking.value) return;
   if (importStatus.value.blocked) {
-    store.openSettings();
+    store.openDocumentImport();
     return;
   }
   void importDocument();
@@ -222,7 +224,15 @@ async function importDocument() {
       id: props.vaultId,
       sourcePath: path,
     });
-    notifications.success(`Imported ${basename(notePath)}`);
+    // Offer to open the freshly-imported note rather than leaving the user to
+    // hunt for it — the action opens it in Obsidian via the logged command.
+    notifications.notify("success", `Imported ${basename(notePath)}`, {
+      action: {
+        label: "Open in Obsidian",
+        run: () =>
+          invoke("open_imported_document", { id: props.vaultId, path: notePath }),
+      },
+    });
   } catch (e) {
     logWarning(`convert_document failed (vault ${props.vaultId}): ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
@@ -249,23 +259,6 @@ async function importDocument() {
       </button>
       <button
         type="button"
-        data-testid="mode-browse"
-        :aria-label="browseLabel"
-        class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        @click="store.openRecordings(props.vaultId)"
-      >
-        <span class="min-w-0">
-          <span class="block text-sm font-medium text-slate-100">Browse recordings</span>
-          <span class="block text-xs text-slate-400">See past recordings in this vault</span>
-        </span>
-        <span
-          v-if="recordingCount !== null"
-          data-testid="recording-count"
-          class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
-        >{{ recordingCount }}</span>
-      </button>
-      <button
-        type="button"
         data-testid="import-document"
         aria-label="Import a document into this vault"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
@@ -280,6 +273,25 @@ async function importDocument() {
               ? "Converting… this can take a few seconds"
               : importStatus.hint
         }}</span>
+      </button>
+      <!-- Browse recordings is the last action: the two capture actions
+           (record, import) come first now that import shares the chooser. -->
+      <button
+        type="button"
+        data-testid="mode-browse"
+        :aria-label="browseLabel"
+        class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        @click="store.openRecordings(props.vaultId)"
+      >
+        <span class="min-w-0">
+          <span class="block text-sm font-medium text-slate-100">Browse recordings</span>
+          <span class="block text-xs text-slate-400">See past recordings in this vault</span>
+        </span>
+        <span
+          v-if="recordingCount !== null"
+          data-testid="recording-count"
+          class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
+        >{{ recordingCount }}</span>
       </button>
     </div>
     <div class="flex flex-col gap-3 border-t border-white/10 pt-3">

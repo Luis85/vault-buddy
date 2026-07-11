@@ -319,109 +319,137 @@ async function save() {
     @submit.prevent="save"
   >
     <section>
-      <label
-        class="mb-1 block text-sm text-slate-200"
-        for="capture-folder"
-      >
-        Recording folder
-        <span class="block text-xs text-slate-500">Inside the vault</span>
-      </label>
-      <input
-        id="capture-folder"
-        v-model="recordingFolder"
-        data-testid="folder-input"
-        type="text"
-        placeholder="Meetings or Voice Notes"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-      >
-      <p
-        v-if="folderError"
-        data-testid="folder-error"
-        class="mt-1 text-xs text-red-300"
-      >
-        {{ folderError }}
-      </p>
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Recording
+      </h2>
+      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
+        <div>
+          <label
+            class="mb-1 block text-sm text-slate-200"
+            for="capture-folder"
+          >
+            Recording folder
+            <span class="block text-xs text-slate-500">Inside the vault</span>
+          </label>
+          <input
+            id="capture-folder"
+            v-model="recordingFolder"
+            data-testid="folder-input"
+            type="text"
+            placeholder="Meetings or Voice Notes"
+            class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          >
+          <p
+            v-if="folderError"
+            data-testid="folder-error"
+            class="mt-1 text-xs text-red-300"
+          >
+            {{ folderError }}
+          </p>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <label
+            for="capture-bitrate"
+            class="text-sm text-slate-200"
+          >Bitrate</label>
+          <SelectMenu
+            id="capture-bitrate"
+            v-model="bitrateKbps"
+            :options="bitrateOptions"
+            data-testid="bitrate-select"
+          />
+        </div>
+      </div>
     </section>
-    <section class="flex items-center justify-between">
-      <label
-        for="capture-note-toggle"
-        class="text-sm text-slate-200"
-      >
+    <section>
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
         Companion note
-        <span class="block text-xs text-slate-500">.md with metadata + embed</span>
-      </label>
-      <input
-        id="capture-note-toggle"
-        v-model="createNote"
-        data-testid="note-toggle"
-        type="checkbox"
-        class="h-4 w-4 accent-violet-500"
-      >
-    </section>
-    <div
-      v-if="createNote"
-      class="flex items-center justify-between border-l border-white/10 pl-3"
-    >
-      <label
-        for="capture-follow-up-toggle"
-        class="text-sm text-slate-200"
-      >
-        Follow-up template
-        <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
-      </label>
-      <input
-        id="capture-follow-up-toggle"
-        v-model="followUpTemplate"
-        data-testid="follow-up-toggle"
-        type="checkbox"
-        class="h-4 w-4 accent-violet-500"
-      >
-    </div>
-    <TranscriptionSettings v-model="transcriptionSettings" />
-    <section class="flex items-center justify-between gap-2">
-      <label
-        for="capture-bitrate"
-        class="text-sm text-slate-200"
-      >Bitrate</label>
-      <SelectMenu
-        id="capture-bitrate"
-        v-model="bitrateKbps"
-        :options="bitrateOptions"
-        data-testid="bitrate-select"
-      />
+      </h2>
+      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
+        <div class="flex items-center justify-between">
+          <label
+            for="capture-note-toggle"
+            class="text-sm text-slate-200"
+          >
+            Companion note
+            <span class="block text-xs text-slate-500">.md with metadata + embed</span>
+          </label>
+          <input
+            id="capture-note-toggle"
+            v-model="createNote"
+            data-testid="note-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+          >
+        </div>
+        <div
+          v-if="createNote"
+          class="flex items-center justify-between border-l border-white/10 pl-3"
+        >
+          <label
+            for="capture-follow-up-toggle"
+            class="text-sm text-slate-200"
+          >
+            Follow-up template
+            <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
+          </label>
+          <input
+            id="capture-follow-up-toggle"
+            v-model="followUpTemplate"
+            data-testid="follow-up-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+          >
+        </div>
+      </div>
     </section>
     <section>
-      <label
-        class="mb-1 block text-sm text-slate-200"
-        for="capture-input-device"
-      >
-        Microphone
-      </label>
-      <SelectMenu
-        id="capture-input-device"
-        v-model="inputDevice"
-        :options="inputMenuOptions"
-        aria-label="Microphone"
-        data-testid="input-device-select"
-        wide
-      />
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Transcription
+      </h2>
+      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
+        <TranscriptionSettings v-model="transcriptionSettings" />
+      </div>
     </section>
     <section>
-      <label
-        class="mb-1 block text-sm text-slate-200"
-        for="capture-output-device"
-      >
-        Desktop audio from
-        <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
-      </label>
-      <SelectMenu
-        id="capture-output-device"
-        v-model="outputDevice"
-        :options="outputMenuOptions"
-        aria-label="Desktop audio device"
-        data-testid="output-device-select"
-        wide
-      />
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Audio devices
+      </h2>
+      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
+        <div>
+          <label
+            class="mb-1 block text-sm text-slate-200"
+            for="capture-input-device"
+          >
+            Microphone
+          </label>
+          <SelectMenu
+            id="capture-input-device"
+            v-model="inputDevice"
+            :options="inputMenuOptions"
+            aria-label="Microphone"
+            data-testid="input-device-select"
+            wide
+          />
+        </div>
+        <div>
+          <label
+            class="mb-1 block text-sm text-slate-200"
+            for="capture-output-device"
+          >
+            Desktop audio from
+            <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
+          </label>
+          <SelectMenu
+            id="capture-output-device"
+            v-model="outputDevice"
+            :options="outputMenuOptions"
+            aria-label="Desktop audio device"
+            data-testid="output-device-select"
+            wide
+          />
+        </div>
+      </div>
     </section>
     <VaultFolderSetting
       v-model="tasksFolder"

@@ -21,8 +21,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 // buddy-drop tests below can drive the handler directly and assert what it
 // does with drop/non-drop payloads and supported/unsupported extensions.
 type DragDropPayload =
-  | { type: "drop"; paths: string[] }
-  | { type: "over" | "cancel"; paths?: string[] };
+  | { type: "drop" | "enter"; paths: string[] }
+  | { type: "over" | "leave" | "cancel"; paths?: string[] };
 type DragDropHandler = (event: { payload: DragDropPayload }) => void;
 const dragDropMocks = vi.hoisted(() => ({
   onDragDropEvent: vi.fn(),
@@ -149,6 +149,44 @@ describe("BuddyRoot", () => {
       handler?.({ payload: { type: "cancel" } });
       await flushPromises();
       expect(calls).not.toContain("begin_document_import");
+    });
+
+    it("highlights the buddy while a supported document is dragged over it", async () => {
+      const wrapper = mount(BuddyRoot);
+      await flushPromises();
+      handler?.({ payload: { type: "enter", paths: ["C:/x/Report.docx"] } });
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("button.buddy").classes()).toContain("drop-target");
+    });
+
+    it("does not highlight while dragging an unsupported file", async () => {
+      const wrapper = mount(BuddyRoot);
+      await flushPromises();
+      handler?.({ payload: { type: "enter", paths: ["C:/x/photo.png"] } });
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("button.buddy").classes()).not.toContain("drop-target");
+    });
+
+    it("clears the highlight when the drag leaves", async () => {
+      const wrapper = mount(BuddyRoot);
+      await flushPromises();
+      handler?.({ payload: { type: "enter", paths: ["C:/x/Report.docx"] } });
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("button.buddy").classes()).toContain("drop-target");
+      handler?.({ payload: { type: "leave" } });
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("button.buddy").classes()).not.toContain("drop-target");
+    });
+
+    it("clears the highlight after a drop", async () => {
+      const wrapper = mount(BuddyRoot);
+      await flushPromises();
+      handler?.({ payload: { type: "enter", paths: ["C:/x/Report.docx"] } });
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("button.buddy").classes()).toContain("drop-target");
+      handler?.({ payload: { type: "drop", paths: ["C:/x/Report.docx"] } });
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("button.buddy").classes()).not.toContain("drop-target");
     });
 
     it("unregisters the drop listener on unmount", async () => {

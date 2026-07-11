@@ -362,6 +362,22 @@ pub fn take_pending_import(app: tauri::AppHandle) -> Option<String> {
     guard.take()
 }
 
+/// Open a freshly-imported note in Obsidian — the success toast's "Open in
+/// Obsidian" action. `path` is what `convert_document` returned (vault-relative
+/// on success, an absolute fallback otherwise); resolve the vault by id and
+/// launch `obsidian://open` for it. Read-only: never writes into the vault; the
+/// launch is logged (uri::launch), the same audit trail as `open_recording`.
+#[tauri::command]
+pub fn open_imported_document(id: String, path: String) -> Result<(), String> {
+    let vault = discovery::discover_vaults()
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let uri = vault_buddy_core::imported_note_uri(&vault.id, Path::new(&vault.path), &path)
+        .ok_or_else(|| format!("imported note is outside its vault: {path}"))?;
+    vault_buddy_core::uri::launch(&uri)
+}
+
 /// Staleness floor: only sweep staging dirs older than this, so a live
 /// conversion's fresh dir is never touched even if the ImportLock check
 /// somehow raced. 10 min is comfortably longer than any real conversion.

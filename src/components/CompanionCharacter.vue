@@ -15,6 +15,7 @@ const props = withDefaults(
     recording?: boolean;
     paused?: boolean;
     transcribing?: boolean;
+    dropTarget?: boolean;
   }>(),
   {
     animated: true,
@@ -24,6 +25,7 @@ const props = withDefaults(
     recording: false,
     paused: false,
     transcribing: false,
+    dropTarget: false,
   },
 );
 const emit = defineEmits<{
@@ -152,7 +154,7 @@ function onContextMenu() {
       class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
       :class="[
         draggable ? 'cursor-grab' : 'cursor-pointer',
-        { working, still: !animated, recording, paused, transcribing },
+        { working, still: !animated, recording, paused, transcribing, 'drop-target': dropTarget },
       ]"
       :aria-label="
         draggable
@@ -195,6 +197,18 @@ function onContextMenu() {
 </template>
 
 <style scoped>
+/* A droppable document is hovering: pop the buddy up and give it a violet
+   glow so the drop visibly "registers" before the user lets go. The scale is
+   on the outer button, so it composes with the avatar's inner facing flip. */
+.buddy.drop-target {
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 6px rgb(139 92 246 / 0.9))
+    drop-shadow(0 0 12px rgb(139 92 246 / 0.55));
+  transition:
+    transform 120ms ease,
+    filter 120ms ease;
+}
+
 .buddy.recording:not(.still) .rec-dot {
   animation: rec-blink 1.2s ease-in-out infinite;
 }

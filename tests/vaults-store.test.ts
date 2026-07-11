@@ -371,6 +371,16 @@ describe("vaults store", () => {
     expect(store.view).toBe("list");
   });
 
+  it("openDocumentImport switches to the document-import view, back returns to list", () => {
+    // The Pandoc-not-installed gate routes here (a focused setup screen)
+    // instead of the buried settings page; its fixed parent is the vault list.
+    const store = useVaultsStore();
+    store.openDocumentImport();
+    expect(store.view).toBe("documentImport");
+    store.back();
+    expect(store.view).toBe("list");
+  });
+
   it("refreshTaskCount updates one vault and keeps the previous count on failure (GAP-32)", async () => {
     const store = useVaultsStore();
     store.taskCounts = { a: 2, b: 5 };
