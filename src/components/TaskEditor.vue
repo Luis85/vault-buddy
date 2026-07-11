@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-import type { AggTask, TaskItem, TaskPatch } from "../types";
+import type { AggTask, TaskEditorPatch, TaskItem } from "../types";
 import { dueOf, parseTagsInput } from "../utils/taskFields";
+import TaskListPicker from "./TaskListPicker.vue";
 
 // Presentational inline editor: owns its own draft field state (seeded from
 // the task on mount — the container remounts it per edit via v-if, so no
 // re-sync is needed), computes the changed-fields patch, and reports up.
-// The container keeps editingKey and the optimistic mutation/revert.
-const props = defineProps<{ task: AggTask; busy: boolean }>();
+// The container keeps editingKey and the optimistic mutation/revert. `lists`
+// is the row's vault's lists; the picker offers existing lists only
+// (creation lives in the composer's flow).
+const props = defineProps<{ task: AggTask; busy: boolean; lists: string[] }>();
 const emit = defineEmits<{
-  (e: "save", patch: TaskPatch): void;
+  (e: "save", patch: TaskEditorPatch): void;
   (e: "cancel"): void;
 }>();
 
@@ -21,6 +24,7 @@ const editTitle = ref(props.task.title);
 const editDue = ref(dueOf(props.task) ?? "");
 const editPriority = ref<string>(normalizedPriority(props.task));
 const editTags = ref(props.task.tags.join(", "));
+const editList = ref(props.task.list);
 
 // A task must have a title (identity + display). A blank one must block the
 // save entirely — not just get dropped from the changed-fields patch, which
@@ -28,8 +32,8 @@ const editTags = ref(props.task.tags.join(", "));
 // tags change (Codex, PR #46). Mirrors the add-task composer's disabled Add.
 const titleValid = computed(() => editTitle.value.trim().length > 0);
 
-function buildPatch(): TaskPatch {
-  const patch: TaskPatch = {};
+function buildPatch(): TaskEditorPatch {
+  const patch: TaskEditorPatch = {};
   const title = editTitle.value.trim();
   if (title && title !== props.task.title) patch.title = title;
   if (editDue.value !== (dueOf(props.task) ?? "")) {
@@ -39,6 +43,9 @@ function buildPatch(): TaskPatch {
   if (editPriority.value !== normalizedPriority(props.task)) patch.priority = editPriority.value;
   const parsedTags = parseTagsInput(editTags.value);
   if (parsedTags.join(" ") !== props.task.tags.join(" ")) patch.tags = parsedTags;
+  // Changed-fields rule, same as everything above: the move rides the patch
+  // only when the pick differs from where the task lives.
+  if (editList.value !== props.task.list) patch.list = editList.value;
   return patch;
 }
 
@@ -131,6 +138,16 @@ function onEditorEsc(e: KeyboardEvent) {
       aria-label="Tags"
       class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
     >
+    <div class="flex items-center gap-1">
+      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">List</span>
+      <TaskListPicker
+        v-model="editList"
+        :lists="lists"
+        :allow-create="false"
+        aria-label="Task list"
+        data-testid="task-edit-list"
+      />
+    </div>
     <div class="flex items-center justify-end gap-1">
       <button
         type="button"

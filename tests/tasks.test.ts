@@ -1231,6 +1231,77 @@ describe("Tasks", () => {
     });
   });
 
+  describe("editor list move", () => {
+    const inList = () => [
+      { path: "C:/v/Tasks/e.md", title: "Mover", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null },
+    ];
+    async function openEditorAndPick(wrapper: ReturnType<typeof mountView>["wrapper"], listOption: string) {
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      await wrapper.get('[data-testid="task-edit-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector(`[data-testid="task-edit-list-option-${listOption}"]`) as HTMLElement).click();
+      await flushPromises();
+    }
+
+    it("saving a changed list moves the file and adopts the landed path", async () => {
+      const { wrapper, calls } = mountView({
+        list_tasks: inList,
+        list_task_lists: () => ["Inbox"],
+        move_task_to_list: () => "C:/v/Tasks/Inbox/e (2).md", // collision suffix
+      });
+      await flushPromises();
+      await openEditorAndPick(wrapper, "Inbox");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "move_task_to_list")?.args).toEqual({
+        id: "v1",
+        path: "C:/v/Tasks/e.md",
+        list: "Inbox",
+      });
+      // No field changed — the move must not be preceded by an update_task.
+      expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
+      const task = (wrapper.vm as unknown as { tasks: { path: string; list: string }[] }).tasks[0];
+      expect(task.path).toBe("C:/v/Tasks/Inbox/e (2).md");
+      expect(task.list).toBe("Inbox");
+    });
+
+    it("keeping the same list issues no move", async () => {
+      const { wrapper, calls } = mountView({ list_tasks: inList, list_task_lists: () => ["Inbox"] });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      await wrapper.get('[data-testid="task-edit-title"]').setValue("Renamed");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "update_task")?.args).toMatchObject({ patch: { title: "Renamed" } });
+      expect(calls.find((c) => c.cmd === "move_task_to_list")).toBeUndefined();
+    });
+
+    it("a failed move after saved fields keeps the fields and names the move in the toast", async () => {
+      const notifications = useNotificationsStore();
+      const { wrapper } = mountView({
+        list_tasks: inList,
+        list_task_lists: () => ["Inbox"],
+        move_task_to_list: () => {
+          throw new Error("disk full");
+        },
+      });
+      await flushPromises();
+      await openEditorAndPick(wrapper, "Inbox");
+      await wrapper.get('[data-testid="task-edit-title"]').setValue("Renamed");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      // The field patch stays applied (never silently half-reverted)…
+      expect(wrapper.text()).toContain("Renamed");
+      // …and the toast says the MOVE failed, naming the list.
+      const err = notifications.items.find((n) => n.kind === "error");
+      expect(err?.message).toContain("couldn't move");
+      expect(err?.message).toContain("Inbox");
+      // The task stays where it was.
+      const task = (wrapper.vm as unknown as { tasks: { path: string; list: string }[] }).tasks[0];
+      expect(task.list).toBe("");
+    });
+  });
+
   describe("sort control", () => {
     afterEach(() => localStorage.clear());
 

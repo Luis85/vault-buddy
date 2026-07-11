@@ -5,7 +5,7 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskItem, TaskPatch, TasksConfig, Vault } from "../types";
+import type { AggTask, TaskEditorPatch, TaskItem, TasksConfig, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
 import { type Bucket, dateBuckets, listSections, orderLists, tagSections } from "../utils/taskSections";
 import {
@@ -141,12 +141,13 @@ const knownLists = computed(() => {
 // per vault and cached in the maps above.
 const composerVaultId = ref<string | null>(props.vaultId);
 const creatingList = ref(false);
-const composerLists = computed(() => {
-  const id = composerVaultId.value;
-  if (id === null) return [];
+function listsForVault(id: string): string[] {
   const cfg = vaultConfigs.value.get(id);
   return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []);
-});
+}
+const composerLists = computed(() =>
+  composerVaultId.value === null ? [] : listsForVault(composerVaultId.value),
+);
 const composerDefaultList = computed(() => {
   const id = composerVaultId.value;
   return (id !== null && vaultConfigs.value.get(id)?.defaultList) || "";
@@ -417,27 +418,58 @@ function cancelEdit() {
   editingKey.value = null;
 }
 
-async function onEditorSave(task: AggTask, patch: TaskPatch) {
+async function onEditorSave(task: AggTask, editorPatch: TaskEditorPatch) {
   editingKey.value = null;
-  if (Object.keys(patch).length === 0) return;
-  // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
-  const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
-  if (patch.title) task.title = patch.title;
-  if (patch.clearDue) task.due = null;
-  else if (patch.due) task.due = patch.due;
-  if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
-  if (patch.tags !== undefined) task.tags = patch.tags;
-  sortInPlace();
-  busy.value.add(task.path);
+  // The list move is not a frontmatter write — strip it off the field patch
+  // and run it as its own step AFTER the fields land (the fields write
+  // targets the OLD path; the move changes it).
+  const { list: targetList, ...patch } = editorPatch;
+  if (Object.keys(patch).length === 0 && targetList === undefined) return;
+  const oldPath = task.path;
+  busy.value.add(oldPath);
   try {
-    await invoke("update_task", { id: task.vaultId, path: task.path, patch });
-  } catch (e) {
-    Object.assign(task, before);
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`update_task failed: ${String(e)}`);
+    if (Object.keys(patch).length > 0) {
+      // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
+      const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
+      if (patch.title) task.title = patch.title;
+      if (patch.clearDue) task.due = null;
+      else if (patch.due) task.due = patch.due;
+      if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
+      if (patch.tags !== undefined) task.tags = patch.tags;
+      sortInPlace();
+      try {
+        await invoke("update_task", { id: task.vaultId, path: task.path, patch });
+      } catch (e) {
+        Object.assign(task, before);
+        sortInPlace();
+        notifications.error(String(e));
+        logWarning(`update_task failed: ${String(e)}`);
+        // Fields failed — don't compound the situation by also moving.
+        return;
+      }
+    }
+    if (targetList !== undefined) {
+      // Not optimistic: the landed path (which may carry a collision suffix)
+      // only exists in the command's answer, so the row adopts it on success.
+      try {
+        const landed = await invoke<string>("move_task_to_list", {
+          id: task.vaultId,
+          path: task.path,
+          list: targetList,
+        });
+        task.path = landed;
+        task.list = targetList;
+        sortInPlace();
+      } catch (e) {
+        // Saved fields are kept (never silently half-reverted) — the toast
+        // names exactly what failed.
+        const prefix = Object.keys(patch).length > 0 ? "Saved fields, but couldn't move" : "Couldn't move";
+        notifications.error(`${prefix} to "${targetList || "No list"}": ${String(e)}`);
+        logWarning(`move_task_to_list failed: ${String(e)}`);
+      }
+    }
   } finally {
-    busy.value.delete(task.path);
+    busy.value.delete(oldPath);
   }
 }
 </script>
@@ -608,6 +640,7 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
             <TaskEditor
               :task="task"
               :busy="isBusy(task.path)"
+              :lists="listsForVault(task.vaultId)"
               @save="onEditorSave(task, $event)"
               @cancel="cancelEdit"
             />

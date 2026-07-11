@@ -205,11 +205,14 @@ tests pin both behaviors. Fixes every SelectMenu consumer at once.
   aggregate mode re-fetches lists/config when the picked vault changes
   (lazy, cached per vault). `add()` passes the picked list; the returned
   `TaskDto` (now carrying `list`) merges into the view as today.
-- **Inline editor** gains the same picker seeded with the row's list; on
-  save, field changes go first (one `update_task` at the old path), then
-  a changed list issues `move_task_to_list` and the row re-keys to the
-  returned path. A failed move after a successful patch keeps the patch
-  and raises a toast naming the move — never silently half-applied.
+- **Inline editor** gains the same picker seeded with the row's list
+  (existing lists only — creation lives in the composer's flow; routing a
+  create round-trip through the presentational editor would add a second
+  signalling channel for no real gain); on save, field changes go first
+  (one `update_task` at the old path), then a changed list issues
+  `move_task_to_list` and the row re-keys to the returned path. A failed
+  move after a successful patch keeps the patch and raises a toast naming
+  the move — never silently half-applied.
 - **Per-vault Vault settings** (CaptureSettings' tasks section) gains
   the settings object's UI: a Default-list picker and a list-order
   editor (the vault's lists with up/down controls, persisted via

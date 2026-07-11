@@ -152,6 +152,11 @@ export interface TaskPatch {
   order?: number;
 }
 
+/** What the inline editor emits: the update_task patch plus an optional list
+ * move — the container strips `list` and routes it to move_task_to_list (a
+ * file move is not a frontmatter write). */
+export type TaskEditorPatch = TaskPatch & { list?: string };
+
 export interface TasksConfig {
   tasksFolder: string | null;
   /** Lists settings object: where unpicked new tasks land (null = the tasks
