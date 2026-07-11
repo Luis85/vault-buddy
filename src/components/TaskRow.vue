@@ -5,19 +5,29 @@ import { dueOf, localToday } from "../utils/taskFields";
 // Presentational task row: the container owns all state and side effects; this
 // component only renders and reports intent up. When `editing`, it yields its
 // body to the slot (the container places a TaskEditor there) so the inline
-// editor's save/cancel bind to container handlers directly.
-defineProps<{
-  task: AggTask;
-  busy: boolean;
-  isAggregate: boolean;
-  editing: boolean;
-}>();
+// editor's save/cancel bind to container handlers directly. `reorderable`
+// shows the grip handle (Manual sort, no filters); the raw pointer/key
+// events travel up — the container's reorder composable owns the drag.
+withDefaults(
+  defineProps<{
+    task: AggTask;
+    busy: boolean;
+    isAggregate: boolean;
+    editing: boolean;
+    reorderable?: boolean;
+    dragging?: boolean;
+    dropTarget?: boolean;
+  }>(),
+  { reorderable: false, dragging: false, dropTarget: false },
+);
 defineEmits<{
   (e: "toggle"): void;
   (e: "archive"): void;
   (e: "edit"): void;
   (e: "open"): void;
   (e: "tagClick", tag: string): void;
+  (e: "reorderPointerDown", ev: PointerEvent): void;
+  (e: "reorderKeydown", ev: KeyboardEvent): void;
 }>();
 
 // Deterministic short label (no locale dependence): "Jul 15".
@@ -36,10 +46,61 @@ const isOverdue = (t: AggTask): boolean => {
 <template>
   <li
     data-testid="task-row"
-    class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
+    class="flex items-center gap-2 rounded-lg border bg-white/5 px-2 py-1"
+    :class="[
+      dragging ? 'opacity-50' : '',
+      dropTarget ? 'border-violet-400' : 'border-white/10',
+    ]"
   >
     <slot v-if="editing" />
     <template v-else>
+      <button
+        v-if="reorderable"
+        type="button"
+        data-testid="task-drag"
+        :disabled="busy"
+        :aria-label="`Reorder ${task.title} (arrow keys move it)`"
+        title="Drag to reorder"
+        class="shrink-0 cursor-grab touch-none rounded p-0.5 text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+        @pointerdown="$emit('reorderPointerDown', $event)"
+        @keydown="$emit('reorderKeydown', $event)"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <circle
+            cx="9"
+            cy="5"
+            r="1.6"
+          /><circle
+            cx="15"
+            cy="5"
+            r="1.6"
+          />
+          <circle
+            cx="9"
+            cy="12"
+            r="1.6"
+          /><circle
+            cx="15"
+            cy="12"
+            r="1.6"
+          />
+          <circle
+            cx="9"
+            cy="19"
+            r="1.6"
+          /><circle
+            cx="15"
+            cy="19"
+            r="1.6"
+          />
+        </svg>
+      </button>
       <input
         type="checkbox"
         data-testid="task-checkbox"

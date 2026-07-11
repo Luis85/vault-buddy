@@ -2,12 +2,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { computed, onMounted, ref } from "vue";
 
+import { useTaskActions } from "../composables/useTaskActions";
+import { useTaskLists } from "../composables/useTaskLists";
+import { useTaskReorder } from "../composables/useTaskReorder";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskEditorPatch, TaskItem, TasksConfig, Vault } from "../types";
+import type { AggTask, TaskItem, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
-import { type Bucket, dateBuckets, listSections, orderLists, tagSections } from "../utils/taskSections";
+import { planReorder } from "../utils/taskOrder";
+import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
 import {
   directionApplies,
   loadSortPref,
@@ -42,17 +46,40 @@ const composer = ref<InstanceType<typeof TaskComposer> | null>(null);
 const vaultOptions = computed(() =>
   allVaults.value.map((v) => ({ value: v.id, label: v.name })),
 );
-// Task paths whose set_task_status write is in flight. A second action on the
-// same row while its write is pending would race the first (on a slow disk the
-// two writes can land out of order, leaving the file disagreeing with the UI),
-// so the row's controls are disabled and re-entrant actions are ignored until
-// it resolves — a toggle and an archive for the same task can't race. A
-// reactive Set so the template's :disabled tracks add/delete. Keyed by path alone:
-// task paths are unique across vaults (two vaults would have to contain the same
-// absolute file), and the aggregation spec documents that assumption — this comment
-// is its code-side anchor.
-const busy = ref(new Set<string>());
-const isBusy = (path: string) => busy.value.has(path);
+// Row writes (toggle/archive/open/editor save), the shared per-path busy
+// guard, and the lists state each live in their composable — state + IPC
+// split out for the LOC cap, rendering stays here.
+const {
+  busy,
+  isBusy,
+  toggle,
+  archive,
+  openInObsidian,
+  editingKey,
+  rowKey,
+  startEdit,
+  cancelEdit,
+  onEditorSave,
+} = useTaskActions({ tasks, sortInPlace });
+const {
+  listOrder,
+  knownLists,
+  creatingList,
+  composerLists,
+  composerDefaultList,
+  listsForVault,
+  loadVaultLists,
+  loadVaultConfig,
+  onComposerVaultChange,
+  createList,
+} = useTaskLists(props.vaultId);
+
+// The composer's New list flow: the composable creates + caches; the picker
+// shows the created list once it is re-selected here.
+async function onCreateList(name: string) {
+  const created = await createList(name);
+  if (created !== null) composer.value?.setList(created);
+}
 
 // done / total of the visible (non-archived) list; drives the progress bar.
 const progress = computed(() => {
@@ -110,93 +137,78 @@ function flipSortDir() {
   sortInPlace();
 }
 
+// Manual ordering: drag (or arrow-key) a row within its section; the landed
+// slot becomes an `order` rank via planReorder — one midpoint write in the
+// common case, a section-wide materialization when ranks need seeding.
+// Handles show only in Manual sort with NO filter active: reordering a
+// filtered subset would write ranks against invisible neighbors.
+const rootRef = ref<HTMLElement | null>(null);
+const reordering = ref(false);
+const reorderEnabled = computed(
+  () =>
+    sortPref.value.key === "manual" &&
+    filter.value.trim() === "" &&
+    tagFilter.value === null &&
+    !reordering.value,
+);
+const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
+  enabled: () => reorderEnabled.value,
+  rowsFor: (sectionKey) =>
+    rootRef.value
+      ? ([...rootRef.value.querySelectorAll(`[data-reorder-section="${sectionKey}"]`)] as HTMLElement[])
+      : [],
+  commit: commitReorder,
+});
+
+async function commitReorder(sectionKey: string, fromIndex: number, toIndex: number) {
+  const section = buckets.value.find((b) => b.key === sectionKey)?.tasks ?? [];
+  const plan = planReorder(section, fromIndex, toIndex);
+  if (!plan) return;
+  if (plan.kind === "single") {
+    const task = section[fromIndex];
+    if (busy.value.has(task.path)) return;
+    const prev = task.order;
+    task.order = plan.order;
+    sortInPlace();
+    busy.value.add(task.path);
+    try {
+      await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order: plan.order } });
+    } catch (e) {
+      task.order = prev;
+      sortInPlace();
+      notifications.error(String(e));
+      logWarning(`reorder failed: ${String(e)}`);
+    } finally {
+      busy.value.delete(task.path);
+    }
+    return;
+  }
+  // Materialization: seed spaced ranks across the section — optimistic for
+  // the whole batch, serialized writes (each its own file, possibly across
+  // vaults in the aggregate), one revert + toast if ANY write fails. The
+  // view-level guard keeps a second reorder from interleaving.
+  reordering.value = true;
+  const affected = section.filter((t) => plan.orders.has(t.path));
+  const prevOrders = new Map(affected.map((t) => [t.path, t.order] as const));
+  for (const t of affected) t.order = plan.orders.get(t.path) ?? t.order;
+  sortInPlace();
+  try {
+    for (const t of affected) {
+      await invoke("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } });
+    }
+  } catch (e) {
+    for (const t of affected) t.order = prevOrders.get(t.path) ?? t.order;
+    sortInPlace();
+    notifications.error(`Couldn't save the new order: ${String(e)}`);
+    logWarning(`reorder materialization failed: ${String(e)}`);
+  } finally {
+    reordering.value = false;
+  }
+}
+
 // Component-local; every panel visit starts back on dates (YAGNI: no
 // persistence this slice).
 const grouping = ref<"dates" | "tags" | "lists">("dates");
-
-// A List is a folder under the vault's tasks root; enumeration is fetched
-// per vault (fan-out in aggregate mode, best-effort like the tasks load)
-// so the Lists grouping can show empty lists and the pickers can offer
-// every list. listOrder comes from the vault's lists settings object; the
-// aggregate keeps [] (a cross-vault order union is YAGNI — alphabetical).
-const vaultLists = ref(new Map<string, string[]>());
-const vaultConfigs = ref(new Map<string, TasksConfig>());
-// Sections honor the vault's configured order in per-vault mode; the
-// aggregate stays alphabetical (a cross-vault order union is YAGNI).
-const listOrder = computed(() =>
-  props.vaultId !== null ? (vaultConfigs.value.get(props.vaultId)?.listOrder ?? []) : [],
-);
-const knownLists = computed(() => {
-  const seen = new Map<string, string>();
-  for (const lists of vaultLists.value.values())
-    for (const l of lists) {
-      const k = l.toLowerCase();
-      if (!seen.has(k)) seen.set(k, l);
-    }
-  return [...seen.values()];
-});
-
-// The composer's target vault (its own pick in aggregate mode); its lists
-// and configured default feed the composer's list picker, fetched lazily
-// per vault and cached in the maps above.
-const composerVaultId = ref<string | null>(props.vaultId);
-const creatingList = ref(false);
-function listsForVault(id: string): string[] {
-  const cfg = vaultConfigs.value.get(id);
-  return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []);
-}
-const composerLists = computed(() =>
-  composerVaultId.value === null ? [] : listsForVault(composerVaultId.value),
-);
-const composerDefaultList = computed(() => {
-  const id = composerVaultId.value;
-  return (id !== null && vaultConfigs.value.get(id)?.defaultList) || "";
-});
-
-const configsInFlight = new Set<string>();
-async function loadVaultConfig(id: string) {
-  if (configsInFlight.has(id)) return;
-  configsInFlight.add(id);
-  try {
-    const cfg = await invoke<TasksConfig>("get_tasks_config", { id });
-    if (cfg && Array.isArray(cfg.listOrder)) {
-      vaultConfigs.value.set(id, cfg);
-      vaultConfigs.value = new Map(vaultConfigs.value); // Map mutation isn't tracked
-    }
-  } catch (e) {
-    logWarning(`get_tasks_config failed for vault ${id}: ${String(e)}`);
-  } finally {
-    configsInFlight.delete(id);
-  }
-}
-
-function onComposerVaultChange(id: string) {
-  composerVaultId.value = id;
-  if (!vaultConfigs.value.has(id)) void loadVaultConfig(id);
-  if (!vaultLists.value.has(id)) void loadVaultLists(id);
-}
-
-// The composer's New list flow: create in the composer's target vault, fold
-// the landed name into the vault's lists, and re-select it in the picker.
-async function onCreateList(name: string) {
-  const id = composerVaultId.value ?? props.vaultId;
-  if (id === null || creatingList.value) return;
-  creatingList.value = true;
-  try {
-    const created = await invoke<string>("create_task_list", { id, name });
-    const lists = vaultLists.value.get(id) ?? [];
-    if (!lists.some((l) => l.toLowerCase() === created.toLowerCase())) {
-      vaultLists.value.set(id, [...lists, created]);
-      vaultLists.value = new Map(vaultLists.value);
-    }
-    composer.value?.setList(created);
-  } catch (e) {
-    notifications.error(String(e));
-    logWarning(`create_task_list failed: ${String(e)}`);
-  } finally {
-    creatingList.value = false;
-  }
-}
 
 const buckets = computed<Bucket[]>(() => {
   if (grouping.value === "tags") return tagSections(filteredTasks.value);
@@ -208,27 +220,6 @@ const buckets = computed<Bucket[]>(() => {
     });
   return dateBuckets(filteredTasks.value, localToday());
 });
-
-// Best-effort per vault, like the tasks load: a vault whose enumeration
-// fails contributes no lists (log-only — the tasks toast already names a
-// broken vault) and the view still renders.
-// In-flight dedupe: the composer's initial vault-change fires while the
-// aggregate fan-out for the same vault is still pending — without the guard
-// every aggregate open would fetch the first vault's lists twice.
-const listsInFlight = new Set<string>();
-async function loadVaultLists(id: string) {
-  if (listsInFlight.has(id)) return;
-  listsInFlight.add(id);
-  try {
-    const lists = await invoke<string[]>("list_task_lists", { id });
-    vaultLists.value.set(id, Array.isArray(lists) ? lists : []);
-    vaultLists.value = new Map(vaultLists.value); // Map mutation isn't tracked
-  } catch (e) {
-    logWarning(`list_task_lists failed for vault ${id}: ${String(e)}`);
-  } finally {
-    listsInFlight.delete(id);
-  }
-}
 
 onMounted(async () => {
   try {
@@ -330,152 +321,13 @@ async function add(payload: AddPayload) {
   }
 }
 
-async function toggle(task: AggTask) {
-  // Ignore a re-action while this row's write is still pending — otherwise two
-  // concurrent set_task_status writes for the same task can land out of order.
-  if (busy.value.has(task.path)) return;
-  // GAP-32: captured BEFORE the optimistic flip so a failed write can
-  // restore the task's actual original status (e.g. "in-progress") instead
-  // of forging "new" — the old revert derived the restored value from the
-  // just-flipped `done` boolean, which only ever knows "done"/"new".
-  const prevStatus = task.status;
-  const done = !task.done;
-  // Optimistic: flip locally, revert + notify on failure.
-  task.done = done;
-  task.status = done ? "done" : "new";
-  sortInPlace();
-  busy.value.add(task.path);
-  try {
-    await invoke("set_task_status", { id: task.vaultId, path: task.path, status: task.status });
-    // Badge refresh (GAP-32 / Codex PR #46): kicked off right after the
-    // write resolves, before the row's busy flag clears in `finally` — it's
-    // fire-and-forget (`void`) against the vaults store's own state, so it
-    // never blocks this row's controls either way, but starting it here
-    // keeps it colocated with the success branch rather than a `finally`
-    // that also runs on failure.
-    void vaultsStore.refreshTaskCount(task.vaultId);
-  } catch (e) {
-    task.status = prevStatus;
-    task.done = prevStatus === "done";
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`set_task_status failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(task.path);
-  }
-}
-
-async function archive(task: AggTask) {
-  if (busy.value.has(task.path)) return;
-  busy.value.add(task.path);
-  // Optimistic: remove from the list; on failure push back + re-sort rather
-  // than re-inserting at a captured index (GAP-32: the index goes stale —
-  // one slot off — if a concurrent add landed while this write was in
-  // flight; recomputing placement via sortInPlace is always correct).
-  const index = tasks.value.findIndex((t) => t.path === task.path);
-  const removed = tasks.value.splice(index, 1)[0];
-  try {
-    await invoke("set_task_status", { id: task.vaultId, path: task.path, status: "archived" });
-    void vaultsStore.refreshTaskCount(task.vaultId);
-  } catch (e) {
-    tasks.value.push(removed);
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`archive failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(task.path);
-  }
-}
-
-async function openInObsidian(task: AggTask) {
-  try {
-    await invoke("open_task", { id: task.vaultId, path: task.path });
-    // Obsidian takes over — get the panel out of the way. Panel visibility is
-    // owned by Rust (close_panel), best-effort, mirroring the vault-open and
-    // recording-open flows. A failed launch falls through to the catch and
-    // keeps the panel up so the error toast is visible.
-    void invoke("close_panel").catch(() => {});
-  } catch (e) {
-    notifications.error(String(e));
-    logWarning(`open_task failed: ${String(e)}`);
-  }
-}
-
-// Inline editor: one row at a time; opening another row discards unsaved
-// edits in the first (the file is the source of truth, edits are cheap).
-// Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
-// two tag sections (Task 7) opens its editor on only the clicked row. The
-// draft field state and its IME-guarded key handlers live in TaskEditor; the
-// container keeps editingKey (which row is open) and the optimistic write.
-const editingKey = ref<string | null>(null);
-const rowKey = (bucketKey: string, task: AggTask) => `${bucketKey}:${task.path}`;
-
-function startEdit(task: AggTask, bucketKey: string) {
-  editingKey.value = rowKey(bucketKey, task);
-}
-
-function cancelEdit() {
-  editingKey.value = null;
-}
-
-async function onEditorSave(task: AggTask, editorPatch: TaskEditorPatch) {
-  editingKey.value = null;
-  // The list move is not a frontmatter write — strip it off the field patch
-  // and run it as its own step AFTER the fields land (the fields write
-  // targets the OLD path; the move changes it).
-  const { list: targetList, ...patch } = editorPatch;
-  if (Object.keys(patch).length === 0 && targetList === undefined) return;
-  const oldPath = task.path;
-  busy.value.add(oldPath);
-  try {
-    if (Object.keys(patch).length > 0) {
-      // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
-      const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
-      if (patch.title) task.title = patch.title;
-      if (patch.clearDue) task.due = null;
-      else if (patch.due) task.due = patch.due;
-      if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
-      if (patch.tags !== undefined) task.tags = patch.tags;
-      sortInPlace();
-      try {
-        await invoke("update_task", { id: task.vaultId, path: task.path, patch });
-      } catch (e) {
-        Object.assign(task, before);
-        sortInPlace();
-        notifications.error(String(e));
-        logWarning(`update_task failed: ${String(e)}`);
-        // Fields failed — don't compound the situation by also moving.
-        return;
-      }
-    }
-    if (targetList !== undefined) {
-      // Not optimistic: the landed path (which may carry a collision suffix)
-      // only exists in the command's answer, so the row adopts it on success.
-      try {
-        const landed = await invoke<string>("move_task_to_list", {
-          id: task.vaultId,
-          path: task.path,
-          list: targetList,
-        });
-        task.path = landed;
-        task.list = targetList;
-        sortInPlace();
-      } catch (e) {
-        // Saved fields are kept (never silently half-reverted) — the toast
-        // names exactly what failed.
-        const prefix = Object.keys(patch).length > 0 ? "Saved fields, but couldn't move" : "Couldn't move";
-        notifications.error(`${prefix} to "${targetList || "No list"}": ${String(e)}`);
-        logWarning(`move_task_to_list failed: ${String(e)}`);
-      }
-    }
-  } finally {
-    busy.value.delete(oldPath);
-  }
-}
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
+  <div
+    ref="rootRef"
+    class="flex flex-col gap-2"
+  >
     <div
       v-if="!loading && !loadError && progress.total > 0"
       data-testid="task-progress"
@@ -625,17 +477,27 @@ async function onEditorSave(task: AggTask, editorPatch: TaskEditorPatch) {
         </h3>
         <ul class="flex flex-col gap-1">
           <TaskRow
-            v-for="task in bucket.tasks"
+            v-for="(task, i) in bucket.tasks"
             :key="rowKey(bucket.key, task)"
             :task="task"
             :busy="isBusy(task.path)"
             :is-aggregate="isAggregate"
             :editing="editingKey === rowKey(bucket.key, task)"
+            :reorderable="reorderEnabled"
+            :dragging="dragState?.sectionKey === bucket.key && dragState.fromIndex === i"
+            :drop-target="
+              dragState?.sectionKey === bucket.key &&
+                dragState.toIndex === i &&
+                dragState.fromIndex !== i
+            "
+            :data-reorder-section="bucket.key"
             @toggle="toggle(task)"
             @archive="archive(task)"
             @edit="startEdit(task, bucket.key)"
             @open="openInObsidian(task)"
             @tag-click="tagFilter = $event"
+            @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
+            @reorder-keydown="onHandleKeydown($event, bucket.key, i)"
           >
             <TaskEditor
               :task="task"

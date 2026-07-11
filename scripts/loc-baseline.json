@@ -3,11 +3,11 @@
     "frontend": 500,
     "rust": 800
   },
-  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
+  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs \u2014 higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
   "allowlist": {
     "src-tauri/src/capture_commands.rs": {
-      "loc": 1215,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1211->1215: rename now emits capture:transcribeRetargeted on a transcript-sidecar move too (not only a queued-job match) so a transcription that finished before the rename prompt re-keys its terminal store row (Codex PR #46 round 4) — needs the retargeted_queue binding + OR condition."
+      "loc": 1219,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1211->1215: rename retarget on transcript-sidecar moves (Codex PR #46 round 4). 1215->1219: set_capture_config must also preserve the per-vault lists settings object (defaultList/listOrder, the tasks_folder preservation rule extended) \u2014 two fields + the invariant comment."
     },
     "src-tauri/src/transcription.rs": {
       "loc": 1086,

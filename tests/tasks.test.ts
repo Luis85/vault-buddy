@@ -793,7 +793,7 @@ describe("Tasks", () => {
 
   it("tag and title filters combine (AND)", async () => {
     const tagged = (n: number, tags: string[]): TaskItem => ({
-      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags,
+      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags, list: "", order: null,
     });
     const { wrapper } = mountView({
       list_tasks: () => [tagged(0, ["work"]), tagged(1, ["work"]), tagged(2, []), tagged(3, []), tagged(4, []), tagged(5, [])],
