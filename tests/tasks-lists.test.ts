@@ -175,6 +175,35 @@ describe("Tasks — lists & sorting", () => {
       await flushPromises();
       expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ id: "vb", list: "Waiting" });
     });
+
+    it("does not carry the previous vault's default into a quick add after switching (Codex #53 re-review)", async () => {
+      // va's default is "Inbox"; switching to vb whose config is still pending
+      // must NOT send "Inbox" on a quick add — the composer clears the draft
+      // list on switch, so the backend applies vb's own default.
+      let resolveVb!: (v: unknown) => void;
+      const { wrapper, calls } = mountAggregateAttached({
+        get_tasks_config: (args: unknown) => {
+          const id = (args as { id: string }).id;
+          return id === "va"
+            ? { tasksFolder: null, defaultList: "Inbox", listOrder: [] }
+            : new Promise((r) => (resolveVb = r)); // vb config stays pending
+        },
+        list_task_lists: (args: unknown) => ((args as { id: string }).id === "va" ? ["Inbox"] : []),
+      });
+      await flushPromises(); // va (the initial target) loads → draft follows "Inbox"
+      await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
+      await flushPromises();
+      // Quick add before vb's config resolves.
+      await wrapper.get('[data-testid="task-input"]').setValue("Quick");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      const call = calls.find((c) => c.cmd === "add_task");
+      expect(call?.args).toMatchObject({ id: "vb" });
+      expect(call?.args).not.toHaveProperty("list"); // NOT the stale "Inbox"
+      resolveVb({ tasksFolder: null, defaultList: "Waiting", listOrder: [] });
+    });
   });
 
   describe("editor list move", () => {

@@ -187,20 +187,34 @@ async function writeSingleRank(task: AggTask, order: number) {
 
 // Materialization: seed spaced ranks across the section — optimistic for
 // the whole batch, serialized writes (each its own file, possibly across
-// vaults in the aggregate), one revert + toast if ANY write fails. The
-// view-level guard keeps a second reorder from interleaving.
+// vaults in the aggregate). The view-level guard keeps a second reorder from
+// interleaving.
 async function materializeRanks(section: AggTask[], orders: Map<string, number>) {
   reordering.value = true;
   const affected = section.filter((t) => orders.has(t.path));
   const prevOrders = new Map(affected.map((t) => [t.path, t.order] as const));
   for (const t of affected) t.order = orders.get(t.path) ?? t.order;
   sortInPlace();
+  // The writes are serialized and non-atomic across files, so a mid-batch
+  // failure leaves earlier files already written. Track what landed and
+  // revert ONLY the tasks that never reached disk — reverting the whole batch
+  // would desync the UI from a partially-written section (the mismatch would
+  // surface on the next reload as a phantom partial reorder). Same "keep what
+  // succeeded, name what failed" posture as the editor's field-then-move save.
+  const written = new Set<string>();
   try {
     for (const t of affected) {
       await invoke("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } });
+      written.add(t.path);
     }
   } catch (e) {
-    for (const t of affected) t.order = prevOrders.get(t.path) ?? t.order;
+    // `?? null` (not `?? t.order`): a previous order of null means the task
+    // was UNRANKED and must revert to unranked — `null ?? t.order` would
+    // wrongly keep the new optimistic rank. Every affected path is a key in
+    // prevOrders, so a genuinely missing entry can't occur here.
+    for (const t of affected) {
+      if (!written.has(t.path)) t.order = prevOrders.get(t.path) ?? null;
+    }
     sortInPlace();
     notifications.error(`Couldn't save the new order: ${String(e)}`);
     logWarning(`reorder materialization failed: ${String(e)}`);

@@ -160,4 +160,29 @@ describe("manual reordering", () => {
     expect(rowTitles(wrapper)).toEqual(["a", "b"]); // back where it was
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
+
+  it("keeps already-written ranks on a partial materialize failure (Codex #53 re-review)", async () => {
+    // The batch writes b then c; fail the SECOND write. b already reached
+    // disk, so its new rank must stay in memory (matching disk) — a blanket
+    // revert would show a phantom un-reorder that a reload contradicts. Only
+    // the unwritten c reverts.
+    const notifications = useNotificationsStore();
+    let n = 0;
+    const { wrapper } = mountManual([task("a", 1024), task("b", null), task("c", null)], {
+      update_task: () => {
+        n += 1;
+        if (n >= 2) throw new Error("locked");
+        return null;
+      },
+    });
+    await flushPromises();
+    await wrapper.findAll('[data-testid="task-drag"]')[2].trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    const rows = (wrapper.vm as unknown as { tasks: { path: string; order: number | null }[] }).tasks;
+    const orderOf = (p: string) => rows.find((t) => t.path === p)?.order;
+    expect(orderOf("C:/v/Tasks/b.md")).toBe(3072); // written → kept (matches disk)
+    expect(orderOf("C:/v/Tasks/c.md")).toBeNull(); // never written → reverted
+    expect(orderOf("C:/v/Tasks/a.md")).toBe(1024); // untouched
+    expect(notifications.items.some((n2) => n2.kind === "error")).toBe(true);
+  });
 });

@@ -78,9 +78,16 @@ watch(
 watch(addVaultId, (id) => {
   if (id) {
     // A new target vault means a new lists universe — drop the manual pick
-    // and re-follow that vault's default when it arrives.
+    // and re-follow that vault's default when it arrives. Clear to "" (NOT
+    // props.defaultList): at switch time the prop still holds the PREVIOUS
+    // vault's default (the container updates composerVaultId synchronously,
+    // but the recomputed default only propagates on the next flush), so
+    // copying it would send the old vault's list on a quick add before the
+    // new vault's config loads. "" + untouched makes submit() omit the list
+    // so the backend applies the NEW vault's default; the defaultList watcher
+    // repopulates addList once that config arrives (Codex, PR #53 re-review).
     listTouched.value = false;
-    addList.value = props.defaultList;
+    addList.value = "";
     emit("vaultChange", id);
   }
 });
