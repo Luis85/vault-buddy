@@ -4,16 +4,6 @@
 //! NOT an index — no tokenization, no persistence, no write-hooks; `(mtime,
 //! size)` self-invalidates. See
 //! docs/superpowers/specs/2026-07-11-search-performance-content-cache-design.md.
-//!
-//! This task lands the primitive on its own, self-contained; a follow-up
-//! task wires `cached_lowered` into `core::search`'s scan loop. Until that
-//! lands, everything below `cached_lowered` in the call graph is exercised
-//! only by `#[cfg(test)]`, which the `-D warnings` dead-code lint can't see
-//! in a normal (non-test) build. Widening `cached_lowered` from `pub(crate)`
-//! to `pub` would dodge the lint but is not the shape the wiring task
-//! expects, so it's suppressed module-wide here instead; remove this once
-//! `core::search` calls in.
-#![allow(dead_code)]
 
 use crate::search::MAX_CONTENT_BYTES;
 use std::collections::HashMap;
@@ -122,7 +112,16 @@ pub(crate) fn cached_lowered(path: &Path, cache: &SearchCache) -> Option<Arc<str
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
     if size > MAX_CONTENT_BYTES {
-        return None; // oversize: name-only, exactly as before — no entry needed
+        // A path cached as Text while <= MAX that has since grown past the cap
+        // must not keep its now-unreachable bytes counted for the process
+        // lifetime — drop and reconcile any existing entry before bailing.
+        let mut map = cache.lock();
+        if let Some(CacheEntry::Text { lowered, .. }) = map.remove(path) {
+            cache
+                .bytes
+                .fetch_sub(lowered.len() as u64, Ordering::Relaxed);
+        }
+        return None;
     }
     let mtime = meta.modified().ok()?;
 
@@ -229,6 +228,25 @@ mod tests {
         let big = "x".repeat(crate::search::MAX_CONTENT_BYTES as usize + 1);
         let p = write(dir.path(), "big.md", &big);
         let c = SearchCache::new();
+        assert!(cached_lowered(&p, &c).is_none());
+        assert_eq!(c.cached_bytes(), 0);
+        assert!(c.peek_text(&p).is_none());
+    }
+
+    #[test]
+    fn growing_past_the_cap_after_being_cached_reconciles_stale_bytes() {
+        // Regression: a path cached as Text while <= MAX_CONTENT_BYTES that
+        // later grows past the cap must not keep its now-unreachable bytes
+        // counted for the process lifetime. The old oversize branch returned
+        // None before ever consulting the map, so a stale Text entry (and its
+        // byte-counter contribution) was never removed.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(dir.path(), "grows.md", "alpha\n");
+        let c = SearchCache::new();
+        assert!(cached_lowered(&p, &c).is_some());
+        assert!(c.cached_bytes() > 0);
+        let big = "x".repeat(crate::search::MAX_CONTENT_BYTES as usize + 1);
+        std::fs::write(&p, big).unwrap();
         assert!(cached_lowered(&p, &c).is_none());
         assert_eq!(c.cached_bytes(), 0);
         assert!(c.peek_text(&p).is_none());
