@@ -442,4 +442,12 @@ describe("CaptureSettings", () => {
       args: { id: "v1", tasksFolder: "Mine" },
     });
   });
+
+  it("renders the self-contained Task lists settings card", async () => {
+    // The lists settings object (defaultList/listOrder) saves through its own
+    // command so a lists-config failure can't block the capture/folder saves.
+    const { wrapper } = await mountLoaded();
+    expect(wrapper.text()).toContain("Task lists");
+    expect(wrapper.find('[data-testid="task-lists-save"]').exists()).toBe(true);
+  });
 });

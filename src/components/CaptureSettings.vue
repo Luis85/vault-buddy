@@ -11,6 +11,7 @@ import type {
   TasksConfig,
 } from "../types";
 import SelectMenu from "./SelectMenu.vue";
+import TaskListSettings from "./TaskListSettings.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
@@ -462,6 +463,9 @@ async function save() {
       :error="tasksFolderError"
       @edit="tasksFolderEdited = true"
     />
+    <!-- Self-contained (own load/save) so its lists-config failure can't
+         block the capture/folder saves — the independent-save pattern. -->
+    <TaskListSettings :vault-id="vaultId" />
     <VaultFolderSetting
       v-model="documentsFolder"
       heading="Document import"
