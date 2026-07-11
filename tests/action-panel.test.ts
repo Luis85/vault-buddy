@@ -40,18 +40,21 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll(".panel-scroll button");
-    // 2 vaults × (row + daily note + tasks + capture + gear) + All-tasks bar
-    expect(buttons).toHaveLength(11);
+    // 2 vaults × (row + daily note + tasks + capture + gear); the All-tasks
+    // button now lives in the header, not the scrolling list body.
+    expect(buttons).toHaveLength(10);
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
   });
 
-  it("shows the All-tasks entry bar with the summed open count and opens aggregate mode", async () => {
+  it("opens aggregate tasks from the header All-tasks icon, with the summed open count", async () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
     store.taskCounts = { d4e5f6: 2, a1b2c3: 3 };
     const wrapper = mount(ActionPanel, { global: { stubs: { Tasks: true } } });
+    // The button is a header icon now, not a bar in the scrolling list body.
+    expect(wrapper.find('.panel-scroll [data-testid="all-tasks"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="all-tasks-count"]').text()).toBe("5");
     await wrapper.get('[data-testid="all-tasks"]').trigger("click");
     expect(store.view).toBe("tasks");
@@ -63,17 +66,56 @@ describe("ActionPanel", () => {
     expect(wrapper.findComponent(Tasks).exists()).toBe(true);
   });
 
-  it("hides the count badge at zero", () => {
+  it("orders the header icons All tasks → Search → Settings", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.taskCounts = { d4e5f6: 1 };
+    const wrapper = mount(ActionPanel);
+    const html = wrapper.html();
+    const tasks = html.indexOf('data-testid="all-tasks"');
+    const search = html.indexOf('data-testid="search-toggle"');
+    const settings = html.indexOf('data-testid="settings-toggle"');
+    expect(tasks).toBeGreaterThan(-1);
+    expect(search).toBeGreaterThan(tasks);
+    expect(settings).toBeGreaterThan(search);
+  });
+
+  it("caps the All-tasks count badge at 99+", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.taskCounts = { d4e5f6: 80, a1b2c3: 40 }; // 120 total
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.get('[data-testid="all-tasks-count"]').text()).toBe("99+");
+  });
+
+  it("labels the All-tasks icon with the open count for screen readers", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.taskCounts = { d4e5f6: 2, a1b2c3: 3 };
+    const wrapper = mount(ActionPanel);
+    // an icon button carries no visible text, so the label must name it + count
+    expect(
+      wrapper.get('[data-testid="all-tasks"]').attributes("aria-label"),
+    ).toContain("All tasks");
+    expect(
+      wrapper.get('[data-testid="all-tasks"]').attributes("aria-label"),
+    ).toContain("5");
+  });
+
+  it("hides the count badge at zero but keeps the All-tasks icon", () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;
     store.loaded = true;
     store.taskCounts = {};
     const wrapper = mount(ActionPanel);
-    expect(wrapper.get('[data-testid="all-tasks"]').text()).toContain("All tasks");
+    expect(wrapper.find('[data-testid="all-tasks"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="all-tasks-count"]').exists()).toBe(false);
   });
 
-  it("hides the bar without vaults", () => {
+  it("hides the All-tasks icon without vaults", () => {
     const store = useVaultsStore();
     store.vaults = [];
     store.loaded = true;
@@ -239,10 +281,10 @@ describe("ActionPanel", () => {
     store.busyVaultId = "a1b2c3";
     store.busyCommand = "open_vault";
     const wrapper = mount(ActionPanel);
-    // vault action buttons only — the header's settings gear stays usable
-    // 2 vaults × (row + daily note + tasks + capture + gear) + All-tasks bar
+    // vault action buttons only — the header's icons (all-tasks/search/gear)
+    // stay usable; 2 vaults × (row + daily note + tasks + capture + gear)
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(11);
+    expect(buttons).toHaveLength(10);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );

@@ -83,6 +83,11 @@ const showFilter = computed(
 const totalOpenTasks = computed(() =>
   Object.values(store.taskCounts).reduce((a, b) => a + b, 0),
 );
+// Cap the header badge so a large cross-vault total can't widen the icon out
+// of the compact top bar — three chars ("99+") is the most it ever renders.
+const taskBadge = computed(() =>
+  totalOpenTasks.value > 99 ? "99+" : String(totalOpenTasks.value),
+);
 const tasksKey = computed(() => store.tasksVaultId ?? "all");
 const filtered = computed(() => {
   const query = filter.value.trim().toLowerCase();
@@ -139,6 +144,27 @@ watch(
         >
           {{ store.vaults.length }}
         </span>
+        <button
+          v-if="view === 'list' && store.vaults.length > 0"
+          type="button"
+          class="relative cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :aria-label="`All tasks across every vault${totalOpenTasks > 0 ? ` — ${totalOpenTasks} open` : ''}`"
+          title="All tasks"
+          data-testid="all-tasks"
+          @click="store.openAllTasks()"
+        >
+          <AppIcon>
+            <path d="M9 11l3 3 8-8" />
+            <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+          </AppIcon>
+          <!-- Corner badge like VaultList's per-vault Tasks button — widens
+               with digits (capped at 99+), never grows the header row. -->
+          <span
+            v-if="totalOpenTasks > 0"
+            data-testid="all-tasks-count"
+            class="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-violet-500 px-1 text-center text-[9px] font-semibold leading-[14px] text-white"
+          >{{ taskBadge }}</span>
+        </button>
         <button
           v-if="view === 'list'"
           type="button"
@@ -307,26 +333,6 @@ watch(
       v-else
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
-      <button
-        v-if="store.vaults.length > 0"
-        type="button"
-        data-testid="all-tasks"
-        :disabled="store.busyVaultId !== null"
-        class="mb-2 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-left text-sm text-slate-200 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-        aria-label="All tasks across every vault"
-        @click="store.openAllTasks()"
-      >
-        <AppIcon>
-          <path d="M9 11l3 3 8-8" />
-          <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
-        </AppIcon>
-        <span class="min-w-0 flex-1 truncate">All tasks</span>
-        <span
-          v-if="totalOpenTasks > 0"
-          data-testid="all-tasks-count"
-          class="shrink-0 rounded-full bg-violet-500 px-1.5 text-center text-[10px] font-semibold leading-4 text-white"
-        >{{ totalOpenTasks }}</span>
-      </button>
       <VaultList
         v-if="filtered.length > 0"
         :vaults="filtered"

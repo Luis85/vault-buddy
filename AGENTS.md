@@ -873,8 +873,10 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
   camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
   task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
-  prop; `null` is the aggregate mode, reached via the "All tasks" bar above
-  the vault list in `ActionPanel.vue` (badge = `store.taskCounts` summed) and
+  prop; `null` is the aggregate mode, reached via the "All tasks" header icon
+  button in `ActionPanel.vue` (the first of the list-view header icons —
+  before search and settings — carrying a corner count badge = `store.taskCounts`
+  summed, capped at `99+` so a large total can't widen the compact header) and
   the store's `openAllTasks()` action (`view = "tasks"`, `tasksVaultId =
   null`). Aggregate mode fans out `list_vaults` then a parallel per-vault
   `list_tasks`, best-effort per vault — a vault whose `list_tasks` call fails
