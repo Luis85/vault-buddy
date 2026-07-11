@@ -1080,4 +1080,57 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-vault"]').exists()).toBe(false);
   });
 
+  describe("sort control", () => {
+    afterEach(() => localStorage.clear());
+
+    // All undated so every open task shares ONE date bucket: the sort orders
+    // rows WITHIN sections (buckets keep partitioning by design), so a
+    // cross-bucket fixture would show bucket order no matter the sort.
+    const undated = () => [
+      { path: "C:/v/Tasks/a.md", title: "Alpha", status: "new", created: "2026-07-01", done: false, due: null, priority: null, tags: [], list: "", order: null },
+      { path: "C:/v/Tasks/b.md", title: "Beta", status: "new", created: "2026-07-02", done: false, due: null, priority: null, tags: [], list: "", order: 1024 },
+      { path: "C:/v/Tasks/c.md", title: "Carrot", status: "new", created: "2026-07-03", done: false, due: null, priority: null, tags: [], list: "", order: 2048 },
+    ];
+    const rowTitles = (wrapper: ReturnType<typeof mountView>["wrapper"]) =>
+      wrapper.findAll('[data-testid="task-open"]').map((r) => r.text());
+
+    async function pickSort(wrapper: ReturnType<typeof mountView>["wrapper"], key: string) {
+      await wrapper.get('[data-testid="task-sort"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector(`[data-testid="task-sort-option-${key}"]`) as HTMLElement).click();
+      await flushPromises();
+    }
+
+    it("re-sorts rows when a sort key is picked and persists the choice", async () => {
+      const { wrapper } = mountView({ list_tasks: undated });
+      await flushPromises();
+      expect(rowTitles(wrapper)).toEqual(["Carrot", "Beta", "Alpha"]); // default: newest created first
+      await pickSort(wrapper, "title");
+      expect(rowTitles(wrapper)).toEqual(["Alpha", "Beta", "Carrot"]);
+      expect(localStorage.getItem("vault-buddy:task-sort")).toContain('"title"');
+    });
+
+    it("direction toggle flips the order and is disabled for Default", async () => {
+      const { wrapper } = mountView({ list_tasks: undated });
+      await flushPromises();
+      const dir = wrapper.get('[data-testid="task-sort-dir"]');
+      expect(dir.attributes("disabled")).toBeDefined();
+      await pickSort(wrapper, "created");
+      // created's natural direction is newest-first…
+      expect(rowTitles(wrapper)).toEqual(["Carrot", "Beta", "Alpha"]);
+      expect(wrapper.get('[data-testid="task-sort-dir"]').attributes("disabled")).toBeUndefined();
+      await wrapper.get('[data-testid="task-sort-dir"]').trigger("click");
+      await flushPromises();
+      // …and the toggle flips it to oldest-first.
+      expect(rowTitles(wrapper)).toEqual(["Alpha", "Beta", "Carrot"]);
+    });
+
+    it("loads the persisted per-view sort on mount (manual: ranked first)", async () => {
+      localStorage.setItem("vault-buddy:task-sort", JSON.stringify({ v1: { key: "manual", dir: "asc" } }));
+      const { wrapper } = mountView({ list_tasks: undated });
+      await flushPromises();
+      // Ranked (1024, 2048) first by rank, unranked Alpha after.
+      expect(rowTitles(wrapper)).toEqual(["Beta", "Carrot", "Alpha"]);
+    });
+  });
 });

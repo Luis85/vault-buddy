@@ -7,7 +7,17 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, TaskPatch, Vault } from "../types";
 import { dueOf, localToday } from "../utils/taskFields";
-import { taskComparator, type TaskSortPref } from "../utils/taskSort";
+import {
+  directionApplies,
+  loadSortPref,
+  NATURAL_DIR,
+  saveSortPref,
+  SORT_OPTIONS,
+  type SortKey,
+  taskComparator,
+  type TaskSortPref,
+} from "../utils/taskSort";
+import SelectMenu from "./SelectMenu.vue";
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
@@ -73,13 +83,30 @@ const filteredTasks = computed(() => {
   });
 });
 
-// The user's sort choice for this view; the comparator lives in
-// utils/taskSort (mirroring core::tasks::list_tasks for Default) so an
-// optimistic insert/edit lands where a refetch would put it.
-const sortPref = ref<TaskSortPref>({ key: "default", dir: "asc" });
+// The user's sort choice for this view, persisted per view key ("all" for
+// the aggregate). The comparator lives in utils/taskSort (mirroring
+// core::tasks::list_tasks for Default) so an optimistic insert/edit lands
+// where a refetch would put it.
+const sortViewKey = props.vaultId ?? "all";
+const sortPref = ref<TaskSortPref>(loadSortPref(sortViewKey));
 
 function sortInPlace() {
   tasks.value.sort(taskComparator(sortPref.value));
+}
+
+// Picking a key resets direction to that key's natural one (due: soonest
+// first, created: newest first) instead of inheriting the previous key's
+// toggle state, which reads as arbitrary.
+function setSortKey(key: SortKey) {
+  sortPref.value = { key, dir: NATURAL_DIR[key] };
+  saveSortPref(sortViewKey, sortPref.value);
+  sortInPlace();
+}
+
+function flipSortDir() {
+  sortPref.value = { ...sortPref.value, dir: sortPref.value.dir === "asc" ? "desc" : "asc" };
+  saveSortPref(sortViewKey, sortPref.value);
+  sortInPlace();
 }
 
 type Bucket = { key: string; label: string | null; tasks: AggTask[] };
@@ -153,6 +180,9 @@ onMounted(async () => {
       const items = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
       const id = props.vaultId;
       tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
+      // Core hands back Default order; a persisted non-default sort must
+      // apply to the initial load too, not only after edits.
+      sortInPlace();
     } else {
       // Aggregate: fan out over every vault, best-effort per vault — the
       // same posture as the store's taskCounts load. A failed vault
@@ -392,30 +422,54 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
 
     <div
       v-if="!loading && !loadError && tasks.length > 0"
-      class="flex gap-0.5 self-start"
-      role="radiogroup"
-      aria-label="Group tasks by"
+      class="flex items-center gap-0.5"
     >
-      <button
-        v-for="g in [
-          { key: 'dates', label: 'Dates' },
-          { key: 'tags', label: 'Tags' },
-        ] as const"
-        :key="g.key"
-        type="button"
-        role="radio"
-        :data-testid="`task-grouping-${g.key}`"
-        :aria-checked="grouping === g.key"
-        class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        :class="
-          grouping === g.key
-            ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-            : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-        "
-        @click="grouping = g.key"
+      <div
+        class="flex gap-0.5"
+        role="radiogroup"
+        aria-label="Group tasks by"
       >
-        {{ g.label }}
-      </button>
+        <button
+          v-for="g in [
+            { key: 'dates', label: 'Dates' },
+            { key: 'tags', label: 'Tags' },
+          ] as const"
+          :key="g.key"
+          type="button"
+          role="radio"
+          :data-testid="`task-grouping-${g.key}`"
+          :aria-checked="grouping === g.key"
+          class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          :class="
+            grouping === g.key
+              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
+              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+          "
+          @click="grouping = g.key"
+        >
+          {{ g.label }}
+        </button>
+      </div>
+      <div class="ml-auto flex items-center gap-1">
+        <SelectMenu
+          :model-value="sortPref.key"
+          :options="SORT_OPTIONS"
+          aria-label="Sort tasks"
+          data-testid="task-sort"
+          @update:model-value="setSortKey($event as SortKey)"
+        />
+        <button
+          type="button"
+          data-testid="task-sort-dir"
+          :disabled="!directionApplies(sortPref.key)"
+          :aria-label="`Sort direction: ${sortPref.dir === 'asc' ? 'ascending' : 'descending'}`"
+          :title="sortPref.dir === 'asc' ? 'Ascending' : 'Descending'"
+          class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+          @click="flipSortDir"
+        >
+          {{ sortPref.dir === "asc" ? "↑" : "↓" }}
+        </button>
+      </div>
     </div>
 
     <p
