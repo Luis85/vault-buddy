@@ -266,6 +266,20 @@ pub fn add_task(
     // document-import discipline) — a junction planted between the check and
     // the create must not receive the task file.
     capture_paths::assert_root_inside_vault(&vault_path, &target_root)?;
+    // The list must resolve inside the tasks ROOT, not merely the vault. The
+    // checks above only bound target_root by the vault, so a list folder that
+    // is a symlink/junction under the tasks root but resolves to ANOTHER folder
+    // in the same vault would pass — and create_task would write the task there,
+    // outside the configured tasks root. The read-side walkers (task_lists /
+    // list_tasks) canonicalize and skip any folder escaping the tasks root, so
+    // such an add would silently succeed yet the task would never appear in the
+    // Tasks view (a write/read mismatch). move_task_to_list validates against
+    // the root the same way. Only a non-empty list can escape — an empty list
+    // writes at the root itself, already asserted above (Codex, PR #53
+    // re-review).
+    if !effective_list.is_empty() {
+        capture_paths::assert_root_inside_vault(&root, &target_root)?;
+    }
     let path = tasks::create_task(&target_root, title, today, due, priority, tags)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
@@ -645,6 +659,45 @@ mod tests {
         assert!(std::path::Path::new(&created.path).starts_with(vault.join("Tasks").join("Inbox")));
         let listed = list_tasks(&paths, "deadbeef01234567");
         assert_eq!(listed[0].list, "Inbox");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_task_rejects_a_list_symlinked_outside_the_tasks_root() {
+        // A list folder that is a symlink under Tasks/ but resolves to ANOTHER
+        // folder in the same vault passes vault-containment yet escapes the
+        // tasks root. create_task must not write through it: the read-side
+        // walkers (task_lists/list_tasks) skip such escaping folders, so the
+        // add would silently succeed while the task vanishes from the Tasks
+        // view. Validated against the tasks root, the add is rejected and no
+        // task lands in the escape target (Codex, PR #53 re-review).
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        let tasks = vault.join("Tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        let elsewhere = vault.join("Elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        // Tasks/Work → <vault>/Elsewhere: inside the vault, outside the tasks root.
+        std::os::unix::fs::symlink(&elsewhere, tasks.join("Work")).unwrap();
+        let res = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Escapes",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Work"),
+        );
+        assert!(
+            res.is_err(),
+            "a list escaping the tasks root must be rejected"
+        );
+        // No task file may land in the escape target.
+        assert!(
+            std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+            "no task may be written outside the tasks root"
+        );
     }
 
     #[test]
