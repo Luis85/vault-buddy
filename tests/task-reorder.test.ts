@@ -161,6 +161,30 @@ describe("manual reordering", () => {
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
 
+  it("reorders a Lists section whose name contains a quote without throwing (Codex #53 re-review)", async () => {
+    // is_valid_list_name allows a double quote, so the section key
+    // `list:a"b` would break an interpolated attribute selector and throw in
+    // querySelectorAll. rowsFor now filters by dataset instead.
+    const inQuoted = (title: string, order: number): TaskItem => ({
+      ...task(title, order),
+      list: 'a"b',
+    });
+    const { wrapper, calls } = mountManual([inQuoted("x", 1024), inQuoted("y", 2048)]);
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    // Drag handles are present in the quoted-name list section.
+    expect(wrapper.findAll('[data-testid="task-drag"]').length).toBeGreaterThan(0);
+    // Keyboard reorder invokes rowsFor("list:a\"b") — must not throw, must commit.
+    await wrapper.findAll('[data-testid="task-drag"]')[0].trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")?.args).toEqual({
+      id: "v1",
+      path: "C:/v/Tasks/x.md",
+      patch: { order: 2048 + 1024 }, // x moved below y → one step past the end
+    });
+  });
+
   it("blocks further reorders until an in-flight single-rank write lands (Codex #53 re-review)", async () => {
     // While a midpoint write is pending, every handle must disappear (the
     // view-level guard) so a second reorder can't be computed against the

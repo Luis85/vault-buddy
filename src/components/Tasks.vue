@@ -151,9 +151,17 @@ const reorderEnabled = computed(
 );
 const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
   enabled: () => reorderEnabled.value,
+  // Filter by dataset rather than interpolating sectionKey into an attribute
+  // selector: a Lists-grouping key is `list:<name>`, and a list folder name
+  // may contain a double quote (is_valid_list_name only bars /, \, leading
+  // dot), which would make the selector invalid and throw. querySelectorAll
+  // returns document order, and a section's rows are contiguous, so the
+  // filtered list stays in visual order.
   rowsFor: (sectionKey) =>
     rootRef.value
-      ? ([...rootRef.value.querySelectorAll(`[data-reorder-section="${sectionKey}"]`)] as HTMLElement[])
+      ? ([...rootRef.value.querySelectorAll<HTMLElement>("[data-reorder-section]")].filter(
+          (el) => el.dataset.reorderSection === sectionKey,
+        ))
       : [],
   commit: commitReorder,
 });

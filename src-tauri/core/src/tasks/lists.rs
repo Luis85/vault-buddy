@@ -142,6 +142,19 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
     if !canon_path.starts_with(&canon_root) {
         return Err("Task file is outside the vault's tasks folder".to_string());
     }
+    // Re-read the frontmatter and refuse a file that is no longer a
+    // `type: Task` document, mirroring the status/field writers (set_fields
+    // rejects a non-task). A list-only editor save skips update_task, so
+    // without this a note edited outside the app to drop `type: Task` — or a
+    // file swapped in at this path — could still be moved around the tasks
+    // folder as if the stale task write still applied.
+    let content =
+        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+    if !super::doc::is_task(&content) {
+        return Err(
+            "This file is no longer a task document — reopen the list to refresh.".to_string(),
+        );
+    }
     // Lexical gate on the target list — rejected before any filesystem access.
     let normalized = normalize_list_rel(list)?;
     let target_dir = if normalized.is_empty() {
@@ -392,6 +405,27 @@ mod tests {
         // A dot-prefixed target would land the task in a walk-skipped folder.
         assert!(move_task_to_list(&root, &root.join("t.md"), ".hidden").is_err());
         assert!(move_task_to_list(&root, &root.join("t.md"), "Work/.hidden").is_err());
+    }
+
+    #[test]
+    fn move_task_rejects_a_file_that_is_no_longer_a_task() {
+        // A list-only editor save skips update_task, so the move must re-read
+        // frontmatter and refuse a file edited (outside the app) to drop
+        // `type: Task` — mirroring the status/field writers (Codex, PR #53
+        // re-review). The file stays put, never moved under the tasks folder.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(
+            &root,
+            "note.md",
+            "---\ntype: Note\ntitle: \"Not a task\"\n---\n",
+        );
+        assert!(move_task_to_list(&root, &root.join("note.md"), "Inbox").is_err());
+        assert!(root.join("note.md").exists(), "the file must not be moved");
+        assert!(!root.join("Inbox").join("note.md").exists());
+        // A real task still moves.
+        write(&root, "t.md", TASK);
+        assert!(move_task_to_list(&root, &root.join("t.md"), "Inbox").is_ok());
     }
 
     #[cfg(unix)]
