@@ -108,6 +108,20 @@ describe("TaskListPicker", () => {
     }
   });
 
+  it("leaves new-list mode via resetNonce when the created value is unchanged (Codex #53 re-review)", async () => {
+    // Idempotent same-name create: the parent re-selects the SAME modelValue
+    // (e.g. the current default "Inbox"), so the modelValue watch never fires —
+    // only the resetNonce bump can close the inline create form.
+    const w = mountPicker({ modelValue: "Inbox", lists: ["Inbox"] });
+    await w.get('[data-testid="list-picker"]').trigger("click");
+    (document.body.querySelector('[data-testid="list-picker-option-.__new__"]') as HTMLElement).click();
+    await flushPromises();
+    expect(w.find('[data-testid="list-picker-new-name"]').exists()).toBe(true);
+    await w.setProps({ resetNonce: 1 }); // modelValue stays "Inbox"
+    await flushPromises();
+    expect(w.find('[data-testid="list-picker-new-name"]').exists()).toBe(false);
+  });
+
   it("leaves new-list mode when the parent selects the created list", async () => {
     const w = mountPicker();
     await w.get('[data-testid="list-picker"]').trigger("click");

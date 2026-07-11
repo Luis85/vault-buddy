@@ -14,12 +14,21 @@ const props = withDefaults(
     lists: string[];
     /** Disables the confirm while the parent's create call is in flight. */
     busy?: boolean;
+    /** Bumped by the parent on a successful create to leave new-list mode even
+     * when the re-selected value is unchanged (idempotent same-name create). */
+    resetNonce?: number;
     /** The settings picker offers existing lists only. */
     allowCreate?: boolean;
     ariaLabel?: string;
     dataTestid?: string;
   }>(),
-  { busy: false, allowCreate: true, ariaLabel: undefined, dataTestid: undefined },
+  {
+    busy: false,
+    allowCreate: true,
+    ariaLabel: undefined,
+    dataTestid: undefined,
+    resetNonce: 0,
+  },
 );
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
@@ -59,15 +68,13 @@ function onPick(value: string | number) {
   emit("update:modelValue", String(value));
 }
 
-// The parent selecting the created list (or any programmatic change) ends
-// new-list mode — creation success is signalled through the model, not a
-// second channel.
-watch(
-  () => props.modelValue,
-  () => {
-    newMode.value = false;
-  },
-);
+// The parent selecting the created list (a modelValue change) ends new-list
+// mode. resetNonce covers the idempotent same-name create, where the parent
+// re-selects the SAME value and modelValue never changes — the bump still
+// closes the form. A failed create bumps neither, so it stays open for retry.
+watch([() => props.modelValue, () => props.resetNonce], () => {
+  newMode.value = false;
+});
 
 function confirmNew() {
   const name = newName.value.trim();

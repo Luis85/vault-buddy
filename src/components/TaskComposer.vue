@@ -80,11 +80,17 @@ function onCreateConfirmed(name: string) {
   emit("createList", name);
 }
 // The container resolves the created list and re-selects it here — unless the
-// pick state moved on while the create was in flight.
+// pick state moved on while the create was in flight. Bumping listResetNonce
+// closes the picker's inline create form even when the value is UNCHANGED
+// (create is idempotent — confirming an existing name re-selects the same
+// value, so the picker's modelValue watch alone would leave it stuck open;
+// Codex, PR #53 re-review).
+const listResetNonce = ref(0);
 function setList(list: string) {
   if (pickGen !== createPickGen) return;
   listTouched.value = true;
   addList.value = list;
+  listResetNonce.value += 1;
 }
 // Aggregate add: which vault receives the new task. Defaults to the first
 // vault once the options arrive (they load async in the container), re-homing
@@ -260,6 +266,7 @@ defineExpose({ reset, setList });
         :model-value="displayList"
         :lists="lists"
         :busy="creatingList"
+        :reset-nonce="listResetNonce"
         aria-label="List for the new task"
         data-testid="task-add-list"
         @update:model-value="onListPicked"

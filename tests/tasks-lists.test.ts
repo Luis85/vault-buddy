@@ -75,6 +75,27 @@ describe("Tasks — lists & sorting", () => {
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
       expect(headers).toContain("Someday");
     });
+
+    it("shows No tasks match, not empty list headers, when a Lists-grouped filter excludes all (Codex #53 re-review)", async () => {
+      // includeEmpty must go off while a filter narrows the list: an empty-list
+      // header would otherwise mask the "No tasks match" state when the filter
+      // excludes everything.
+      const many = Array.from({ length: 6 }, (_, i) => ({
+        path: `C:/v/Tasks/t${i}.md`, title: `Task ${i}`, status: "new", created: "2026-07-08",
+        done: false, due: null, priority: null, tags: [], list: "Work", order: null,
+      }));
+      const { wrapper } = mountView({
+        list_tasks: () => many,
+        list_task_lists: () => ["Work", "Someday"],
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [] }),
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+      await wrapper.get('[data-testid="task-filter"]').setValue("zzzznope");
+      await flushPromises();
+      expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
+      expect(wrapper.text()).toContain("No tasks match");
+    });
   });
 
   describe("composer list picker", () => {

@@ -111,6 +111,11 @@ const filteredTasks = computed(() => {
     return true;
   });
 });
+// Whether a filter is actually narrowing the list (matches filteredTasks'
+// own gates) — Lists grouping consults it to drop empty lists while filtering.
+const filterActive = computed(
+  () => tagFilter.value !== null || (filter.value.trim() !== "" && showFilter.value),
+);
 
 // The user's sort choice for this view, persisted per view key ("all" for
 // the aggregate). The comparator lives in utils/taskSort (mirroring
@@ -267,7 +272,7 @@ const buckets = computed<Bucket[]>(() => {
     // Per-vault mode surfaces empty (fresh) lists; the aggregate skips them
     // to avoid cross-vault noise.
     return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
-      includeEmpty: !isAggregate.value,
+      includeEmpty: !isAggregate.value && !filterActive.value,
     });
   return dateBuckets(filteredTasks.value, localToday());
 });
