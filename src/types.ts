@@ -129,6 +129,11 @@ export interface TaskItem {
   due: string | null;
   priority: string | null;
   tags: string[];
+  /** The task's List: parent folder relative to the tasks root, `/`-joined,
+   * "" at the root. */
+  list: string;
+  /** Manual rank from the `order:` frontmatter number; null = unranked. */
+  order: number | null;
 }
 
 /** A TaskItem enriched with its owning vault — the ONE internal shape the
@@ -143,10 +148,21 @@ export interface TaskPatch {
   clearDue?: boolean;
   priority?: string;
   tags?: string[];
+  /** Manual rank write (drag-to-reorder). Finite; nothing un-ranks a task. */
+  order?: number;
 }
+
+/** What the inline editor emits: the update_task patch plus an optional list
+ * move — the container strips `list` and routes it to move_task_to_list (a
+ * file move is not a frontmatter write). */
+export type TaskEditorPatch = TaskPatch & { list?: string };
 
 export interface TasksConfig {
   tasksFolder: string | null;
+  /** Lists settings object: where unpicked new tasks land (null = the tasks
+   * root) and the display order for list sections/pickers. */
+  defaultList: string | null;
+  listOrder: string[];
 }
 
 /** Per-vault imported-documents folder — get_documents_config/

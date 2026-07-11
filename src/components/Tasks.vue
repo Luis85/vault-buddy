@@ -2,14 +2,28 @@
 import { invoke } from "@tauri-apps/api/core";
 import { computed, onMounted, ref } from "vue";
 
+import { useTaskActions } from "../composables/useTaskActions";
+import { useTaskLists } from "../composables/useTaskLists";
+import { useTaskReorder } from "../composables/useTaskReorder";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskItem, TaskPatch, Vault } from "../types";
-import { dueOf, localToday } from "../utils/taskFields";
+import type { AggTask, TaskItem, Vault } from "../types";
+import { localToday } from "../utils/taskFields";
+import { planReorder } from "../utils/taskOrder";
+import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
+import {
+  loadSortPref,
+  NATURAL_DIR,
+  saveSortPref,
+  type SortKey,
+  taskComparator,
+  type TaskSortPref,
+} from "../utils/taskSort";
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
+import TaskViewControls from "./TaskViewControls.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
 // Aggregate mode: one merged view across every vault (vaultId === null).
@@ -30,17 +44,43 @@ const composer = ref<InstanceType<typeof TaskComposer> | null>(null);
 const vaultOptions = computed(() =>
   allVaults.value.map((v) => ({ value: v.id, label: v.name })),
 );
-// Task paths whose set_task_status write is in flight. A second action on the
-// same row while its write is pending would race the first (on a slow disk the
-// two writes can land out of order, leaving the file disagreeing with the UI),
-// so the row's controls are disabled and re-entrant actions are ignored until
-// it resolves — a toggle and an archive for the same task can't race. A
-// reactive Set so the template's :disabled tracks add/delete. Keyed by path alone:
-// task paths are unique across vaults (two vaults would have to contain the same
-// absolute file), and the aggregation spec documents that assumption — this comment
-// is its code-side anchor.
-const busy = ref(new Set<string>());
-const isBusy = (path: string) => busy.value.has(path);
+// Row writes (toggle/archive/open/editor save), the shared per-path busy
+// guard, and the lists state each live in their composable — state + IPC
+// split out for the LOC cap, rendering stays here.
+const {
+  busy,
+  isBusy,
+  toggle,
+  archive,
+  openInObsidian,
+  editingKey,
+  rowKey,
+  startEdit,
+  cancelEdit,
+  onEditorSave,
+} = useTaskActions({ tasks, sortInPlace });
+const {
+  listOrder,
+  knownLists,
+  creatingList,
+  composerVaultId,
+  composerLists,
+  composerDefaultList,
+  listsForVault,
+  loadVaultLists,
+  loadVaultConfig,
+  onComposerVaultChange,
+  createList,
+} = useTaskLists(props.vaultId);
+
+// New list flow: create + cache, then re-select here. `target` (the vault
+// createList used) blocks a mid-create composer vault switch from adopting the
+// old vault's list on the new one (Codex, PR #53).
+async function onCreateList(name: string) {
+  const target = composerVaultId.value;
+  const created = await createList(name);
+  if (created !== null && composerVaultId.value === target) composer.value?.setList(created);
+}
 
 // done / total of the visible (non-archived) list; drives the progress bar.
 const progress = computed(() => {
@@ -71,107 +111,192 @@ const filteredTasks = computed(() => {
     return true;
   });
 });
+// Whether a filter is actually narrowing the list (matches filteredTasks'
+// own gates) — Lists grouping consults it to drop empty lists while filtering.
+const filterActive = computed(
+  () => tagFilter.value !== null || (filter.value.trim() !== "" && showFilter.value),
+);
 
-const PRIORITY_RANK: Record<string, number> = { high: 0, low: 2 };
-const rank = (t: TaskItem) => PRIORITY_RANK[t.priority ?? ""] ?? 1;
-// "0<date>" < "1" makes valid dues sort ascending ahead of undated.
-const dueKey = (t: TaskItem) => {
-  const d = dueOf(t);
-  return d ? `0${d}` : "1";
-};
+// The user's sort choice for this view, persisted per view key ("all" for
+// the aggregate). The comparator lives in utils/taskSort (mirroring
+// core::tasks::list_tasks for Default) so an optimistic insert/edit lands
+// where a refetch would put it.
+const sortViewKey = props.vaultId ?? "all";
+const sortPref = ref<TaskSortPref>(loadSortPref(sortViewKey));
 
 function sortInPlace() {
-  // Mirrors core::tasks::list_tasks so an optimistic insert/edit lands where
-  // a refetch would put it: open first (due asc → priority → newest created
-  // → title); done by newest created → title.
-  tasks.value.sort(
-    (a, b) =>
-      Number(a.done) - Number(b.done) ||
-      (a.done
-        ? b.created.localeCompare(a.created) ||
-          a.title.localeCompare(b.title) ||
-          a.vaultName.localeCompare(b.vaultName) ||
-          a.path.localeCompare(b.path)
-        : dueKey(a).localeCompare(dueKey(b)) ||
-          rank(a) - rank(b) ||
-          b.created.localeCompare(a.created) ||
-          a.title.localeCompare(b.title) ||
-          a.vaultName.localeCompare(b.vaultName) ||
-          a.path.localeCompare(b.path)),
-  );
+  tasks.value.sort(taskComparator(sortPref.value));
 }
 
-type Bucket = { key: string; label: string | null; tasks: AggTask[] };
+// Picking a key resets direction to that key's natural one (due: soonest
+// first, created: newest first) instead of inheriting the previous key's
+// toggle state, which reads as arbitrary.
+function setSortKey(key: SortKey) {
+  sortPref.value = { key, dir: NATURAL_DIR[key] };
+  saveSortPref(sortViewKey, sortPref.value);
+  sortInPlace();
+}
+
+function flipSortDir() {
+  sortPref.value = { ...sortPref.value, dir: sortPref.value.dir === "asc" ? "desc" : "asc" };
+  saveSortPref(sortViewKey, sortPref.value);
+  sortInPlace();
+}
+
+// Manual ordering: drag (or arrow-key) a row within its section; the landed
+// slot becomes an `order` rank via planReorder — one midpoint write in the
+// common case, a section-wide materialization when ranks need seeding. Grips
+// render in Manual sort with NO filter (a filtered subset would rank against
+// invisible neighbors) and stay MOUNTED but inert during a rank write —
+// unmounting (or `disabled`) drops keyboard focus on every Arrow step.
+const rootRef = ref<HTMLElement | null>(null);
+const reordering = ref(false);
+const reorderView = computed(
+  () =>
+    sortPref.value.key === "manual" &&
+    filter.value.trim() === "" &&
+    tagFilter.value === null,
+);
+const reorderEnabled = computed(() => reorderView.value && !reordering.value);
+const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
+  enabled: () => reorderEnabled.value,
+  // Filter by dataset rather than interpolating sectionKey into an attribute
+  // selector: a Lists-grouping key is `list:<name>`, and a list folder name
+  // may contain a double quote (is_valid_list_name only bars /, \, leading
+  // dot), which would make the selector invalid and throw. querySelectorAll
+  // returns document order, and a section's rows are contiguous, so the
+  // filtered list stays in visual order.
+  rowsFor: (sectionKey) =>
+    rootRef.value
+      ? ([...rootRef.value.querySelectorAll<HTMLElement>("[data-reorder-section]")].filter(
+          (el) => el.dataset.reorderSection === sectionKey,
+        ))
+      : [],
+  commit: commitReorder,
+});
+
+async function commitReorder(sectionKey: string, fromIndex: number, toIndex: number) {
+  const section = buckets.value.find((b) => b.key === sectionKey)?.tasks ?? [];
+  const plan = planReorder(section, fromIndex, toIndex);
+  if (!plan) return;
+  if (plan.kind === "single") await writeSingleRank(section[fromIndex], plan.order);
+  else await materializeRanks(section, plan.orders);
+}
+
+// One midpoint write, optimistic with revert — the common drop.
+async function writeSingleRank(task: AggTask, order: number) {
+  if (busy.value.has(task.path)) return;
+  const prev = task.order;
+  task.order = order;
+  sortInPlace();
+  busy.value.add(task.path);
+  // The view-level guard (shared with materialization) makes every grip inert
+  // until this write resolves: a second reorder would compute its rank against
+  // this optimistic, not-yet-persisted position and diverge if this write
+  // later fails and reverts. Serialize reorders view-wide instead.
+  reordering.value = true;
+  try {
+    await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order } });
+  } catch (e) {
+    task.order = prev;
+    sortInPlace();
+    notifications.error(String(e));
+    logWarning(`reorder failed: ${String(e)}`);
+  } finally {
+    busy.value.delete(task.path);
+    reordering.value = false;
+  }
+}
+
+// Materialization: seed spaced ranks across the section — optimistic for
+// the whole batch, serialized writes (each its own file, possibly across
+// vaults in the aggregate). The view-level guard keeps a second reorder from
+// interleaving.
+async function materializeRanks(section: AggTask[], orders: Map<string, number>) {
+  const affected = section.filter((t) => orders.has(t.path));
+  // Abort if ANY affected row already has an in-flight write (e.g. a slow
+  // status toggle on a neighbor in this section). Materialize must write EVERY
+  // affected row to establish the section's total order, so it can't just skip
+  // the busy one — and writing order to that file mid-save would race the
+  // in-flight write (both are read-modify-write frontmatter edits, so whichever
+  // lands last drops the other's change). Bail and let the user retry once the
+  // save lands — the same silent no-op writeSingleRank does for its one busy
+  // row (Codex, PR #53 re-review).
+  if (affected.some((t) => busy.value.has(t.path))) return;
+  reordering.value = true;
+  // No affected row is busy (asserted above), so guard them all and — because
+  // this batch owns every one of their guards — clear them all in `finally`.
+  // Its update_task(order) and a toggle/edit/archive on the same row are both
+  // read-modify-write frontmatter saves, so leaving the row controls live would
+  // let a concurrent write clobber the order (or vice versa).
+  affected.forEach((t) => busy.value.add(t.path));
+  const prevOrders = new Map(affected.map((t) => [t.path, t.order] as const));
+  for (const t of affected) t.order = orders.get(t.path) ?? t.order;
+  sortInPlace();
+  // The writes are serialized and non-atomic across files, so a mid-batch
+  // failure leaves earlier files already written. Track what landed and
+  // revert ONLY the tasks that never reached disk — reverting the whole batch
+  // would desync the UI from a partially-written section (the mismatch would
+  // surface on the next reload as a phantom partial reorder). Same "keep what
+  // succeeded, name what failed" posture as the editor's field-then-move save.
+  const written = new Set<string>();
+  try {
+    for (const t of affected) {
+      await invoke("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } });
+      written.add(t.path);
+    }
+  } catch (e) {
+    // `?? null` (not `?? t.order`): a previous order of null means the task
+    // was UNRANKED and must revert to unranked — `null ?? t.order` would
+    // wrongly keep the new optimistic rank. Every affected path is a key in
+    // prevOrders, so a genuinely missing entry can't occur here.
+    for (const t of affected) {
+      if (!written.has(t.path)) t.order = prevOrders.get(t.path) ?? null;
+    }
+    sortInPlace();
+    notifications.error(`Couldn't save the new order: ${String(e)}`);
+    logWarning(`reorder materialization failed: ${String(e)}`);
+  } finally {
+    affected.forEach((t) => busy.value.delete(t.path));
+    reordering.value = false;
+  }
+}
 
 // Component-local; every panel visit starts back on dates (YAGNI: no
 // persistence this slice).
-const grouping = ref<"dates" | "tags">("dates");
+const grouping = ref<"dates" | "tags" | "lists">("dates");
 
 const buckets = computed<Bucket[]>(() => {
-  if (grouping.value === "tags") {
-    // One section per tag (alphabetical, case-insensitive), a task under
-    // EACH of its tags — Obsidian tag-pane semantics; then No tags, then
-    // Done. Headers always render in tag mode. Order within sections is
-    // the global sort, untouched.
-    const byTag = new Map<string, { label: string; tasks: AggTask[] }>();
-    const notags: AggTask[] = [];
-    const done: AggTask[] = [];
-    for (const t of filteredTasks.value) {
-      if (t.done) {
-        done.push(t);
-        continue;
-      }
-      if (t.tags.length === 0) {
-        notags.push(t);
-        continue;
-      }
-      for (const tag of t.tags) {
-        const key = tag.toLowerCase();
-        const entry = byTag.get(key) ?? { label: tag, tasks: [] };
-        entry.tasks.push(t);
-        byTag.set(key, entry);
-      }
-    }
-    const sections: Bucket[] = [...byTag.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, { label, tasks }]) => ({ key: `tag:${key}`, label: `#${label}`, tasks }));
-    if (notags.length > 0) sections.push({ key: "notags", label: "No tags", tasks: notags });
-    if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });
-    return sections;
-  }
-  const today = localToday();
-  const groups: Record<string, AggTask[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
-  for (const t of filteredTasks.value) {
-    if (t.done) groups.done.push(t);
-    else {
-      const d = dueOf(t);
-      if (!d) groups.nodate.push(t);
-      else if (d < today) groups.overdue.push(t);
-      else if (d === today) groups.today.push(t);
-      else groups.upcoming.push(t);
-    }
-  }
-  // Headers only once a dated open task exists — a vault that never uses due
-  // dates keeps the flat list it had before this feature.
-  const showHeaders =
-    groups.overdue.length + groups.today.length + groups.upcoming.length > 0;
-  return [
-    { key: "overdue", label: "Overdue" },
-    { key: "today", label: "Today" },
-    { key: "upcoming", label: "Upcoming" },
-    { key: "nodate", label: "No date" },
-    { key: "done", label: "Done" },
-  ]
-    .map(({ key, label }) => ({ key, label: showHeaders ? label : null, tasks: groups[key] }))
-    .filter((b) => b.tasks.length > 0);
+  if (grouping.value === "tags") return tagSections(filteredTasks.value);
+  if (grouping.value === "lists")
+    // Per-vault mode surfaces empty (fresh) lists; the aggregate skips them
+    // to avoid cross-vault noise.
+    return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
+      includeEmpty: !isAggregate.value && !filterActive.value,
+    });
+  return dateBuckets(filteredTasks.value, localToday());
 });
+
+// A fresh per-vault list folder has no tasks yet; keep the grouping control
+// reachable so it shows via Lists instead of hiding behind "No tasks yet" (the
+// aggregate omits empty lists) (Codex, PR #53 re-review).
+const hasDisplayableLists = computed(() => !isAggregate.value && knownLists.value.length > 0);
 
 onMounted(async () => {
   try {
     if (props.vaultId !== null) {
-      const items = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
       const id = props.vaultId;
+      const [items] = await Promise.all([
+        invoke<TaskItem[]>("list_tasks", { id }),
+        // Lists + config feed the Lists grouping and the composer's picker;
+        // a failed read degrades (log-only, same posture as the tasks load).
+        loadVaultLists(id),
+        loadVaultConfig(id),
+      ]);
       tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
+      // Core hands back Default order; a persisted non-default sort must
+      // apply to the initial load too, not only after edits.
+      sortInPlace();
     } else {
       // Aggregate: fan out over every vault, best-effort per vault — the
       // same posture as the store's taskCounts load. A failed vault
@@ -182,6 +307,9 @@ onMounted(async () => {
       const failed: string[] = [];
       const results = await Promise.all(
         vaults.map(async (v) => {
+          // The list enumeration rides the same fan-out (its own catch —
+          // a lists failure must not mark the vault's TASKS as failed).
+          void loadVaultLists(v.id);
           try {
             const items = await invoke<TaskItem[]>("list_tasks", { id: v.id });
             return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));
@@ -209,7 +337,16 @@ onMounted(async () => {
   }
 });
 
-type AddPayload = { title: string; due: string; priority: string; tags: string[]; vaultId: string | null };
+type AddPayload = {
+  title: string;
+  due: string;
+  priority: string;
+  tags: string[];
+  // undefined = the composer had no explicit pick and its default hadn't
+  // loaded — let the backend apply the configured default (see the composer).
+  list: string | undefined;
+  vaultId: string | null;
+};
 
 async function add(payload: AddPayload) {
   const title = payload.title.trim();
@@ -223,6 +360,11 @@ async function add(payload: AddPayload) {
     if (payload.due) args.due = payload.due;
     if (payload.priority !== "normal") args.priority = payload.priority;
     if (payload.tags.length > 0) args.tags = payload.tags;
+    // A defined list (incl. "" = an explicit No list override) is sent as-is;
+    // undefined is omitted so the backend applies the vault's configured
+    // default — the composer only omits it before its default has loaded, so
+    // a quick add during that window still lands in the default list.
+    if (payload.list !== undefined) args.list = payload.list;
     const created = await invoke<TaskItem>("add_task", args);
     tasks.value.unshift({
       ...created,
@@ -243,121 +385,13 @@ async function add(payload: AddPayload) {
   }
 }
 
-async function toggle(task: AggTask) {
-  // Ignore a re-action while this row's write is still pending — otherwise two
-  // concurrent set_task_status writes for the same task can land out of order.
-  if (busy.value.has(task.path)) return;
-  // GAP-32: captured BEFORE the optimistic flip so a failed write can
-  // restore the task's actual original status (e.g. "in-progress") instead
-  // of forging "new" — the old revert derived the restored value from the
-  // just-flipped `done` boolean, which only ever knows "done"/"new".
-  const prevStatus = task.status;
-  const done = !task.done;
-  // Optimistic: flip locally, revert + notify on failure.
-  task.done = done;
-  task.status = done ? "done" : "new";
-  sortInPlace();
-  busy.value.add(task.path);
-  try {
-    await invoke("set_task_status", { id: task.vaultId, path: task.path, status: task.status });
-    // Badge refresh (GAP-32 / Codex PR #46): kicked off right after the
-    // write resolves, before the row's busy flag clears in `finally` — it's
-    // fire-and-forget (`void`) against the vaults store's own state, so it
-    // never blocks this row's controls either way, but starting it here
-    // keeps it colocated with the success branch rather than a `finally`
-    // that also runs on failure.
-    void vaultsStore.refreshTaskCount(task.vaultId);
-  } catch (e) {
-    task.status = prevStatus;
-    task.done = prevStatus === "done";
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`set_task_status failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(task.path);
-  }
-}
-
-async function archive(task: AggTask) {
-  if (busy.value.has(task.path)) return;
-  busy.value.add(task.path);
-  // Optimistic: remove from the list; on failure push back + re-sort rather
-  // than re-inserting at a captured index (GAP-32: the index goes stale —
-  // one slot off — if a concurrent add landed while this write was in
-  // flight; recomputing placement via sortInPlace is always correct).
-  const index = tasks.value.findIndex((t) => t.path === task.path);
-  const removed = tasks.value.splice(index, 1)[0];
-  try {
-    await invoke("set_task_status", { id: task.vaultId, path: task.path, status: "archived" });
-    void vaultsStore.refreshTaskCount(task.vaultId);
-  } catch (e) {
-    tasks.value.push(removed);
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`archive failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(task.path);
-  }
-}
-
-async function openInObsidian(task: AggTask) {
-  try {
-    await invoke("open_task", { id: task.vaultId, path: task.path });
-    // Obsidian takes over — get the panel out of the way. Panel visibility is
-    // owned by Rust (close_panel), best-effort, mirroring the vault-open and
-    // recording-open flows. A failed launch falls through to the catch and
-    // keeps the panel up so the error toast is visible.
-    void invoke("close_panel").catch(() => {});
-  } catch (e) {
-    notifications.error(String(e));
-    logWarning(`open_task failed: ${String(e)}`);
-  }
-}
-
-// Inline editor: one row at a time; opening another row discards unsaved
-// edits in the first (the file is the source of truth, edits are cheap).
-// Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
-// two tag sections (Task 7) opens its editor on only the clicked row. The
-// draft field state and its IME-guarded key handlers live in TaskEditor; the
-// container keeps editingKey (which row is open) and the optimistic write.
-const editingKey = ref<string | null>(null);
-const rowKey = (bucketKey: string, task: AggTask) => `${bucketKey}:${task.path}`;
-
-function startEdit(task: AggTask, bucketKey: string) {
-  editingKey.value = rowKey(bucketKey, task);
-}
-
-function cancelEdit() {
-  editingKey.value = null;
-}
-
-async function onEditorSave(task: AggTask, patch: TaskPatch) {
-  editingKey.value = null;
-  if (Object.keys(patch).length === 0) return;
-  // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
-  const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
-  if (patch.title) task.title = patch.title;
-  if (patch.clearDue) task.due = null;
-  else if (patch.due) task.due = patch.due;
-  if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
-  if (patch.tags !== undefined) task.tags = patch.tags;
-  sortInPlace();
-  busy.value.add(task.path);
-  try {
-    await invoke("update_task", { id: task.vaultId, path: task.path, patch });
-  } catch (e) {
-    Object.assign(task, before);
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`update_task failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(task.path);
-  }
-}
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
+  <div
+    ref="rootRef"
+    class="flex flex-col gap-2"
+  >
     <div
       v-if="!loading && !loadError && progress.total > 0"
       data-testid="task-progress"
@@ -406,36 +440,22 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
       :is-aggregate="isAggregate"
       :vault-options="vaultOptions"
       :adding="adding"
+      :lists="composerLists"
+      :default-list="composerDefaultList"
+      :creating-list="creatingList"
       @submit="add"
+      @create-list="onCreateList"
+      @vault-change="onComposerVaultChange"
     />
 
-    <div
-      v-if="!loading && !loadError && tasks.length > 0"
-      class="flex gap-0.5 self-start"
-      role="radiogroup"
-      aria-label="Group tasks by"
-    >
-      <button
-        v-for="g in [
-          { key: 'dates', label: 'Dates' },
-          { key: 'tags', label: 'Tags' },
-        ] as const"
-        :key="g.key"
-        type="button"
-        role="radio"
-        :data-testid="`task-grouping-${g.key}`"
-        :aria-checked="grouping === g.key"
-        class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        :class="
-          grouping === g.key
-            ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-            : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-        "
-        @click="grouping = g.key"
-      >
-        {{ g.label }}
-      </button>
-    </div>
+    <TaskViewControls
+      v-if="!loading && !loadError && (tasks.length > 0 || hasDisplayableLists)"
+      :grouping="grouping"
+      :sort-pref="sortPref"
+      @update:grouping="grouping = $event"
+      @set-sort-key="setSortKey"
+      @flip-sort-dir="flipSortDir"
+    />
 
     <p
       v-if="loading"
@@ -450,13 +470,13 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
       {{ loadError }}
     </p>
     <p
-      v-else-if="tasks.length === 0"
+      v-else-if="tasks.length === 0 && buckets.length === 0"
       class="text-xs text-slate-400"
     >
       No tasks yet.
     </p>
     <p
-      v-else-if="filteredTasks.length === 0"
+      v-else-if="buckets.length === 0"
       class="text-xs text-slate-400"
     >
       No tasks match{{ tagFilter ? ` #${tagFilter}` : "" }}{{ showFilter && filter ? ` "${filter}"` : "" }}.
@@ -477,21 +497,33 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
         </h3>
         <ul class="flex flex-col gap-1">
           <TaskRow
-            v-for="task in bucket.tasks"
+            v-for="(task, i) in bucket.tasks"
             :key="rowKey(bucket.key, task)"
             :task="task"
             :busy="isBusy(task.path)"
             :is-aggregate="isAggregate"
             :editing="editingKey === rowKey(bucket.key, task)"
+            :reorderable="reorderView"
+            :reorder-busy="reordering"
+            :dragging="dragState?.sectionKey === bucket.key && dragState.fromIndex === i"
+            :drop-target="
+              dragState?.sectionKey === bucket.key &&
+                dragState.toIndex === i &&
+                dragState.fromIndex !== i
+            "
+            :data-reorder-section="bucket.key"
             @toggle="toggle(task)"
             @archive="archive(task)"
             @edit="startEdit(task, bucket.key)"
             @open="openInObsidian(task)"
             @tag-click="tagFilter = $event"
+            @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
+            @reorder-keydown="onHandleKeydown($event, bucket.key, i)"
           >
             <TaskEditor
               :task="task"
               :busy="isBusy(task.path)"
+              :lists="listsForVault(task.vaultId)"
               @save="onEditorSave(task, $event)"
               @cancel="cancelEdit"
             />

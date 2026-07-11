@@ -38,7 +38,7 @@ Management PRD's status line now narrates what shipped and what remains
 unbuilt, and `AGENTS.md` documents the `task_commands::*` surface. Kept as a
 struck-through record per this catalog's convention.
 
-## Status: Shipped (v0.5.0, extended through v0.5.3)
+## Status: Shipped (v0.5.0, extended through v0.5.3 and the lists increment)
 
 - **v0.5.0** — the vertical slice: configure a per-vault tasks folder, list
   tasks, add a task, toggle completion.
@@ -50,6 +50,12 @@ struck-through record per this catalog's convention.
   due, priority), click-to-open in Obsidian, title filter.
 - **v0.5.3** — Obsidian-compatible `tags`: chips, click-to-filter, tags on
   add/edit, and a Dates | Tags grouping toggle.
+- **Lists increment** — Lists as folders under the tasks folder: a
+  `Dates | Tags | Lists` grouping toggle, list pickers on the composer
+  (inline "New list…" creation) and the inline editor (moving the task's
+  file between list folders), a per-vault default list + list order
+  settings card, user-selectable sorting (persisted per view), and manual
+  drag-to-reorder writing an `order` frontmatter rank.
 
 ## Implementation
 

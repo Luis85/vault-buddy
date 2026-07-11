@@ -63,6 +63,16 @@ function setActive(i: number) {
   });
 }
 
+// Scroll must never DISMISS the menu (the old close-on-scroll made a popup
+// taller than its 220px max unreachable — wheeling its own option list closed
+// it). A scroll inside the popup is navigation: ignore it. A scroll outside
+// moves the trigger under the position:fixed popup: re-anchor instead.
+// Capture-phase listener because scroll doesn't bubble.
+function onWindowScroll(e: Event) {
+  if (popupRef.value?.contains(e.target as Node)) return;
+  positionPopup();
+}
+
 async function openMenu() {
   open.value = true;
   activeIndex.value = Math.max(
@@ -73,7 +83,7 @@ async function openMenu() {
   await nextTick();
   positionPopup();
   popupRef.value?.focus();
-  window.addEventListener("scroll", closeMenu, true);
+  window.addEventListener("scroll", onWindowScroll, true);
   window.addEventListener("resize", closeMenu);
   document.addEventListener("pointerdown", onDocPointerDown, true);
 }
@@ -81,7 +91,7 @@ async function openMenu() {
 function closeMenu() {
   if (!open.value) return;
   open.value = false;
-  window.removeEventListener("scroll", closeMenu, true);
+  window.removeEventListener("scroll", onWindowScroll, true);
   window.removeEventListener("resize", closeMenu);
   document.removeEventListener("pointerdown", onDocPointerDown, true);
   triggerRef.value?.focus();
@@ -138,7 +148,7 @@ function onPopupKeydown(e: KeyboardEvent) {
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener("scroll", closeMenu, true);
+  window.removeEventListener("scroll", onWindowScroll, true);
   window.removeEventListener("resize", closeMenu);
   document.removeEventListener("pointerdown", onDocPointerDown, true);
 });

@@ -74,6 +74,38 @@ describe("SelectMenu", () => {
     }
   });
 
+  it("stays open when the popup's own option list scrolls", async () => {
+    // User-reported: with enough options the popup itself scrolls (max-height
+    // ~220px), and the capture-phase window scroll listener closed the menu on
+    // the popup's OWN scroll — the lower options were unreachable by wheel or
+    // scrollbar. Scroll doesn't bubble, but a capture listener sees it anyway.
+    const w = mountMenu("");
+    await w.get('[data-testid="lang"]').trigger("click");
+    const popup = document.body.querySelector('[role="listbox"]') as HTMLElement;
+    popup.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(document.body.querySelector('[role="listbox"]')).not.toBeNull();
+  });
+
+  it("stays open (repositioning) when the page behind scrolls", async () => {
+    // Scrolling the panel content must track the trigger, not dismiss the
+    // menu — the popup is position:fixed, so it repositions instead.
+    const w = mountMenu("");
+    await w.get('[data-testid="lang"]').trigger("click");
+    document.body.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(document.body.querySelector('[role="listbox"]')).not.toBeNull();
+  });
+
+  it("still closes on a pointerdown outside the popup", async () => {
+    // Pin the dismissal path that remains after the scroll fix.
+    const w = mountMenu("");
+    await w.get('[data-testid="lang"]').trigger("click");
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await flushPromises();
+    expect(document.body.querySelector('[role="listbox"]')).toBeNull();
+  });
+
   it("moves aria-activedescendant with the keyboard highlight (GAP-33)", async () => {
     const w = mountMenu("");
     await w.get('[data-testid="lang"]').trigger("click");

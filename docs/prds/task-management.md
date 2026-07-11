@@ -6,7 +6,10 @@
   filtering in v0.5.2; Obsidian-compatible tags on Tasks (chips, tag filter,
   tag grouping) in v0.5.3; the cross-vault aggregated view (one merged
   "All tasks" list, frontend fan-out over the per-vault commands) in
-  v0.5.4. User-defined lists, the dashboard, templates, Task Tags on
+  v0.5.4; user-defined Lists (as real folders under the tasks folder —
+  see the amendment under Task Lists below), user-selectable sorting, and
+  manual drag-to-reorder (a persisted `order` rank) in the lists
+  increment. The dashboard, templates, Task Tags on
   non-Task notes / Todos, and the AI features below remain unbuilt. See
   [Per-Vault Task List](../use-cases/per-vault-task-list.md) and
   [Aggregated Task Dashboard & Lists](../use-cases/aggregated-task-dashboard-and-lists.md).
@@ -257,7 +260,12 @@ Examples:
 - Release
 - Projects
 
-Custom lists are stored as metadata rather than physical folders.
+**Amended (lists increment):** a List IS a physical folder under the
+Vault's Task Folder — the earlier draft ("stored as metadata rather than
+physical folders") is superseded. Folders keep the Vault the single
+source of truth (a folder created by hand in Obsidian is a List), moving
+a Task between Lists moves its file, and the Buddy stores only
+preferences about Lists (default List, display order) in its own config.
 
 ### Aggregated Task View
 
@@ -400,7 +408,11 @@ Obsidian is never required for creating or editing tasks.
 - Task aggregation — ✅ shipped (v0.5.4: the merged All-tasks view with
   vault attribution and a vault-picking add; Task-tagged Notes as aggregate
   rows still open)
-- Task lists — unbuilt
+- Task lists — ✅ shipped (lists increment: lists as folders, a Lists
+  grouping mode with cross-vault merge, list pickers on add/edit with
+  inline creation, moving tasks between lists, per-vault default list +
+  list order settings; plus user-selectable sorting and manual
+  drag-to-reorder via a persisted `order` rank)
 - Dashboard — unbuilt (per-vault date buckets shipped in v0.5.2 are the
   single-vault precursor)
 

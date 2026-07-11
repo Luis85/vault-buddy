@@ -241,6 +241,10 @@ pub fn set_capture_config(
         // command owns it) so saving capture settings can't reset it — same
         // read-inside-the-lock discipline as tasks_folder above.
         documents_folder: existing.documents_folder,
+        // Same rule for the lists settings object (set_task_lists_config owns
+        // it): a capture save must never reset the default list or the order.
+        default_list: existing.default_list,
+        list_order: existing.list_order,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {

@@ -36,9 +36,13 @@ _Avoid_: Task, tagged Task — a Task-tagged Note is not a Task
 An inline checklist line, written `- [ ] description`, inside any Note's body — a Task, a Task-tagged Note, or any other Note — used to track granular progress or present a checklist for that Note. A Todo has no frontmatter, no file of its own, and no identity outside the Note containing it.
 _Avoid_: Task, subtask, todo item
 
-**Task List**:
-A named grouping of Tasks (e.g. Inbox, Today, Someday) held as metadata on a Task, not as a physical folder.
-_Avoid_: Folder, category, board
+**Task List** (or just **List**, in the tasks domain):
+A named grouping of Tasks (e.g. Inbox, Next, Someday), reflected as a real folder under the Vault's Task Folder — the filesystem defines which Lists exist (a folder created by hand in Obsidian is a List), and moving a Task between Lists moves its file. The Buddy keeps only preferences ABOUT Lists (the default List for new Tasks, their display order) in its own config, never their existence. Tasks at the Task Folder root belong to no List ("No list"). This supersedes the earlier draft that held Lists as Task metadata.
+_Avoid_: Category, board; "folder" alone (a List is a folder, but not every vault folder is a List)
+
+**Order** (manual rank):
+An optional `order` number in a Task's frontmatter giving its hand-arranged position (ascending) for the Manual sort. Assigned on first reorder — never written at creation — and read leniently: a Task without one is unranked and follows the ranked ones.
+_Avoid_: Index, position (both imply a dense sequence; ranks are sparse and gap-tolerant)
 
 **Project**:
 Task metadata linking a Task to the larger body of notes or work it belongs to.
