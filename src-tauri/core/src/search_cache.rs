@@ -148,7 +148,19 @@ pub(crate) fn cached_lowered(path: &Path, cache: &SearchCache) -> Option<Arc<str
         // every scan; return None WITHOUT recording an entry so the next search
         // retries once the file is readable again.
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => None,
-        Err(_) => return None,
+        Err(_) => {
+            // Transient error (e.g. a Windows sharing violation / AV-backup lock):
+            // reconcile a stale Text entry so its bytes aren't retained for the
+            // process lifetime, but do NOT memoize an Uncacheable entry — the next
+            // search must still retry once the file is readable again.
+            let mut map = cache.lock();
+            if let Some(CacheEntry::Text { lowered, .. }) = map.remove(path) {
+                cache
+                    .bytes
+                    .fetch_sub(lowered.len() as u64, Ordering::Relaxed);
+            }
+            return None;
+        }
     };
 
     let mut map = cache.lock();
@@ -287,6 +299,28 @@ mod tests {
         assert!(cached_lowered(&p, &c).is_none());
         assert!(!c.is_uncacheable(&p)); // NOT memoized — retried next search
         assert_eq!(c.cached_bytes(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transient_error_with_prior_entry_reconciles_bytes() {
+        // Regression: a transient (non-InvalidData) read error on a path
+        // previously cached as Text must reconcile the stale entry's bytes
+        // (not leak them for the process lifetime) while still NOT memoizing.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.md");
+        std::fs::write(&p, "hello world\n").unwrap();
+        let c = SearchCache::new();
+        assert!(cached_lowered(&p, &c).is_some());
+        assert!(c.cached_bytes() > 0); // cached as Text
+                                       // Replace the file with a directory: changes (mtime,size) so the entry
+                                       // is stale, and the next read fails with EISDIR (a non-InvalidData,
+                                       // transient-class error).
+        std::fs::remove_file(&p).unwrap();
+        std::fs::create_dir(&p).unwrap();
+        assert!(cached_lowered(&p, &c).is_none());
+        assert_eq!(c.cached_bytes(), 0); // stale bytes reconciled, not leaked
+        assert!(!c.is_uncacheable(&p)); // still not memoized
     }
 
     #[test]
