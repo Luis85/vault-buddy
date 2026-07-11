@@ -257,4 +257,28 @@ describe("manual reordering", () => {
     await flushPromises();
     expect(busy.size).toBe(0);
   });
+
+  it("aborts materialization when an affected row is already busy (Codex #53 re-review)", async () => {
+    // A neighbor with an in-flight write (e.g. a slow status toggle) sits in
+    // the shared busy guard. Reordering an unranked section would materialize
+    // ranks for EVERY affected row — including that busy one — starting a
+    // second read-modify-write frontmatter save against its file that races
+    // the first, so whichever lands last drops the other's change.
+    // Materialize can't skip a row (it sets the section's total order), so the
+    // whole reorder aborts and writes nothing; the user retries once the save
+    // lands.
+    const { wrapper, calls } = mountManual([task("a", 1024), task("b", null), task("c", null)]);
+    await flushPromises();
+    // Simulate an in-flight write on b by seeding the shared per-path guard.
+    (wrapper.vm as unknown as { busy: Set<string> }).busy.add("C:/v/Tasks/b.md");
+    await wrapper.vm.$nextTick();
+    // Move c up one slot: neighbor b is unranked → this would materialize {b, c}.
+    await wrapper.findAll('[data-testid="task-drag"]')[2].trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    // Aborted: no order write at all, and the optimistic order never applied.
+    expect(calls.some((c) => c.cmd === "update_task")).toBe(false);
+    const rows = (wrapper.vm as unknown as { tasks: { path: string; order: number | null }[] }).tasks;
+    expect(rows.find((t) => t.path === "C:/v/Tasks/c.md")?.order).toBeNull();
+    expect(rowTitles(wrapper)).toEqual(["a", "b", "c"]); // unchanged
+  });
 });
