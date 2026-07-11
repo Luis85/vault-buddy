@@ -1,7 +1,9 @@
 mod capture_commands;
 mod commands;
 mod diagnostics;
+mod document_commands;
 mod mcp_commands;
+mod pandoc;
 mod search_commands;
 mod task_commands;
 mod transcription;
@@ -73,6 +75,25 @@ fn panel_pinned_open() -> bool {
     )
 }
 
+/// Set while a native OS dialog (file picker / Browse) opened from the panel is
+/// in flight. Such a dialog takes OS focus, blurring the panel — and the
+/// focus-out check treats only `main`/`panel` as in-app, so it would hide the
+/// panel out from under the dialog, leaving the import's `Converting…`/toast
+/// state (rendered in the panel window) invisible after the user picks a file.
+/// The frontend sets this true before `open()` and false in its `finally`; the
+/// check declines to hide while it is set (like the Ctrl-open pin). A bool, not
+/// a timed pin, because a dialog can stay open arbitrarily long. Set by a sync
+/// command and read by the focus-out check — both main thread.
+static DIALOG_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_dialog_active(active: bool) {
+    DIALOG_ACTIVE.store(active, Ordering::Relaxed);
+}
+
+fn dialog_active() -> bool {
+    DIALOG_ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Hide the panel once focus has really left the app. Clicking from the panel
 /// to the buddy (or back) fires the source window's blur BEFORE the
 /// destination's focus lands, so a check run at blur time would see neither
@@ -112,6 +133,14 @@ fn schedule_focus_out_check(app: &tauri::AppHandle) {
                     // multi-open. (Only-hide invariant intact: a pin never
                     // shows anything.)
                     if panel_pinned_open() {
+                        return;
+                    }
+                    // A native OS dialog (file picker / Browse) opened from the
+                    // panel is what stole focus — declining the hide keeps the
+                    // panel (and its Converting…/toast state) alive underneath.
+                    // Cleared in the frontend's `finally`, so a later real
+                    // click-away still hides. (Only-hide invariant intact.)
+                    if dialog_active() {
                         return;
                     }
                     if let Some(panel) = checked.get_webview_window("panel") {
@@ -184,6 +213,8 @@ pub fn run() {
         }))
         // Recording saved/failed toasts.
         .plugin(tauri_plugin_notification::init())
+        // Native file pickers: Pandoc-path Browse + document-import file open.
+        .plugin(tauri_plugin_dialog::init())
         // Persist to a rotating file in the app log dir — the bare `.build()`
         // logged only to stdout, which is invisible in a release GUI build,
         // so crashes left no trail. `targets` REPLACES the plugin defaults
@@ -239,6 +270,8 @@ pub fn run() {
         .manage(transcription::TranscriptionState::default())
         .manage(capture_commands::ConfigWriteLock::default())
         .manage(mcp_commands::McpServerState::default())
+        .manage(document_commands::ImportLock::default())
+        .manage(document_commands::DocumentImportPending::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -322,6 +355,8 @@ pub fn run() {
             commands::start_buddy_drag,
             commands::show_buddy_menu,
             commands::open_logs_folder,
+            commands::open_external_url,
+            commands::set_dialog_active,
             commands::rearm_crash_detection,
             commands::get_autostart,
             commands::set_autostart,
@@ -354,6 +389,13 @@ pub fn run() {
             mcp_commands::get_mcp_config,
             mcp_commands::set_mcp_config,
             mcp_commands::regenerate_mcp_token,
+            document_commands::detect_pandoc,
+            document_commands::convert_document,
+            document_commands::get_documents_config,
+            document_commands::set_documents_config,
+            document_commands::set_pandoc_path,
+            document_commands::begin_document_import,
+            document_commands::take_pending_import,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
@@ -442,6 +484,7 @@ pub fn run() {
             tray::create_tray(app.handle())?;
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
+            document_commands::run_import_recovery(app.handle());
             transcription::run_transcription(app.handle());
             mcp_commands::start_if_enabled(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles

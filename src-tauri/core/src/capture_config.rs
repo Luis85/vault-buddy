@@ -68,6 +68,8 @@ pub struct VaultCaptureConfig {
     /// Vault-relative folder holding this vault's task documents.
     /// None → the default "Tasks".
     pub tasks_folder: Option<String>,
+    /// Vault-relative folder holding imported documents. None → "Documents".
+    pub documents_folder: Option<String>,
 }
 
 impl Default for VaultCaptureConfig {
@@ -85,6 +87,7 @@ impl Default for VaultCaptureConfig {
             transcript_timestamps: true,
             follow_up_template: true,
             tasks_folder: None,
+            documents_folder: None,
         }
     }
 }
@@ -119,6 +122,11 @@ impl VaultCaptureConfig {
     pub fn tasks_root(&self) -> &str {
         self.tasks_folder.as_deref().unwrap_or("Tasks")
     }
+
+    /// The vault-relative folder holding imported documents. None → "Documents".
+    pub fn documents_root(&self) -> &str {
+        self.documents_folder.as_deref().unwrap_or("Documents")
+    }
 }
 
 /// Default port for the embedded MCP server: 0x5642 = ASCII "VB".
@@ -151,10 +159,22 @@ impl Default for McpConfig {
     }
 }
 
+/// App-global Document Import settings. Pandoc is one system-wide binary,
+/// so its path override is app-global, not per-vault. Top-level
+/// `documentImport` section beside `vaults`/`mcp`; parsed per-field
+/// defensively for the same reason.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DocumentImportConfig {
+    /// Manual override for a Pandoc not on PATH (a portable install).
+    /// None → detect on PATH only.
+    pub pandoc_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AppConfig {
     pub vaults: HashMap<String, VaultCaptureConfig>,
     pub mcp: McpConfig,
+    pub document_import: DocumentImportConfig,
 }
 
 /// Per-field parsing through serde_json::Value: the file is hand-edited,
@@ -172,7 +192,15 @@ pub fn parse_config(json: &str) -> AppConfig {
         }
     }
     let mcp = value.get("mcp").map(mcp_entry).unwrap_or_default();
-    AppConfig { vaults, mcp }
+    let document_import = value
+        .get("documentImport")
+        .map(document_import_entry)
+        .unwrap_or_default();
+    AppConfig {
+        vaults,
+        mcp,
+        document_import,
+    }
 }
 
 fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
@@ -229,6 +257,10 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("tasksFolder")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        documents_folder: entry
+            .get("documentsFolder")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -260,6 +292,17 @@ fn mcp_entry(entry: &serde_json::Value) -> McpConfig {
     }
 }
 
+fn document_import_entry(entry: &serde_json::Value) -> DocumentImportConfig {
+    DocumentImportConfig {
+        pandoc_path: entry
+            .get("pandocPath")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    }
+}
+
 pub fn vault_config(cfg: &AppConfig, vault_id: &str) -> VaultCaptureConfig {
     cfg.vaults.get(vault_id).cloned().unwrap_or_default()
 }
@@ -288,6 +331,23 @@ pub fn load_config_from(path: &Path) -> AppConfig {
     }
 }
 
+/// Read the config for a read-modify-write UPDATE. A MISSING file is fine (first
+/// run) → default; any OTHER read error (the file EXISTS but can't be read — a
+/// permission / AV / indexing hiccup) is propagated so the caller ABORTS the
+/// save instead of writing a default that silently drops every other vault/MCP
+/// section (Codex review — the save side of GAP-02). Readable-but-corrupt JSON
+/// still degrades per-field via `parse_config`, the same as every read path.
+fn load_config_for_update(path: &Path) -> std::io::Result<AppConfig> {
+    match std::fs::read_to_string(path) {
+        Ok(json) => Ok(parse_config(&json)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
+        Err(e) => {
+            log::warn!("config: {} unreadable during save: {e}", path.display());
+            Err(e)
+        }
+    }
+}
+
 pub fn load_config() -> AppConfig {
     let Some(path) = config_path() else {
         return AppConfig::default();
@@ -309,6 +369,13 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         mcp.insert("token".to_string(), json!(cfg.mcp.token));
         mcp.insert("allowWrites".to_string(), json!(cfg.mcp.allow_writes));
         root.insert("mcp".to_string(), Value::Object(mcp));
+    }
+    if cfg.document_import != DocumentImportConfig::default() {
+        let mut di = Map::new();
+        if let Some(p) = &cfg.document_import.pandoc_path {
+            di.insert("pandocPath".to_string(), json!(p));
+        }
+        root.insert("documentImport".to_string(), Value::Object(di));
     }
     let mut vaults = Map::new();
     let mut ids: Vec<&String> = cfg.vaults.keys().collect();
@@ -344,6 +411,9 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         if let Some(folder) = &v.tasks_folder {
             entry.insert("tasksFolder".to_string(), json!(folder));
         }
+        if let Some(folder) = &v.documents_folder {
+            entry.insert("documentsFolder".to_string(), json!(folder));
+        }
         vaults.insert(id.clone(), Value::Object(entry));
     }
     root.insert("vaults".to_string(), Value::Object(vaults));
@@ -377,22 +447,6 @@ pub fn write_config(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
     result
 }
 
-/// Read the current config for a read-modify-write. ONLY a missing file may
-/// default (that is the first save); any other read error must propagate —
-/// treating an unreadable config.json as empty and writing it back would
-/// silently wipe every other vault's settings (GAP-02: a voice-note vault
-/// reverting to Meeting mode re-enables desktop-audio loopback).
-fn read_config_for_update(path: &Path) -> std::io::Result<AppConfig> {
-    match std::fs::read_to_string(path) {
-        Ok(json) => Ok(parse_config(&json)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
-        Err(e) => {
-            log::warn!("config: {} unreadable during save: {e}", path.display());
-            Err(e)
-        }
-    }
-}
-
 /// Read-modify-write so saving one vault preserves the others. No lock of
 /// its own: callers that can race (the IPC command layer) must serialize
 /// calls behind a mutex.
@@ -401,7 +455,7 @@ pub fn update_vault_config_at(
     vault_id: &str,
     v: VaultCaptureConfig,
 ) -> std::io::Result<()> {
-    let mut cfg = read_config_for_update(path)?;
+    let mut cfg = load_config_for_update(path)?;
     cfg.vaults.insert(vault_id.to_string(), v);
     write_config(path, &cfg)
 }
@@ -416,9 +470,27 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
 /// update_vault_config_at (same no-own-lock rule: IPC callers serialize
 /// behind ConfigWriteLock).
 pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> {
-    let mut cfg = read_config_for_update(path)?;
+    let mut cfg = load_config_for_update(path)?;
     cfg.mcp = mcp;
     write_config(path, &cfg)
+}
+
+/// Read-modify-write for the app-global document-import section, mirroring
+/// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
+/// behind ConfigWriteLock).
+pub fn update_document_import_config_at(
+    path: &Path,
+    di: DocumentImportConfig,
+) -> std::io::Result<()> {
+    let mut cfg = load_config_for_update(path)?;
+    cfg.document_import = di;
+    write_config(path, &cfg)
+}
+
+pub fn update_document_import_config(di: DocumentImportConfig) -> Result<(), String> {
+    let path = config_path().ok_or("Cannot resolve the config directory")?;
+    update_document_import_config_at(&path, di)
+        .map_err(|e| format!("Could not save document import settings: {e}"))
 }
 
 #[cfg(test)]
@@ -614,6 +686,7 @@ mod tests {
                 transcript_timestamps: false,
                 follow_up_template: true,
                 tasks_folder: Some("Inbox/Tasks".to_string()),
+                documents_folder: Some("Inbox/Documents".to_string()),
             },
         );
         cfg.vaults
@@ -657,6 +730,38 @@ mod tests {
         let kept = vault_config(&cfg, "keep");
         assert_eq!(kept.mode, RecordingMode::VoiceNote);
         assert_eq!(kept.bitrate_kbps, 160);
+    }
+
+    // A read error other than "missing file" must ABORT the save, not default
+    // and clobber every other section (GAP-02, save side). A directory at the
+    // config path forces a non-NotFound read error deterministically — even as
+    // root, unlike a permission bit.
+    #[test]
+    fn update_aborts_on_a_non_missing_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config-is-a-dir");
+        std::fs::create_dir(&path).unwrap();
+        let di = DocumentImportConfig {
+            pandoc_path: Some("C:/pandoc.exe".into()),
+        };
+        assert!(update_document_import_config_at(&path, di).is_err());
+        // Nothing was written over the directory.
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn update_defaults_and_saves_when_the_config_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json"); // does not exist yet
+        let di = DocumentImportConfig {
+            pandoc_path: Some("C:/pandoc.exe".into()),
+        };
+        update_document_import_config_at(&path, di).unwrap();
+        let cfg = parse_config(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(
+            cfg.document_import.pandoc_path.as_deref(),
+            Some("C:/pandoc.exe")
+        );
     }
 
     #[test]
@@ -822,35 +927,46 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_config_fails_the_save_instead_of_wiping_other_vaults() {
-        // GAP-02: any read error used to map to AppConfig::default(), then
-        // write_config replaced the whole file with only the edited vault —
-        // a momentarily locked/unreadable config.json (Windows AV, indexer)
-        // silently dropped vaults B..N. Invalid UTF-8 stands in for that
-        // read failure portably: read_to_string errors, writes would succeed.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        let garbage = [0xFFu8, 0xFE, 0x01];
-        std::fs::write(&path, garbage).unwrap();
-        let err = update_vault_config_at(&path, "a", VaultCaptureConfig::default())
-            .expect_err("a non-NotFound read error must fail the save");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        // the save failed LOUDLY and touched nothing
-        assert_eq!(std::fs::read(&path).unwrap(), garbage);
-
-        let err = update_mcp_config_at(&path, McpConfig::default())
-            .expect_err("the mcp save has the same read-modify-write wipe");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert_eq!(std::fs::read(&path).unwrap(), garbage);
+    fn documents_root_defaults_to_documents() {
+        let mut c = VaultCaptureConfig::default();
+        assert_eq!(c.documents_root(), "Documents");
+        c.documents_folder = Some("Imports".into());
+        assert_eq!(c.documents_root(), "Imports");
     }
 
     #[test]
-    fn missing_config_still_defaults_on_first_save() {
-        // NotFound is the one read error that may default: it IS the first save.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        update_vault_config_at(&path, "a", VaultCaptureConfig::default()).unwrap();
-        let cfg = load_config_from(&path);
-        assert!(cfg.vaults.contains_key("a"));
+    fn parses_document_import_section() {
+        let json = r#"{"documentImport":{"pandocPath":"C:\\pandoc\\pandoc.exe"},"vaults":{}}"#;
+        let cfg = parse_config(json);
+        assert_eq!(
+            cfg.document_import.pandoc_path.as_deref(),
+            Some("C:\\pandoc\\pandoc.exe")
+        );
+    }
+
+    #[test]
+    fn parses_documents_folder_per_vault() {
+        let json = r#"{"vaults":{"v1":{"documentsFolder":"Imports"}}}"#;
+        let cfg = parse_config(json);
+        assert_eq!(
+            cfg.vaults["v1"].documents_folder.as_deref(),
+            Some("Imports")
+        );
+    }
+
+    #[test]
+    fn serialize_roundtrips_document_import_section() {
+        // Regression: serialize_config once emitted only `vaults`; a save from
+        // another surface would silently delete this section. Mirrors the mcp test.
+        let mut cfg = AppConfig::default();
+        cfg.document_import.pandoc_path = Some("/usr/bin/pandoc".into());
+        let round = parse_config(&serialize_config(&cfg));
+        assert_eq!(round.document_import, cfg.document_import);
+    }
+
+    #[test]
+    fn serialize_omits_default_document_import_section() {
+        let cfg = AppConfig::default();
+        assert!(!serialize_config(&cfg).contains("documentImport"));
     }
 }

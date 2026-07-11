@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, type Ref, ref, watch } from "vue";
 
 import { logWarning } from "../logging";
 import type {
   AudioDevice,
   AudioDevices,
   CaptureConfig,
+  DocumentsConfig,
   TasksConfig,
 } from "../types";
 import SelectMenu from "./SelectMenu.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
+import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 const props = defineProps<{ vaultId: string }>();
 
@@ -56,6 +58,16 @@ const tasksFolderError = ref<string | null>(null);
 // RecordMode.vue's `loaded` persist gate.
 const tasksFolderLoaded = ref(false);
 const tasksFolderEdited = ref(false);
+
+// The per-vault documents folder — same independent-command shape as
+// tasksFolder above (its own get/set_documents_config pair, saved with the
+// form's single Save button as its own independent invoke, gated the same
+// way so a documents-config failure can't block the capture or tasks save
+// and vice versa).
+const documentsFolder = ref(""); // "" shows the "Documents" placeholder / clears to default
+const documentsFolderError = ref<string | null>(null);
+const documentsFolderLoaded = ref(false);
+const documentsFolderEdited = ref(false);
 
 // A configured device that is not currently connected must stay
 // selectable (unplugging a headset must not silently rewrite the
@@ -125,11 +137,60 @@ watch(
     transcriptionLanguage,
     transcriptTimestamps,
     tasksFolder,
+    documentsFolder,
   ],
   () => {
     if (saveState.value === "saved") saveState.value = "idle";
   },
 );
+
+// Load an optional per-vault folder field through its own command, off the
+// capture form's critical path: a failure warns and continues (the folder is
+// optional), and the resolved value is dropped if the user already started
+// typing (their edit owns the field — the same rule as RecordMode's pre-load
+// toggle guard). Shared verbatim by the tasks and documents folders so the
+// two reads can't drift apart.
+async function loadOptionalField<T>(
+  cmd: string,
+  editedRef: Ref<boolean>,
+  loadedRef: Ref<boolean>,
+  targetRef: Ref<string>,
+  extract: (cfg: T) => string | null,
+) {
+  try {
+    const cfg = await invoke<T>(cmd, { id: props.vaultId });
+    if (!editedRef.value) targetRef.value = extract(cfg) ?? "";
+    loadedRef.value = true;
+  } catch (e) {
+    logWarning(`${cmd} failed (vault ${props.vaultId}): ${String(e)}`);
+  }
+}
+
+// Save an optional per-vault folder field through its own command. Gated on
+// loaded-or-edited: a value that is neither is the default seed, and writing
+// it would clear the vault's real folder. A failure is a field-level error
+// (returned so the caller can withhold the "Saved ✓") — deliberately NOT
+// short-circuited by the capture-config save, so neither write can block the
+// other's. Shared verbatim by the tasks and documents folders.
+async function saveOptionalField(
+  cmd: string,
+  key: string,
+  value: string,
+  loaded: boolean,
+  edited: boolean,
+  errorRef: Ref<string | null>,
+): Promise<boolean> {
+  if (!loaded && !edited) return false;
+  const trimmed = value.trim();
+  try {
+    await invoke(cmd, { id: props.vaultId, [key]: trimmed === "" ? null : trimmed });
+    return false;
+  } catch (e) {
+    errorRef.value = String(e);
+    logWarning(`${cmd} failed (vault ${props.vaultId}): ${String(e)}`);
+    return true;
+  }
+}
 
 onMounted(async () => {
   try {
@@ -154,20 +215,22 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
-  // Separate invoke (not in the Promise.all above) so a tasks-config failure
-  // can't block the capture form from loading — the tasks folder is optional.
-  try {
-    const tcfg = await invoke<TasksConfig>("get_tasks_config", {
-      id: props.vaultId,
-    });
-    // A user who started typing before this read landed owns the field —
-    // the resolved value must not clobber their edit (the same rule as
-    // RecordMode's pre-load toggle guard).
-    if (!tasksFolderEdited.value) tasksFolder.value = tcfg.tasksFolder ?? "";
-    tasksFolderLoaded.value = true;
-  } catch (e) {
-    logWarning(`get_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
-  }
+  // Separate invokes (not in the Promise.all above) so an optional-folder read
+  // can't block the capture form from loading — both folders are optional.
+  await loadOptionalField<TasksConfig>(
+    "get_tasks_config",
+    tasksFolderEdited,
+    tasksFolderLoaded,
+    tasksFolder,
+    (cfg) => cfg.tasksFolder,
+  );
+  await loadOptionalField<DocumentsConfig>(
+    "get_documents_config",
+    documentsFolderEdited,
+    documentsFolderLoaded,
+    documentsFolder,
+    (cfg) => cfg.documentsFolder,
+  );
 });
 
 async function save() {
@@ -175,6 +238,7 @@ async function save() {
   saveError.value = null;
   folderError.value = null;
   tasksFolderError.value = null;
+  documentsFolderError.value = null;
   const folder = recordingFolder.value.trim();
   let failed = false;
   try {
@@ -203,24 +267,33 @@ async function save() {
     else saveError.value = message;
     logWarning(`capture settings save failed (vault ${props.vaultId}): ${message}`);
   }
-  // The tasks folder saves with the same button but through its own command —
-  // deliberately NOT short-circuited by a capture-config failure above, so
-  // neither config's write can block the other's. Its failure stays a
-  // field-level error under the tasks input. Gated on loaded-or-edited (see
-  // the refs above): a value that is neither is the default seed, and writing
-  // it would clear the vault's real folder.
-  if (tasksFolderLoaded.value || tasksFolderEdited.value) {
-    const tasks = tasksFolder.value.trim();
-    try {
-      await invoke("set_tasks_config", {
-        id: props.vaultId,
-        tasksFolder: tasks === "" ? null : tasks,
-      });
-    } catch (e) {
-      failed = true;
-      tasksFolderError.value = String(e);
-      logWarning(`set_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
-    }
+  // Both optional folders save with the same button through their own
+  // commands — each independent (a failure of one can't block the other or
+  // the capture save) and each a field-level error. The `|| failed` ordering
+  // keeps a prior failure sticky while still ALWAYS attempting both writes.
+  if (
+    await saveOptionalField(
+      "set_tasks_config",
+      "tasksFolder",
+      tasksFolder.value,
+      tasksFolderLoaded.value,
+      tasksFolderEdited.value,
+      tasksFolderError,
+    )
+  ) {
+    failed = true;
+  }
+  if (
+    await saveOptionalField(
+      "set_documents_config",
+      "documentsFolder",
+      documentsFolder.value,
+      documentsFolderLoaded.value,
+      documentsFolderEdited.value,
+      documentsFolderError,
+    )
+  ) {
+    failed = true;
   }
   // "Saved ✓" must mean the WHOLE form landed — either failure withholds it.
   saveState.value = failed ? "idle" : "saved";
@@ -350,35 +423,28 @@ async function save() {
         wide
       />
     </section>
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Tasks
-      </h2>
-      <label
-        class="mb-1 block text-sm text-slate-200"
-        for="tasks-folder"
-      >
-        Tasks folder
-        <span class="block text-xs text-slate-500">Inside the vault</span>
-      </label>
-      <input
-        id="tasks-folder"
-        v-model="tasksFolder"
-        data-testid="tasks-folder-input"
-        type="text"
-        placeholder="Tasks"
-        aria-label="Tasks folder"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-        @input="tasksFolderEdited = true"
-      >
-      <p
-        v-if="tasksFolderError"
-        data-testid="tasks-folder-error"
-        class="mt-1 text-xs text-red-300"
-      >
-        {{ tasksFolderError }}
-      </p>
-    </section>
+    <VaultFolderSetting
+      v-model="tasksFolder"
+      heading="Tasks"
+      label="Tasks folder"
+      placeholder="Tasks"
+      input-id="tasks-folder"
+      input-testid="tasks-folder-input"
+      error-testid="tasks-folder-error"
+      :error="tasksFolderError"
+      @edit="tasksFolderEdited = true"
+    />
+    <VaultFolderSetting
+      v-model="documentsFolder"
+      heading="Document import"
+      label="Documents folder"
+      placeholder="Documents"
+      input-id="documents-folder"
+      input-testid="documents-folder-input"
+      error-testid="documents-folder-error"
+      :error="documentsFolderError"
+      @edit="documentsFolderEdited = true"
+    />
     <p
       v-if="saveError"
       data-testid="save-error"

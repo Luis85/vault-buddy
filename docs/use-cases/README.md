@@ -75,6 +75,7 @@ main PRD's former Non-Functional Requirements section.
 | Use case | Domain | Source PRD |
 | --- | --- | --- |
 | [AI-Enriched Meeting Notes](ai-enriched-meeting-notes.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
+| [Document Import via Pandoc](document-import-pandoc.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Additional Capture Providers](additional-capture-providers.md) | Knowledge Intake | [Knowledge Intake](../prds/knowledge-intake.md) |
 | [Task Tags & Todos](task-tags-and-todos.md) | Task Management | [Task Management](../prds/task-management.md) |
 | [AI-Assisted Task Management](ai-assisted-task-management.md) | Task Management | [Task Management](../prds/task-management.md) |
@@ -94,7 +95,7 @@ main PRD's former Non-Functional Requirements section.
 ## By source PRD
 
 - [Vault Buddy PRD (Product Vision)](../PRD.md) — Desktop Companion, Vault Discovery & Open, Daily Note, Knowledge Search & Retrieval, Workflow Automation Engine, Natural Language Interface, Plugin Platform & Specialized AI Agents.
-- [Knowledge Intake](../prds/knowledge-intake.md) — Meeting Recording, Voice Note Recording, Local Speech-to-Text Transcription, Companion Note & Follow-up Template, Recordings Browser, Re-transcription, Rename Recording, AI-Enriched Meeting Notes, Additional Capture Providers.
+- [Knowledge Intake](../prds/knowledge-intake.md) — Meeting Recording, Voice Note Recording, Local Speech-to-Text Transcription, Companion Note & Follow-up Template, Recordings Browser, Re-transcription, Rename Recording, AI-Enriched Meeting Notes, Document Import via Pandoc, Additional Capture Providers.
 - [Task Management](../prds/task-management.md) — Per-Vault Task List, Task Tags & Todos, Aggregated Task Dashboard & Lists, AI-Assisted Task Management.
 - [The Knowledge Lifecycle](../prds/knowledge-lifecycle.md) — vision framing for Knowledge Search & Retrieval and Workflow Automation Engine; no capability of its own beyond what those PRDs specify.
 - [AI Platform & Agent Runtime](../prds/ai-platform.md) — Vault Buddy Runtime & Embedded MCP Server.

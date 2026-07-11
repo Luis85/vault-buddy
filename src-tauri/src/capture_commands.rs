@@ -237,6 +237,10 @@ pub fn set_capture_config(
         transcript_timestamps: cfg.transcript_timestamps,
         follow_up_template: cfg.follow_up_template,
         tasks_folder: existing.tasks_folder,
+        // Preserve the per-vault documents folder (its own set_documents_config
+        // command owns it) so saving capture settings can't reset it — same
+        // read-inside-the-lock discipline as tasks_folder above.
+        documents_folder: existing.documents_folder,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {

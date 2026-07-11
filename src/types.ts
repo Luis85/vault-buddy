@@ -149,6 +149,23 @@ export interface TasksConfig {
   tasksFolder: string | null;
 }
 
+/** Per-vault imported-documents folder — get_documents_config/
+ * set_documents_config, the same shape as TasksConfig/get_tasks_config. */
+export interface DocumentsConfig {
+  documentsFolder: string | null;
+}
+
+/** App-global Pandoc install status (detect_pandoc). configuredPath seeds
+ * the path-override field; sandboxSupported gates the "too old" message
+ * (Pandoc 2.15+ for --sandbox). */
+export interface PandocStatus {
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+  sandboxSupported: boolean;
+  configuredPath: string | null;
+}
+
 export interface SearchHit {
   vaultId: string;
   vaultName: string;

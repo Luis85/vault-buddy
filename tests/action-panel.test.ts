@@ -518,4 +518,19 @@ describe("ActionPanel", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Vault settings");
   });
+
+  it("routes the importPicker view to ImportVaultPicker with a back button", async () => {
+    const store = useVaultsStore();
+    store.openImportPicker("C:/x/Report.docx");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { ImportVaultPicker: true } },
+    });
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Import document");
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("list");
+    expect(store.pendingImportPath).toBeNull();
+  });
 });

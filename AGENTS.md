@@ -21,6 +21,7 @@ here documents a failure mode somebody already hit.
 - [The window system (most invariant-heavy area)](#the-window-system-most-invariant-heavy-area)
 - [The vault domain](#the-vault-domain-core-crate--vaults-store)
 - [The capture domain](#the-capture-domain-src-tauricapture--capture_commandsrs--capture-store)
+- [The document-import domain](#the-document-import-domain-coresrcdocument_importrs--src-taurisrcdocument_commandsrs--documentimportsettingsvue--importvaultpickervue)
 - [The transcription & recordings domains](#the-transcription--recordings-domains-src-tauritranscribe--coresrctranscriptrecordingsrs--transcriptionrs)
 - [The tasks domain](#the-tasks-domain-coresrctasksrs--task_commandsrs--tasksvue)
 - [The search domain](#the-search-domain-coresrcsearchrs--search_commandsrs--searchvue)
@@ -103,12 +104,12 @@ vault-buddy/
 │   ├── capabilities/           # single default capability (all 3 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, transcription.rs, task_commands.rs,
-│   │                           #   search_commands.rs, mcp_commands.rs, tray.rs,
-│   │                           #   diagnostics.rs, main.rs
+│   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
+│   │                           #   tray.rs, diagnostics.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths},
-│   │                           #   companion_placement, checkpoint, app_diagnostics,
-│   │                           #   vault_walk, crash, throttle, sync_util
+│   │                           #   document_import, companion_placement, checkpoint,
+│   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),
@@ -208,6 +209,7 @@ Three OS windows, one frontend bundle, one Rust process:
    │  transcription.rs ── single-worker transcription queue + model download              │
    │  task_commands.rs / search_commands.rs ── thin gates over core::tasks / core::search │
    │  mcp_commands.rs ── embedded MCP server lifecycle + settings (vault_buddy_mcp crate) │
+   │  document_commands.rs ── pandoc detect/convert, import recovery, doc settings        │
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
    └──────┬───────────────────────────┬───────────────────────────┬───────────────────────┘
           │ IPC commands + events     │                           │
@@ -243,17 +245,18 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 45 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 54 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
-| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `rearm_crash_detection`, `get_autostart`, `set_autostart` |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` *(async)* |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks` *(async)*, `add_task` *(async)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash) |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -310,7 +313,7 @@ actually subscribe.
 | State | Location |
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
-| Per-vault capture/tasks settings + app-global `mcp` section (enabled/port/token/allowWrites) | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
+| Per-vault capture/tasks/`documents_folder` settings + app-global `mcp` and `document_import` (user-set `pandoc_path` override) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
@@ -384,7 +387,13 @@ Invariants:
   they run on the main thread where the window getters, `set_position`,
   `show`/`hide` and `set_focus` are valid. `toggle_panel` positions the hidden
   panel, shows it, focuses it, emits `panel-shown`, and hides the bubble;
-  opening never touches the buddy window. `panel-shown` is the panel webview's
+  opening never touches the buddy window. The show half is factored into
+  `commands::show_panel(app)` (position-while-hidden → show → focus → emit
+  `panel-shown` → hide bubble) so a document drag-dropped on the buddy can
+  *open* the panel idempotently without the toggle's hide branch —
+  `begin_document_import` stashes the path then calls `show_panel`, never
+  `toggle_panel` (a toggle would close an already-open panel or race
+  `panel-shown`'s list-default over the picker view). `panel-shown` is the panel webview's
   precise "opened" signal — `PanelRoot` re-runs discovery and picks its view on
   it (window focus is a leaky proxy that also fires on a mere refocus). Every
   exit path and the updater reuse these commands — there is no offset/shift to
@@ -415,7 +424,14 @@ Invariants:
   blur being sampled; without the pin the multi-open flow the user
   explicitly requested would collapse after the first result. The pin
   expires on its own and never shows anything, so the only-hide invariant
-  stands.
+  stands. A second sanctioned exception: a **native-dialog flag**
+  (`DIALOG_ACTIVE`, set via `set_dialog_active` — the frontend's
+  `withDialogSuppressed` wraps every `tauri-plugin-dialog` `open()`) makes the
+  check decline the hide while an OS file picker / Pandoc Browse is up. Such a
+  dialog steals OS focus and would otherwise hide the panel (and the in-flight
+  import's `Converting…`/toast state, which render in the panel window) out
+  from under the user. Unlike the timed pin it's a plain bool (a dialog stays
+  open arbitrarily long), cleared in the frontend's `finally`; still only-hide.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -463,16 +479,18 @@ Invariants:
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. Four sanctioned write paths
+logged (`uri::launch`) as the audit trail. Five sanctioned write paths
 exist, each documented in its own domain section below:
 
 1. the **capture** domain — recordings and companion notes;
 2. the **transcription** domain — the `<base>.transcript.md` sidecar;
 3. the **tasks** domain — creating a task document (collision-safe);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
-   (status toggle, rename, due/priority/tags edit — one generalized writer).
+   (status toggle, rename, due/priority/tags edit — one generalized writer);
+5. the **document-import** domain — a Pandoc-converted markdown note plus
+   its extracted-media sibling folder.
 
-All four ride the same never-clobber/atomic machinery in
+All five ride the same never-clobber/atomic machinery in
 `core::capture_note` / `core::capture_paths` (exclusive-create temps,
 `rename_noreplace`, suffix retry). Any other code touching vault contents
 directly is a design change, not a patch. Design specs:
@@ -481,7 +499,8 @@ directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`,
 `docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md`,
 `docs/superpowers/specs/2026-07-09-task-tags-design.md`,
-`docs/superpowers/specs/2026-07-10-task-aggregation-design.md`.
+`docs/superpowers/specs/2026-07-10-task-aggregation-design.md`,
+`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
 `list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
@@ -579,6 +598,78 @@ found the failure it prevents:
 - Per-vault settings live app-side in `%APPDATA%\vault-buddy\config.json`
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
+
+## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
+
+A second Capture Provider (Knowledge Intake): convert a `.docx` / `.odt` /
+`.rtf` into a vault markdown note via **user-installed Pandoc** — gated behind
+detecting Pandoc, never bundled (Pandoc is GPL-2 and a ~150–200 MB Windows
+binary; neither fits this MIT, light-installer app). It is the fifth sanctioned
+vault write, riding the same never-clobber/atomic machinery as capture. Spec:
+`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Two
+entry points: dragging a document onto the buddy (`BuddyRoot` filters
+`docx/odt/rtf`, `begin_document_import` stashes the path + shows the panel on
+the `importPicker` view) and the **Import Document** action in the per-vault
+record chooser (a `tauri-plugin-dialog` file picker). Invariants — each exists
+because a review found the failure it prevents:
+
+- **Pandoc resolution recovers past stale/old installs.** `resolve_working_pandoc`
+  probes an ordered candidate list — config `pandoc_path` override →
+  concrete `pandoc(.exe)` executables enumerated from the (Windows
+  registry-augmented) PATH → bare `pandoc` — and **prefers a
+  sandbox-capable (≥ 2.15) candidate**, keeping probing past a runnable but
+  too-old one so a stale override can't shadow a supported Pandoc on PATH;
+  only if none is sandbox-capable does it report the old one (so
+  `detect_pandoc` shows an accurate "installed but too old" and
+  `convert_document` still refuses). On Windows the PATH is read fresh from
+  the registry so a just-installed Pandoc is seen without an app restart.
+- **Conversions are serialized and sandboxed.** `convert_document` is async
+  (the pandoc child runs off the main thread via `spawn_blocking`) and takes
+  a process-wide `ImportLock` `try_lock` (fail-fast, `()`-guarded so a past
+  panic can't wedge it — `try_acquire` recovers a poisoned lock) so two
+  quick drops can't race the exists-reservation into a partial publish.
+  Pandoc runs `-f <reader> -t gfm --sandbox --extract-media=<relative>
+  -o <relative> +RTS -M512M -RTS` with cwd = a hidden in-vault staging dir
+  and an **absolute** source — every OUTPUT path is relative so rewritten
+  image links stay valid after publish; `--sandbox` blocks untrusted-doc
+  resource fetches and the RTS heap cap bounds memory a timeout can't.
+- **Never clobber; publish is media-first with rollback.** Output lands at
+  `<vault>/<documents_folder default "Documents">/YYYY/MM/YYYY-MM-DD <Original
+  Name>.md` with `type: Document` / `tags: [vault-buddy-import]` /
+  `source` (original path) / `imported` / `format` frontmatter — every string
+  emitted through `yaml_quote` (Windows backslash paths would otherwise be
+  malformed YAML). `reserve_basename` reserves BOTH `<name>.md` and the
+  `<name>/` media sibling up front (Pandoc bakes the media-folder name into
+  image links, so it can't be chosen at publish time); `publish` renames media
+  into place then the note at the EXACT reserved name, rolling media back if
+  the note commit fails. The ~two-rename window between media publish and the
+  note write is the accepted `GAP-54` crash gap (worst case: a stray folder of
+  our own extracted files, no user data). The original file stays at its
+  source — import copies, never moves.
+- **Containment, lexical + canonical, at every level.** `safe_recording_root`
+  + `assert_path_inside_vault` gate the documents root; the **fully dated
+  dir is asserted before AND after `create_dir_all`** (the pre-create check
+  stops `create_dir_all` from following a pre-existing `Documents/2026`
+  symlink/junction outside the vault; the post-create check closes the
+  swap-in race — the same discipline `start_capture` uses).
+- **Owned-temp recovery.** Interrupted conversions leave a hidden
+  `.vault-buddy.tmp.import` staging dir; `run_import_recovery` (wired in
+  `setup` after capture recovery) sweeps only those — dated `YYYY/MM` layout,
+  canonical containment at every dated level (symlinks AND Windows junctions),
+  deleting the owned staging ENTRY, never a symlink's resolved target — and
+  reschedules for fresh orphans younger than the staleness window, mirroring
+  capture's retry loop.
+- **Frontend**: app-global Pandoc status/path lives in
+  `DocumentImportSettings.vue` (Buddy settings; `detect_pandoc` /
+  `set_pandoc_path` with a Browse picker), the per-vault Documents Folder in
+  `CaptureSettings.vue` via the shared `VaultFolderSetting.vue`, the OS
+  drag-drop handled in `BuddyRoot.vue` (filters `docx/odt/rtf`) landing on the
+  Pandoc-gated vault chooser `ImportVaultPicker.vue`, and the record-chooser
+  action in `RecordMode.vue`. The `vaults` store carries the `importPicker`
+  view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
+  **before** the list default so a drag-dropped path survives `panel-shown`.
+  `tauri-plugin-dialog` (Cargo + `dialog:allow-open` capability) backs both
+  file pickers.
 
 ## The transcription & recordings domains (`src-tauri/transcribe/` + `core/src/{transcript,recordings}.rs` + `transcription.rs`)
 
@@ -996,18 +1087,23 @@ show/hide state, owned by Rust. So the `vaults` store lost `panelOpen`/
 re-runs discovery and defaults the view to the vault list, unless a one-shot
 `requestView(view)` asked otherwise — a failed update install `requestView`s
 `settings` so the reopen lands on the error/retry UI instead of being reset to
-the list. It also bumps `shownNonce`; because the panel window is only
+the list. It also drains a drag-dropped document path via `take_pending_import`
+(a one-shot Rust stash filled by `begin_document_import`) BEFORE the list
+default, routing to the `importPicker` view with `pendingImportPath` set so a
+buddy drop survives the `panel-shown` refresh. It also bumps `shownNonce`; because the panel window is only
 hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks | search`, with `captureSettingsVaultId` /
-`recordingsVaultId` / `recordModeVaultId` / `tasksVaultId`) because that must
+transcriptions | tasks | search | importPicker`, with `captureSettingsVaultId` /
+`recordingsVaultId` / `recordModeVaultId` / `tasksVaultId` /
+`pendingImportPath`) because that must
 survive the panel window being hidden. Views form a fixed one-parent-per-view
 tree (no history stack): the vault-row capture button `openRecordMode`s
-(Meeting / Voice Note / Browse recordings), `openRecordings` opens the
-read-only list, the vault-row Tasks button `openTasks` opens the per-vault
-todo view, the header's magnifier `openSearch`es the cross-vault search view,
+(Meeting / Voice Note / Browse recordings / Import Document), `openRecordings`
+opens the read-only list, the vault-row Tasks button `openTasks` opens the
+per-vault todo view, `importPicker` (parent: the list) is the drag-drop vault
+chooser, the header's magnifier `openSearch`es the cross-vault search view,
 and `back()` returns to the immediate parent (`recordings` → record view,
 everything else → the list) — the header renders the magnifier + cog (buddy
 settings) on the list and a ← back button on every other view.

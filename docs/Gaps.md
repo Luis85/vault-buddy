@@ -44,17 +44,66 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
+### GAP-55 · Low (mitigated) · A document dropped during an in-flight import
+`src/components/ImportVaultPicker.vue` (`pick`) + `src/stores/vaults.ts`
+(`begin_document_import` → `refresh()` re-arms `pendingImportPath`). If a
+second document is dropped while the first conversion is still running,
+`begin_document_import` re-points `pendingImportPath` to the new path.
+Originally the first `pick()` then called `showList()` unconditionally,
+clearing `pendingImportPath` and silently discarding the second drop.
+**Mitigated** (polish pass): `pick()` snapshots the path it converts and only
+`showList()`s if `pendingImportPath` still equals that snapshot — otherwise it
+leaves the picker on the newly-dropped document, so the second drop survives
+and the user just picks a vault for it. Still single-slot, so a THIRD drop
+landing before the second is picked would overwrite the second; a full queue
+is the only complete fix, but disproportionate for a narrow, non-destructive
+window (imports are serialized by `ImportLock`; nothing is ever written for a
+dropped-then-lost path). Surfaced by the Task 9 review.
+
+### GAP-54 · Low · Document-import media publish has a non-atomic crash window
+`src-tauri/core/src/document_import.rs` (`publish_inner`, the media
+`rename` before the note `write_note_atomic`). Publishing moves the media
+folder out of the staging dir first, then commits the note. If the process
+is killed / loses power in that ~two-rename window, the media folder is
+already published but no note exists, and `run_import_recovery` only sweeps
+`.vault-buddy.tmp.import` staging dirs — not the published-but-unreferenced
+media folder. Result: a stray media folder (our OWN extracted files — no
+user data loss) that a later same-name import suffixes around (` (2)`).
+**Accepted as a documented limitation** (comment at the site): a
+crash-atomic fix needs two-phase commit across two filesystem objects
+(unavailable) or a permanent per-import marker file in every media folder —
+disproportionate to a microsecond window whose worst case is a cosmetic
+leftover folder. **Fix, if ever pursued:** the staging dir name encodes the
+basename and still exists on crash, so the janitor could parse it and remove
+a matching `<basename>/` media folder that has no sibling `<basename>.md`
+note (provably our orphan, since the basename comes from our owned staging
+dir). A crash *inside* `write_note_atomic` (between temp-create and
+`rename_noreplace`) can also strand a hidden `.<basename>.md.vault-buddy.tmp`
+FILE next to the target — the import janitor sweeps only `.vault-buddy.tmp.import`
+dirs, not this temp. It is our own tiny, walk-invisible file (no user data),
+and the surface is shared by every domain that uses `write_note_atomic`
+(capture/transcript/tasks), not import-specific.
+
 ### GAP-01 · ~~High~~ FIXED 2026-07-10 · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
 `owning_vault_id` and `open_recording_note` now match on canonical paths via
 `capture_paths::vault_owning_path` (unresolvable = rejected), and both
 transcription commands require `capture_paths::is_capture_mp3` — the same
 ownership filter `rename_plan` enforces (now shared).
 
-### GAP-02 · ~~Medium~~ FIXED 2026-07-10 · A transient config read failure during save wipes every other vault's settings
-`update_vault_config_at` and `update_mcp_config_at` now share
-`read_config_for_update`: only `NotFound` defaults (first save); any other
-read error logs and propagates, so the save fails loudly and the file is
-left untouched.
+### GAP-02 · ~~Medium~~ FIXED · A transient config read failure during save wiped every other vault's settings
+`src-tauri/core/src/capture_config.rs` (`update_vault_config_at`,
+`update_mcp_config_at`, `update_document_import_config_at`).
+Previously any `read_to_string` error — not just NotFound — mapped to
+`AppConfig::default()`, then `write_config` replaced the whole file with
+only the edited section. A momentarily locked/unreadable `config.json`
+(Windows AV, indexer) while saving one section silently dropped the others;
+a voice-note vault could revert to Meeting mode, re-enabling desktop-audio
+loopback — exactly the flip the per-field parser exists to prevent.
+**Fixed:** all three read-modify-write update paths now go through
+`load_config_for_update`, which defaults only on `ErrorKind::NotFound` and
+propagates (aborts the save on) any other read error. Regression tests:
+`update_aborts_on_a_non_missing_read_error`,
+`update_defaults_and_saves_when_the_config_is_missing`.
 
 ### GAP-03 · ~~Medium~~ FIXED 2026-07-10 · Transcript ownership markers match anywhere in the file, not the frontmatter
 `is_regenerable`, `needs_transcription`, and `transcript_status` now read the
@@ -646,7 +695,7 @@ review in the PR-43 ledger):
 - `McpSettings.vue`: guard the `mcp:status` listener registration against
   unmount-before-resolve (one leaked listener per fast settings visit).
 
-### GAP-54 · Low · Capture event-ordering corners after the async migration
+### GAP-56 · Low · Capture event-ordering corners after the async migration
 Catalogued by sub-pass B's final review (2026-07-10); both exotic, neither
 worse in kind than the pre-async behavior:
 - `capture:saved` can theoretically beat `capture:started`: the monitor

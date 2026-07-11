@@ -7,6 +7,7 @@ import { useVaultsStore } from "../stores/vaults";
 import AppIcon from "./AppIcon.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
+import ImportVaultPicker from "./ImportVaultPicker.vue";
 import NotificationHost from "./NotificationHost.vue";
 import RecordingBar from "./RecordingBar.vue";
 import Recordings from "./Recordings.vue";
@@ -34,6 +35,7 @@ const VIEW_TITLES: Record<string, string> = {
   transcriptions: "Transcriptions",
   tasks: "Tasks",
   search: "Search",
+  importPicker: "Import document",
 };
 // The tasks view is dual-mode: a null vault id is the cross-vault aggregate.
 const title = computed(() =>
@@ -282,6 +284,12 @@ watch(
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <Search />
+    </div>
+    <div
+      v-else-if="view === 'importPicker'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <ImportVaultPicker />
     </div>
     <div
       v-else
