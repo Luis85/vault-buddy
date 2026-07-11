@@ -129,6 +129,11 @@ pub struct TaskDto {
     pub due: Option<String>,
     pub priority: Option<String>,
     pub tags: Vec<String>,
+    /// The task's List: parent folder relative to the tasks root, `/`-joined,
+    /// "" at the root. Additive for the frontend and MCP list_tasks alike.
+    pub list: String,
+    /// Manual rank from the `order:` frontmatter number; None = unranked.
+    pub order: Option<f64>,
 }
 
 impl TaskDto {
@@ -142,6 +147,8 @@ impl TaskDto {
             due: t.due,
             priority: t.priority,
             tags: t.tags,
+            list: t.list,
+            order: t.order,
         }
     }
 }
@@ -240,6 +247,8 @@ pub fn add_task(
         due: due.map(str::to_string),
         priority: priority.map(str::to_string),
         tags: tags.to_vec(),
+        list: String::new(),
+        order: None,
     })
 }
 

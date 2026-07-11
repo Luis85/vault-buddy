@@ -18,6 +18,13 @@ pub struct TaskItem {
     pub due: Option<String>,
     pub priority: Option<String>,
     pub tags: Vec<String>,
+    /// The task's List = its parent folder relative to the tasks root, always
+    /// `/`-joined ("" at the root) — the identity crosses IPC and merges
+    /// across platforms, so it never carries the OS separator.
+    pub list: String,
+    /// Manual rank from the `order:` frontmatter number; lenient read —
+    /// unparseable/non-finite is unranked, never an error.
+    pub order: Option<f64>,
 }
 
 /// Sort tier for a priority value: high first, low last, anything else
@@ -52,7 +59,7 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
     // unresolvable root → empty list (best-effort, unchanged).
     if let Ok(canon_root) = std::fs::canonicalize(root) {
         crate::vault_walk::walk_vault(&canon_root, &mut |path, name| {
-            collect_task_file(path, name, &mut out);
+            collect_task_file(path, name, &canon_root, &mut out);
             crate::vault_walk::Flow::Continue
         });
     }
@@ -83,7 +90,7 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
 
 /// The per-file half of the old recursive collector: read, keep `type: Task`
 /// files, map to a TaskItem. Unreadable files and non-tasks degrade silently.
-fn collect_task_file(path: &Path, name: &str, out: &mut Vec<TaskItem>) {
+fn collect_task_file(path: &Path, name: &str, canon_root: &Path, out: &mut Vec<TaskItem>) {
     if !name.ends_with(".md") {
         return;
     }
@@ -105,6 +112,21 @@ fn collect_task_file(path: &Path, name: &str, out: &mut Vec<TaskItem>) {
     let priority = scalar_field(&content, "priority");
     let tags = note_tags(&content);
     let done = status == "done";
+    // The walk hands canonical paths under the canonical root, so the parent
+    // dir's strip_prefix is the task's List for free (no extra I/O).
+    let list = path
+        .parent()
+        .and_then(|dir| dir.strip_prefix(canon_root).ok())
+        .map(|rel| {
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_default();
+    let order = scalar_field(&content, "order")
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|f| f.is_finite());
     out.push(TaskItem {
         path: path.to_path_buf(),
         title,
@@ -114,6 +136,8 @@ fn collect_task_file(path: &Path, name: &str, out: &mut Vec<TaskItem>) {
         due,
         priority,
         tags,
+        list,
+        order,
     });
 }
 
@@ -410,6 +434,74 @@ mod tests {
             titles,
             vec!["SoonerHigh", "Sooner", "Later", "NoDue", "BadDue", "Done"]
         );
+    }
+
+    #[test]
+    fn list_tasks_derives_list_from_subfolder() {
+        // A List IS a folder: the task's list is its parent folder relative to
+        // the tasks root — "" at the root, `/`-joined at any depth (never the
+        // platform separator; the identity crosses IPC and merges across OSes).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "top.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Top\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            &root.join("work"),
+            "mid.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Mid\"\ncreated: 2026-07-07\n---\n",
+        );
+        write(
+            &root.join("work/q3"),
+            "deep.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Deep\"\ncreated: 2026-07-06\n---\n",
+        );
+        let items = list_tasks(root);
+        let lists: Vec<(&str, &str)> = items
+            .iter()
+            .map(|t| (t.title.as_str(), t.list.as_str()))
+            .collect();
+        assert_eq!(
+            lists,
+            vec![("Top", ""), ("Mid", "work"), ("Deep", "work/q3")]
+        );
+    }
+
+    #[test]
+    fn list_tasks_reads_order_leniently() {
+        // `order:` is the manual rank — lenient read like every widened field:
+        // integers and floats parse, anything else (or absence) is unranked
+        // (None), never an error.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-08\norder: 1536\n---\n",
+        );
+        write(
+            root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ncreated: 2026-07-08\norder: 1536.5\n---\n",
+        );
+        write(
+            root,
+            "c.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"C\"\ncreated: 2026-07-08\norder: soon\n---\n",
+        );
+        write(
+            root,
+            "d.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"D\"\ncreated: 2026-07-08\n---\n",
+        );
+        let items = list_tasks(root);
+        let by_title = |t: &str| items.iter().find(|i| i.title == t).unwrap().order;
+        assert_eq!(by_title("A"), Some(1536.0));
+        assert_eq!(by_title("B"), Some(1536.5));
+        assert_eq!(by_title("C"), None);
+        assert_eq!(by_title("D"), None);
     }
 
     #[test]
