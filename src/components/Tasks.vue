@@ -7,6 +7,7 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, TaskPatch, Vault } from "../types";
 import { dueOf, localToday } from "../utils/taskFields";
+import { taskComparator, type TaskSortPref } from "../utils/taskSort";
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
@@ -72,33 +73,13 @@ const filteredTasks = computed(() => {
   });
 });
 
-const PRIORITY_RANK: Record<string, number> = { high: 0, low: 2 };
-const rank = (t: TaskItem) => PRIORITY_RANK[t.priority ?? ""] ?? 1;
-// "0<date>" < "1" makes valid dues sort ascending ahead of undated.
-const dueKey = (t: TaskItem) => {
-  const d = dueOf(t);
-  return d ? `0${d}` : "1";
-};
+// The user's sort choice for this view; the comparator lives in
+// utils/taskSort (mirroring core::tasks::list_tasks for Default) so an
+// optimistic insert/edit lands where a refetch would put it.
+const sortPref = ref<TaskSortPref>({ key: "default", dir: "asc" });
 
 function sortInPlace() {
-  // Mirrors core::tasks::list_tasks so an optimistic insert/edit lands where
-  // a refetch would put it: open first (due asc → priority → newest created
-  // → title); done by newest created → title.
-  tasks.value.sort(
-    (a, b) =>
-      Number(a.done) - Number(b.done) ||
-      (a.done
-        ? b.created.localeCompare(a.created) ||
-          a.title.localeCompare(b.title) ||
-          a.vaultName.localeCompare(b.vaultName) ||
-          a.path.localeCompare(b.path)
-        : dueKey(a).localeCompare(dueKey(b)) ||
-          rank(a) - rank(b) ||
-          b.created.localeCompare(a.created) ||
-          a.title.localeCompare(b.title) ||
-          a.vaultName.localeCompare(b.vaultName) ||
-          a.path.localeCompare(b.path)),
-  );
+  tasks.value.sort(taskComparator(sortPref.value));
 }
 
 type Bucket = { key: string; label: string | null; tasks: AggTask[] };
