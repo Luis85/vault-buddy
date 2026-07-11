@@ -246,6 +246,28 @@ fn scan_vault(
     })
 }
 
+/// Populate `cache` with one vault's note content WITHOUT matching — the
+/// pre-warm's unit of work, so the warm and lazy search paths share
+/// `cached_lowered` and can never diverge. Walks the same reparse-safe walk a
+/// search does and polls `is_cancelled` per file (a shutdown or superseded warm
+/// stops promptly). Best-effort: an unresolvable vault path is skipped, and
+/// per-file read failures degrade exactly as the live scan's do. Only notes are
+/// warmed — attachments are name-only, so there is nothing to cache for them.
+pub fn warm_vault(vault: &Vault, cache: &SearchCache, is_cancelled: &(dyn Fn() -> bool + Sync)) {
+    let Ok(canon_root) = std::fs::canonicalize(Path::new(&vault.path)) else {
+        return;
+    };
+    walk_vault(&canon_root, &mut |path, name| {
+        if is_cancelled() {
+            return Flow::Stop;
+        }
+        if !name.starts_with('.') && md_stem(name).is_some() {
+            let _ = cached_lowered(path, cache);
+        }
+        Flow::Continue
+    });
+}
+
 /// Case-insensitive `.md` note check returning the stem. The suffix is 3
 /// ASCII bytes, so the byte compare can't split a char boundary and
 /// `len - 3` is a valid boundary; `> 3` keeps the stem non-empty (a bare

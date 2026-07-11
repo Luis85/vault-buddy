@@ -197,6 +197,8 @@ pub(crate) fn cached_lowered(path: &Path, cache: &SearchCache) -> Option<Arc<str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::Vault;
+    use crate::search::{search_vaults, search_vaults_with_cache, warm_vault};
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
@@ -205,6 +207,15 @@ mod tests {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
         p
+    }
+
+    fn vault(id: &str, name: &str, path: &Path) -> Vault {
+        Vault {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: path.to_string_lossy().into_owned(),
+            open: false,
+        }
     }
 
     #[test]
@@ -339,5 +350,86 @@ mod tests {
         assert!(c.cached_bytes() <= 120); // ...but not stored past the cap
         assert!(c.peek_text(&b).is_none());
         assert!(c.peek_text(&a).is_some());
+    }
+
+    #[test]
+    fn warm_then_search_is_a_pure_cache_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = write(dir.path(), "n.md", "Project Alpha\n");
+        let v = vault("v1", "W", dir.path());
+        let cache = SearchCache::new();
+        warm_vault(&v, &cache, &|| false);
+        assert!(cache.cached_bytes() > 0);
+        let before = cache
+            .peek_text(&std::fs::canonicalize(&note).unwrap())
+            .unwrap();
+        let _ = search_vaults_with_cache(&[v], "alpha", &cache, &|| false);
+        let after = cache
+            .peek_text(&std::fs::canonicalize(&note).unwrap())
+            .unwrap();
+        // The search reused the warmed entry — no re-insert.
+        assert!(Arc::ptr_eq(&before, &after));
+    }
+
+    #[test]
+    fn warmed_search_matches_cold_search_including_multibyte() {
+        // Equivalence: a warmed cache must not change results, including
+        // multibyte content and a non-ASCII query (the lowercase fallback path).
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Notes/idea.md",
+            "intro\nProject Alpha kickoff\n",
+        );
+        write(dir.path(), "cafe.md", "Beim Kaffee in der Straße\n");
+        write(dir.path(), "Alpha plan.md", "nothing relevant\n");
+        let v = vault("v1", "Work", dir.path());
+        for q in ["alpha", "straße", "kaffee"] {
+            let cold = search_vaults(std::slice::from_ref(&v), q);
+            let cache = SearchCache::new();
+            warm_vault(&v, &cache, &|| false);
+            let warm = search_vaults_with_cache(std::slice::from_ref(&v), q, &cache, &|| false);
+            assert_eq!(cold, warm, "query {q:?} diverged");
+        }
+    }
+
+    #[test]
+    fn warm_honors_cancellation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..50 {
+            write(dir.path(), &format!("n{i:02}.md"), "some body text\n");
+        }
+        let v = vault("v1", "W", dir.path());
+        let cache = SearchCache::new();
+        let polls = AtomicUsize::new(0);
+        let cancel = move || polls.fetch_add(1, Ordering::Relaxed) >= 3;
+        warm_vault(&v, &cache, &cancel);
+        // Stopped early: not all 50 notes were warmed.
+        assert!(cache.cached_bytes() < 50 * "some body text\n".len() as u64);
+    }
+
+    #[test]
+    fn multi_vault_one_shared_cache_matches_serial() {
+        // Regression: the per-vault scan threads share ONE &SearchCache; the
+        // concurrent get/insert + byte-counter path must still produce the
+        // serial-identical, vault-ordered, budget-capped result.
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let c = tempfile::tempdir().unwrap();
+        for i in 0..60 {
+            write(a.path(), &format!("alpha a{i:02}.md"), "x\n");
+            write(b.path(), &format!("alpha b{i:02}.md"), "x\n");
+            write(c.path(), &format!("alpha c{i:02}.md"), "x\n");
+        }
+        let vs = [
+            vault("va", "A", a.path()),
+            vault("vb", "B", b.path()),
+            vault("vc", "C", c.path()),
+        ];
+        let serial = search_vaults(&vs, "alpha");
+        let shared = SearchCache::new();
+        let concurrent = search_vaults_with_cache(&vs, "alpha", &shared, &|| false);
+        assert_eq!(serial, concurrent);
     }
 }
