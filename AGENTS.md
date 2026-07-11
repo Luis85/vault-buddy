@@ -332,7 +332,7 @@ resize entirely:
 - **`main`** — the buddy, fixed 88×88, the only window the user drags and the
   only one whose position is persisted. It never changes size, so it is
   structurally flicker-proof.
-- **`panel`** — the vault/settings panel (360×340), created hidden.
+- **`panel`** — the vault/settings panel (400×420), created hidden.
 - **`bubble`** — the greeting speech bubble (260×150), created hidden.
 
 `panel` and `bubble` are *positioned while hidden, then shown* — a moved-only

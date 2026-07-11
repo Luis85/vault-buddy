@@ -27,8 +27,8 @@
       {
         "label": "panel",
         "title": "Vault Buddy Panel",
-        "width": 360,
-        "height": 340,
+        "width": 400,
+        "height": 420,
         "visible": false,
         "transparent": true,
         "decorations": false,
