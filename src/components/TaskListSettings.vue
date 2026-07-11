@@ -22,13 +22,18 @@ const defaultList = ref("");
 const order = ref<string[]>([]);
 const saveState = ref<"idle" | "saving" | "saved">("idle");
 const error = ref<string | null>(null);
+// Monotonic edit counter (the Search view's stale-response-ticket pattern):
+// every edit bumps it, so a save that resolves can tell whether the controls
+// still match what it persisted.
+const editGen = ref(0);
 
-// Any edit after a save clears the "Saved" acknowledgement — otherwise the UI
-// keeps showing "Saved" over an unpersisted change (default-list pick OR a
-// reorder), so a user could navigate away thinking it was saved. Covers both
-// fields uniformly; the onMounted assignment fires this while saveState is
-// already "idle", a harmless no-op.
+// Any edit bumps the generation and clears a stale "Saved" acknowledgement —
+// otherwise the UI keeps showing "Saved" over an unpersisted change
+// (default-list pick OR a reorder), so a user could navigate away thinking it
+// was saved. Covers both fields uniformly; the onMounted assignment fires this
+// while saveState is "idle", a harmless generation bump.
 watch([defaultList, order], () => {
+  editGen.value += 1;
   if (saveState.value === "saved") saveState.value = "idle";
 });
 
@@ -64,13 +69,18 @@ async function save() {
   if (saveState.value === "saving") return;
   saveState.value = "saving";
   error.value = null;
+  // Snapshot the generation we're persisting. If the user edits a control
+  // while the request is in flight, the resolved save no longer reflects the
+  // current form, so it must NOT claim "Saved" (the watcher can't clear a
+  // "saving" state, so the stale success would otherwise stick).
+  const savedGen = editGen.value;
   try {
     await invoke("set_task_lists_config", {
       id: props.vaultId,
       defaultList: defaultList.value || null,
       listOrder: order.value,
     });
-    saveState.value = "saved";
+    saveState.value = editGen.value === savedGen ? "saved" : "idle";
   } catch (e) {
     saveState.value = "idle";
     error.value = String(e);

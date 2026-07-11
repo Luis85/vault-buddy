@@ -81,6 +81,27 @@ describe("TaskListSettings", () => {
     expect(wrapper.text()).not.toContain("Saved");
   });
 
+  it("does not show Saved when the form is edited while the save is in flight (Codex #53 re-review)", async () => {
+    // A save started, then the user edits a control before it resolves — the
+    // resolved request no longer matches the current form, so it must NOT
+    // claim "Saved" (the watcher can't clear a "saving" state).
+    let resolveSave!: (v: unknown) => void;
+    const { wrapper } = mountSettings({
+      set_task_lists_config: () => new Promise((r) => (resolveSave = r)),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-lists-save"]').trigger("click"); // save now pending
+    await flushPromises();
+    // Edit the default list while the save is in flight.
+    await wrapper.get('[data-testid="default-list"]').trigger("click");
+    await flushPromises();
+    (document.body.querySelector('[data-testid="default-list-option-Waiting"]') as HTMLElement).click();
+    await flushPromises();
+    resolveSave(null); // the stale save resolves
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Saved");
+  });
+
   it("shows a field-level error when the save fails", async () => {
     const { wrapper } = mountSettings({
       set_task_lists_config: () => {
