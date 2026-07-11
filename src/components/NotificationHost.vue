@@ -1,13 +1,20 @@
 <script setup lang="ts">
+import { logWarning } from "../logging";
 import type { Notification } from "../stores/notifications";
 import { useNotificationsStore } from "../stores/notifications";
 const notifications = useNotificationsStore();
 
 // Run a toast's call-to-action (e.g. "Open" the imported note), then dismiss
-// it — the action resolves the toast, so it shouldn't linger afterwards.
+// it — the action resolves the toast, so it shouldn't linger afterwards. A
+// failed action (the note's vault was removed, the OS can't launch the
+// obsidian:// handler) must not vanish the toast silently: report it, or the
+// user loses the only feedback with no sign Open failed.
 async function runAction(item: Notification) {
   try {
     await item.action?.run();
+  } catch (e) {
+    logWarning(`notification action "${item.action?.label ?? ""}" failed: ${String(e)}`);
+    notifications.error(`Couldn't ${item.action?.label ?? "complete that action"}: ${String(e)}`);
   } finally {
     notifications.dismiss(item.id);
   }

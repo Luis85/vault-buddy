@@ -1,4 +1,4 @@
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -76,6 +76,22 @@ describe("NotificationHost", () => {
     await action.trigger("click");
     expect(run).toHaveBeenCalledTimes(1);
     expect(n.items).toHaveLength(0); // clicking the action dismisses the toast
+  });
+
+  it("surfaces an error when a toast action fails instead of dismissing it silently", async () => {
+    // A failed Open (vault removed, OS can't launch obsidian://) must not just
+    // vanish the toast — the user needs to know the action didn't work.
+    const n = useNotificationsStore();
+    const run = vi.fn().mockRejectedValue(new Error("no obsidian handler"));
+    n.notify("success", "Imported X", { action: { label: "Open in Obsidian", run } });
+    const w = mount(NotificationHost);
+    await w.get('[data-testid="notification-action"]').trigger("click");
+    await flushPromises();
+    expect(
+      n.items.some((i) => i.kind === "error" && i.message.includes("no obsidian handler")),
+    ).toBe(true);
+    // the original actionable toast is gone — the error toast reports it now
+    expect(n.items.some((i) => i.message === "Imported X")).toBe(false);
   });
 
   it("renders no action button for a plain toast", () => {
