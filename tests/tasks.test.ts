@@ -128,7 +128,7 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
     await wrapper.get('[data-testid="task-add"]').trigger("click");
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it", list: "" } });
     expect(wrapper.text()).toContain("Ship it");
   });
 
@@ -276,7 +276,7 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
     await wrapper.get('[data-testid="task-input"]').trigger("keydown.enter");
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it", list: "" } });
   });
 
   it("ignores Enter while composing an IME candidate (GAP-31)", async () => {
@@ -292,7 +292,7 @@ describe("Tasks", () => {
     // After composition ends, normal Enter works.
     await titleInput.trigger("keydown", { key: "Enter", isComposing: false });
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "候選" } });
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "候選", list: "" } });
   });
 
   it("opens a task in Obsidian when its title is clicked and closes the panel", async () => {
@@ -418,7 +418,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Big one", due: "2026-07-20", priority: "high" },
+      args: { id: "v1", title: "Big one", due: "2026-07-20", priority: "high", list: "" },
     });
   });
 
@@ -430,7 +430,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Plain" },
+      args: { id: "v1", title: "Plain", list: "" },
     });
   });
 
@@ -815,7 +815,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Tagged one", tags: ["work", "home/errands"] },
+      args: { id: "v1", title: "Tagged one", tags: ["work", "home/errands"], list: "" },
     });
   });
 
@@ -833,7 +833,7 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({
       cmd: "add_task",
-      args: { id: "v1", title: "Double hash", tags: ["work", "home"] },
+      args: { id: "v1", title: "Double hash", tags: ["work", "home"], list: "" },
     });
   });
 
@@ -1130,6 +1130,104 @@ describe("Tasks", () => {
       expect(headers).toEqual(["next"]);
       const rows = wrapper.findAll('[data-testid="task-row"]');
       expect(rows).toHaveLength(2);
+    });
+  });
+
+  describe("composer list picker", () => {
+    it("defaults the add target to the vault's configured defaultList", async () => {
+      const { wrapper, calls } = mountView({
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: [] }),
+        list_task_lists: () => ["Inbox", "Next"],
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-input"]').setValue("Defaulted");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Inbox" });
+    });
+
+    it("picking No list overrides the configured default", async () => {
+      const { wrapper, calls } = mountView({
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: [] }),
+        list_task_lists: () => ["Inbox"],
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-input"]').setValue("Rooted");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "" });
+    });
+
+    it("New list… creates the folder, selects it, and the next add lands there", async () => {
+      const { wrapper, calls } = mountView({
+        list_task_lists: () => ["Inbox"],
+        create_task_list: () => "Someday",
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-__new__"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-list-new-name"]').setValue(" Someday ");
+      await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");
+      await flushPromises();
+      // The picker trims before emitting (core re-validates the same way).
+      expect(calls.find((c) => c.cmd === "create_task_list")?.args).toMatchObject({ id: "v1", name: "Someday" });
+      // The picker re-renders showing the created list (new-mode exited).
+      expect(wrapper.get('[data-testid="task-add-list"]').text()).toContain("Someday");
+      await wrapper.get('[data-testid="task-input"]').setValue("Later");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Someday" });
+    });
+
+    it("a failed list creation stays in the flow and raises a toast", async () => {
+      const notifications = useNotificationsStore();
+      const { wrapper } = mountView({
+        create_task_list: () => {
+          throw new Error("List names need at least one character");
+        },
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-__new__"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-list-new-name"]').setValue("x");
+      await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");
+      await flushPromises();
+      expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+      // Still in new-list mode for a retry.
+      expect(wrapper.find('[data-testid="task-add-list-new-name"]').exists()).toBe(true);
+    });
+
+    it("aggregate: switching the composer vault fetches that vault's lists config", async () => {
+      const { wrapper, calls } = mountAggregateAttached({
+        get_tasks_config: (args: unknown) =>
+          (args as { id: string }).id === "vb"
+            ? { tasksFolder: null, defaultList: "Waiting", listOrder: [] }
+            : { tasksFolder: null, defaultList: null, listOrder: [] },
+        list_task_lists: (args: unknown) =>
+          (args as { id: string }).id === "vb" ? ["Waiting"] : [],
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
+      await flushPromises();
+      expect(calls.some((c) => c.cmd === "get_tasks_config" && (c.args as { id: string }).id === "vb")).toBe(true);
+      // The new vault's default list becomes the add target.
+      await wrapper.get('[data-testid="task-input"]').setValue("Cross");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ id: "vb", list: "Waiting" });
     });
   });
 

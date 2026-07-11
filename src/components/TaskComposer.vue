@@ -3,21 +3,37 @@ import { ref, watch } from "vue";
 
 import { parseTagsInput } from "../utils/taskFields";
 import SelectMenu from "./SelectMenu.vue";
+import TaskListPicker from "./TaskListPicker.vue";
 
 // Presentational add-task composer: owns its own draft field state (title,
-// due, priority, tags, showAddOptions, and — in aggregate mode — the selected
-// vault). No store/invoke access: it reports a parsed payload up via `submit`
-// and the container resolves the real target vault, validates, and writes.
+// due, priority, tags, list, showAddOptions, and — in aggregate mode — the
+// selected vault). No store/invoke access: it reports a parsed payload up via
+// `submit` and the container resolves the real target vault, validates, and
+// writes; list creation is likewise emitted up (`createList`).
 const props = defineProps<{
   isAggregate: boolean;
   vaultOptions: { value: string; label: string }[];
   adding: boolean;
+  /** The target vault's lists (display order) and configured default list —
+   * the container feeds the CURRENT target vault's values. */
+  lists: string[];
+  defaultList: string;
+  creatingList: boolean;
 }>();
 const emit = defineEmits<{
   (
     e: "submit",
-    payload: { title: string; due: string; priority: string; tags: string[]; vaultId: string | null },
+    payload: {
+      title: string;
+      due: string;
+      priority: string;
+      tags: string[];
+      list: string;
+      vaultId: string | null;
+    },
   ): void;
+  (e: "createList", name: string): void;
+  (e: "vaultChange", vaultId: string): void;
 }>();
 
 const title = ref("");
@@ -25,9 +41,31 @@ const showAddOptions = ref(false);
 const addDue = ref("");
 const addPriority = ref("normal");
 const addTags = ref("");
+// Where the new task lands ("" = the tasks root). Follows the vault's
+// configured default until the user picks explicitly — the config read
+// resolves async after mount, and a late default must not clobber a pick.
+const addList = ref("");
+const listTouched = ref(false);
+watch(
+  () => props.defaultList,
+  (d) => {
+    if (!listTouched.value) addList.value = d;
+  },
+  { immediate: true },
+);
+function onListPicked(list: string) {
+  listTouched.value = true;
+  addList.value = list;
+}
+// The container resolves the created list and re-selects it here.
+function setList(list: string) {
+  listTouched.value = true;
+  addList.value = list;
+}
 // Aggregate add: which vault receives the new task. Defaults to the first
 // vault once the options arrive (they load async in the container), re-homing
 // if the current pick vanishes; component-local, no persistence across opens.
+// The container listens for changes to feed this vault's lists/default in.
 const addVaultId = ref("");
 watch(
   () => props.vaultOptions,
@@ -36,6 +74,15 @@ watch(
   },
   { immediate: true },
 );
+watch(addVaultId, (id) => {
+  if (id) {
+    // A new target vault means a new lists universe — drop the manual pick
+    // and re-follow that vault's default when it arrives.
+    listTouched.value = false;
+    addList.value = props.defaultList;
+    emit("vaultChange", id);
+  }
+});
 
 function submit() {
   emit("submit", {
@@ -44,6 +91,10 @@ function submit() {
     priority: addPriority.value,
     // Client-side lenient parse; the shell strictly validates the charset.
     tags: parseTagsInput(addTags.value),
+    // Always explicit ("" = the tasks root): the composer displays the
+    // effective target, so what you see is what is sent — a picked No list
+    // must override a configured default rather than fall back to it.
+    list: addList.value,
     // The container uses props.vaultId in single-vault mode; only the aggregate
     // picker's value is meaningful here.
     vaultId: props.isAggregate ? addVaultId.value : null,
@@ -62,8 +113,8 @@ function onTitleEnter(e: KeyboardEvent) {
 }
 
 // Cleared by the container after a SUCCESSFUL add only — a failed add keeps the
-// user's input. The selected vault is deliberately NOT reset, so a burst of
-// cross-vault adds stays on the chosen vault.
+// user's input. The selected vault AND list are deliberately NOT reset, so a
+// burst of adds into one list stays there.
 function reset() {
   title.value = "";
   addDue.value = "";
@@ -71,7 +122,7 @@ function reset() {
   addTags.value = "";
   showAddOptions.value = false;
 }
-defineExpose({ reset });
+defineExpose({ reset, setList });
 </script>
 
 <template>
@@ -158,6 +209,22 @@ defineExpose({ reset });
         aria-label="Tags"
         class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
       >
+    </div>
+
+    <div
+      v-if="showAddOptions"
+      class="flex items-center gap-1"
+    >
+      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">List</span>
+      <TaskListPicker
+        :model-value="addList"
+        :lists="lists"
+        :busy="creatingList"
+        aria-label="List for the new task"
+        data-testid="task-add-list"
+        @update:model-value="onListPicked"
+        @create="emit('createList', $event)"
+      />
     </div>
   </div>
 </template>

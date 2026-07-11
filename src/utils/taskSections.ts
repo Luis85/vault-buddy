@@ -102,24 +102,41 @@ export function listSections(
     else if (t.list === "") nolist.push(t);
     else ensure(t.list).tasks.push(t);
   }
-  // listOrder names first (case-insensitive match against what exists),
-  // then the rest alphabetically by label.
-  const ordered: Bucket[] = [];
-  const taken = new Set<string>();
-  for (const name of listOrder) {
-    const key = name.toLowerCase();
-    const entry = byList.get(key);
-    if (entry && !taken.has(key)) {
-      taken.add(key);
-      ordered.push({ key: `list:${key}`, label: entry.label, tasks: entry.tasks });
-    }
-  }
-  const rest = [...byList.entries()]
-    .filter(([key]) => !taken.has(key))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, { label, tasks }]) => ({ key: `list:${key}`, label, tasks }));
-  const sections = [...ordered, ...rest];
+  const sections = orderLists(
+    [...byList.values()].map((e) => e.label),
+    listOrder,
+  ).map((label) => {
+    const key = label.toLowerCase();
+    return { key: `list:${key}`, label, tasks: byList.get(key)?.tasks ?? [] };
+  });
   if (nolist.length > 0) sections.push({ key: "nolist", label: "No list", tasks: nolist });
   if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });
   return sections;
+}
+
+/** Display order for list names: `listOrder` entries first (case-insensitive
+ * match against what exists, order names without a match ignored), the rest
+ * alphabetical. Shared by the sections above and the pickers so a list never
+ * sits in two different places on one screen. */
+export function orderLists(names: string[], listOrder: string[]): string[] {
+  const byKey = new Map<string, string>();
+  for (const n of names) {
+    const k = n.toLowerCase();
+    if (!byKey.has(k)) byKey.set(k, n);
+  }
+  const ordered: string[] = [];
+  const taken = new Set<string>();
+  for (const name of listOrder) {
+    const key = name.toLowerCase();
+    const label = byKey.get(key);
+    if (label !== undefined && !taken.has(key)) {
+      taken.add(key);
+      ordered.push(label);
+    }
+  }
+  const rest = [...byKey.entries()]
+    .filter(([key]) => !taken.has(key))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, label]) => label);
+  return [...ordered, ...rest];
 }

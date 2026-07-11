@@ -7,7 +7,7 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, TaskPatch, TasksConfig, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
-import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
+import { type Bucket, dateBuckets, listSections, orderLists, tagSections } from "../utils/taskSections";
 import {
   directionApplies,
   loadSortPref,
@@ -120,7 +120,12 @@ const grouping = ref<"dates" | "tags" | "lists">("dates");
 // every list. listOrder comes from the vault's lists settings object; the
 // aggregate keeps [] (a cross-vault order union is YAGNI — alphabetical).
 const vaultLists = ref(new Map<string, string[]>());
-const listOrder = ref<string[]>([]);
+const vaultConfigs = ref(new Map<string, TasksConfig>());
+// Sections honor the vault's configured order in per-vault mode; the
+// aggregate stays alphabetical (a cross-vault order union is YAGNI).
+const listOrder = computed(() =>
+  props.vaultId !== null ? (vaultConfigs.value.get(props.vaultId)?.listOrder ?? []) : [],
+);
 const knownLists = computed(() => {
   const seen = new Map<string, string>();
   for (const lists of vaultLists.value.values())
@@ -130,6 +135,67 @@ const knownLists = computed(() => {
     }
   return [...seen.values()];
 });
+
+// The composer's target vault (its own pick in aggregate mode); its lists
+// and configured default feed the composer's list picker, fetched lazily
+// per vault and cached in the maps above.
+const composerVaultId = ref<string | null>(props.vaultId);
+const creatingList = ref(false);
+const composerLists = computed(() => {
+  const id = composerVaultId.value;
+  if (id === null) return [];
+  const cfg = vaultConfigs.value.get(id);
+  return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []);
+});
+const composerDefaultList = computed(() => {
+  const id = composerVaultId.value;
+  return (id !== null && vaultConfigs.value.get(id)?.defaultList) || "";
+});
+
+const configsInFlight = new Set<string>();
+async function loadVaultConfig(id: string) {
+  if (configsInFlight.has(id)) return;
+  configsInFlight.add(id);
+  try {
+    const cfg = await invoke<TasksConfig>("get_tasks_config", { id });
+    if (cfg && Array.isArray(cfg.listOrder)) {
+      vaultConfigs.value.set(id, cfg);
+      vaultConfigs.value = new Map(vaultConfigs.value); // Map mutation isn't tracked
+    }
+  } catch (e) {
+    logWarning(`get_tasks_config failed for vault ${id}: ${String(e)}`);
+  } finally {
+    configsInFlight.delete(id);
+  }
+}
+
+function onComposerVaultChange(id: string) {
+  composerVaultId.value = id;
+  if (!vaultConfigs.value.has(id)) void loadVaultConfig(id);
+  if (!vaultLists.value.has(id)) void loadVaultLists(id);
+}
+
+// The composer's New list flow: create in the composer's target vault, fold
+// the landed name into the vault's lists, and re-select it in the picker.
+async function onCreateList(name: string) {
+  const id = composerVaultId.value ?? props.vaultId;
+  if (id === null || creatingList.value) return;
+  creatingList.value = true;
+  try {
+    const created = await invoke<string>("create_task_list", { id, name });
+    const lists = vaultLists.value.get(id) ?? [];
+    if (!lists.some((l) => l.toLowerCase() === created.toLowerCase())) {
+      vaultLists.value.set(id, [...lists, created]);
+      vaultLists.value = new Map(vaultLists.value);
+    }
+    composer.value?.setList(created);
+  } catch (e) {
+    notifications.error(String(e));
+    logWarning(`create_task_list failed: ${String(e)}`);
+  } finally {
+    creatingList.value = false;
+  }
+}
 
 const buckets = computed<Bucket[]>(() => {
   if (grouping.value === "tags") return tagSections(filteredTasks.value);
@@ -145,13 +211,21 @@ const buckets = computed<Bucket[]>(() => {
 // Best-effort per vault, like the tasks load: a vault whose enumeration
 // fails contributes no lists (log-only — the tasks toast already names a
 // broken vault) and the view still renders.
+// In-flight dedupe: the composer's initial vault-change fires while the
+// aggregate fan-out for the same vault is still pending — without the guard
+// every aggregate open would fetch the first vault's lists twice.
+const listsInFlight = new Set<string>();
 async function loadVaultLists(id: string) {
+  if (listsInFlight.has(id)) return;
+  listsInFlight.add(id);
   try {
     const lists = await invoke<string[]>("list_task_lists", { id });
     vaultLists.value.set(id, Array.isArray(lists) ? lists : []);
     vaultLists.value = new Map(vaultLists.value); // Map mutation isn't tracked
   } catch (e) {
     logWarning(`list_task_lists failed for vault ${id}: ${String(e)}`);
+  } finally {
+    listsInFlight.delete(id);
   }
 }
 
@@ -161,15 +235,10 @@ onMounted(async () => {
       const id = props.vaultId;
       const [items] = await Promise.all([
         invoke<TaskItem[]>("list_tasks", { id }),
+        // Lists + config feed the Lists grouping and the composer's picker;
+        // a failed read degrades (log-only, same posture as the tasks load).
         loadVaultLists(id),
-        // listOrder feeds the Lists grouping; a failed read degrades to
-        // alphabetical (log-only, same posture as the lists fetch).
-        invoke<TasksConfig>("get_tasks_config", { id }).then(
-          (cfg) => {
-            listOrder.value = Array.isArray(cfg?.listOrder) ? cfg.listOrder : [];
-          },
-          (e: unknown) => logWarning(`get_tasks_config failed for vault ${id}: ${String(e)}`),
-        ),
+        loadVaultConfig(id),
       ]);
       tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
       // Core hands back Default order; a persisted non-default sort must
@@ -215,7 +284,14 @@ onMounted(async () => {
   }
 });
 
-type AddPayload = { title: string; due: string; priority: string; tags: string[]; vaultId: string | null };
+type AddPayload = {
+  title: string;
+  due: string;
+  priority: string;
+  tags: string[];
+  list: string;
+  vaultId: string | null;
+};
 
 async function add(payload: AddPayload) {
   const title = payload.title.trim();
@@ -229,6 +305,10 @@ async function add(payload: AddPayload) {
     if (payload.due) args.due = payload.due;
     if (payload.priority !== "normal") args.priority = payload.priority;
     if (payload.tags.length > 0) args.tags = payload.tags;
+    // Always explicit ("" = the tasks root): the composer displayed the
+    // effective target, so a picked No list overrides a configured default
+    // instead of falling back to it.
+    args.list = payload.list;
     const created = await invoke<TaskItem>("add_task", args);
     tasks.value.unshift({
       ...created,
@@ -412,7 +492,12 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
       :is-aggregate="isAggregate"
       :vault-options="vaultOptions"
       :adding="adding"
+      :lists="composerLists"
+      :default-list="composerDefaultList"
+      :creating-list="creatingList"
       @submit="add"
+      @create-list="onCreateList"
+      @vault-change="onComposerVaultChange"
     />
 
     <div
