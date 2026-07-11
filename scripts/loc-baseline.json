@@ -29,6 +29,10 @@
       "loc": 835,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
+    "src-tauri/core/src/services.rs": {
+      "loc": 821,
+      "reason": "Crossed the 800 cap adding the tasks-root containment guard in add_task (a list symlinked/junctioned outside the tasks root would accept the write but hide the task from the walkers) plus its symlink-escape regression test (Codex PR #53 re-review). The services layer already holds vault/tasks/recordings functions over one ServicePaths; splitting it into per-domain modules is a separate refactor. Shrink only; split when next touched."
+    },
     "src/stores/capture.ts": {
       "loc": 642,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
