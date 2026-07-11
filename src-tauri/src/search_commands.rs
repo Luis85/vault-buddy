@@ -29,8 +29,10 @@ pub(crate) fn search_cache() -> &'static search::SearchCache {
 /// deviation from this codebase's sync-command idiom: a sync command runs on
 /// the main thread, and a multi-vault content scan there would freeze window
 /// show/hide, drags and the upkeep tick. Running async keeps it off-main; it
-/// touches no window APIs and takes no locks, so none of the main-thread
-/// window invariants apply. The blocking walk runs under `spawn_blocking` so
+/// touches no window APIs and takes no window-state or main-thread locks (the
+/// scan's `SearchCache` mutex lives off-main inside `spawn_blocking`, never
+/// held across a window call), so none of the main-thread window invariants
+/// apply. The blocking walk runs under `spawn_blocking` so
 /// it can't stall the async runtime's workers either. Returns `Err` on an
 /// infrastructure failure (panicked scan task): an empty SUCCESS would blank
 /// a working result list, while the frontend's error path keeps the previous
