@@ -34,6 +34,20 @@ fn collect_dirs(
     if !walked.insert(dir.to_path_buf()) {
         return; // reparse-point cycle guard, same as vault_walk
     }
+    // Emit this directory as a list — AFTER the cycle-guard insert above, and
+    // never the root itself (whose relative path is ""). Emitting here rather
+    // than from the parent's loop is what keeps a Windows junction/reparse dir
+    // that canonicalizes back to the root (or an already-walked ancestor) from
+    // leaking a blank "" or a duplicate parent into the list picker: on the
+    // second visit the guard returns above, before this push (Codex, PR #53
+    // re-review). A symlinked dir never reaches here on Unix — dir_entries'
+    // file_type() is no-follow, so is_dir() already filtered it out below; the
+    // leak is Windows-junction-only, where is_dir() is true for a reparse dir.
+    if dir != canon_root {
+        if let Ok(rel) = dir.strip_prefix(canon_root) {
+            out.push(rel_to_list(rel));
+        }
+    }
     let mut entries = crate::transcript::dir_entries(dir);
     entries.sort_by(|a, b| a.2.cmp(&b.2));
     for (path, ft, name) in entries {
@@ -42,9 +56,6 @@ fn collect_dirs(
         }
         match std::fs::canonicalize(&path) {
             Ok(child) if child.starts_with(canon_root) => {
-                if let Ok(rel) = child.strip_prefix(canon_root) {
-                    out.push(rel_to_list(rel));
-                }
                 collect_dirs(&child, canon_root, walked, out);
             }
             _ => continue,
@@ -282,13 +293,22 @@ mod tests {
     #[test]
     fn task_lists_terminates_on_a_directory_cycle() {
         // A link back to an ancestor inside the root must terminate and list
-        // each real folder once.
+        // each real folder once, never a blank ("" = the root) or a duplicate.
+        // On Unix the symlinked `loop` is filtered by dir_entries' no-follow
+        // file_type() (is_dir() is false), so it never reaches the walk; the
+        // emit-after-cycle-guard restructure is what protects the equivalent
+        // Windows junction, where a reparse dir reports is_dir()==true and
+        // canonicalizes back to the root (Codex, PR #53 re-review).
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
         std::fs::create_dir_all(root.join("sub")).unwrap();
         std::os::unix::fs::symlink(&root, root.join("sub").join("loop")).unwrap();
         let lists = task_lists(&root);
-        assert_eq!(lists.iter().filter(|l| l.as_str() == "sub").count(), 1);
+        assert_eq!(lists, vec!["sub"]);
+        assert!(
+            !lists.iter().any(|l| l.is_empty()),
+            "a reparse loop back to the root must never emit a blank list"
+        );
     }
 
     #[test]
