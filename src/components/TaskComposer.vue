@@ -99,15 +99,16 @@ function submit() {
     priority: addPriority.value,
     // Client-side lenient parse; the shell strictly validates the charset.
     tags: parseTagsInput(addTags.value),
-    // A user pick is always sent verbatim ("" = an explicit No list override
-    // of the configured default). But before the config read resolves, an
-    // UNTOUCHED picker still shows "" while the real default is unknown — so
-    // an add during that window must NOT send "" (the backend would read it
-    // as an explicit No-list override and drop the task in the tasks root
-    // instead of the configured default). Omit it (undefined) so the backend
-    // applies the fresh default; once loaded, addList holds the default and
-    // is sent normally.
-    list: listTouched.value || addList.value !== "" ? addList.value : undefined,
+    // Send a list ONLY when the user explicitly picked one ("" = an explicit
+    // No-list override). An untouched picker is merely mirroring the vault's
+    // configured default — omit it (undefined) so add_task's list: None path
+    // applies that default through its read-LENIENT branch, which degrades a
+    // hand-edited unsafe default (".hidden", "../x", …) to the tasks root
+    // instead of failing. Sending the resolved default here would force it
+    // onto the write-STRICT path and error every quick add until the setting
+    // was repaired (Codex, PR #53 re-review). This also covers the
+    // config-not-yet-loaded and vault-switch windows: untouched ⇒ omit.
+    list: listTouched.value ? addList.value : undefined,
     // The container uses props.vaultId in single-vault mode; only the aggregate
     // picker's value is meaningful here.
     vaultId: props.isAggregate ? addVaultId.value : null,

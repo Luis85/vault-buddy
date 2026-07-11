@@ -60,16 +60,39 @@ describe("Tasks — lists & sorting", () => {
   });
 
   describe("composer list picker", () => {
-    it("defaults the add target to the vault's configured defaultList", async () => {
+    it("omits list for an untouched configured default so the backend applies it leniently", async () => {
+      // The picker displays the configured default, but an UNTOUCHED add omits
+      // list so add_task's list: None path applies (and can leniently degrade)
+      // the config default — sending it explicitly would force the write-strict
+      // path (Codex #53 re-review). The task still lands in the default list.
       const { wrapper, calls } = mountView({
         get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: [] }),
         list_task_lists: () => ["Inbox", "Next"],
       });
       await flushPromises();
+      // The picker shows the configured default.
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      expect(wrapper.get('[data-testid="task-add-list"]').text()).toContain("Inbox");
       await wrapper.get('[data-testid="task-input"]').setValue("Defaulted");
       await wrapper.get('[data-testid="task-add"]').trigger("click");
       await flushPromises();
-      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Inbox" });
+      expect(calls.find((c) => c.cmd === "add_task")?.args).not.toHaveProperty("list");
+    });
+
+    it("omits list for an untouched UNSAFE configured default (does not force the strict path)", async () => {
+      // A hand-edited unsafe default like ".hidden" must not be sent
+      // explicitly — that would take add_task's write-strict path and fail
+      // every quick add. Omitting it lets the backend degrade it to the root
+      // (Codex #53 re-review).
+      const { wrapper, calls } = mountView({
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: ".hidden", listOrder: [] }),
+        list_task_lists: () => [],
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-input"]').setValue("Safe");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).not.toHaveProperty("list");
     });
 
     it("omits list on a quick add before the default has loaded (Codex #53)", async () => {
@@ -169,11 +192,14 @@ describe("Tasks — lists & sorting", () => {
       (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
       await flushPromises();
       expect(calls.some((c) => c.cmd === "get_tasks_config" && (c.args as { id: string }).id === "vb")).toBe(true);
-      // The new vault's default list becomes the add target.
+      // The add targets vb and omits list (untouched) so the backend applies
+      // vb's own configured default — not sent explicitly (Codex #53 re-review).
       await wrapper.get('[data-testid="task-input"]').setValue("Cross");
       await wrapper.get('[data-testid="task-add"]').trigger("click");
       await flushPromises();
-      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ id: "vb", list: "Waiting" });
+      const cross = calls.find((c) => c.cmd === "add_task")?.args;
+      expect(cross).toMatchObject({ id: "vb" });
+      expect(cross).not.toHaveProperty("list");
     });
 
     it("does not carry the previous vault's default into a quick add after switching (Codex #53 re-review)", async () => {
