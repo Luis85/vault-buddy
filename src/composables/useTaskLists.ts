@@ -119,6 +119,7 @@ export function useTaskLists(vaultId: string | null) {
     listOrder,
     knownLists,
     creatingList,
+    composerVaultId,
     composerLists,
     composerDefaultList,
     listsForVault,

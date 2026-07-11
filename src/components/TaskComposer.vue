@@ -54,6 +54,12 @@ const addTags = ref("");
 const addList = ref("");
 const listTouched = ref(false);
 const displayList = computed(() => (listTouched.value ? addList.value : props.defaultList));
+// Kept as a computed (not an inline template expression) so the disabled guard
+// — including the in-flight list-create block — stays out of the template's
+// complexity budget.
+const addDisabled = computed(
+  () => props.adding || props.creatingList || title.value.trim() === "",
+);
 function onListPicked(list: string) {
   listTouched.value = true;
   addList.value = list;
@@ -88,6 +94,12 @@ watch(addVaultId, (id) => {
 });
 
 function submit() {
+  // Block the add while a "New list…" create is still in flight: the picker is
+  // untouched until setList runs on the create's success, so an add now would
+  // omit the list and drop the task in the configured default/root instead of
+  // the list the user just chose. The Add button is disabled to match; this
+  // guards the Enter path too (Codex, PR #53 re-review).
+  if (props.creatingList) return;
   emit("submit", {
     title: title.value,
     due: addDue.value,
@@ -168,7 +180,7 @@ defineExpose({ reset, setList });
       <button
         type="button"
         data-testid="task-add"
-        :disabled="adding || title.trim() === ''"
+        :disabled="addDisabled"
         class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
         @click="submit"
       >

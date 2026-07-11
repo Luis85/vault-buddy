@@ -195,6 +195,73 @@ describe("Tasks — lists & sorting", () => {
       expect(wrapper.find('[data-testid="task-add-list-new-name"]').exists()).toBe(true);
     });
 
+    it("blocks the add while a New list… create is still in flight (Codex #53 re-review)", async () => {
+      // creatingList stays true until create_task_list resolves; the picker is
+      // untouched (setList runs only on success), so an add now would omit the
+      // list and drop the task in the default/root instead of the chosen list.
+      let resolveCreate!: (v: string) => void;
+      const { wrapper, calls } = mountView({
+        list_task_lists: () => ["Inbox"],
+        create_task_list: () => new Promise<string>((r) => (resolveCreate = r)),
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      await wrapper.get('[data-testid="task-input"]').setValue("Later");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-.__new__"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-list-new-name"]').setValue("Someday");
+      await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");
+      await flushPromises();
+      // Create pending: Add is disabled and clicking it is a no-op.
+      const add = wrapper.get('[data-testid="task-add"]');
+      expect((add.element as HTMLButtonElement).disabled).toBe(true);
+      await add.trigger("click");
+      await flushPromises();
+      expect(calls.some((c) => c.cmd === "add_task")).toBe(false);
+      // Once the list lands it is selected and the add targets it.
+      resolveCreate("Someday");
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Someday" });
+    });
+
+    it("does not adopt a created list after switching the composer vault mid-create (Codex #53 re-review)", async () => {
+      // Aggregate: create a list for va, switch the composer to vb before it
+      // resolves — the va list must NOT be selected on the vb composer, or the
+      // next add would send it as vb's explicit (wrong) target.
+      let resolveCreate!: (v: string) => void;
+      const { wrapper, calls } = mountAggregateAttached({
+        list_task_lists: () => [],
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [] }),
+        create_task_list: () => new Promise<string>((r) => (resolveCreate = r)),
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-.__new__"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-list-new-name"]').setValue("VaList");
+      await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");
+      await flushPromises();
+      // create for va is in flight — switch the composer to vb.
+      await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
+      await flushPromises();
+      resolveCreate("VaList"); // lands for va, but the composer is on vb now
+      await flushPromises();
+      await wrapper.get('[data-testid="task-input"]').setValue("OnB");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      const add = calls.find((c) => c.cmd === "add_task");
+      expect(add?.args).toMatchObject({ id: "vb" });
+      expect(add?.args).not.toHaveProperty("list"); // NOT the stale "VaList"
+    });
+
     it("aggregate: switching the composer vault fetches that vault's lists config", async () => {
       const { wrapper, calls } = mountAggregateAttached({
         get_tasks_config: (args: unknown) =>

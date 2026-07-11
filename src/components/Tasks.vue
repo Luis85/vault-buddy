@@ -63,6 +63,7 @@ const {
   listOrder,
   knownLists,
   creatingList,
+  composerVaultId,
   composerLists,
   composerDefaultList,
   listsForVault,
@@ -72,11 +73,13 @@ const {
   createList,
 } = useTaskLists(props.vaultId);
 
-// The composer's New list flow: the composable creates + caches; the picker
-// shows the created list once it is re-selected here.
+// New list flow: create + cache, then re-select here. `target` (the vault
+// createList used) blocks a mid-create composer vault switch from adopting the
+// old vault's list on the new one (Codex, PR #53).
 async function onCreateList(name: string) {
+  const target = composerVaultId.value;
   const created = await createList(name);
-  if (created !== null) composer.value?.setList(created);
+  if (created !== null && composerVaultId.value === target) composer.value?.setList(created);
 }
 
 // done / total of the visible (non-archived) list; drives the progress bar.
@@ -270,11 +273,9 @@ const buckets = computed<Bucket[]>(() => {
   return dateBuckets(filteredTasks.value, localToday());
 });
 
-// Per-vault list folders exist even before any task lands in them. The view
-// must stay reachable so a fresh empty list is visible (via the Lists
-// grouping) instead of hidden behind "No tasks yet" until the first task is
-// added — the aggregate deliberately omits empty lists (Codex, PR #53
-// re-review).
+// A fresh per-vault list folder has no tasks yet; keep the grouping control
+// reachable so it shows via Lists instead of hiding behind "No tasks yet" (the
+// aggregate omits empty lists) (Codex, PR #53 re-review).
 const hasDisplayableLists = computed(() => !isAggregate.value && knownLists.value.length > 0);
 
 onMounted(async () => {
