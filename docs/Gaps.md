@@ -84,22 +84,11 @@ dirs, not this temp. It is our own tiny, walk-invisible file (no user data),
 and the surface is shared by every domain that uses `write_note_atomic`
 (capture/transcript/tasks), not import-specific.
 
-### GAP-01 · High · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
-`src-tauri/src/transcription.rs:581` (`owning_vault_id`), used by
-`transcribe_recording_now` and `retranscribe`.
-`Path::starts_with` compares raw components without resolving `..`, so a
-path like `<vault>\..\anywhere\foo.mp3` (pointing at a real file) passes
-the vault-containment check; the pipeline then writes
-`foo.transcript.md` **outside any vault** (`write_placeholder` /
-`force_write_sidecar` and the final sidecar). `retranscribe` additionally
-bypasses the vault's `transcribe` gate. Both commands also skip the
-`is_capture_base` ownership filter that `rename_capture` enforces via
-`rename_plan`, so any `.mp3` in a vault gets a sidecar minted next to it.
-The same lexical matcher in `open_recording_note`
-(`capture_commands.rs:979`) is read-only, lower stakes.
-**Fix:** canonicalize (or reject `ParentDir` components in) the incoming
-path before the prefix match, and require a capture-pattern basename like
-the rename path does.
+### GAP-01 · ~~High~~ FIXED 2026-07-10 · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
+`owning_vault_id` and `open_recording_note` now match on canonical paths via
+`capture_paths::vault_owning_path` (unresolvable = rejected), and both
+transcription commands require `capture_paths::is_capture_mp3` — the same
+ownership filter `rename_plan` enforces (now shared).
 
 ### GAP-02 · ~~Medium~~ FIXED · A transient config read failure during save wiped every other vault's settings
 `src-tauri/core/src/capture_config.rs` (`update_vault_config_at`,
@@ -116,77 +105,46 @@ propagates (aborts the save on) any other read error. Regression tests:
 `update_aborts_on_a_non_missing_read_error`,
 `update_defaults_and_saves_when_the_config_is_missing`.
 
-### GAP-03 · Medium · Transcript ownership markers match anywhere in the file, not the frontmatter
-`src-tauri/core/src/transcript.rs:44, 186, 242-245`.
-`is_regenerable`, `needs_transcription`, and `transcript_status` use
-whole-content `contains(MARKER_*)`. A hand-edited or `complete` sidecar
-whose *body* contains the literal `vault-buddy-transcript: pending` (e.g.
-notes quoting the placeholder) is classified regenerable, re-enqueued by
-the backfill, and overwritten by `replace_if_ours` — the one place the
-"never overwrite a finished or hand-edited transcript" rule can be beaten
-by content coincidence. `capture_note::note_field` and `tasks::is_task`
-already do frontmatter-scoped matching.
-**Fix:** read the marker via a frontmatter-scoped check
-(`note_field(content, "vault-buddy-transcript")`).
+### GAP-03 · ~~Medium~~ FIXED 2026-07-10 · Transcript ownership markers match anywhere in the file, not the frontmatter
+`is_regenerable`, `needs_transcription`, and `transcript_status` now read the
+marker via a frontmatter-scoped `note_field(content, "vault-buddy-transcript")`
+reader; body text quoting a marker no longer reclassifies a sidecar.
 
-### GAP-04 · Medium · Renaming a transcribed recording strands the transcript and silently re-transcribes
-`src-tauri/capture/src/rename.rs:18` (with `core/capture_note.rs:127`,
-`core/transcript.rs:183`).
-`execute` moves only the mp3 and note and retargets only the `![[…mp3]]`
-embed line; `<old>.transcript.md` stays behind and the note keeps embedding
-the old transcript name. `transcript_path(new.mp3)` then doesn't exist, so
-the next launch's backfill re-runs a multi-minute whisper inference to
-produce a sidecar nothing embeds, while the recordings list shows the
-transcript as "Missing" despite it existing under the old name.
-**Fix:** move `<old>.transcript.md` on the same `rename_noreplace` rails
-and retarget the `.transcript` embed line in `rename_plan`/`execute`.
+### GAP-04 · ~~Medium~~ FIXED 2026-07-10 · Renaming a transcribed recording strands the transcript and silently re-transcribes
+`rename::execute` now moves `<old>.transcript.md` via the same
+`rename_noreplace` rails right after the mp3 and retargets the note's
+`.transcript` embed; a transcript-side failure degrades to a warning and
+keeps the old embed (audio first, never clobber).
 
-### GAP-05 · Medium · System suspend mid-recording appends the whole sleep gap as encoded silence
-`src-tauri/capture/src/session.rs:189-215, 276-295`.
-The 100 ms tick loop consumes a full `tick_frames` on every wake and
-silence-pads underruns; `next_tick += TICK` never resyncs to
-`Instant::now()`. On Windows, `Instant` (QPC) generally advances across
-suspend, so after a laptop sleeps mid-recording the loop runs back-to-back
-catch-up ticks and appends the entire sleep (potentially hours) as silence,
-inflating `duration_secs` and the file. Related: each pause→resume can
-encode up to ~100 ms of spurious silence from an early wake on an empty
-buffer.
-**Fix:** clamp `next_tick` to `now + TICK` when more than a few ticks
-behind; skip the take on a wake that arrived before schedule.
+### GAP-05 · ~~Medium~~ FIXED 2026-07-10 · System suspend mid-recording appends the whole sleep gap as encoded silence
+The tick loop now runs a pure `plan_tick` policy: a wake >500 ms behind
+schedule resyncs `next_tick` forward by up to the lag, capped to how much
+real audio is currently buffered — near-zero after a suspend (the sources
+were asleep too), so `next_tick` lands at ~`now + TICK` and the sleep gap
+is never encoded as silence, exactly as before. (A real I/O stall instead
+has a full buffer and gets full catch-up — see the Codex PR #46 fix noted
+in session.rs.) A wake before schedule (pause/resume control message)
+consumes nothing. Catch-up under 500 ms is unchanged (backpressure still
+averages out).
 
-### GAP-06 · Medium · Never-clobber degrades to a racy fallback on filesystems without hard links
-`src-tauri/core/src/capture_paths.rs:269-291` (`rename_noreplace`), used by
-every finalize/note write and recovery.
-When `hard_link` fails with anything other than AlreadyExists/NotFound
-(exFAT, FAT32, SMB shares), the fallback is a TOCTOU-racy `exists()` check
-+ replacing `std::fs::rename`. A sync client creating the same name between
-check and rename gets its file silently replaced — the one path where the
-headline invariant can break. Documented in-code as deliberate leniency.
-**Fix:** on Windows use `MoveFileExW` *without* `MOVEFILE_REPLACE_EXISTING`
-(natively non-replacing) instead of the exists-guarded rename.
+### GAP-06 · ~~Medium~~ FIXED 2026-07-10 · Never-clobber degrades to a racy fallback on filesystems without hard links
+On Windows the fallback is now MoveFileExW WITHOUT MOVEFILE_REPLACE_EXISTING
+(natively non-replacing, no TOCTOU window); non-Windows keeps the guarded
+rename (compile gate only, never shipped). Windows-arm execution arrives
+with sub-pass D's Windows `cargo test` step (GAP-43).
 
-### GAP-07 · Medium · `rename_capture` has no vault-containment check at all
-`src-tauri/src/capture_commands.rs:779-820`.
-`rename_plan` validates only the capture-pattern stem and `.mp3` extension;
-the path itself is arbitrary, so IPC can rename any
-`YYYY-MM-DD HHmm *.mp3` (and retarget its note) anywhere on disk — unlike
-every other write path, which gates on `assert_*_inside_vault`.
-**Fix:** resolve the owning vault (canonicalized — see GAP-01) and refuse
-paths outside it.
+### GAP-07 · ~~Medium~~ FIXED 2026-07-10 · `rename_capture` has no vault-containment check at all
+The command now refuses paths outside every registered vault via the
+canonical `capture_paths::vault_owning_path` (GAP-01's helper) before
+planning the rename.
 
-### GAP-08 · Medium · A wedged device open makes the app unquittable
-`src-tauri/src/capture_commands.rs:532-580` + `tray.rs:37-47` +
-`lib.rs:261-284`.
-The start-timeout branch deliberately keeps the reservation until the
-worker's `recv()` returns; if the audio driver never returns,
-`is_recording` stays true forever: `quit` blocks forever in
-`request_stop_and_wait(None)`, `hide_buddy` no-ops forever, and every
-Alt+F4 spawns another permanently blocked `close-finalize` thread. Only a
-process kill exits — which then reports as a crash.
-**Fix:** bounded wait on shutdown when `active.part.is_none()` (nothing on
-disk to strand yet), or mark the reservation "startup-wedged" so quit may
-bypass it. Any fix must keep the "never lose captured audio" invariant for
-sessions that *did* reach disk.
+### GAP-08 · ~~Medium~~ FIXED 2026-07-10 · A wedged device open makes the app unquittable
+The reservation now carries an explicit `startup_wedged` flag (set only in
+the start-timeout branch); shutdown paths (`request_stop_and_wait(None)`,
+`hide_buddy`, `quit`, CloseRequested) bypass the wait only when it is set
+AND `part.is_none()` — nothing on disk. The janitor records a late worker's
+`.part`, closing the bypass; recordings that reached disk keep the
+wait-forever posture.
 
 ### GAP-09 · Low · Daily-note formats with literal words silently create misnamed notes
 `src-tauri/core/src/daily_notes.rs:64-87` + `core/src/lib.rs:33-34`.
@@ -313,60 +271,42 @@ need it), which means **long work in a sync command freezes window
 show/hide, drags, and the upkeep tick**. Fixes must not move
 window-touching code off the main thread.
 
-### GAP-20 · High · `stop_capture` blocks the main thread for up to 15 s
-`src-tauri/src/capture_commands.rs:701-711`.
-The sync command waits on a condvar until finalize (LAME flush, fsync,
-`rename_noreplace`, note write) completes. Stopping on a slow/network vault
-freezes the whole UI for the entire encode — the exact freeze the tray path
-avoids by spawning `tray-stop`. Related low: after the 15 s timeout it
-still returns `Ok(())`, so the frontend sees success while the recording
-may still be finalizing (only the log records the timeout).
-**Fix:** make it async (the wait is on `CaptureState`, not window locks) or
-return immediately and let `capture:saved`/`failed` drive the UI; return a
-distinct "still saving" result on timeout.
+### GAP-20 · ~~High~~ FIXED 2026-07-10 · `stop_capture` blocks the main thread for up to 15 s
+Now an async command: the condvar wait runs under `spawn_blocking`, and the
+15 s expiry returns a typed `{ stillSaving: true }` instead of a bare Ok —
+the store keeps its saving UI and the capture events finish the story.
+`request_stop_and_wait` returns `StopWait` so no caller can misread a
+timeout as success.
 
-### GAP-21 · High · `start_capture` blocks the main thread for up to 10 s
-`src-tauri/src/capture_commands.rs:514`.
-The sync command waits `ready_rx.recv_timeout(10s)` while the
-`capture-device` thread opens WASAPI devices; a slow or wedged audio driver
-(the timeout's own premise) freezes the entire UI for the duration.
-**Fix:** make it async, or return after the reservation and deliver
-readiness via an event.
+### GAP-21 · ~~High~~ FIXED 2026-07-10 · `start_capture` blocks the main thread for up to 10 s
+Now an async command: the whole start body (device-ready wait included)
+runs under `spawn_blocking` with reservation semantics unchanged; the
+buddy-show indicator tail is marshalled back to the main thread
+(window show is main-thread-only).
 
-### GAP-22 · Medium · Read-only list commands do unbounded filesystem/device work on the main thread
-`capture_commands.rs:300` (`list_recordings` — scans dated folders and
-reads every note's frontmatter), `task_commands.rs:97/182`
-(`list_tasks`/`count_open_tasks` — recursive subtree walk),
-`capture_commands.rs:269` (`list_audio_devices` — COM/WASAPI enumeration,
-commonly hundreds of ms). A large archive or slow disk stalls the UI on
-every panel open — the reason `search_vaults` was made async.
-**Fix:** make these async (they touch no window APIs or window-state
-locks).
+### GAP-22 · ~~Medium~~ FIXED 2026-07-10 · Read-only list commands do unbounded filesystem/device work on the main thread
+`list_recordings`, `list_tasks`, `count_open_tasks`, and
+`list_audio_devices` are async now, each wrapping its filesystem/COM work
+in `spawn_blocking` (the `search_vaults` precedent); a panicked task
+degrades to the empty value each already used, with a warn.
 
 ## 3. Robustness & swallowed errors
 
 The repo's own invariant: *no swallowed error* — anything caught-and-hidden
 goes through `log::warn!`/`log::error!`. These sites violate it.
 
-### GAP-23 · Medium · Silent `Ok`-with-empty on unreadable single-file configs
-`core/src/discovery.rs:63` (existing-but-unreadable `obsidian.json` → empty
-vault list, user sees "no vaults", logs say nothing),
-`core/src/capture_config.rs:226` (`load_config`),
-`core/src/daily_notes.rs:46` (`load_settings`),
-`core/src/app_diagnostics.rs:27` (`check_previous_run`'s `_ =>` arm),
-`core/src/transcript.rs:189/247` (unreadable-sidecar arms). The vault-walk
-scan noise is a documented exception; these one-file reads are not.
-**Fix:** `log::warn!` on any error other than NotFound at each site.
+### GAP-23 · ~~Medium~~ FIXED 2026-07-10 · Silent `Ok`-with-empty on unreadable single-file configs
+All six arms (`discovery`, `capture_config::load_config_from`,
+`daily_notes::load_settings`, `app_diagnostics::check_previous_run`,
+`transcript::needs_transcription`/`transcript_status`) now `log::warn!` on
+any read error other than NotFound; return values still degrade unchanged.
 
-### GAP-24 · Medium · `.expect` on thread spawn inside main-thread native callbacks
-`lib.rs:284` (`close-finalize` in the CloseRequested handler),
-`tray.rs:45/219` (`shutdown-finalize`, `tray-stop`), plus the spawns inside
-`start_capture` (`capture_commands.rs:408/420/510/577/616`). The codebase's
-own rule (documented at `schedule_focus_out_check`) is that a panic in a
-window-event handler aborts across the WebView2 FFI boundary with no crash
-record; spawn failure under resource exhaustion does exactly that here.
-**Fix:** replace with the log-and-degrade pattern `lib.rs:128-130` already
-uses.
+### GAP-24 · ~~Medium~~ FIXED 2026-07-10 · `.expect` on thread spawn inside main-thread native callbacks
+All eight sites (close-finalize, shutdown-finalize, tray-stop, and the five
+start_capture spawns) now log-and-degrade per site instead of panicking
+across the WebView2 FFI boundary; the setup-time spawns (recovery,
+transcribe-worker, topmost-checkpoint) were never in a native callback and
+keep `.expect`.
 
 ### GAP-25 · Low · Assorted swallowed results
 - `src-tauri/src/diagnostics.rs:85-87, 99-101` — run-marker
@@ -386,63 +326,49 @@ uses.
   that saw the job in `transcription_queue_status` never learns its fate
   (polling self-corrects). Emit `capture:transcribeSkipped`.
 
-### GAP-26 · Low · Inconsistent error strings; paths leak into user-facing errors
-`commands.rs:510` (`"vault not found: {id}"`) vs the user-worded
-`"Vault not found — was it removed from Obsidian?"`
-(`capture_commands.rs:344`, `task_commands.rs:36`); several errors embed
-absolute local paths (`capture_commands.rs:347/980`,
-`task_commands.rs:130`). Cosmetic on a local desktop app.
-**Fix:** unify on the user-worded form via one shared vault lookup (the
-`discover_vaults().find(..)` lookup is duplicated 6× — see GAP-45).
+### GAP-26 · ~~Low~~ FIXED 2026-07-10 · Inconsistent error strings; paths leak into user-facing errors
+The four hand-rolled `discovery::discover_vaults().into_iter().find(|v| v.id
+== id)` lookups in `capture_commands.rs` (`set_capture_config`,
+`start_capture_blocking`) and `task_commands.rs` (`set_tasks_config`,
+`tasks_root_for`) now delegate to `crate::commands::find_vault` — the same
+`services::find_vault` user-worded copy the panel and MCP already share, so
+there is exactly one vault-not-found message left. The user-facing errors
+that embedded absolute local paths (`start_capture_blocking`'s vault-folder
+check, `open_recording_note`'s outside-its-vault error in
+`capture_commands.rs`, `open_task`'s outside-its-vault error in
+`task_commands.rs`) now log the path via `log::warn!` and return a
+path-free, user-worded `Err`. `services::find_vault` itself (the MCP
+contract) was left untouched — out of this pass's scope. The `add_task`
+vault-folder check in `core::services` (initially left for the same reason)
+was closed out in a later pass: it now logs the path via `log::warn!` and
+returns the same path-free copy as `start_capture_blocking`.
 
 ## 4. Frontend defects & races
 
-### GAP-27 · Medium · Escape in an open dropdown also closes the whole panel
-`src/components/SelectMenu.vue:101-103` + `src/roots/PanelRoot.vue:23-25`.
-`onPopupKeydown` handles Escape with `preventDefault()` but no
-`stopPropagation()`; the keydown bubbles to `window`, where PanelRoot calls
-`close_panel`. Dismissing the bitrate/model/duration dropdown in settings
-hides the entire panel. Search's Escape handler shows the intended pattern.
-**Fix:** `e.stopPropagation()` in SelectMenu's Escape branch.
+### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
+`onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
+`closeMenu()`, matching Search's handler; a regression test opens the popup,
+dispatches Escape on it, and asserts a `window` keydown listener is never
+called.
 
-### GAP-28 · Medium · The quiet startup update check can stomp a manual check or an in-flight install
-`src/stores/updates.ts:61-73`.
-The `phase !== "idle"` guard runs only before `await check()`. A slow quiet
-check resolving after the user manually checked and hit Install flips
-`phase` back to `available` mid-`installUpdate`; landing between
-`download()` and `install()` makes `install()` run on a fresh,
-never-downloaded `Update` object.
-**Fix:** re-check `this.phase === "idle"` after the `await` before
-assigning.
+### GAP-28 · ~~Medium~~ FIXED 2026-07-10 · A slow quiet update check can stomp a manual check or install
+`checkForUpdatesQuietly` now re-checks `phase === "idle"` after its
+`await check()` and discards the stale result otherwise, so it can never
+flip `phase`/`available` under a manual check or a mid-flight install.
 
-### GAP-29 · Medium · The rename prompt is unreachable for saves that happen while the panel is closed
-`src/components/ActionPanel.vue:97-103`.
-The `shownNonce` watcher calls `capture.dismissRename()` on every
-`panel-shown`. A recording stopped from the tray (panel closed) arms
-`lastSaved` in the hidden panel's store; opening the panel to name the
-recording kills the prompt before it renders — the 30 s rename window only
-works if the panel was already open.
-**Fix:** only dismiss when the prompt is older than a threshold (a real
-*stale* prompt), or skip the dismiss on the first show after a save.
+### GAP-29 · ~~Medium~~ FIXED 2026-07-10 · The rename prompt is unreachable for saves that happen while the panel is closed
+The store now stamps `lastSavedAtMs` on `capture:saved`; the `shownNonce`
+watcher calls the new `dismissRenameIfStale()` instead of an unconditional
+`dismissRename()`, so a prompt younger than `RENAME_PROMPT_MS` survives a
+reopen.
 
-### GAP-30 · Medium · After a failed config read, one transcription toggle rewrites the vault's capture config to defaults
-`src/components/RecordMode.vue:105-118, 87`.
-`loadConfig`'s `finally` sets `loaded = true` even on failure; the
-`transcription` setter then `persist()`s the default-seeded config
-(recordingFolder null, bitrate 128, devices null…) via
-`set_capture_config`, overwriting the user's settings on disk.
-CaptureSettings' `tasksFolderLoaded` gate shows the careful pattern.
-**Fix:** on read failure persist only the four transcription fields, or
-require an explicit save. (Pairs with GAP-02 — the Rust side makes the
-blast radius all vaults.)
+### GAP-30 · ~~Medium~~ FIXED 2026-07-10 · After a failed config read, one transcription toggle rewrites the vault's capture config to defaults
+`loaded` now flips only inside the try block (success path); a failed read
+leaves it false, so no toggle persists the default-seeded config. The
+failure is logged via `logWarning`.
 
-### GAP-31 · Medium · No IME-composition guard on the add-task Enter — a vault write
-`src/components/Tasks.vue:139`.
-Search guards Enter/arrows/Escape with `event.isComposing`; Tasks does not.
-A CJK user committing an IME candidate with Enter immediately creates a
-task document from the half-composed title (a sanctioned vault write).
-`ActionPanel.vue:82`'s filter Escape has the same, lower-stakes gap.
-**Fix:** ignore Enter when `event.isComposing`.
+### GAP-31 · ~~Medium~~ FIXED 2026-07-10 · IME-composition guards on the add-task Enter and filter Escape
+Added `onTitleEnter` handler in Tasks.vue and early isComposing return in ActionPanel's `onFilterEscape` — both now follow Search's precedent.
 
 ### GAP-32 · Low · Assorted store/component edges
 - `src/stores/capture.ts:234-241` — `refreshWaitingForRecording` responses
@@ -451,11 +377,18 @@ task document from the half-composed title (a sanctioned vault write).
   ignore when `activeTranscription` is set.
 - `src/stores/vaults.ts:81-101` — `taskCounts` refreshes only on panel
   open, so the vault-row badge is stale after task edits until reopen.
-  Refresh from `back()`/Tasks mutations.
+  Refresh from `back()`/Tasks mutations. (FIXED 2026-07-10 — added
+  `refreshTaskCount(id)`, called from Tasks.vue on toggle/archive/add
+  success, plus a full `loadTaskCounts()` from `back()` when leaving the
+  tasks view.)
 - `src/components/Tasks.vue:84-86, 98-104` — failed-toggle revert forges
   `status: "new"` instead of restoring the original (`in-progress` etc.);
   the failure re-insert uses a pre-await index, restoring one slot off
   after a concurrent add. Capture the original status; recompute the index.
+  (FIXED 2026-07-10 — toggle now captures `prevStatus` before the
+  optimistic flip and restores it verbatim on failure; archive's failure
+  path pushes the removed task back and re-sorts instead of trusting a
+  captured index.)
 - `src/stores/capture.ts:242-430` — `init()` registers 14 listeners with
   no re-entry guard or unlisten storage (safe today; double-init
   double-fires everything). Roots assign `unlisten*` only after `await
@@ -464,7 +397,10 @@ task document from the half-composed title (a sanctioned vault write).
 - `src/stores/notifications.ts:20-26` — dedupe reuses the newest identical
   toast without extending its TTL (a re-raise at t=3.9 s vanishes at 4.0 s
   and reads as flicker); dismissed ids' timers still fire. Restart the
-  timer on dedupe-reuse.
+  timer on dedupe-reuse. (FIXED 2026-07-10 — a `timers` map keyed by
+  notification id lets dedupe-reuse `clearTimeout`+restart the TTL, and
+  `dismiss`/`clear` now cancel their timer instead of leaving it to fire a
+  no-op later.)
 - `src/stores/vaults.ts:184-195` — `back()` carries duplicated dead
   branches; nothing enforces valid view+vaultId pairs (a null-id
   `captureSettings` renders the list under the wrong header) — unreachable
@@ -473,29 +409,23 @@ task document from the half-composed title (a sanctioned vault write).
   non-nullable `number` while `capture.ts:63` defends with `!= null`; one
   of them is wrong. Make it `number | null` to match the defensive read.
 
-### GAP-33 · Low · Accessibility gaps in the two listbox surfaces
-- `src/components/Search.vue:260` — static `aria-expanded="true"` claims an
-  always-open popup even for empty/recents states; bind to
-  `visibleHits.length > 0` and add `aria-autocomplete="list"`.
-- `src/components/SelectMenu.vue:144-169` — keyboard highlight is
-  visual-only: no option `id`s, no `aria-activedescendant`, no
-  `scrollIntoView` (a 13-item list scrolls at 220 px, so the highlight
-  moves off-screen), no Home/End/typeahead — and the 4 existing tests cover
-  none of the keyboard path.
+### GAP-33 · ~~Low~~ FIXED 2026-07-10 · Accessibility gaps in the two listbox surfaces
+- `src/components/SelectMenu.vue` — options now carry `optionId(i)` ids, the
+  listbox binds `aria-activedescendant` to the highlighted option, keyboard
+  moves (`ArrowUp`/`ArrowDown`/`Home`/`End`) call `setActive` which
+  `scrollIntoView`s the option (pointermove keeps the bare assignment so
+  hover can't fight keyboard scrolling); keyboard-path tests pin
+  activedescendant tracking and Home/End.
+- `src/components/Search.vue` — `aria-expanded` now binds to
+  `visibleHits.length > 0` instead of a static `"true"`, plus
+  `aria-autocomplete="list"`.
 
 ## 5. Security & configuration
 
-### GAP-34 · Medium · CSP is disabled for all three webviews
-`src-tauri/tauri.conf.json:56` — `"security": { "csp": null }`. Every
-window can invoke all 40 commands, four of which write into vaults; the app
-renders strings derived from vault contents (search results, note titles).
-`HighlightText` being index-based mitigates, but CSP is cheap
-defense-in-depth for exactly the injection class that would weaponize
-GAP-01/GAP-07.
-**Fix:** set a restrictive CSP (e.g. `default-src 'self'; style-src 'self'
-'unsafe-inline'`).
+### GAP-34 · ~~Medium~~ FIXED 2026-07-10 · CSP is disabled for all three webviews
+`src-tauri/tauri.conf.json:56` — CSP is now `"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"` (plus `connect-src ipc: http://ipc.localhost` per Tauri's CSP guidance; note Tauri does NOT auto-append origins — on WebView2 `invoke()` rides `window.chrome.webview.postMessage`, which CSP doesn't police, so the connect-src entries cover the wry `ipc:` scheme and any fetch-based transport; adopting the `asset:` protocol later would need explicit `asset: http://asset.localhost` additions). The policy mitigates injection attacks from strings rendered from vault contents (search results, note titles). Linux compile gate (`npx tauri build --no-bundle`) green. **Runtime behavior in the packaged WebView2 app is NOT yet verified — the next Windows-checklist run must confirm all three windows render (buddy sprites, panel styles, bubble) and the updater/settings views work; a breakage is a one-line revert of this commit.**
 
-### GAP-35 · Medium · GitHub Actions pinned by mutable tag, including the one that holds the updater signing key
+### GAP-35 · ~~Medium~~ FIXED 2026-07-10 · GitHub Actions pinned by mutable tag, including the one that holds the updater signing key
 All three workflows: `actions/checkout@v4`, `actions/setup-node@v4`,
 `Swatinem/rust-cache@v2`, `actions/upload-artifact@v4`,
 `tauri-apps/tauri-action@v0` (a floating major-0), and
@@ -503,21 +433,19 @@ All three workflows: `actions/checkout@v4`, `actions/setup-node@v4`,
 feeds `TAURI_SIGNING_PRIVATE_KEY` into `tauri-action` — a compromised tag
 on that action exfiltrates the key that can ship updates to every user.
 **Fix:** pin all third-party actions to full commit SHAs.
+(FIXED 2026-07-10 — all 22 `uses:` lines across `ci.yml`, `release.yml`,
+and `bump-version.yml` now pin a full commit SHA resolved live via
+`git ls-remote`, with the original tag/branch kept as a trailing comment;
+`dtolnay/rust-toolchain@stable` pins the branch head with a dated comment
+since it has no tag to fall back to.)
 
-### GAP-36 · Medium · CI exposes the signing secrets to same-repo PR branch builds; no `permissions:` block
-`.github/workflows/ci.yml` (top level, and `windows-app` env). No
-`permissions:` block means the default `GITHUB_TOKEN` scope; the signing
-secrets are present during `npm ci`/`build.rs` on any same-repo branch PR
-(fork PRs are safe — secrets are empty and handled).
-**Fix:** add `permissions: contents: read`; consider signing only on push
-to `main`/release.
+### GAP-36 · ~~Medium~~ FIXED 2026-07-10 · CI exposes the signing secrets to same-repo PR branch builds; no `permissions:` block
+`ci.yml` now has a top-level `permissions: contents: read` block and the `windows-app` job's signing env is empty on all PR events (only populated on push) — the existing keyless fallback builds unsigned artifacts for every PR.
 
-### GAP-37 · Medium · `bump-version.yml` interpolates the dispatch input into shell
-`.github/workflows/bump-version.yml:37` — `${{ inputs.version }}` lands
-directly in a `run:` line (and later in the branch name): a workflow-command
-/shell injection vector for write-access users, with a token holding
-`contents: write` + `pull-requests: write`.
-**Fix:** pass the input via `env:` and reference `"$VERSION"`.
+### GAP-37 · ~~Medium~~ FIXED 2026-07-10 · `bump-version.yml` interpolates the dispatch input into shell
+The input and the ref-name error path now travel via `env:` (REQUESTED_VERSION,
+REF_NAME) and are quoted in the run line; downstream steps already used the
+script's resolved version.
 
 ### GAP-38 · Low · Capability breadth vs its own comment
 `src-tauri/capabilities/default.json` — the description claims "no
@@ -545,37 +473,42 @@ workspace clippy) after the tauri build produces the `dist/` that
 non-obvious: the shell's tests cannot move to `rust-core` — they need the
 WebView/GTK system libs and a built `dist/`.
 
-### GAP-41 · High · The release dispatch path is unvalidated
-`.github/workflows/release.yml:11-15`.
-The `tag` input isn't checked against `tauri.conf.json`'s version (the
-comment says it "must match" — nothing enforces it) and there is no ref
-guard (unlike `bump-version.yml`): dispatching from any branch releases
-that branch's code under an arbitrary tag, and a mismatch ships a
-`latest.json` whose version disagrees with the tag.
-**Fix:** guard `github.ref_name == 'main'` and
-`inputs.tag == "v" + tauri.conf.json version`.
+### GAP-41 · ~~High~~ FIXED 2026-07-10 · The release dispatch path is unvalidated
+A new `validate` job in `.github/workflows/release.yml` now rejects a
+`workflow_dispatch` off any branch but `main`, checks
+`inputs.tag == "v" + tauri.conf.json version`, and — for BOTH trigger
+paths — requires the released SHA to be an ancestor of `main` via the
+compare API (`identical`/`behind`), closing the hole where a v* tag pushed
+on a non-main commit with a matching version and green PR-branch CI would
+publish that branch's code (found by Codex on PR #46). Kept as a
+tombstone because the workflow can't be exercised locally — the job only
+proves itself out on the next real release dispatch.
 
-### GAP-42 · Medium · A release can ship from a red commit
-`.github/workflows/release.yml:20` — the release job runs no tests and has
-no dependency on CI success for the SHA; a tag on a broken commit publishes
-and is immediately offered to every installed app via the updater.
-**Fix:** gate the release job on the CI workflow's success for that SHA.
+### GAP-42 · ~~Medium~~ FIXED 2026-07-10 · A release can ship from a red commit
+The same `validate` job (`.github/workflows/release.yml`) now queries
+`gh run list` for the CI workflow's conclusion on `github.sha` and fails
+closed (including on an API error) unless the most recent completed run is
+`success`; `windows-installer` gained `needs: validate`. Kept as a
+tombstone for the same reason as GAP-41 — untestable outside a real
+dispatch/tag push.
 
-### GAP-43 · Medium · No Rust tests run on Windows (clippy half FIXED 2026-07-10)
+### GAP-43 · ~~Medium~~ FIXED 2026-07-10 · No Rust tests run on Windows
 The workspace-clippy half is fixed: `linux-app` now runs
 `cargo clippy --workspace --all-targets -- -D warnings`, covering the
-shell. Still open: the most platform-sensitive code (process detection,
-`GetKeyState`, whisper on MSVC, WASAPI loopback) is Windows-only, yet
-`windows-app` is build-only.
-**Fix:** a `cargo test` step (core + capture + transcribe
-`--features whisper`) in the Windows job.
+shell. The test half is fixed: `windows-app` now runs `cargo test` for
+core, capture, and transcribe (including `--features whisper`) after the
+build step, so the most platform-sensitive code (process detection,
+`GetKeyState`, WASAPI loopback gates, MoveFileExW's non-replacing fallback,
+whisper on MSVC) executes in CI for the first time — including the GAP-06
+`cfg(windows)` MoveFileExW contract test and the GAP-08 startup-wedge
+predicate.
 
 ### GAP-44 · Low · Release/bump edges
 - ~~No CI job runs `node scripts/bump-version.mjs --check`~~ — fixed
   2026-07-10: the `frontend` job runs it before the build.
 - `scripts/bump-version.mjs:107-110` — accepts a new version equal to or
   lower than current; equal input later fails at `git commit` with a
-  confusing "nothing to commit". Reject `newVersion <= current`.
+  confusing "nothing to commit". Reject `newVersion <= current`. (FIXED 2026-07-10 — resolveNewVersion rejects X.Y.Z <= current with a message naming both)
 - ~~No `cargo audit` step~~ — fixed 2026-07-10: `cargo deny check`
   (advisories + licenses + sources, `src-tauri/deny.toml`) runs in
   `rust-core`. Still open: no `npm audit` step and no Dependabot/Renovate
@@ -595,8 +528,10 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   unreadable-dir skip, and canonicalize-failure branches are exercised only
   indirectly via tasks/search tests.
 - `capture_paths.rs`: `rename_noreplace`'s link-succeeded-but-remove-failed
-  warn path and the non-decisive-error fallback rename (the GAP-06 path);
-  `assert_root_inside_vault` with a missing vault path.
+  warn path; `assert_root_inside_vault` with a missing vault path. (The
+  GAP-06 non-decisive-error fallback itself is no longer untested: the
+  non-Windows arm has direct contract tests, and the `cfg(windows)` twin
+  now executes on the Windows CI runner, fixed 2026-07-10.)
 - `capture_note.rs`: `write_atomic_replacing`'s numbered-temp squatter path
   and failure-cleanup branch (only `write_note_atomic`'s squatter is
   tested).
@@ -612,12 +547,16 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   space-delimited false positive.
 
 **Capture / transcribe crates**
-- `devices.rs`: only "never panics" smoke tests can run on device-less CI
-  runners — the format-dispatch arms, the error-callback → `Lost` path, and
-  the entire `#[cfg(windows)]` loopback block are never *executed* by any
-  test anywhere (Windows CI never runs `cargo test`, GAP-43).
+- `devices.rs`: only "never panics" smoke tests run in CI. The Windows
+  `cargo test` step (2026-07-10) now compiles and smoke-runs the
+  format-dispatch arms and the `#[cfg(windows)]` loopback block on the
+  Windows runner, but hosted Windows runners are device-less — so that code,
+  and the error-callback → `Lost` path, is still never *executed against a
+  real audio device* by any test.
 - `session.rs`: mid-recording encode/write/flush failure and best-effort
-  finalize; the suspend/early-tick behavior (GAP-05) is unpinned.
+  finalize; `plan_tick` (GAP-05) is unit-tested but the suspend path itself
+  cannot be exercised end-to-end (`Instant` is unmockable) — the loop
+  wiring is reviewed, not tested.
 - `engine.rs`: the FFI trampoline regression tests do run (Linux CI,
   `--features whisper`); the real-model end-to-end test is `#[ignore]`
   (manual). `model.rs`/`decode.rs` have excellent hermetic coverage
@@ -636,18 +575,20 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   untested (only `rootFor` is).
 - `UpdateSettings.vue` is tested only indirectly through
   `buddy-settings.test.ts`; `HighlightText.vue` only via the util's tests.
-- `SelectMenu.vue`'s 4 tests cover none of the keyboard path, outside-click
-  close, or positioning (GAP-33).
+- `SelectMenu.vue`'s tests now cover the keyboard path (GAP-33, fixed
+  2026-07-10) but not outside-click close or positioning.
 - Event-listener cleanup paths in the roots and `capture.init()` re-entry
   (GAP-32) have no tests.
 
 ## 8. Tech debt & duplication
 
 ### GAP-45 · Shell
-- `start_capture` is ~293 lines with four inline thread bodies
-  (`capture_commands.rs:332-625`); `process_transcription` ~186 lines.
-- The `discover_vaults().find(|v| v.id == id)` lookup is duplicated 6×
-  across three files with two error styles (GAP-26).
+- `start_capture_blocking` (the async command's moved body, sub-pass B) is
+  ~330 lines with four inline thread bodies (`capture_commands.rs:321-655`);
+  `process_transcription` ~186 lines.
+- ~~The `discover_vaults().find(|v| v.id == id)` lookup is duplicated 6×
+  across three files with two error styles~~ FIXED 2026-07-10 — the four
+  shell-side lookups now delegate to `commands::find_vault` (GAP-26).
 - The roots loop (`recording_roots` → `safe_recording_root` →
   `assert_root_inside_vault`) appears 3× (`list_recordings`,
   `run_recovery`, `scan_and_enqueue`); the owning-vault-by-prefix matcher
@@ -667,11 +608,20 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   own `vault_walk.rs` header warns about exactly this drift class.
 
 ### GAP-47 · Frontend
-- Inline SVG icon paths are copy-pasted (the identical gear in
+- ~~Inline SVG icon paths are copy-pasted (the identical gear in
   `ActionPanel.vue` and `VaultList.vue`; X-marks in three components) — a
-  tiny `<Icon name>` component would end it.
-- `Search.vue` (494 LOC) and `stores/capture.ts` (602 LOC) are the two
-  oversized files; split when next touched.
+  tiny `<Icon name>` component would end it.~~ PARTIALLY FIXED 2026-07-10
+  (polish sub-pass E) — `AppIcon.vue` now wraps the standard stroked
+  line-icon `<svg>`; the ActionPanel/VaultList icon buttons were converted,
+  dissolving both fallow clone groups (cloneGroups 3→1, duplicatedLines
+  100→22). The X-marks in other components can adopt `AppIcon` on next
+  touch; two non-standard VaultList icons (omitting `stroke-linejoin`) were
+  left raw to keep that pass move-only.
+- `Search.vue` (494 LOC) and `stores/capture.ts` (~646 LOC) are the two
+  oversized files; split when next touched. (The `tasks.rs` and `Tasks.vue`
+  LOC-allowlist split obligations were both retired in polish sub-pass E:
+  `tasks.rs`→`doc/parse/writer/list/disk` modules, `Tasks.vue`→
+  `TaskRow`/`TaskEditor`/`TaskComposer`.)
 - `transcribe_recording_now` is registered but never invoked from the
   frontend — `Recordings.vue:92-101` routes *all* retries (including plain
   `failed` rows) through force `retranscribe`, which bypasses the vault's
@@ -745,6 +695,23 @@ review in the PR-43 ledger):
 - `McpSettings.vue`: guard the `mcp:status` listener registration against
   unmount-before-resolve (one leaked listener per fast settings visit).
 
+### GAP-56 · Low · Capture event-ordering corners after the async migration
+Catalogued by sub-pass B's final review (2026-07-10); both exotic, neither
+worse in kind than the pre-async behavior:
+- `capture:saved` can theoretically beat `capture:started`: the monitor
+  thread is live before the async shell emits `started`
+  (`capture_commands.rs`), so a self-finalizing session (≥1 poll tick,
+  ~500 ms) plus a >500 ms async-runtime stall reorders them; the store's
+  `started` handler would then set `status = "recording"` after `saved`
+  reset it, sticking the recording UI with no terminal event. Fix shape: a
+  store-side stale-`started` guard.
+- The janitor's worker-replied-`Err` drain clears the reservation without
+  emitting (the `capture:failed` fired back at start-timeout time), so a
+  stop issued against a resynced wedged reservation can resolve
+  `{stillSaving:false}` with no event ever arriving — the store parks in
+  "saving" until reload. Requires a webview reload to resync the wedged
+  state first; the old bare-`Ok` had the identical hole.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
@@ -753,35 +720,34 @@ itself (broken PRD link, missing `cancel_transcription` /
 the IPC list, missing `linux-app` job, wrong whisper-CI claim, CONTEXT.md
 unreferenced). What remains lives in the *other* docs:
 
-### GAP-49 · Medium · Broken/stale references in the human-facing docs
-- `README.md:14` — the PRD link targets `PRD%20-%20Product%20Vision.md` at
-  the repo root; the file is under `docs/`. The front-page product link
-  404s on GitHub.
-- `docs/DEVELOPMENT.md:76-91` — "Tests and checks" omits the transcribe
-  crate from the clippy/test commands CI actually runs, and the prose says
-  "split into three crates" (there are four).
-- `docs/DEVELOPMENT.md:159` — says the signing secrets are needed "to
-  build"; CI explicitly builds without them.
-- `.github/pull_request_template.md` — claims Windows-only shell changes
-  "can't compile in this container" (the Linux compile gate exists) and
-  lists the CI gates as `frontend` → `rust-core` → `windows-app`, omitting
-  `linux-app` and implying sequence.
-- `docs/PRD - Product Vision.md:4,580,602` — status says "Shipping —
-  v0.3.0" and "except Search and Tasks"; the repo is at 0.5.1 with both
-  shipped. The use-cases README says to re-run reconciliation on each
-  release; it wasn't.
-- `.github/workflows/release.yml:47-49` — comment still claims the `tauri`
-  npm script aliases `tauri dev`; `package.json` fixed that (the override
-  is harmless, the justification stale).
-- `src-tauri/transcribe/Cargo.toml:8-10` — comment says the Windows job is
-  the whisper compile gate; the Linux `rust-core` job builds *and tests*
-  the feature.
+### GAP-49 · ~~Medium~~ FIXED 2026-07-10 · Broken/stale references in the human-facing docs
+Every catalogued reference was corrected:
+- The PRD was renamed to `docs/PRD.md` (GAP-50) and all 15 referrers'
+  link/frontmatter targets were repointed — the README front-page link,
+  the AGENTS.md doc map, `docs/DEVELOPMENT.md`, both per-domain PRDs, every
+  `docs/use-cases/` page, and the dated increment-1 spec — so none 404s.
+- `docs/DEVELOPMENT.md` now names the four member crates plus the shell
+  (was "three crates") and its "Tests and checks" command list includes the
+  transcribe + mcp clippy/test commands CI actually runs; the updater-signing
+  note now says CI builds unsigned by design on PR events rather than
+  "needs the secrets to build" (GAP-36).
+- `.github/pull_request_template.md` drops the stale "can't compile in this
+  container" claim (the Linux compile gate exists) and names all four CI
+  jobs (`frontend`, `rust-core`, `linux-app`, `windows-app`) without
+  implying a sequence.
+- `docs/PRD.md`'s status line reads the shipped v0.5.x reality (Search +
+  Tasks shipped, plus the opt-in local MCP server).
+- `.github/workflows/release.yml`'s stale `tauri`-npm-script comment and
+  `src-tauri/transcribe/Cargo.toml`'s wrong "Windows is the whisper compile
+  gate" comment (the Linux `rust-core` job builds *and tests* the feature)
+  were both corrected.
 
 ### GAP-50 · Low · Naming and structure
-- `docs/PRD - Product Vision.md` — spaces in the filename force `%20`
-  links, which is what produced the broken references. Rename to
-  `docs/PRD.md` and fix the three referrers (README, DEVELOPMENT, and the
-  AGENTS.md doc map).
+- ~~`docs/PRD - Product Vision.md` — spaces in the filename force `%20`
+  links, which is what produced the broken references.~~ FIXED 2026-07-10 —
+  renamed to `docs/PRD.md`; the 15 referrers (README, AGENTS.md doc map,
+  DEVELOPMENT, both per-domain PRDs, every use-cases page, and the dated
+  increment-1 spec) were repointed to the new path.
 - No CHANGELOG; release bodies are boilerplate. No SECURITY.md (updater
   key rotation/compromise procedure). See GAP-44.
 
@@ -810,7 +776,9 @@ not regress:
   guarantee and per-class caps; `rename_noreplace` AlreadyExists semantics
   on dangling symlinks; `EmitThrottle`/`PositionCheckpointer` state
   machines; write-path TOCTOUs backstopped by exclusive-create or
-  `rename_noreplace` (except the GAP-06 fallback).
+  `rename_noreplace`, including the GAP-06 fallback (direct contract tests
+  on the non-Windows arm; the `cfg(windows)` twin now executes on Windows
+  CI, fixed 2026-07-10).
 - **Capture/transcribe**: exclusive `.part` create; pairwise reservation
   including the transcript name; recovery ownership/layout/staleness
   filters; pause-never-blocks-shutdown; rename keeps the date prefix and

@@ -9,9 +9,9 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows (MVP)
-- **Status:** vault access · cross-vault search · per-vault tasks · one-click meeting & voice recording · local offline transcription · local MCP server for AI clients
+- **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · local offline transcription · local MCP server for AI clients
 
-See the [Product Requirements Document](PRD%20-%20Product%20Vision.md) for the full vision,
+See the [Product Requirements Document](docs/PRD.md) for the full vision,
 principles, capabilities, and roadmap.
 
 ## Install
@@ -70,11 +70,16 @@ The buddy appears as a small, always-on-top character on your desktop.
   Click a recording to open its note in Obsidian, or **re-transcribe** any
   one on the spot — useful after switching to a larger, more accurate speech
   model.
-- **Tasks per vault**: the **Tasks button** on a vault row opens a simple
-  todo list — add a task, check it off, archive it — backed by plain
-  `type: Task` Markdown files in a folder you choose (default `Tasks`), so
-  everything stays visible and editable in Obsidian too. Hand-written task
-  files in that folder show up in the list as well.
+- **Track tasks** per vault: the **checklist button** on a vault row opens a
+  todo list backed by plain `type: Task` Markdown notes in a folder you
+  choose (default `Tasks`) — fully Obsidian-compatible, hand-authored files
+  included. Add tasks with an optional due date, priority, and `#tags`;
+  check them off, edit them inline, or archive them; group by due date
+  (Overdue / Today / Upcoming) or by tag; click a title to open the note in
+  Obsidian. The vault row shows a badge with the open-task count. An **All
+  tasks** bar above the vault list opens the same view merged across every
+  vault (badge = summed open count), where adding a task picks which vault
+  it lands in.
 
 - **Connect your AI tools (opt-in)**: Vault Buddy can serve a **local MCP
   server** so MCP clients — Claude Code, Claude Desktop, Cursor — can list
@@ -94,11 +99,13 @@ daily note — and only after you flip the separate vault-writes switch).
 Recording saves the audio, an optional companion note, and (if
 enabled) a transcript sidecar into a dated folder you choose — always under
 fresh names, never replacing a file you already have. Tasks create new
-`type: Task` files the same collision-safe way; the one edit they make to
-an existing file is flipping the `status:` line of a task you check off or
-archive — and only in files whose frontmatter says `type: Task`, which
-includes task files you wrote by hand. Nothing else in your vault is ever
-modified. Everything stays on your machine — no account, nothing uploaded.
+`type: Task` files the same collision-safe way; the edits they make to an
+existing file (checking off or archiving a task, or changing its title,
+due date, priority, or tags in the inline editor) rewrite only the
+frontmatter lines you changed — and only in files whose frontmatter says
+`type: Task`, which includes task files you wrote by hand. Nothing else in
+your vault is ever modified. Everything stays on your machine — no account,
+nothing uploaded.
 
 ## Contributing
 

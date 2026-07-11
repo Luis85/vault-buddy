@@ -63,6 +63,10 @@ export const useUpdatesStore = defineStore("updates", {
       if (this.phase !== "idle") return;
       try {
         const update = await check();
+        // GAP-28: the idle guard above ran BEFORE the await — a manual check
+        // or install that started while this hung must not be stomped by a
+        // stale quiet result.
+        if (this.phase !== "idle") return;
         if (update) {
           // same markRaw rule as checkForUpdates — see above
           this.available = markRaw(update);

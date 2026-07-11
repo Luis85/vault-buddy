@@ -23,18 +23,25 @@ jobs:
     steps:
       - name: Require dispatch from main
         if: github.ref_name != 'main'
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "::error::Dispatch this workflow from main (was: ${{ github.ref_name }})"
+          echo "::error::Dispatch this workflow from main (was: $REF_NAME)"
           exit 1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Bump version
-        run: node scripts/bump-version.mjs "${{ inputs.version }}"
+        env:
+          # Never interpolate a dispatch input into the script line — a
+          # crafted input would run as shell with a contents:write token
+          # (GAP-37). env + quoting keeps it data.
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: node scripts/bump-version.mjs "$REQUESTED_VERSION"
 
       - name: Resolve new version
         id: version

@@ -432,6 +432,25 @@ describe("Search", () => {
     expect(calls.some((c) => c.cmd === "open_search_result")).toBe(false);
   });
 
+  it("aria-expanded reflects whether hits are visible (GAP-33)", async () => {
+    // Static aria-expanded="true" claimed an always-open popup even for the
+    // empty/recents states.
+    const { wrapper } = mountSearch({ search_vaults: () => response([]) });
+    const input = wrapper.get('[data-testid="search-input"]');
+    expect(input.attributes("aria-expanded")).toBe("false");
+    expect(input.attributes("aria-autocomplete")).toBe("list");
+    await type(wrapper, "zzz");
+    expect(input.attributes("aria-expanded")).toBe("false"); // no matches
+  });
+
+  it("aria-expanded turns true once hits are visible (GAP-33)", async () => {
+    const { wrapper } = mountSearch();
+    const input = wrapper.get('[data-testid="search-input"]');
+    expect(input.attributes("aria-expanded")).toBe("false");
+    await type(wrapper, "alpha");
+    expect(input.attributes("aria-expanded")).toBe("true");
+  });
+
   it("Escape clears the query first instead of bubbling", async () => {
     const { wrapper } = mountSearch();
     const input = wrapper.get('[data-testid="search-input"]');

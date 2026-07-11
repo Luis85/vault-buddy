@@ -3,7 +3,7 @@ type: UseCase
 status: shipped
 domain: vault-management
 shipped_in: v0.3.0
-source_prd: "docs/PRD - Product Vision.md"
+source_prd: "docs/PRD.md"
 related_specs:
   - "docs/superpowers/specs/2026-07-03-increment-1-companion-daily-note-design.md"
 tags: [use-case, vault-management, foundation]
@@ -15,7 +15,7 @@ tags: [use-case, vault-management, foundation]
 
 ## Source
 
-Main PRD, [§14 Functional Requirements → Daily Notes](../PRD%20-%20Product%20Vision.md) (open, create) and [§11 Core Capabilities → Obsidian Integration → Daily Notes](../PRD%20-%20Product%20Vision.md). Shipped in Phase 1 — Foundation ("Daily Notes ✓").
+Main PRD, [§14 Functional Requirements → Daily Notes](../PRD.md) (open, create) and [§11 Core Capabilities → Obsidian Integration → Daily Notes](../PRD.md). Shipped in Phase 1 — Foundation ("Daily Notes ✓").
 
 ## Status: Shipped (v0.3.0)
 

@@ -106,6 +106,9 @@ export const useCaptureStore = defineStore("capture", {
     waitingForRecording: false,
     /** Post-save rename window; null once renamed/dismissed/expired. */
     lastSaved: null as { mp3: string; note: string | null } | null,
+    /** Wall-clock time `lastSaved` was armed — lets `dismissRenameIfStale`
+     * tell a genuinely stale prompt from a fresh one (GAP-29). */
+    lastSavedAtMs: null as number | null,
     renameError: null as string | null,
     renameTimer: null as ReturnType<typeof setTimeout> | null,
   }),
@@ -181,6 +184,22 @@ export const useCaptureStore = defineStore("capture", {
       for (const job of terminal.slice(0, excess)) {
         delete this.transcriptions[job.mp3];
       }
+    },
+    /**
+     * Re-key a seeded transcription row after a capture rename retargeted its
+     * queued job (Codex, PR #46). The row is keyed by mp3 path; without this
+     * a panel that seeded `transcriptions[from]` from transcription_queue_status
+     * keeps a stale row that never gets a terminal event (the worker now emits
+     * for `to`), so it stays visible/cancelable forever and overcounts the
+     * summary. A no-op when nothing was seeded — the worker's own
+     * capture:transcribing seeds `to` fresh, so conjuring a phantom row here
+     * would be wrong.
+     */
+    retargetTranscription(from: string, to: string) {
+      const job = this.transcriptions[from];
+      if (!job) return;
+      delete this.transcriptions[from];
+      this.transcriptions[to] = { ...job, mp3: to, name: nameOf(to) };
     },
     /**
      * Record an observation of the currently-active job for the "taking
@@ -264,6 +283,7 @@ export const useCaptureStore = defineStore("capture", {
         this.error = null;
         this.warning = null;
         this.lastSaved = { mp3: event.payload.mp3, note: event.payload.note };
+        this.lastSavedAtMs = Date.now();
         this.renameError = null;
         this.armRenameExpiry();
         // waitingForRecording is backend truth computed as `active.is_none()
@@ -366,6 +386,15 @@ export const useCaptureStore = defineStore("capture", {
         this.upsert(event.payload.mp3, { phase: "cancelled", progress: null, skipped: false });
         this.refreshWaitingForRecording();
       });
+      // A capture rename retargeted a still-queued job to a new path; move
+      // this window's seeded row to match, or it strands under the old key
+      // (Codex, PR #46 — the backend queue was fixed, the store was not).
+      await listen<{ from: string; to: string }>(
+        "capture:transcribeRetargeted",
+        (event) => {
+          this.retargetTranscription(event.payload.from, event.payload.to);
+        },
+      );
       await listen<{ atMs: number }>("capture:paused", (event) => {
         this.paused = true;
         this.pausedSinceMs = event.payload.atMs ?? Date.now();
@@ -469,7 +498,13 @@ export const useCaptureStore = defineStore("capture", {
       this.status = "saving";
       try {
         logBreadcrumb("capture: stop requested");
-        await invoke("stop_capture");
+        const r = await invoke<{ stillSaving: boolean }>("stop_capture");
+        if (r.stillSaving) {
+          // Finalize outlived the bounded wait (slow/network vault). Stay in
+          // the saving UI; capture:saved / capture:failed complete the
+          // transition (GAP-20 — the old bare Ok looked like success).
+          logBreadcrumb("capture: stop still saving after bounded wait");
+        }
         // capture:saved / capture:failed events complete the transition.
       } catch (e) {
         this.status = "idle";
@@ -553,7 +588,22 @@ export const useCaptureStore = defineStore("capture", {
         this.renameTimer = null;
       }
       this.lastSaved = null;
+      this.lastSavedAtMs = null;
       this.renameError = null;
+    },
+    /** Dismiss the rename prompt only when it is genuinely stale (older than
+     * the rename window) — the panel-reopen reset must not kill a fresh
+     * prompt armed while the panel was closed (GAP-29). The 30 s timer is
+     * the primary expiry; this is the reopen-time belt for throttled timers
+     * in a hidden webview. */
+    dismissRenameIfStale() {
+      if (!this.lastSaved) return;
+      if (this.lastSavedAtMs != null && Date.now() - this.lastSavedAtMs < RENAME_PROMPT_MS) return;
+      // A live prompt with no timestamp is a can't-happen (lastSavedAtMs is
+      // always armed alongside lastSaved) — falling through to dismiss
+      // degrades to the pre-GAP-29 behavior instead of risking a prompt that
+      // can never be judged stale and so pins itself open forever.
+      this.dismissRename();
     },
     async rename(title: string) {
       if (!this.lastSaved) return;

@@ -87,6 +87,75 @@ pub struct RenamePlan {
     pub note_from: PathBuf,
 }
 
+/// Ownership filter shared by the rename and transcription commands: a
+/// `.mp3` (any case) whose stem carries the capture-pattern prefix. Any
+/// command that mints or moves files NEXT TO a given mp3 must pass this —
+/// an arbitrary user mp3 must never grow a Vault Buddy sidecar or be
+/// shuffled by our rename machinery.
+pub fn is_capture_mp3(path: &Path) -> bool {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let is_mp3 = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+    is_mp3 && is_capture_base(&stem)
+}
+
+/// A canonical containment match: the owning vault plus the canonical forms
+/// of BOTH sides, so callers derive vault-relative paths from the same
+/// canonical prefix (`\\?\`-form on Windows) instead of mixing raw and
+/// resolved paths — mixing them makes `strip_prefix` fail (the `open_task`
+/// precedent in task_commands.rs).
+pub struct OwningVault<'v> {
+    pub vault: &'v crate::discovery::Vault,
+    pub vault_canonical: PathBuf,
+    pub path_canonical: PathBuf,
+}
+
+/// The registered vault whose folder contains `path`, matched on CANONICAL
+/// paths. `Path::starts_with` compares raw components without resolving
+/// `..` or links, so a lexical prefix check accepts `<vault>\..\anywhere`
+/// and symlink escapes (GAP-01). An unresolvable `path` is a rejection —
+/// never a fallback to lexical matching; a registry entry whose own folder
+/// can't resolve is skipped.
+///
+/// The FINAL COMPONENT must not itself be a link, even one whose target
+/// resolves inside the vault: write-bearing callers (the transcript
+/// sidecar minter, the rename planner) derive sibling paths from the RAW
+/// path, not from `path_canonical` — a symlinked file would carry those
+/// writes to the LINK's parent, which can sit outside every vault, while
+/// only the target was ever checked. Requiring the canonical path to equal
+/// `canonicalize(parent).join(file_name)` pins the actual directory entry
+/// to the folder the caller will write into; a plain file always satisfies
+/// this trivially, so ordinary containment is unaffected.
+pub fn vault_owning_path<'v>(
+    vaults: &'v [crate::discovery::Vault],
+    path: &Path,
+) -> Option<OwningVault<'v>> {
+    let path_canonical = std::fs::canonicalize(path).ok()?;
+    let parent_canonical = path.parent().and_then(|p| std::fs::canonicalize(p).ok())?;
+    let file_name = path.file_name()?;
+    if path_canonical != parent_canonical.join(file_name) {
+        return None;
+    }
+    for vault in vaults {
+        let Ok(vault_canonical) = std::fs::canonicalize(&vault.path) else {
+            continue;
+        };
+        if path_canonical.starts_with(&vault_canonical) {
+            return Some(OwningVault {
+                vault,
+                vault_canonical,
+                path_canonical,
+            });
+        }
+    }
+    None
+}
+
 /// Pure planning for the post-save rename: validates ownership and the
 /// title, derives the new base. Execution (reservation + rename_noreplace +
 /// embed retarget) lives in the capture crate so the safety rails are shared
@@ -96,11 +165,7 @@ pub fn rename_plan(mp3: &Path, new_title: &str) -> Result<RenamePlan, String> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let is_mp3 = mp3
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
-    if !is_mp3 || !is_capture_base(&stem) {
+    if !is_capture_mp3(mp3) {
         // Ownership filter: rename only files carrying our capture
         // pattern — never an arbitrary user mp3 handed in by mistake.
         return Err("Not a Vault Buddy capture file".to_string());
@@ -228,7 +293,8 @@ pub fn assert_path_inside_vault(vault_path: &Path, root: &Path) -> Result<(), St
 }
 
 /// Whether a `hard_link` error is decisive on its own and must propagate
-/// rather than be papered over by the guarded rename fallback.
+/// rather than be papered over by the platform fallback — native
+/// non-replacing `MoveFileExW` on Windows, the guarded rename elsewhere.
 /// `AlreadyExists` is the live collision signal — `to` is taken, exactly
 /// what non-replacing semantics need to report. `NotFound` means `from`
 /// itself is missing, which the fallback (also rooted at `from`) cannot
@@ -242,6 +308,53 @@ fn hard_link_error_is_decisive(e: &std::io::Error) -> bool {
         e.kind(),
         std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotFound
     )
+}
+
+/// The non-decisive-error fallback for filesystems that can't hard-link
+/// (exFAT/FAT32/SMB). On Windows: MoveFileExW WITHOUT
+/// MOVEFILE_REPLACE_EXISTING is natively non-replacing — it fails with
+/// ERROR_ALREADY_EXISTS when `to` exists, which io::Error maps to
+/// ErrorKind::AlreadyExists, exactly the signal our suffix-retry callers
+/// key on. This closes the TOCTOU window the old exists()+rename check had
+/// (GAP-06): a sync client creating the same name between check and rename
+/// was silently replaced — the one path where never-clobber could break.
+#[cfg(windows)]
+fn rename_noreplace_fallback(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    fn wide(p: &Path) -> Vec<u16> {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    // Flags deliberately 0: same-directory move (all callers), no replace,
+    // no copy fallback needed.
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+            wide(from).as_ptr(),
+            wide(to).as_ptr(),
+            0,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Non-Windows keeps the guarded rename it always had: these builds are the
+/// Linux compile gate and tests, never a shipped binary, and Unix has no
+/// portable non-replacing rename below renameat2 (not in std).
+#[cfg(not(windows))]
+fn rename_noreplace_fallback(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "destination exists",
+        ));
+    }
+    std::fs::rename(from, to)
 }
 
 /// Atomic non-replacing move: hard_link + remove_file fails with
@@ -259,13 +372,12 @@ fn hard_link_error_is_decisive(e: &std::io::Error) -> bool {
 ///   `rename_into_reserved`) into an endless suffix-minting loop, since
 ///   `to` existing looks like a fresh collision on every retry.
 /// - Any `hard_link` error *except* `AlreadyExists`/`NotFound` (see
-///   `hard_link_error_is_decisive`) falls back to the guarded
-///   exists()+rename path — the same racy-but-pre-check-guarded
-///   behavior this function had before hard links were introduced, so
-///   it can never be worse than what shipped before. This covers
-///   exFAT/FAT32/SMB filesystems that report all sorts of "can't hard
-///   link" codes, not just the ones we happen to have enumerated.
-///   NTFS/ext4 keep the atomic hard-link path.
+///   `hard_link_error_is_decisive`) falls back to the platform's native
+///   non-replacing move on Windows (MoveFileExW without
+///   MOVEFILE_REPLACE_EXISTING); the pre-check-guarded rename elsewhere.
+///   This covers exFAT/FAT32/SMB filesystems that report all sorts of
+///   "can't hard link" codes, not just the ones we happen to have
+///   enumerated. NTFS/ext4 keep the atomic hard-link path.
 pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(from, to) {
         Ok(()) => {
@@ -278,15 +390,7 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
             Ok(())
         }
         Err(e) if hard_link_error_is_decisive(&e) => Err(e),
-        Err(_) => {
-            if to.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    "destination exists",
-                ));
-            }
-            std::fs::rename(from, to)
-        }
+        Err(_) => rename_noreplace_fallback(from, to),
     }
 }
 
@@ -308,6 +412,7 @@ pub fn reserve_final(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::Vault;
     use chrono::NaiveDate;
 
     fn date() -> NaiveDate {
@@ -486,8 +591,10 @@ mod tests {
     // propagate" contract at the destination-collision boundary: this is
     // the one case where propagating is still correct (AlreadyExists is
     // decisive, see `hard_link_error_is_decisive`), and it's exercised
-    // through the real `hard_link` + guarded-fallback path since `to`
-    // already exists before `rename_noreplace` is even called.
+    // through the real `hard_link` + platform-fallback path (native
+    // non-replacing `MoveFileExW` on Windows, the guarded rename
+    // elsewhere) since `to` already exists before `rename_noreplace` is
+    // even called.
     #[test]
     fn rename_noreplace_refuses_existing_destination() {
         let dir = tempfile::tempdir().unwrap();
@@ -541,6 +648,63 @@ mod tests {
         rename_noreplace(&from, &to).unwrap();
         assert!(!from.exists(), "source removed");
         assert_eq!(std::fs::read_to_string(&to).unwrap(), "payload");
+    }
+
+    #[test]
+    fn fallback_refuses_existing_destination() {
+        // GAP-06: the non-decisive-error fallback (filesystems without hard
+        // links: exFAT/FAT32/SMB) must be non-replacing. On Windows that is
+        // MoveFileExW WITHOUT MOVEFILE_REPLACE_EXISTING (native, no TOCTOU
+        // window); elsewhere the guarded exists()+rename remains (the
+        // non-Windows build is a compile gate, never shipped).
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.mp3");
+        let to = dir.path().join("to.mp3");
+        std::fs::write(&from, "a").unwrap();
+        std::fs::write(&to, "keep me").unwrap();
+        let err = rename_noreplace_fallback(&from, &to).expect_err("must not replace");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn fallback_moves_when_destination_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.mp3");
+        let to = dir.path().join("to.mp3");
+        std::fs::write(&from, "a").unwrap();
+        rename_noreplace_fallback(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "a");
+    }
+
+    // Windows twin of the two contract tests above — same two contracts,
+    // gated to `cfg(windows)` because `rename_noreplace_fallback`'s Windows
+    // body calls MoveFileExW via the windows-sys FFI, which only links on a
+    // Windows target. This crate's tests run in the Linux `rust-core` CI
+    // job, so this test does not execute there; it executes once sub-pass
+    // D's Windows `cargo test` CI step lands (GAP-43) — until then it is a
+    // compile-only guarantee that the Windows arm has the same signature
+    // and behavior as the non-Windows arm the Linux job does exercise.
+    #[cfg(windows)]
+    #[test]
+    fn fallback_windows_contract() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let from = dir.path().join("from.mp3");
+        let to = dir.path().join("to.mp3");
+        std::fs::write(&from, "a").unwrap();
+        std::fs::write(&to, "keep me").unwrap();
+        let err = rename_noreplace_fallback(&from, &to).expect_err("must not replace");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "keep me");
+
+        let from2 = dir.path().join("from2.mp3");
+        let to2 = dir.path().join("to2.mp3");
+        std::fs::write(&from2, "a").unwrap();
+        rename_noreplace_fallback(&from2, &to2).unwrap();
+        assert!(!from2.exists());
+        assert_eq!(std::fs::read_to_string(&to2).unwrap(), "a");
     }
 
     #[cfg(unix)]
@@ -627,5 +791,115 @@ mod tests {
         let mp3 = Path::new("/v/2026/07/2026-07-04 1405 Meeting (2).mp3");
         let plan = rename_plan(mp3, "Standup").unwrap();
         assert_eq!(plan.new_base, "2026-07-04 1405 Standup");
+    }
+
+    fn vault_at(dir: &Path) -> Vault {
+        Vault {
+            id: "v1".into(),
+            name: "V".into(),
+            path: dir.to_string_lossy().into_owned(),
+            open: false,
+        }
+    }
+
+    #[test]
+    fn is_capture_mp3_requires_capture_stem_and_mp3_extension() {
+        assert!(is_capture_mp3(Path::new("/v/2026-07-04 1405 Meeting.mp3")));
+        // extension is case-insensitive, same as rename_plan's check
+        assert!(is_capture_mp3(Path::new("/v/2026-07-04 1405 Meeting.MP3")));
+        assert!(!is_capture_mp3(Path::new("/v/holiday-song.mp3")));
+        assert!(!is_capture_mp3(Path::new("/v/2026-07-04 1405 Meeting.md")));
+    }
+
+    #[test]
+    fn vault_owning_path_matches_a_file_inside_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let mp3 = vault_dir.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&mp3, "x").unwrap();
+        let vaults = vec![vault_at(&vault_dir)];
+        let owned = vault_owning_path(&vaults, &mp3).expect("inside the vault");
+        assert_eq!(owned.vault.id, "v1");
+        assert_eq!(owned.path_canonical, std::fs::canonicalize(&mp3).unwrap());
+        assert_eq!(
+            owned.vault_canonical,
+            std::fs::canonicalize(&vault_dir).unwrap()
+        );
+    }
+
+    #[test]
+    fn vault_owning_path_rejects_a_dotdot_escape() {
+        // GAP-01: Path::starts_with compares raw components, so
+        // `<vault>/../outside.mp3` passed the old lexical prefix check while
+        // pointing at a real file OUTSIDE the vault.
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let outside = dir.path().join("2026-07-04 1405 Outside.mp3");
+        std::fs::write(&outside, "x").unwrap();
+        let sneaky = vault_dir.join("..").join("2026-07-04 1405 Outside.mp3");
+        let vaults = vec![vault_at(&vault_dir)];
+        assert!(sneaky.exists(), "the escape path must point at a real file");
+        assert!(vault_owning_path(&vaults, &sneaky).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_owning_path_rejects_a_symlink_escaping_the_vault() {
+        // GAP-01: a symlink planted inside the vault whose target resolves
+        // OUTSIDE it must not pass containment via canonicalize() alone.
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let outside = dir.path().join("2026-07-04 1405 Outside.mp3");
+        std::fs::write(&outside, "x").unwrap();
+        let link = vault_dir.join("2026-07-04 1405 Linked.mp3");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let vaults = vec![vault_at(&vault_dir)];
+        assert!(vault_owning_path(&vaults, &link).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_owning_path_rejects_a_symlinked_file_even_when_its_target_is_inside() {
+        // Whole-branch review, GAP-01 seam: a symlink whose TARGET resolves
+        // inside the vault passed the gate, but write-bearing callers derive
+        // sibling paths (transcript sidecar, rename targets) from the RAW
+        // path — writes would land at the LINK's parent, outside the vault.
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let real = vault_dir.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&real, "x").unwrap();
+        let outside_link = dir.path().join("2026-07-04 1405 Meeting.mp3");
+        std::os::unix::fs::symlink(&real, &outside_link).unwrap();
+        let inside_link = vault_dir.join("2026-07-04 1405 Alias.mp3");
+        std::os::unix::fs::symlink(&real, &inside_link).unwrap();
+        let vaults = vec![vault_at(&vault_dir)];
+        assert!(vault_owning_path(&vaults, &outside_link).is_none());
+        assert!(vault_owning_path(&vaults, &inside_link).is_none());
+        // the real file itself still matches
+        assert!(vault_owning_path(&vaults, &real).is_some());
+    }
+
+    #[test]
+    fn vault_owning_path_rejects_missing_files_and_skips_dead_vaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        std::fs::create_dir(&vault_dir).unwrap();
+        let mp3 = vault_dir.join("2026-07-04 1405 Meeting.mp3");
+        std::fs::write(&mp3, "x").unwrap();
+        // an unresolvable path is a rejection, not a fallback to lexical matching
+        assert!(vault_owning_path(&[vault_at(&vault_dir)], Path::new("/no/such.mp3")).is_none());
+        // a registry entry whose folder is gone is skipped; a later vault still matches
+        let dead = Vault {
+            id: "dead".into(),
+            name: "Dead".into(),
+            path: dir.path().join("gone").to_string_lossy().into_owned(),
+            open: false,
+        };
+        let vaults = vec![dead, vault_at(&vault_dir)];
+        assert_eq!(vault_owning_path(&vaults, &mp3).unwrap().vault.id, "v1");
     }
 }

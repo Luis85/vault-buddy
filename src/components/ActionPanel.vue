@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
+import AppIcon from "./AppIcon.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import ImportVaultPicker from "./ImportVaultPicker.vue";
@@ -36,7 +37,12 @@ const VIEW_TITLES: Record<string, string> = {
   search: "Search",
   importPicker: "Import document",
 };
-const title = computed(() => VIEW_TITLES[view.value] ?? "Vaults");
+// The tasks view is dual-mode: a null vault id is the cross-vault aggregate.
+const title = computed(() =>
+  view.value === "tasks" && store.tasksVaultId === null
+    ? "All tasks"
+    : (VIEW_TITLES[view.value] ?? "Vaults"),
+);
 
 // `/` jumps to search from the vault list — unless the keystroke is going
 // into a text field (the vault filter must keep receiving "/"). Ctrl/Cmd+F
@@ -72,6 +78,10 @@ const FILTER_THRESHOLD = 5;
 const showFilter = computed(
   () => view.value === "list" && store.vaults.length > FILTER_THRESHOLD,
 );
+const totalOpenTasks = computed(() =>
+  Object.values(store.taskCounts).reduce((a, b) => a + b, 0),
+);
+const tasksKey = computed(() => store.tasksVaultId ?? "all");
 const filtered = computed(() => {
   const query = filter.value.trim().toLowerCase();
   if (!query) return store.vaults;
@@ -83,6 +93,8 @@ const filtered = computed(() => {
 });
 
 function onFilterEscape(event: KeyboardEvent) {
+  // GAP-31: IME composition can emit Escape; that must dismiss the IME, not clear the filter
+  if (event.isComposing) return;
   if (filter.value) {
     // first Escape clears the filter; a second one bubbles up and closes
     filter.value = "";
@@ -94,14 +106,18 @@ function onFilterEscape(event: KeyboardEvent) {
 // longer fires on close and transient UI used to survive a close-and-reopen.
 // `shownNonce` bumps each time Rust re-shows the panel (see PanelRoot /
 // toggle_panel's panel-shown event): treat it as the reopen signal and clear
-// what a close used to reset — the filter text and a lingering post-save
-// rename prompt. (The record chooser is now a store-owned view, reset by
+// what a close used to reset — the filter text and a STALE rename prompt
+// only (GAP-29: a tray-stopped recording arms `lastSaved` while the panel is
+// hidden, and an unconditional dismiss here killed that prompt before it
+// ever rendered — the 30 s window only worked if the panel was already
+// open). `dismissRenameIfStale` keeps anything younger than
+// RENAME_PROMPT_MS. (The record chooser is now a store-owned view, reset by
 // `refresh`/`showList`, so it needs no local teardown here.)
 watch(
   () => store.shownNonce,
   () => {
     filter.value = "";
-    capture.dismissRename();
+    capture.dismissRenameIfStale();
   },
 );
 </script>
@@ -130,24 +146,14 @@ watch(
           data-testid="search-toggle"
           @click="store.openSearch()"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <AppIcon>
             <circle
               cx="11"
               cy="11"
               r="8"
             />
             <path d="m21 21-4.35-4.35" />
-          </svg>
+          </AppIcon>
         </button>
         <button
           v-if="view === 'list'"
@@ -158,17 +164,7 @@ watch(
           data-testid="settings-toggle"
           @click="store.openSettings()"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <AppIcon>
             <circle
               cx="12"
               cy="12"
@@ -177,7 +173,7 @@ watch(
             <path
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
-          </svg>
+          </AppIcon>
         </button>
         <button
           v-else
@@ -188,19 +184,9 @@ watch(
           data-testid="back-button"
           @click="store.back()"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <AppIcon>
             <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
+          </AppIcon>
         </button>
       </div>
     </div>
@@ -285,11 +271,11 @@ watch(
       <Transcriptions />
     </div>
     <div
-      v-else-if="view === 'tasks' && store.tasksVaultId"
+      v-else-if="view === 'tasks'"
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <Tasks
-        :key="store.tasksVaultId"
+        :key="tasksKey"
         :vault-id="store.tasksVaultId"
       />
     </div>
@@ -309,6 +295,26 @@ watch(
       v-else
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
+      <button
+        v-if="store.vaults.length > 0"
+        type="button"
+        data-testid="all-tasks"
+        :disabled="store.busyVaultId !== null"
+        class="mb-2 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-left text-sm text-slate-200 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+        aria-label="All tasks across every vault"
+        @click="store.openAllTasks()"
+      >
+        <AppIcon>
+          <path d="M9 11l3 3 8-8" />
+          <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+        </AppIcon>
+        <span class="min-w-0 flex-1 truncate">All tasks</span>
+        <span
+          v-if="totalOpenTasks > 0"
+          data-testid="all-tasks-count"
+          class="shrink-0 rounded-full bg-violet-500 px-1.5 text-center text-[10px] font-semibold leading-4 text-white"
+        >{{ totalOpenTasks }}</span>
+      </button>
       <VaultList
         v-if="filtered.length > 0"
         :vaults="filtered"

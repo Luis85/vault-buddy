@@ -92,13 +92,24 @@ describe("capture store", () => {
   });
 
   it("start failure surfaces the error and stays idle", async () => {
+    // GAP-21: start_capture became an async command (spawn_blocking on the
+    // Rust side); the frontend already awaits invoke(), so this rejection
+    // path's timing is unchanged — re-verified here, mirroring the
+    // status-resets + error-toast idiom used for stop/cancel/retranscribe.
     mockIPC(() => {
       throw "No microphone found";
     });
     const store = useCaptureStore();
+    const notes = useNotificationsStore();
     await store.start("v1");
     expect(store.status).toBe("idle");
     expect(store.error).toContain("No microphone");
+    expect(
+      notes.items.some((i) => i.kind === "error" && i.message.includes("No microphone")),
+    ).toBe(true);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("capture start rejected"),
+    );
   });
 
   it("stop passes through saving and returns to idle on saved event", async () => {
@@ -128,6 +139,21 @@ describe("capture store", () => {
     expect(store.lastSavedFile).toBe("/v/m.mp3");
     expect(store.error).toBeNull();
     expect(store.warning).toBeNull();
+  });
+
+  it("keeps the saving UI when stop resolves stillSaving (GAP-20)", async () => {
+    // A 15s finalize timeout used to resolve as a bare success; the typed
+    // result must NOT flip the store out of "saving" — capture:saved/failed
+    // events own that transition.
+    mockIPC((cmd) => {
+      if (cmd === "stop_capture") return { stillSaving: true };
+      throw new Error(`unexpected ${cmd}`);
+    });
+    const store = useCaptureStore();
+    store.status = "recording";
+    await store.stop();
+    expect(store.status).toBe("saving");
+    expect(store.error).toBeNull();
   });
 
   it("failed event resets to idle with error", async () => {
@@ -234,6 +260,60 @@ describe("capture store", () => {
     store.dismissTranscription("queued.mp3");
     expect(store.transcriptions["active.mp3"]).toBeDefined();
     expect(store.transcriptions["queued.mp3"]).toBeDefined();
+  });
+
+  it("transcribeRetargeted re-keys a seeded queued row to the renamed mp3", async () => {
+    // Codex review, PR #46: the shell's rename retarget moved only the Rust
+    // queue entry; a panel that had already seeded transcriptions[old] from
+    // transcription_queue_status kept the stale row, which never received a
+    // terminal event (the worker emits for the NEW mp3) — visible and
+    // cancelable forever, overcounting the summary.
+    mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
+    const store = useCaptureStore();
+    await store.init();
+    store.transcriptions = {
+      "/v/old.mp3": { mp3: "/v/old.mp3", vaultId: "v1", name: "old", phase: "queued", progress: null, model: null, error: null, startedAtMs: 5 },
+    };
+    state.eventHandlers["capture:transcribeRetargeted"]!({ payload: { from: "/v/old.mp3", to: "/v/new (2).mp3" } });
+    expect(store.transcriptions["/v/old.mp3"]).toBeUndefined();
+    const moved = store.transcriptions["/v/new (2).mp3"];
+    expect(moved).toBeDefined();
+    expect(moved.phase).toBe("queued"); // queued state preserved
+    expect(moved.vaultId).toBe("v1");
+    expect(moved.mp3).toBe("/v/new (2).mp3"); // mp3 field re-pointed
+    expect(moved.name).toBe("new (2)"); // display name recomputed from the new path
+  });
+
+  it("transcribeRetargeted re-keys a TERMINAL (done) row after a rename", async () => {
+    // Codex review, PR #46 round 4: if transcription finishes before the user
+    // accepts the 30s rename prompt, the store keeps a terminal done/failed
+    // row keyed to the old mp3. The shell now emits the retarget on a sidecar
+    // move too (not only a queued-job match), and the store handler must move
+    // the terminal row so "open transcript"/retry point at the renamed file.
+    mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
+    const store = useCaptureStore();
+    await store.init();
+    store.transcriptions = {
+      "/v/old.mp3": { mp3: "/v/old.mp3", vaultId: "v1", name: "old", phase: "done", progress: 1, model: null, error: null, startedAtMs: 5 },
+    };
+    state.eventHandlers["capture:transcribeRetargeted"]!({ payload: { from: "/v/old.mp3", to: "/v/new.mp3" } });
+    expect(store.transcriptions["/v/old.mp3"]).toBeUndefined();
+    const moved = store.transcriptions["/v/new.mp3"];
+    expect(moved).toBeDefined();
+    expect(moved.phase).toBe("done"); // terminal state preserved
+    expect(moved.mp3).toBe("/v/new.mp3");
+    expect(moved.name).toBe("new");
+  });
+
+  it("transcribeRetargeted is a no-op when no row was seeded for the old mp3", async () => {
+    // The worker will emit capture:transcribing for the new name and seed it
+    // fresh — the retarget event must not conjure a phantom row.
+    mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
+    const store = useCaptureStore();
+    await store.init();
+    state.eventHandlers["capture:transcribeRetargeted"]!({ payload: { from: "/v/old.mp3", to: "/v/new.mp3" } });
+    expect(store.transcriptions["/v/old.mp3"]).toBeUndefined();
+    expect(store.transcriptions["/v/new.mp3"]).toBeUndefined();
   });
 
   it("surfaces a transcription failure reason as a notification", async () => {
@@ -774,6 +854,19 @@ describe("capture store", () => {
     vi.advanceTimersByTime(2_000);
     expect(store.lastSaved).toBeNull();
     vi.useRealTimers();
+  });
+
+  it("panel reopen keeps a rename prompt younger than the rename window (GAP-29)", () => {
+    // A tray-stopped recording arms lastSaved in the hidden panel's store;
+    // the shownNonce watcher used to dismiss it before it ever rendered.
+    const store = useCaptureStore();
+    store.lastSaved = { mp3: "/v/2026-07-10 1200 Meeting.mp3", note: null };
+    store.lastSavedAtMs = Date.now() - 5_000; // 5 s old — fresh
+    store.dismissRenameIfStale();
+    expect(store.lastSaved).not.toBeNull();
+    store.lastSavedAtMs = Date.now() - 31_000; // past RENAME_PROMPT_MS — stale
+    store.dismissRenameIfStale();
+    expect(store.lastSaved).toBeNull();
   });
 
   it("rename calls rename_capture and updates the saved file", async () => {

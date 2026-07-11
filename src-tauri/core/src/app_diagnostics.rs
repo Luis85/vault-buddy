@@ -24,7 +24,16 @@ pub fn check_previous_run(dir: &Path) -> PreviousRun {
         Ok(content) if !content.starts_with("clean") => {
             PreviousRun::Unclean(content.trim().to_string())
         }
-        _ => PreviousRun::CleanOrFirst,
+        Ok(_) => PreviousRun::CleanOrFirst,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PreviousRun::CleanOrFirst,
+        Err(e) => {
+            // Unreadable marker: crash detection silently degraded before.
+            log::warn!(
+                "diagnostics: cannot read run marker {}: {e}",
+                dir.join(RUN_MARKER).display()
+            );
+            PreviousRun::CleanOrFirst
+        }
     }
 }
 
@@ -171,5 +180,17 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         write_running_marker(dir.path(), "9.9.9").unwrap();
         assert!(!crash_record_looks_fresh(dir.path()));
+    }
+
+    #[test]
+    fn unreadable_marker_reads_as_clean_or_first() {
+        // Non-NotFound read error (marker path is a directory): degrade
+        // value unchanged, only logged now.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(RUN_MARKER)).unwrap();
+        assert!(matches!(
+            check_previous_run(dir.path()),
+            PreviousRun::CleanOrFirst
+        ));
     }
 }

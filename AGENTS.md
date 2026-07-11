@@ -74,7 +74,7 @@ here is deliberately only the shipped increments.
 | [CLAUDE.md](CLAUDE.md) | Thin pointer at this file for Claude Code |
 | [CONTEXT.md](CONTEXT.md) | The domain glossary / ubiquitous language (Vault, Buddy, Capture, Task vs Todo vs Task Tag, Runtime, Capability…). Use these terms in code, docs, and commits; keep it current via the `domain-modeling` skill |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Contributor setup, build prerequisites, CI/release pipelines, logs & crash reporting, capture config reference |
-| [docs/PRD - Product Vision.md](docs/PRD%20-%20Product%20Vision.md) | Vision, principles, capability roadmap |
+| [docs/PRD.md](docs/PRD.md) | Vision, principles, capability roadmap |
 | [docs/prds/](docs/prds/) | Per-domain PRDs (knowledge intake, task management, …) |
 | [docs/use-cases/](docs/use-cases/) | One file per use case, reconciled against reality on each release |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specs — the *why* behind each increment's shape |
@@ -228,24 +228,32 @@ Three OS windows, one frontend bundle, one Rust process:
 - The **frontend never touches the filesystem or windows directly** — every
   effect goes through an IPC command; every state change Rust owns comes
   back as an event.
-- **Sync commands run on the main thread** (that is why window-touching
-  commands are sync and `search_vaults` is async — see the window system
-  section).
+- **Sync commands run on the main thread** — the window-thread invariant
+  pins only *window-touching* commands to sync. Everything that does
+  blocking filesystem/device work and touches no window API is async on
+  the blocking pool: `search_vaults`, `start_capture`, `stop_capture`
+  (typed `stillSaving` on its bounded-wait expiry), `list_recordings`,
+  `list_tasks`, `count_open_tasks`, `list_audio_devices`, the task WRITE
+  commands `add_task`/`set_task_status`/`update_task` (fsync'd frontmatter
+  writes — a slow/network vault must not freeze the event loop on a save;
+  `open_task` stays sync like the sibling `open_*` URI launches), and the
+  MCP settings commands. `start_capture`'s buddy-show indicator tail is
+  marshalled back via `run_on_main_thread`.
 - The app is **single-instance** (`tauri-plugin-single-instance`, registered
   FIRST in the builder — keep it first): a second launch exits immediately
   and the surviving instance reveals the buddy instead.
 
 ### The IPC surface
 
-All 52 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 54 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
-| `capture_commands.rs` | `start_capture`, `stop_capture`, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings`, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` |
+| `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` *(async)* |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`, `set_task_status`, `count_open_tasks` |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks` *(async)*, `add_task` *(async)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash) |
@@ -269,6 +277,7 @@ actually subscribe.
 | `capture:started/paused/resumed/saved/failed/warning` | Recording lifecycle | capture store (init in BuddyRoot **and** PanelRoot) |
 | `capture:level` | Mic level ~5 Hz, 0–1, advisory & lossy | capture store |
 | `capture:transcribing/transcribeProgress/transcribed/transcribeSkipped/transcribeFailed/transcribeCancelled` | Transcription job lifecycle (each carries the `mp3`) | capture store |
+| `capture:transcribeRetargeted` | A rename moved a queued job OR a transcript sidecar `{from, to}`; the store re-keys its seeded row (queued or terminal) | capture store |
 | `capture:modelDownload` / `capture:modelReady` | Whisper model download progress / ready | capture store |
 | `mcp:status` | MCP server state `{state, port?, message?}` on every transition | McpSettings (panel) |
 | `mcp:write` | An MCP client's successful vault write `{kind, title, vaultName}` | useBuddyAnnouncements (buddy window ONLY — exactly-once) |
@@ -323,7 +332,7 @@ resize entirely:
 - **`main`** — the buddy, fixed 88×88, the only window the user drags and the
   only one whose position is persisted. It never changes size, so it is
   structurally flicker-proof.
-- **`panel`** — the vault/settings panel (360×340), created hidden.
+- **`panel`** — the vault/settings panel (400×420), created hidden.
 - **`bubble`** — the greeting speech bubble (260×150), created hidden.
 
 `panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
@@ -390,7 +399,7 @@ Invariants:
   exit path and the updater reuse these commands — there is no offset/shift to
   undo, because the buddy never moves to make room. The flip side: **a sync
   command must never block** — long work belongs on a worker thread or in an
-  async command (see docs/Gaps.md for the current violations).
+  async command.
 - **The panel closes itself when focus really leaves the app.**
   `schedule_focus_out_check` is fired only from the **panel** window's
   `WindowEvent::Focused(false)` (keyed on `window.label() == "panel"`): only
@@ -476,7 +485,8 @@ exist, each documented in its own domain section below:
 1. the **capture** domain — recordings and companion notes;
 2. the **transcription** domain — the `<base>.transcript.md` sidecar;
 3. the **tasks** domain — creating a task document (collision-safe);
-4. the **tasks** domain — the surgical `status:` frontmatter toggle;
+4. the **tasks** domain — the surgical multi-key frontmatter field write
+   (status toggle, rename, due/priority/tags edit — one generalized writer);
 5. the **document-import** domain — a Pandoc-converted markdown note plus
    its extracted-media sibling folder.
 
@@ -487,6 +497,9 @@ directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`,
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`,
 `docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md`,
+`docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md`,
+`docs/superpowers/specs/2026-07-09-task-tags-design.md`,
+`docs/superpowers/specs/2026-07-10-task-aggregation-design.md`,
 `docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
@@ -549,6 +562,10 @@ found the failure it prevents:
   `tray::hide_buddy` (the single guarded chokepoint); quit/close finalize
   on worker threads — never block the event loop — and the app exits only
   after the save lands.
+  One scoped exception (GAP-08): a startup-wedged reservation with no
+  `.part` on disk no longer blocks hide/quit/close — nothing exists to
+  strand; once a late worker reports its `.part`, the wait-forever
+  posture resumes.
 - **Pause is a session Control message** (`Control { Stop, Pause, Resume }`
   on the one channel the shell's device thread forwards): streams stay
   open, drained samples are discarded, nothing is encoded, the fsync
@@ -559,9 +576,20 @@ found the failure it prevents:
   keeps the `YYYY-MM-DD HHmm ` prefix and refuses non-capture files;
   execution reuses the reservation + `rename_noreplace` + suffix-retry
   loop, retargets exactly the note's embed line, and a note-side failure
-  after a successful audio move degrades to a warning (audio first).
-  Config writes stay app-side: owned temp + REPLACING rename is correct
-  for `config.json` only, serialized behind `ConfigWriteLock`.
+  after a successful audio move degrades to a warning (audio first). The
+  rename ALSO moves `<old>.transcript.md` onto the reserved base on the
+  same rails and retargets the note's `.transcript` embed alongside the
+  audio embed; a transcript-side collision or failure degrades to the same
+  warning, leaving the old sidecar and its old embed intact rather than
+  orphaning it. The command REQUIRES canonical vault containment
+  (`vault_owning_path`, GAP-01/GAP-07) before planning a rename, refuses
+  outright while the recording is the ACTIVE transcription job (renaming
+  underneath in-flight work would orphan the worker's terminal write), and
+  retargets a still-QUEUED job to the landed name (which may carry a
+  collision suffix the plan didn't predict) so a pending transcription
+  follows the file instead of stranding under the old name. Config writes
+  stay app-side: owned temp + REPLACING rename is correct for
+  `config.json` only, serialized behind `ConfigWriteLock`.
 - **Companion note & follow-up template**: the optional `.md` embeds the audio
   and carries recording metadata; with the per-vault `follow_up_template` on
   (default), `render_note` (core) also appends a `## Follow-up` scaffold (action
@@ -716,52 +744,172 @@ type: Task
 status: new
 title: "Buy milk"
 created: 2026-07-08
+due: 2026-07-15
+priority: high
 ---
 ```
 
 `type: Task` is the identity (so hand-authored task files count too), and the
-checkbox is binary against `status: done`. Per-vault config adds one field,
-`tasks_folder` (default `Tasks`), alongside the capture config in the same
-app-side `config.json` (`tasks_root()` resolves the default). All logic lives
-in the pure `core::tasks` crate (unit-tested on Linux); the shell
-(`task_commands.rs`) resolves a vault + tasks root and delegates.
+checkbox is binary against `status: done`. `due` (`YYYY-MM-DD`) and `priority`
+(`high|normal|low`) are optional widened fields (v0.5.2, the tasks-todo-list
+increment): both lines are written only when present — absent `due` means no
+due date and clearing it on edit **removes the line**; absent `priority` means
+normal and `priority: normal` is **never written** (keeps hand-authored files
+minimal and round-trip stable). Reads degrade gracefully: an unparseable `due`
+(anything not plain `YYYY-MM-DD`, checked by `is_valid_due` — no calendar
+validity, so `2026-02-31` is accepted like Obsidian's own date picker tolerates
+it) sorts/buckets as no-date, and an unknown `priority` value sorts/renders as
+normal — same defensive-read posture as the rest of the vault domain. Per-vault
+config adds one field, `tasks_folder` (default `Tasks`), alongside the capture
+config in the same app-side `config.json` (`tasks_root()` resolves the
+default). All logic lives in the pure `core::tasks` crate (unit-tested on
+Linux); the shell (`task_commands.rs`) resolves a vault + tasks root and
+delegates.
+
+**Tags (v0.5.3, task-tags increment).** `tags: Vec<String>` (empty when none)
+is the third widened field, `note_tags` (beside `note_field`) reading
+Obsidian's frontmatter `tags:` property in every form it accepts — flow
+`[work, home/errands]`, block `- item` list, legacy comma/space string — plus
+the singular `tag:` alias, read only when `tags:` is absent (`tags:` always
+wins, even present-but-empty). Read normalization is lenient, matching the
+rest of the vault domain's defensive-read posture: strip an optional leading
+`#`, unquote, validate against `is_valid_tag`'s charset (letters/digits/`-`/
+`_`/`/`, at least one non-digit — rejects all-numeric and anything with a
+space) and silently drop invalid entries, dedupe case-insensitively keeping
+the first-seen casing. Writes are the opposite posture — strict and
+canonical: always single-line flow style (`tags: [work, home/errands]`),
+written only when non-empty, and the shell's `validated_tags` runs every tag
+through the same `is_valid_tag` charset check but turns a failure into an
+inline error naming the offending token instead of dropping it, so a bad tag
+can never silently vanish on save. `Some([])` from the editor/patch clears —
+removes the line (or block) entirely, same "absent means gone" semantics as
+`due`.
 
 - **Two sanctioned vault writes, same discipline as capture/transcript.**
-  *Create* (`create_task`) reuses the collision-safe atomic note writer
-  (exclusive-create temp + `rename_noreplace`, ` (N)` suffix on collision —
-  never clobbers). *Toggle* (`set_status` → `set_task_status`) is a surgical
-  read-modify-write that changes ONLY the frontmatter `status:` line, preserving
-  every other field and the body byte-for-byte (CRLF included), via the shared
-  `capture_note::write_atomic_replacing` (temp + fsync + REPLACING rename). It
-  inserts a `status:` line for a hand-authored task that lacks one, always
-  terminated so it can't corrupt the closing fence; a file that is not
-  `type: Task` (or whose frontmatter never closes) is refused.
-- **`is_task` requires a CLOSED frontmatter fence** so the list and the toggle
-  agree on what is a task — the list must never surface a row the toggle would
+  *Create* (`create_task`, now threading through optional `due`/`priority`)
+  reuses the collision-safe atomic note writer (exclusive-create temp +
+  `rename_noreplace`, ` (N)` suffix on collision — never clobbers). *Field
+  write* is `set_fields(content, updates: &[(&str, Option<&str>)])`, the
+  generalized multi-key surgical rewriter behind both the status toggle and
+  the inline editor: for each `(key, value)`, `Some(v)` rewrites the existing
+  `key:` line in place or inserts one at the closing fence, `None` removes the
+  line, and everything else (CRLF, unknown keys, key order, body) is preserved
+  byte-for-byte; it refuses a non-`type: Task` document or an unclosed
+  frontmatter fence (`None`). `set_status` is now a thin one-entry wrapper over
+  `set_fields` so the list/toggle agreement invariants stay on one
+  implementation. On disk, `update_task_fields(root, path, updates)` is the
+  shared write path (canonicalize root+path + containment + read + atomic
+  `capture_note::write_atomic_replacing` — temp + fsync + REPLACING rename);
+  `set_task_status` and the shell's `update_task` command both delegate to it,
+  so a rename/due/priority edit and a status flip go through the exact same
+  containment and atomicity guarantees. **Block-list consumption** is the one
+  writer change tags needed: when a matched key's line has an EMPTY value
+  (nothing but whitespace after the colon) and is followed by YAML list-item
+  lines (`- item`, indented or not, including a mapping item's indented
+  continuation lines), a rewrite or removal of that key consumes those list
+  lines too — a rewrite drops the key line + items and emits the single new
+  flow line, a removal drops them all; keys with an inline value are
+  unaffected. This is what lets a hand-authored block-style `tags:` list
+  round-trip to one canonical flow line on the next save instead of leaving
+  orphaned `- item` lines behind — the round-trip stays surgical, same as
+  every other field.
+- **`is_task` requires a CLOSED frontmatter fence** so the list and the writer
+  agree on what is a task — the list must never surface a row a write would
   reject.
 - **Path safety.** `safe_recording_root` (lexical) + `assert_path_inside_vault`
   (canonicalizes the nearest existing ancestor, catching a symlink/junction
   even when the leaf doesn't exist yet) gate the save/create paths;
-  `assert_root_inside_vault` gates the read; `set_task_status` canonicalizes
-  root+path and requires containment. `add_task` also rejects a missing vault
-  dir (`!is_dir()`) before creating, so a stale registry can't resurrect a
-  deleted vault. `set_capture_config` preserves `tasks_folder` (read under
-  `ConfigWriteLock`) so saving capture settings can't reset it.
+  `assert_root_inside_vault` gates the read; `update_task_fields` (and
+  `open_task`, separately) canonicalize root+path and require containment.
+  `add_task` also rejects a missing vault dir (`!is_dir()`) before creating, so
+  a stale registry can't resurrect a deleted vault. `set_capture_config`
+  preserves `tasks_folder` (read under `ConfigWriteLock`) so saving capture
+  settings can't reset it.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
   tasks organized into subfolders are all surfaced. The recursive walk is the
   shared `core::vault_walk` helper — canonical containment (a
   symlink/junction escaping the folder is skipped), a walked-set bounding
   reparse cycles, dot-directory skips (`.obsidian`/`.trash`/`.git`) — with
-  the per-file `type: Task` filter in `tasks.rs`. Output is one flat sorted
-  list — open first (`status != "done"`), newest `created`, then title —
-  across the whole subtree. `count_open_tasks` powers the vault-row badge.
+  the per-file `type: Task` filter in `tasks.rs`. The sort stays clock-free:
+  open tasks (`status != "done"`) first, then due ascending (no/unparseable
+  due sorts last), then priority tier (high < normal < low), then newest
+  `created`, then title; done tasks ignore due and sort by newest `created`
+  then title. "Overdue"/"Today" need a clock, so date-bucket grouping is
+  deliberately the frontend's job, not the sort's. `count_open_tasks` powers
+  the vault-row badge.
+- **`open_task(id, path)`** is a read-only Obsidian handoff for the row's
+  title click, mirroring `open_recording`: canonicalize + require containment
+  inside the vault's tasks root, compute the vault-relative path against the
+  **canonical** vault path (a lexical relative path would fail `strip_prefix`
+  against `list_tasks`' canonical paths, notably Windows' `\\?\` form), then
+  `uri::launch(uri::open_file_uri(...))` — logged like every other vault open,
+  never writes.
 - **Frontend** (`Tasks.vue`, self-contained like `Recordings.vue` — no new
-  store): a `tasks` panel view reached from a per-row Tasks button; a folder
-  setting, an add-task input, and a checkbox list. Toggles are optimistic
-  (revert + toast on failure) and **serialized per row** (a reactive in-flight
-  Set disables the checkbox until its write resolves, so two concurrent writes
-  for one task can't land out of order). `TaskItem`/`TaskDto` fields match
-  camelCase across Rust↔TS.
+  store): a `tasks` panel view reached from a per-row Tasks button; an
+  add-task input with an optional due/priority row (the tasks-folder setting
+  lives in the per-vault Vault settings view, not here), and a
+  date-bucketed list (Overdue / Today / Upcoming / No date / Done — bucket
+  headers render only once a dated open task exists, so a vault that never
+  uses due dates keeps the flat list it always had). A task's title is a click
+  target that calls `open_task` — a successful launch closes the panel
+  (best-effort `close_panel`, same as every other Obsidian handoff), a failed
+  one keeps it open for the error toast. A pencil opens an inline editor
+  (title, due, priority, tags) with one row editable at a time, Save sending
+  only the changed fields (`clearDue: true` for an emptied date; tags follows
+  the same changed-fields rule below) in a single `update_task` call.
+  Toggle/archive/edit are all optimistic (revert + toast on failure) and
+  **serialized per row** (a reactive in-flight Set disables the row's
+  controls until its write resolves, so two concurrent writes for one task
+  can't land out of order — the editor shares this guard with
+  toggle/archive). A title filter appears above 5 tasks, same threshold as
+  the vault list; its query applies only while the input is shown, so
+  archiving below the threshold can't strand a stale, invisible filter.
+  `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
+  camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
+  task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
+  prop; `null` is the aggregate mode, reached via the "All tasks" bar above
+  the vault list in `ActionPanel.vue` (badge = `store.taskCounts` summed) and
+  the store's `openAllTasks()` action (`view = "tasks"`, `tasksVaultId =
+  null`). Aggregate mode fans out `list_vaults` then a parallel per-vault
+  `list_tasks`, best-effort per vault — a vault whose `list_tasks` call fails
+  contributes nothing and is named in one toast, with a blocking "Couldn't
+  load tasks from any vault." banner reserved for `list_vaults` failing or
+  every vault failing. Zero new IPC commands: aggregation is pure frontend
+  fan-out over the two commands the single-vault view already used. Both
+  modes converge on one enriched shape, `AggTask = TaskItem & { vaultId,
+  vaultName }`, so every row action (toggle, archive, edit, open) reads the
+  row's own `task.vaultId` rather than the `vaultId` prop — the prop only
+  decides how the initial fan-out happened. Aggregate-only UI stays additive
+  on top of the shared list: a vault chip on each row (vault-name initial,
+  full name in the tooltip), an add-row vault picker (SelectMenu, defaulting
+  to the first vault) in place of the single-vault view's implicit target,
+  and an "All tasks" header. The sort comparator gains a
+  `vaultName.localeCompare` → `path.localeCompare` tiebreak on both arms so
+  ties across vaults are stable; date buckets, tag mode, filters, and the
+  per-row busy-guard serialization are unchanged and shared by both modes.
+- **Tags (v0.5.3): chips, filter, inputs, and a grouping toggle.** Each row
+  renders all of its tags as chips between the title and the due chip; a chip
+  click activates a single component-local tag filter (no multi-tag filter
+  this slice) that ANDs with the title filter (both feed `filteredTasks`,
+  case-insensitive exact match — no nested-tag prefix matching) and renders
+  as a dismissible chip with an always-visible ✕, independent of the >5
+  title-filter threshold so it can never strand the user once activated. The
+  add-options row and the inline editor each get a free-text tags input
+  (comma/space separated, leading `#` optional per token, split/trimmed
+  client-side into an array); the editor sends `tags` in the patch only when
+  the parsed array differs from the task's current tags, and an emptied input
+  sends `tags: []` (clear) — same changed-fields/optimistic-revert discipline
+  as the other fields. A `Dates | Tags` segmented toggle (component-local
+  state, resets to `dates` on remount) switches the SAME filtered,
+  globally-sorted list from date buckets to tag sections: one alphabetical
+  section per distinct tag with the task repeated under EACH of its tags,
+  then "No tags" (open, untagged), then "Done" (all done tasks) — headers
+  always render in tag mode. Because a task can render more than once, the
+  row `:key` and the inline editor's open-row state are section-scoped
+  (`` `${section}:${task.path}` ``, `editingKey`/`rowKey`), so opening the
+  editor on one duplicate never expands the others, while the per-path
+  `busy` guard still serializes writes for the underlying task across all its
+  rendered rows.
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 
@@ -1019,11 +1167,9 @@ round-trip.
 | Job | Runner | Gates |
 | --- | --- | --- |
 | `frontend` | Linux | ESLint, LOC guard (frontend + Rust files), fallow quality ratchet, version-file agreement, `vue-tsc` typecheck + build, Vitest suite with coverage floors |
-| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over the member crates, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`) |
+| `rust-core` | Linux | `cargo fmt --check` (whole workspace), clippy `-D warnings` + tests on `core`, `capture`, `transcribe`, `mcp` — including `--features whisper` (the only place the whisper FFI tests execute) — plus `cargo machete` (unused deps), a `cargo llvm-cov` line-coverage floor (94) over the member crates, and `cargo deny check` (RustSec advisories + license policy, `src-tauri/deny.toml`) |
 | `linux-app` | Linux (after the two above) | `npx tauri build --no-bundle` — shell compile gate, never released — then **workspace clippy incl. the shell** and the **shell crate's unit tests** (`cargo test -p vault-buddy --lib`; both need the GUI libs + built `dist/` this job has) |
-| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; skips updater signing when secrets are absent (forks) |
-
-Not covered by CI (see docs/Gaps.md): any `cargo test` on Windows.
+| `windows-app` | Windows (after the two above) | Full `npx tauri build`, MSI/NSIS installers as artifacts; leaves updater artifacts unsigned on every PR event by design (the signing secrets are injected only on push to `main`, never on PRs — GAP-36); + `cargo test` for core/capture/transcribe (incl. `--features whisper`) after the build to exercise platform-sensitive code (process detection, GetKeyState, WASAPI gates, MoveFileExW fallback) |
 
 ## Releases
 
@@ -1041,9 +1187,14 @@ dispatch path exists because remote agent sessions can push branches but
 not tags (the git proxy 403s tag refs); `tauri-action` creates the tag and
 the GitHub release itself either way. The workflow signs updater artifacts
 (`TAURI_SIGNING_PRIVATE_KEY` secrets) and attaches `latest.json`, which
-installed apps poll from Settings → Updates. CI builds without updater
-artifacts when the signing secrets are absent (forked PRs) instead of
-failing.
+installed apps poll from Settings → Updates. CI builds unsigned artifacts
+on every PR event by design — the signing secrets are populated only on push
+to `main` and by this release workflow, never on PRs (GAP-36) — instead of
+failing. A `validate` job gates the build: it requires the dispatch path to
+come from `main`, checks the tag matches `tauri.conf.json`'s version,
+requires the released commit to be an ancestor of `main` (compare API —
+covers the tag-push path too), and requires a successful completed CI run
+for the released commit before `windows-installer` starts.
 
 ## Known gaps
 

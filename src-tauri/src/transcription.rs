@@ -149,6 +149,40 @@ impl TranscriptionQueue {
         Enqueued::Queued
     }
 
+    /// True when `mp3` is the job the worker is currently processing. The
+    /// rename command uses this to refuse renaming a file mid-transcription
+    /// (Codex PR #46): the worker holds this exact path open for decode and
+    /// its terminal write (sidecar) targets it, so a rename underneath it
+    /// would strand that write under the old name.
+    fn is_active(&self, mp3: &Path) -> bool {
+        self.active.as_ref().map(|a| a.mp3.as_path()) == Some(mp3)
+    }
+
+    /// Retarget a still-PENDING (not yet started) job's mp3 path in place —
+    /// used after a successful `rename_capture` moves the file out from
+    /// under a queued job, so the worker eventually writes its terminal
+    /// sidecar under the name the renamed note actually embeds (Codex PR
+    /// #46: leaving the queue keyed to the old path meant the worker
+    /// completed into a sidecar the note no longer pointed at, and the
+    /// renamed note's embedded placeholder stayed pending forever). Returns
+    /// whether a pending job matched `old` — a miss (already started,
+    /// already finished, or never queued) is not an error, just nothing to
+    /// do. Never touches `active`: an in-flight job must be refused by the
+    /// caller via `is_active` before this runs, not silently retargeted
+    /// mid-decode.
+    fn retarget_pending(&mut self, old: &Path, new: PathBuf) -> bool {
+        // At most one pending entry per path by construction (`enqueue`
+        // dedups against live pending+active), so the first match is THE
+        // match — renaming in place can never leave a stale duplicate
+        // behind or collide with another pending entry for `new`.
+        if let Some(job) = self.pending.iter_mut().find(|j| j.mp3 == old) {
+            job.mp3 = new;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Clear the active slot after a job finishes (success/fail/panic) — the
     /// worker's one call, right after `process_transcription` returns.
     /// Requeues the path as a fresh `force` job when a rerun was requested
@@ -254,6 +288,27 @@ pub(crate) fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
         }
         Enqueued::Duplicate => {}
     }
+}
+
+/// True when `mp3` is the transcription job currently running — the shell's
+/// rename guard (Codex PR #46): renaming a file the worker is mid-decode on
+/// would leave it completing its terminal write into the old, now-orphaned
+/// path while the renamed note embeds a placeholder that never resolves.
+pub(crate) fn is_active_transcription(app: &AppHandle, mp3: &Path) -> bool {
+    let state = app.state::<TranscriptionState>();
+    let guard = lock_ignoring_poison(&state.inner);
+    guard.is_active(mp3)
+}
+
+/// Retarget a still-queued transcription job from `old` to `new` after a
+/// successful rename (Codex PR #46), so the worker eventually writes its
+/// sidecar under the name the renamed note actually embeds instead of the
+/// stale pre-rename path. Pure bookkeeping under the queue mutex — no I/O —
+/// so a short hold here is fine per this file's never-hold-across-I/O rule.
+pub(crate) fn retarget_pending_transcription(app: &AppHandle, old: &Path, new: PathBuf) -> bool {
+    let state = app.state::<TranscriptionState>();
+    let mut guard = lock_ignoring_poison(&state.inner);
+    guard.retarget_pending(old, new)
 }
 
 /// Enqueue every capture recording still needing a transcript, across all
@@ -577,12 +632,13 @@ fn fail_transcription(app: &AppHandle, mp3: &Path, message: &str) {
     toast(app, "Transcription failed", message);
 }
 
-/// The vault whose folder contains `mp3` (for the retry command).
+/// The vault whose folder contains `mp3` (for the retry/force commands),
+/// matched on CANONICAL paths — `Path::starts_with` on raw components
+/// accepted `<vault>\..\anywhere` escapes and symlinks (GAP-01). None when
+/// the path cannot be resolved or no registered vault contains it.
 fn owning_vault_id(mp3: &Path) -> Option<String> {
-    discovery::discover_vaults()
-        .into_iter()
-        .find(|v| mp3.starts_with(&v.path))
-        .map(|v| v.id)
+    let vaults = discovery::discover_vaults();
+    capture_paths::vault_owning_path(&vaults, mp3).map(|owned| owned.vault.id.clone())
 }
 
 /// Run one job body, converting a panic into a `false` so the worker loop can
@@ -701,6 +757,9 @@ pub fn transcribe_recording_now(app: AppHandle, path: String) -> Result<(), Stri
     if !mp3.is_file() {
         return Err("Recording not found.".to_string());
     }
+    if !capture_paths::is_capture_mp3(&mp3) {
+        return Err("Not a Vault Buddy capture file.".to_string());
+    }
     let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
     enqueue_transcription(
         &app,
@@ -720,6 +779,9 @@ pub fn retranscribe(app: AppHandle, path: String) -> Result<(), String> {
     let mp3 = PathBuf::from(&path);
     if !mp3.is_file() {
         return Err("Recording not found.".to_string());
+    }
+    if !capture_paths::is_capture_mp3(&mp3) {
+        return Err("Not a Vault Buddy capture file.".to_string());
     }
     let vault_id = owning_vault_id(&mp3).ok_or("Recording is not inside a known vault.")?;
     enqueue_transcription(
@@ -991,5 +1053,92 @@ mod tests {
         };
         assert_eq!(q.enqueue(job("X", false)), Enqueued::Duplicate);
         assert!(q.pending.is_empty());
+    }
+
+    // --- Codex PR #46: rename desyncs the transcription queue ------------
+    //
+    // A capture rename that lands while the mp3's transcription job is still
+    // QUEUED or ACTIVE used to leave the queue keyed to the OLD path: the
+    // worker later wrote its terminal sidecar under the old name while the
+    // renamed note embeds the (moved) pending placeholder, which then never
+    // resolves until the next launch's backfill re-runs a multi-minute
+    // whisper inference. `is_active` lets the rename command refuse an
+    // in-flight job outright; `retarget_pending` lets it fix up a queued one
+    // in place instead.
+
+    #[test]
+    fn is_active_true_only_for_the_running_path() {
+        let q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        assert!(q.is_active(Path::new("X")));
+        assert!(!q.is_active(Path::new("Y")));
+    }
+
+    #[test]
+    fn is_active_false_on_an_idle_queue() {
+        let q = TranscriptionQueue::default();
+        assert!(!q.is_active(Path::new("X")));
+    }
+
+    #[test]
+    fn retarget_pending_renames_the_matching_queued_job() {
+        let mut q = TranscriptionQueue::default();
+        q.enqueue(job("old.mp3", false));
+        q.enqueue(job("other.mp3", false));
+        assert!(q.retarget_pending(Path::new("old.mp3"), PathBuf::from("new.mp3")));
+        let mp3s: Vec<_> = q.pending.iter().map(|j| j.mp3.clone()).collect();
+        assert_eq!(
+            mp3s,
+            vec![PathBuf::from("new.mp3"), PathBuf::from("other.mp3")],
+            "the matching entry is renamed in place; the other is untouched"
+        );
+    }
+
+    #[test]
+    fn retarget_pending_returns_false_when_nothing_matches() {
+        let mut q = TranscriptionQueue::default();
+        q.enqueue(job("other.mp3", false));
+        assert!(!q.retarget_pending(Path::new("old.mp3"), PathBuf::from("new.mp3")));
+        assert_eq!(q.pending[0].mp3, PathBuf::from("other.mp3"));
+    }
+
+    #[test]
+    fn retarget_pending_never_touches_the_active_job() {
+        // Behavioral pin against a naive implementation that retargets
+        // whichever job (pending OR active) matches `old`: this must be a
+        // pending-only operation. The shell refuses to call it for an
+        // active path (via `is_active`), but the queue method itself must
+        // not rely on that — it must be structurally incapable of mutating
+        // `active`.
+        let mut q = TranscriptionQueue {
+            active: Some(active_job("X")),
+            ..Default::default()
+        };
+        assert!(!q.retarget_pending(Path::new("X"), PathBuf::from("X2")));
+        assert_eq!(q.active.as_ref().unwrap().mp3, PathBuf::from("X"));
+    }
+
+    #[test]
+    fn retarget_pending_keeps_one_entry_per_path() {
+        // There is at most one pending entry per path by construction
+        // (`enqueue`'s dedup) — retarget must rename in place, never append,
+        // so it can't create a duplicate for the new path either.
+        let mut q = TranscriptionQueue::default();
+        q.enqueue(job("old.mp3", false));
+        q.enqueue(job("other.mp3", false));
+        assert!(q.retarget_pending(Path::new("old.mp3"), PathBuf::from("new.mp3")));
+        assert_eq!(
+            q.pending.len(),
+            2,
+            "retarget renames, it never adds an entry"
+        );
+        let unique: std::collections::HashSet<_> = q.pending.iter().map(|j| &j.mp3).collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "no duplicate mp3 in the pending list after retarget"
+        );
     }
 }

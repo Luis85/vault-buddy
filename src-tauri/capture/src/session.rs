@@ -88,6 +88,66 @@ const TARGET_RATE: u32 = 44_100;
 /// Max buffered audio per source before oldest samples are dropped (2 s).
 const BUFFER_CAP: usize = (TARGET_RATE * 2) as usize;
 const TICK: Duration = Duration::from_millis(100);
+/// A wake more than this far past its schedule COULD be a clock
+/// discontinuity (system suspend — Instant/QPC generally advances across it
+/// on Windows) or a real encode/write/flush/fsync stall (AV-scanned,
+/// cloud-synced, or network-backed vault folder) that also piles up this
+/// much backpressure. The two are told apart not by the lag alone but by
+/// how much REAL audio is sitting in the source buffers when the wake is
+/// handled (see `plan_tick`'s `buffered` parameter, Codex PR #46
+/// session.rs:113): near-empty means the sources were asleep too
+/// (suspend), full means they kept producing the whole time (stall).
+const MAX_TICK_LAG: Duration = Duration::from_millis(500);
+
+/// One wake's schedule decision, pure so it's unit-testable: returns the
+/// new `next_tick` and whether this wake may consume a tick of audio.
+/// Early wake (a control message before schedule) → consume nothing, keep
+/// the schedule. Past schedule within `max_lag` → normal catch-up.
+///
+/// Beyond `max_lag`, `buffered` — how much real audio the fullest source
+/// currently holds — decides how much of the lag to keep as catch-up
+/// (Codex PR #46, session.rs:113 thread, following GAP-05): the new
+/// schedule is `now + tick - min(lag, buffered)`, i.e. resync, but
+/// preserve exactly as much catch-up as there is real buffered audio to
+/// cover it.
+///   - Suspend: sources were asleep too, so `buffered` ≈ 0 → next ≈
+///     `now + tick` — GAP-05's guarantee holds, only the tiny real
+///     remnant drains, no silence is minted for the sleep gap.
+///   - I/O stall: sources kept producing the whole time, so `buffered` ≈
+///     `lag` → next ≈ `next_tick + tick` — full catch-up, back-to-back
+///     ticks drain the real backlog (each take is covered by buffered
+///     audio, so the silence-pad path never fires) instead of stranding it
+///     to drain at 1x for the rest of the session and risking a later
+///     BUFFER_CAP overflow.
+///   - `min(lag, buffered)` caps the adjustment so a buffered surplus can
+///     never push `next_tick` earlier than the plain catch-up floor
+///     (`next_tick + tick`).
+///
+/// The finish/drain path ignores the take flag — a stop always drains
+/// what's buffered.
+fn plan_tick(
+    now: Instant,
+    next_tick: Instant,
+    tick: Duration,
+    max_lag: Duration,
+    buffered: Duration,
+) -> (Instant, bool) {
+    if now < next_tick {
+        (next_tick, false)
+    } else {
+        let lag = now.duration_since(next_tick);
+        if lag > max_lag {
+            let covered = lag.min(buffered);
+            let target = now + tick;
+            // checked_sub, not `-`: covered <= lag by construction so this
+            // can't underflow in practice, but a resync path must never be
+            // able to panic the capture worker regardless.
+            (target.checked_sub(covered).unwrap_or(target), true)
+        } else {
+            (next_tick + tick, true)
+        }
+    }
+}
 
 struct SourceState {
     input: SourceInput,
@@ -212,7 +272,6 @@ fn run_worker(
             }
             Err(RecvTimeoutError::Timeout) => {}
         }
-        next_tick += TICK;
 
         // Drain every source's channel into its (converted) buffer.
         for s in states.iter_mut().filter(|s| s.alive) {
@@ -270,13 +329,34 @@ fn run_worker(
             ended_early = true;
         }
 
+        // plan_tick runs AFTER the drain above, not right after the
+        // control-message handling: during a stall the sources' real audio
+        // sits in the mpsc channels, and only the drain moves it into the
+        // Vec buffers `buffered` reads below (Codex PR #46, session.rs:113
+        // thread) — computing `buffered` before draining would see stale,
+        // near-empty buffers and misclassify every stall as a suspend.
+        // Nothing between the old call site (just above the drain) and
+        // here reads `next_tick`, so moving the call doesn't change what
+        // any of that code observes.
+        // While paused, the drain above discards every arriving sample
+        // instead of extending `s.buffer`, so `buffered` stays pinned at
+        // whatever pre-pause remnant was already sitting there — it never
+        // grows during the pause. A stall while paused therefore resyncs
+        // through the same `buffered` ≈ 0 arm as a suspend: there is
+        // nothing encode-bound to catch up on either way.
+        let buffered_frames = states.iter().map(|s| s.buffer.len()).max().unwrap_or(0) as u64;
+        let buffered = Duration::from_micros(buffered_frames * 1_000_000 / TARGET_RATE as u64);
+        let (new_next_tick, take_tick) =
+            plan_tick(Instant::now(), next_tick, TICK, MAX_TICK_LAG, buffered);
+        next_tick = new_next_tick;
+
         // Pull one tick's worth of audio per source (silence-fill a
         // starved side only while its source is still alive and we keep
         // recording; on finish, take what's left without padding).
         let tick_frames = (TARGET_RATE / 10) as usize;
         let take = if finish {
             states.iter().map(|s| s.buffer.len()).max().unwrap_or(0)
-        } else if paused {
+        } else if paused || !take_tick {
             0
         } else {
             tick_frames
@@ -894,5 +974,120 @@ mod tests {
             warning.contains("simulated note write failure (test)"),
             "note-write warning includes the interpolated {{e}} reason, not just the static prefix: {warning}"
         );
+    }
+
+    #[test]
+    fn plan_tick_early_wake_keeps_schedule_and_skips_take() {
+        // GAP-05 (pause→resume): a control message wakes recv_timeout BEFORE
+        // next_tick; consuming a full tick there silence-padded up to 100 ms
+        // of spurious audio per pause/resume and drifted the schedule.
+        let base = Instant::now();
+        let next = base + TICK;
+        let (new_next, take) = plan_tick(base, next, TICK, MAX_TICK_LAG, Duration::ZERO);
+        assert_eq!(new_next, next, "schedule unchanged on an early wake");
+        assert!(!take, "nothing consumed on an early wake");
+    }
+
+    #[test]
+    fn plan_tick_on_schedule_advances_one_tick() {
+        let base = Instant::now();
+        let (new_next, take) = plan_tick(base, base, TICK, MAX_TICK_LAG, Duration::ZERO);
+        assert_eq!(new_next, base + TICK);
+        assert!(take);
+    }
+
+    #[test]
+    fn plan_tick_moderate_lag_catches_up_without_resync() {
+        // Encode backpressure below the lag cap keeps the catch-up behavior:
+        // average consumption must match real time or long recordings drop
+        // samples (the reason the fixed schedule exists).
+        let base = Instant::now();
+        let now = base + Duration::from_millis(300);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG, Duration::ZERO);
+        assert_eq!(new_next, base + TICK, "catch-up: schedule not resynced");
+        assert!(take);
+    }
+
+    #[test]
+    fn plan_tick_suspend_gap_resyncs_to_now() {
+        // GAP-05: Instant (QPC) advances across suspend on Windows, so after
+        // a sleep the loop ran back-to-back catch-up ticks appending the
+        // WHOLE gap (potentially hours) as encoded silence. Real
+        // backpressure never accumulates MAX_TICK_LAG; a suspend always does.
+        // Sources were asleep too, so their buffers are near-empty —
+        // buffered ≈ 0 keeps this resync exactly like the pre-Codex-#46 arm.
+        let base = Instant::now();
+        let now = base + Duration::from_secs(3600);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG, Duration::ZERO);
+        assert_eq!(new_next, now + TICK, "schedule resynced to real time");
+        assert!(take, "one tick still drains the buffers");
+    }
+
+    #[test]
+    fn plan_tick_lag_boundary_is_exclusive() {
+        // Exactly MAX_TICK_LAG behind is still backpressure territory.
+        let base = Instant::now();
+        let now = base + MAX_TICK_LAG;
+        let (new_next, _) = plan_tick(now, base, TICK, MAX_TICK_LAG, Duration::ZERO);
+        assert_eq!(new_next, base + TICK);
+    }
+
+    #[test]
+    fn plan_tick_io_stall_with_full_buffers_gets_full_catch_up() {
+        // Codex PR #46 (session.rs:113 thread): a real encode/write/fsync
+        // stall (AV scan, cloud-synced or network-backed vault folder) also
+        // exceeds MAX_TICK_LAG, but unlike suspend the sources kept
+        // producing REAL audio into their channels the whole time — it
+        // piled up in the (just-drained) source buffers. Resyncing to
+        // `now` the way a suspend does would abandon catch-up and strand
+        // that backlog to drain at 1x for the rest of the session, risking
+        // a later BUFFER_CAP overflow. Buffered ≈ lag (the source kept
+        // pace with the stall) must yield the SAME schedule as plain
+        // catch-up: next_tick + tick.
+        let base = Instant::now();
+        let now = base + Duration::from_secs(2);
+        let buffered = Duration::from_secs(2);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG, buffered);
+        assert_eq!(
+            new_next,
+            base + TICK,
+            "full catch-up: buffered audio covers the whole stall"
+        );
+        assert!(take);
+    }
+
+    #[test]
+    fn plan_tick_io_stall_with_partial_buffer_covers_only_the_buffered_span() {
+        // Codex PR #46: buffered audio may cover only part of the lag (the
+        // source itself lagged briefly, or BUFFER_CAP already dropped some
+        // of the backlog). The resync should preserve exactly the buffered
+        // span of catch-up, not the whole lag and not none of it.
+        let base = Instant::now();
+        let now = base + Duration::from_secs(10);
+        let buffered = Duration::from_millis(700);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG, buffered);
+        assert_eq!(
+            new_next,
+            now + TICK - Duration::from_millis(700),
+            "resync preserves exactly the buffered catch-up span"
+        );
+        assert!(take);
+    }
+
+    #[test]
+    fn plan_tick_buffered_surplus_is_capped_at_the_lag() {
+        // Codex PR #46: a pre-existing surplus (buffered > lag) must never
+        // push next_tick BEFORE the plain catch-up floor (next_tick + tick)
+        // — min(lag, buffered) caps the adjustment at the lag itself.
+        let base = Instant::now();
+        let now = base + Duration::from_millis(600);
+        let buffered = Duration::from_secs(5);
+        let (new_next, take) = plan_tick(now, base, TICK, MAX_TICK_LAG, buffered);
+        assert_eq!(
+            new_next,
+            base + TICK,
+            "surplus capped at lag: same as plain catch-up"
+        );
+        assert!(take);
     }
 }

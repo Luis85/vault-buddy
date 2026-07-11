@@ -323,7 +323,11 @@ pub fn config_path() -> Option<PathBuf> {
 pub fn load_config_from(path: &Path) -> AppConfig {
     match std::fs::read_to_string(path) {
         Ok(json) => parse_config(&json),
-        Err(_) => AppConfig::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
+        Err(e) => {
+            log::warn!("config: cannot read {}: {e}", path.display());
+            AppConfig::default()
+        }
     }
 }
 
@@ -337,7 +341,10 @@ fn load_config_for_update(path: &Path) -> std::io::Result<AppConfig> {
     match std::fs::read_to_string(path) {
         Ok(json) => Ok(parse_config(&json)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppConfig::default()),
-        Err(e) => Err(e),
+        Err(e) => {
+            log::warn!("config: {} unreadable during save: {e}", path.display());
+            Err(e)
+        }
     }
 }
 

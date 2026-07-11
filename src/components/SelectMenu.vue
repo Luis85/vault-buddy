@@ -50,6 +50,19 @@ function positionPopup() {
   popupStyle.value = style;
 }
 
+// Option ids for aria-activedescendant — the listbox has focus, so AT needs
+// an id trail to the highlighted option (GAP-33).
+const listboxId = computed(() => props.id ?? props.dataTestid ?? "select-menu");
+const optionId = (i: number) => `${listboxId.value}-opt-${i}`;
+
+function setActive(i: number) {
+  activeIndex.value = i;
+  // A 13-item list scrolls at 220px — keep the highlight on-screen.
+  void nextTick(() => {
+    document.getElementById(optionId(i))?.scrollIntoView?.({ block: "nearest" });
+  });
+}
+
 async function openMenu() {
   open.value = true;
   activeIndex.value = Math.max(
@@ -100,13 +113,23 @@ function onTriggerKeydown(e: KeyboardEvent) {
 function onPopupKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     e.preventDefault();
+    // GAP-27: without stopPropagation the Escape bubbles to window, where
+    // PanelRoot closes the whole panel — dismissing a dropdown must only
+    // dismiss the dropdown.
+    e.stopPropagation();
     closeMenu();
   } else if (e.key === "ArrowDown") {
     e.preventDefault();
-    activeIndex.value = Math.min(props.options.length - 1, activeIndex.value + 1);
+    setActive(Math.min(props.options.length - 1, activeIndex.value + 1));
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
-    activeIndex.value = Math.max(0, activeIndex.value - 1);
+    setActive(Math.max(0, activeIndex.value - 1));
+  } else if (e.key === "Home") {
+    e.preventDefault();
+    setActive(0);
+  } else if (e.key === "End") {
+    e.preventDefault();
+    setActive(props.options.length - 1);
   } else if (e.key === "Enter") {
     e.preventDefault();
     const o = props.options[activeIndex.value];
@@ -155,11 +178,13 @@ onBeforeUnmount(() => {
       role="listbox"
       tabindex="-1"
       :style="popupStyle"
+      :aria-activedescendant="activeIndex >= 0 ? optionId(activeIndex) : undefined"
       class="panel-scroll overflow-y-auto rounded-lg border border-white/10 bg-slate-900/95 py-1 text-sm text-slate-100 shadow-xl focus:outline-none"
       @keydown="onPopupKeydown"
     >
       <li
         v-for="(o, i) in options"
+        :id="optionId(i)"
         :key="String(o.value)"
         role="option"
         :aria-selected="o.value === modelValue"

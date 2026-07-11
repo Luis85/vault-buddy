@@ -41,4 +41,16 @@ describe("notifications store", () => {
     n.clear();
     expect(n.items).toEqual([]);
   });
+
+  it("dedupe-reuse restarts the TTL (GAP-32)", () => {
+    // A re-raise at t=3.9s used to vanish at t=4.0s and read as flicker.
+    const n = useNotificationsStore();
+    const id = n.success("saved");
+    vi.advanceTimersByTime(3_900);
+    expect(n.notify("success", "saved")).toBe(id); // dedupe-reuse
+    vi.advanceTimersByTime(3_000); // 6.9s after first, 3.0s after reuse
+    expect(n.items.some((i) => i.id === id)).toBe(true);
+    vi.advanceTimersByTime(1_100);
+    expect(n.items.some((i) => i.id === id)).toBe(false);
+  });
 });

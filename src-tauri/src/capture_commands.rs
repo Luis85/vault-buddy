@@ -25,6 +25,11 @@ pub struct ActiveCapture {
     /// it — None while devices are still being set up (and for a timed-out
     /// start whose worker never reported back).
     pub part: Option<PathBuf>,
+    /// True only for a reservation whose start timed out (the worker never
+    /// reported back). Together with `part.is_none()` it marks the one
+    /// state shutdown may bypass: nothing reached disk, so the
+    /// never-lose-audio invariant is not in play (GAP-08).
+    pub startup_wedged: bool,
 }
 
 /// The mutex holds the active-capture reservation; the condvar is notified
@@ -202,10 +207,7 @@ pub fn set_capture_config(
     }
     // Validate the folder against the real vault path BEFORE writing —
     // an invalid folder is an inline field error, nothing gets written.
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let vault = crate::commands::find_vault(&id)?;
     let folder = cfg
         .recording_folder
         .as_deref()
@@ -270,17 +272,31 @@ pub struct DeviceListDto {
     pub outputs: Vec<DeviceInfoDto>,
 }
 
+/// ASYNC (GAP-22): COM/WASAPI enumeration commonly takes hundreds of ms;
+/// on the main thread that stalled the settings view. cpal initializes COM
+/// per calling thread, so the blocking pool is fine (the capture-device
+/// worker already enumerates off-main).
 #[tauri::command]
-pub fn list_audio_devices() -> DeviceListDto {
-    let list = vault_buddy_capture::devices::list_devices();
-    let map = |d: vault_buddy_capture::devices::DeviceInfo| DeviceInfoDto {
-        name: d.name,
-        is_default: d.is_default,
-    };
-    DeviceListDto {
-        inputs: list.inputs.into_iter().map(map).collect(),
-        outputs: list.outputs.into_iter().map(map).collect(),
-    }
+pub async fn list_audio_devices() -> DeviceListDto {
+    tauri::async_runtime::spawn_blocking(|| {
+        let list = vault_buddy_capture::devices::list_devices();
+        let map = |d: vault_buddy_capture::devices::DeviceInfo| DeviceInfoDto {
+            name: d.name,
+            is_default: d.is_default,
+        };
+        DeviceListDto {
+            inputs: list.inputs.into_iter().map(map).collect(),
+            outputs: list.outputs.into_iter().map(map).collect(),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_audio_devices: task failed: {e}");
+        DeviceListDto {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    })
 }
 
 /// Read-only list of a vault's past recordings for the Recordings view.
@@ -288,28 +304,34 @@ pub fn list_audio_devices() -> DeviceListDto {
 /// and reads each recording's companion note for type/duration. An unknown
 /// vault or unreadable roots yield an empty list — never an error (mirrors
 /// discovery's degrade-to-empty rule). Never writes into the vault.
+///
+/// ASYNC (GAP-22): scans dated folders and reads every companion note's
+/// frontmatter — a large archive stalled the UI on every panel open.
 #[tauri::command]
-pub fn list_recordings(id: String) -> Vec<RecordingDto> {
-    services::list_recordings(&ServicePaths::real(), &id)
+pub async fn list_recordings(id: String) -> Vec<RecordingDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::list_recordings(&ServicePaths::real(), &id)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_recordings: task failed: {e}");
+        Vec::new()
+    })
 }
 
-#[tauri::command]
-pub fn start_capture(
-    app: AppHandle,
-    state: tauri::State<CaptureState>,
+fn start_capture_blocking(
+    app: &AppHandle,
     id: String,
     mode: Option<String>,
 ) -> Result<StatusPayload, String> {
     // Everything fallible-but-cheap (discovery, config, path validation)
     // runs BEFORE the state lock is touched — the mutex must never be held
     // across file I/O or device setup.
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| v.id == id)
-        .ok_or("Vault not found — was it removed from Obsidian?")?;
+    let vault = crate::commands::find_vault(&id)?;
     let vault_path = PathBuf::from(&vault.path);
     if !vault_path.is_dir() {
-        return Err(format!("Vault folder not found: {}", vault.path));
+        log::warn!("start_capture: vault folder missing: {}", vault.path);
+        return Err("Vault folder not found — was it moved or deleted?".to_string());
     }
 
     let mut cfg = capture_config::vault_config(&capture_config::load_config(), &id);
@@ -341,6 +363,7 @@ pub fn start_capture(
     // Reserve the state up front: the lock is held only for the is-running
     // check plus the insert, which closes the double-start window without
     // serializing device setup (or any I/O) under the mutex.
+    let state = app.state::<CaptureState>();
     {
         let mut guard = lock_ignoring_poison(&state.0);
         if guard.is_some() {
@@ -354,6 +377,7 @@ pub fn start_capture(
             paused_total_ms: 0,
             paused_since_ms: None,
             part: None,
+            startup_wedged: false,
         });
     }
 
@@ -363,28 +387,36 @@ pub fn start_capture(
     // Live source-loss warnings: forwarded to the panel while recording.
     let (warn_tx, warn_rx) = mpsc::channel::<String>();
     let app_warn = app.clone();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("capture-warn".into())
         .spawn(move || {
             while let Ok(message) = warn_rx.recv() {
                 let _ = app_warn.emit("capture:warning", serde_json::json!({ "message": message }));
             }
-        })
-        .expect("failed to spawn capture-warn thread");
+        });
+    if let Err(e) = spawned {
+        // Recording proceeds without live warning forwarding; sends into
+        // the dropped receiver are already fire-and-forget.
+        log::warn!("could not spawn capture-warn thread: {e}");
+    }
 
     // Advisory level meter: forward the worker's ~5 Hz peaks to the panel.
     let (level_tx, level_rx) = mpsc::channel::<f32>();
     let app_level = app.clone();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("capture-level".into())
         .spawn(move || {
             while let Ok(peak) = level_rx.recv() {
                 let _ = app_level.emit("capture:level", serde_json::json!({ "peak": peak }));
             }
-        })
-        .expect("failed to spawn capture-level thread");
+        });
+    if let Err(e) = spawned {
+        // Recording proceeds without live level forwarding; sends into the
+        // dropped receiver are already fire-and-forget.
+        log::warn!("could not spawn capture-level thread: {e}");
+    }
 
-    std::thread::Builder::new()
+    let device_thread = std::thread::Builder::new()
         .name("capture-device".into())
         .spawn(move || {
             let open = match vault_buddy_capture::devices::open_sources(
@@ -471,8 +503,15 @@ pub fn start_capture(
             let outcome = session.stop();
             drop(streams);
             let _ = done_tx.send(outcome);
-        })
-        .expect("failed to spawn capture-device thread");
+        });
+    if let Err(e) = device_thread {
+        // Without the worker there IS no recording: nothing has touched
+        // disk yet, so fail the start cleanly and drop the reservation.
+        clear_active(app);
+        let msg = format!("Could not start the recording worker: {e}");
+        emit_failed(app, &msg);
+        return Err(msg);
+    }
 
     // Wait for device readiness WITHOUT the lock — concurrent starts are
     // already rejected by the reservation above.
@@ -490,8 +529,8 @@ pub fn start_capture(
             started_at_ms
         }
         Ok(Err(e)) => {
-            clear_active(&app);
-            emit_failed(&app, &e);
+            clear_active(app);
+            emit_failed(app, &e);
             return Err(e);
         }
         Err(_) => {
@@ -510,11 +549,21 @@ pub fn start_capture(
             // recv() finally returns or the app restarts.
             let msg = "Recording did not start in time.".to_string();
             let _ = control_tx.send(Control::Stop);
+            if let Some(active) = lock_ignoring_poison(&state.0).as_mut() {
+                active.startup_wedged = true;
+            }
             let app4 = app.clone();
-            std::thread::Builder::new()
+            let janitor = std::thread::Builder::new()
                 .name("capture-janitor".into())
                 .spawn(move || {
                     if let Ok(Ok(part)) = ready_rx.recv() {
+                        // The late worker DID reach disk: record its .part so
+                        // the shutdown bypass (GAP-08) closes for this drain.
+                        if let Some(active) =
+                            lock_ignoring_poison(&app4.state::<CaptureState>().0).as_mut()
+                        {
+                            active.part = Some(part.clone());
+                        }
                         log::warn!(
                             "capture: late start after timeout — stopping and draining {}",
                             part.display()
@@ -538,9 +587,19 @@ pub fn start_capture(
                     // either way, or a real recording could never start again.
                     clear_active(&app4);
                     crate::tray::set_capture_state(&app4, crate::tray::TrayCaptureState::Idle);
-                })
-                .expect("failed to spawn capture-janitor thread");
-            emit_failed(&app, &msg);
+                });
+            if let Err(e) = janitor {
+                // The janitor closure (and the ready_rx/done_rx it would
+                // have consumed) is dropped along with the failed spawn, so
+                // nothing is left listening for the worker's reply — a late
+                // reply clears nothing. The reservation stays wedged until
+                // the app restarts; quit stays possible via the
+                // startup-wedged shutdown bypass stamped above (GAP-08),
+                // and a late `.part` that does land is recovered as
+                // `(recovered)` on the next launch.
+                log::error!("could not spawn capture-janitor thread: {e}");
+            }
+            emit_failed(app, &msg);
             return Err(msg);
         }
     };
@@ -559,7 +618,7 @@ pub fn start_capture(
     // user/menu/shutdown stops AND self-finalization (all sources lost) —
     // the state clears and the outcome surfaces no matter who ended it.
     let app3 = app.clone();
-    std::thread::Builder::new()
+    let monitor = std::thread::Builder::new()
         .name("capture-monitor".into())
         .spawn(move || {
             let result = done_rx
@@ -577,13 +636,54 @@ pub fn start_capture(
                 }
             }
             crate::tray::set_capture_state(&app3, crate::tray::TrayCaptureState::Idle);
-        })
-        .expect("failed to spawn capture-monitor thread");
-
-    // Indicator hardening: recording buddy must be visible.
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
+        });
+    if let Err(e) = monitor {
+        // Without a monitor nothing would ever drain the outcome or clear
+        // the state. Stop the session — the device thread still finalizes
+        // and the audio reaches disk (its done_tx send is a no-op into the
+        // dropped receiver) — and report the start as failed.
+        let _ = control_tx.send(Control::Stop);
+        clear_active(app);
+        crate::tray::set_capture_state(app, crate::tray::TrayCaptureState::Idle);
+        let msg = format!("Recording could not be monitored; stopping: {e}");
+        emit_failed(app, &msg);
+        return Err(msg);
     }
+
+    Ok(payload)
+}
+
+/// ASYNC (GAP-21): the 10 s device-ready wait (`ready_rx.recv_timeout`)
+/// froze the whole UI when this ran as a sync command on the main thread —
+/// a wedged audio driver is the timeout's own premise. The body runs on
+/// the blocking pool; reservation semantics are unchanged (names reserved
+/// under the CaptureState mutex before the worker spawns, double-starts
+/// rejected). The one main-thread-only side effect — showing the buddy,
+/// the recording indicator — is marshalled back via run_on_main_thread
+/// (window show/hide is main-thread-only; tray updates off-main are the
+/// capture-monitor precedent).
+#[tauri::command]
+pub async fn start_capture(
+    app: AppHandle,
+    id: String,
+    mode: Option<String>,
+) -> Result<StatusPayload, String> {
+    let worker = app.clone();
+    let payload =
+        tauri::async_runtime::spawn_blocking(move || start_capture_blocking(&worker, id, mode))
+            .await
+            .map_err(|e| {
+                log::warn!("start_capture: task failed: {e}");
+                "Recording start failed — see the logs for details.".to_string()
+            })??;
+    // Indicator hardening: recording buddy must be visible. Best-effort,
+    // same as before — a failed post just loses the show, never the start.
+    let shower = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = shower.get_webview_window("main") {
+            let _ = window.show();
+        }
+    });
     crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
     let _ = app.emit("capture:started", payload.clone());
     Ok(payload)
@@ -620,14 +720,35 @@ fn maybe_enqueue_transcription(app: &AppHandle, vault_id: &str, mp3: &Path) {
 /// wait forever — shutdown paths use it so the app can never exit while a
 /// recording is still finalizing (a slow vault or a stuck fsync must not
 /// strand the capture as .part).
-fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
+/// Outcome of a stop wait: `Cleared` = the reservation was released (the
+/// save landed, there was nothing to wait for, or a startup-wedged
+/// reservation was bypassed); `TimedOut` = the bounded deadline expired
+/// while finalize was still running — the caller must not report success.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StopWait {
+    Cleared,
+    TimedOut,
+}
+
+fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) -> StopWait {
     // Bound to a local so the guard below can borrow it across statements —
     // `app.state::<CaptureState>()` is otherwise a temporary that would be
     // dropped at the end of the `let guard = …;` statement.
     let capture_state = app.state::<CaptureState>();
     let mut guard = lock_ignoring_poison(&capture_state.0);
-    let Some(active) = guard.as_ref() else { return };
+    let Some(active) = guard.as_ref() else {
+        return StopWait::Cleared;
+    };
     let _ = active.control_tx.send(Control::Stop);
+    if wait.is_none() && bypasses_shutdown_wait(active) {
+        // Shutdown against a wedged startup: nothing on disk to strand, and
+        // recv() may never return — don't hold quit hostage. The Stop above
+        // still halts a late worker the moment it reaches its poll loop.
+        log::warn!(
+            "capture: bypassing shutdown wait for a startup-wedged reservation (nothing on disk)"
+        );
+        return StopWait::Cleared;
+    }
     let deadline = wait.map(|limit| std::time::Instant::now() + limit);
     while guard.is_some() {
         match deadline {
@@ -635,7 +756,7 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
                 let now = std::time::Instant::now();
                 if now >= deadline {
                     log::warn!("capture: stop wait timed out");
-                    return;
+                    return StopWait::TimedOut;
                 }
                 // A poisoned condvar wait must recover the same way the
                 // mutex does: recovering the pair keeps shutdown waiting
@@ -660,24 +781,73 @@ fn request_stop_and_wait(app: &AppHandle, wait: Option<Duration>) {
             }
         }
     }
+    StopWait::Cleared
 }
 
+/// Wire result for stop_capture. `stillSaving` = the bounded wait expired
+/// while finalize was still running; the frontend keeps its saving UI and
+/// lets capture:saved/failed finish the story (GAP-20).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopOutcomeDto {
+    pub still_saving: bool,
+}
+
+impl StopOutcomeDto {
+    fn from_wait(wait: StopWait) -> Self {
+        Self {
+            still_saving: wait == StopWait::TimedOut,
+        }
+    }
+}
+
+/// ASYNC (GAP-20): the wait is on CaptureState's condvar — up to 15 s of
+/// LAME flush + fsync + rename on a slow vault — which froze the whole UI
+/// when this ran as a sync command on the main thread. It touches no
+/// window APIs and no window-state locks, so the window-thread invariant
+/// doesn't pin it; the condvar wait runs on the blocking pool.
 #[tauri::command]
-pub fn stop_capture(app: AppHandle, state: tauri::State<CaptureState>) -> Result<(), String> {
-    if lock_ignoring_poison(&state.0).is_none() {
+pub async fn stop_capture(app: AppHandle) -> Result<StopOutcomeDto, String> {
+    if !is_recording(&app) {
         return Err("No recording is running.".to_string());
     }
-    request_stop_and_wait(&app, Some(Duration::from_secs(15)));
-    Ok(())
+    let waiter = app.clone();
+    let wait = tauri::async_runtime::spawn_blocking(move || {
+        request_stop_and_wait(&waiter, Some(Duration::from_secs(15)))
+    })
+    .await
+    .map_err(|e| {
+        log::warn!("stop_capture: wait task failed: {e}");
+        "Stop failed — see the logs for details.".to_string()
+    })?;
+    Ok(StopOutcomeDto::from_wait(wait))
 }
 
 /// Stop triggered from a native menu (tray or buddy) rather than the panel.
 pub fn stop_from_menu(app: &AppHandle) {
-    request_stop_and_wait(app, Some(std::time::Duration::from_secs(15)));
+    let _ = request_stop_and_wait(app, Some(std::time::Duration::from_secs(15)));
 }
 
 pub fn is_recording(app: &AppHandle) -> bool {
     lock_ignoring_poison(&app.state::<CaptureState>().0).is_some()
+}
+
+/// Whether shutdown/hide may skip waiting on this reservation: only a
+/// startup-wedged one with nothing on disk. Everything else — live
+/// recording, ordinary start, late worker whose .part we've learned —
+/// keeps the wait-forever posture.
+fn bypasses_shutdown_wait(active: &ActiveCapture) -> bool {
+    active.startup_wedged && active.part.is_none()
+}
+
+/// The shutdown/hide variant of `is_recording`: a startup-wedged
+/// reservation with no .part must not make the app unquittable or
+/// unhidable (GAP-08), while capture_status et al. keep conservatively
+/// reporting it as recording.
+pub fn recording_blocks_shutdown(app: &AppHandle) -> bool {
+    lock_ignoring_poison(&app.state::<CaptureState>().0)
+        .as_ref()
+        .is_some_and(|active| !bypasses_shutdown_wait(active))
 }
 
 /// Shared by the IPC commands and the tray menu items. Errors are typed
@@ -742,6 +912,7 @@ pub fn resume_capture(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn rename_capture(
+    app: AppHandle,
     state: tauri::State<CaptureState>,
     mp3: String,
     title: String,
@@ -752,12 +923,31 @@ pub fn rename_capture(
     if lock_ignoring_poison(&state.0).is_some() {
         return Err("Cannot rename while a recording is running.".to_string());
     }
-    // rename_plan re-validates ownership (capture-pattern stems only), so
-    // an arbitrary user mp3 can never be renamed through this command.
-    let plan = capture_paths::rename_plan(Path::new(&mp3), &title)?;
-    if !plan.mp3_from.is_file() {
+    // Codex PR #46: the worker holds this exact path open mid-decode and its
+    // terminal write (the sidecar) targets it. Renaming underneath an ACTIVE
+    // job would leave the worker completing into the now-orphaned old path
+    // while the renamed note embeds a placeholder that never resolves —
+    // refuse outright rather than try to retarget work already in flight.
+    // Check-then-act: the queue mutex is released between this check and the
+    // execute below, so a job the worker claims in that window is renamed
+    // anyway and the pending-retarget misses — bounded blast radius (the
+    // pre-fix behavior for exactly that one job), accepted over holding the
+    // transcription lock across rename I/O.
+    if crate::transcription::is_active_transcription(&app, Path::new(&mp3)) {
+        return Err("Cannot rename while this recording is being transcribed.".to_string());
+    }
+    if !Path::new(&mp3).is_file() {
         return Err("Recording file not found — was it moved?".to_string());
     }
+    // Containment (GAP-07): every other write path gates on
+    // assert_*_inside_vault; rename_plan validates only the capture-pattern
+    // stem, so IPC could rename any `YYYY-MM-DD HHmm *.mp3` (and retarget
+    // its note) anywhere on disk. Canonical matching per GAP-01's helper.
+    let vaults = discovery::discover_vaults();
+    if capture_paths::vault_owning_path(&vaults, Path::new(&mp3)).is_none() {
+        return Err("Recording is not inside a known vault.".to_string());
+    }
+    let plan = capture_paths::rename_plan(Path::new(&mp3), &title)?;
     let stem = plan
         .mp3_from
         .file_stem()
@@ -777,6 +967,33 @@ pub fn rename_capture(
         });
     }
     let outcome = vault_buddy_capture::rename::execute(&plan)?;
+    // Codex PR #46: a job still QUEUED for the pre-rename path must follow
+    // the file, or the worker later writes its terminal sidecar under a name
+    // the renamed note no longer embeds, leaving the note's (moved) pending
+    // placeholder stuck until the next launch's backfill re-runs inference.
+    // `outcome.mp3` (not `mp3`/`plan`) is the actual landed name — it may
+    // carry a collision suffix (` (2)`) the plan didn't predict.
+    let retargeted_queue = crate::transcription::retarget_pending_transcription(
+        &app,
+        Path::new(&mp3),
+        outcome.mp3.clone(),
+    );
+    // Re-key the store's seeded row on a queue move OR a sidecar move: a job
+    // that FINISHED before the user accepted the 30s rename prompt leaves a
+    // terminal row keyed to the old mp3 with no queue entry to match, yet the
+    // sidecar + note embed were moved — "open transcript"/retry would use the
+    // moved-away path (Codex PR #46 round 4). The store no-ops when nothing is
+    // keyed to `from`; field names match the store's listener ({ from, to }).
+    if retargeted_queue || outcome.transcript_moved {
+        let to = outcome.mp3.to_string_lossy().into_owned();
+        if retargeted_queue {
+            log::info!("transcribe: retargeted queued transcription from {mp3} to {to}");
+        }
+        let _ = app.emit(
+            "capture:transcribeRetargeted",
+            serde_json::json!({ "from": mp3, "to": to }),
+        );
+    }
     Ok(RenamedPayload {
         mp3: outcome.mp3.to_string_lossy().into_owned(),
         note: outcome.note.map(|p| p.to_string_lossy().into_owned()),
@@ -807,7 +1024,7 @@ pub fn finalize_if_recording(app: &AppHandle) {
         log::info!("capture: finalizing active recording before shutdown");
         // Unbounded: quitting must block until the save lands — exiting
         // on a timeout would kill the worker and strand the .part.
-        request_stop_and_wait(app, None);
+        let _ = request_stop_and_wait(app, None);
     }
 }
 
@@ -939,19 +1156,27 @@ pub fn run_recovery(app: &AppHandle) {
 /// every other vault open.
 fn open_recording_note(path: &str) -> Result<(), String> {
     let mp3 = PathBuf::from(path);
-    let vault = discovery::discover_vaults()
-        .into_iter()
-        .find(|v| mp3.starts_with(&v.path))
-        .ok_or_else(|| format!("no vault owns {path}"))?;
-    let note = mp3.with_extension("md");
+    let vaults = discovery::discover_vaults();
+    // Canonical containment (GAP-01's read-only sibling): the lexical
+    // starts_with accepted `..`/symlink paths pointing outside every vault.
+    let owned = capture_paths::vault_owning_path(&vaults, &mp3)
+        .ok_or_else(|| "Recording is not inside a known vault.".to_string())?;
+    let note = owned.path_canonical.with_extension("md");
     let target = if note.exists() {
         note
     } else {
-        transcript::transcript_path(&mp3)
+        transcript::transcript_path(&owned.path_canonical)
     };
-    let rel = uri::vault_relative_no_ext(&target, Path::new(&vault.path))
-        .ok_or_else(|| format!("recording is outside its vault: {}", target.display()))?;
-    uri::launch(&uri::open_file_uri(&vault.id, &rel))
+    // Both sides canonical, so strip_prefix agrees on Windows' \\?\ form
+    // (the open_task precedent).
+    let rel = uri::vault_relative_no_ext(&target, &owned.vault_canonical).ok_or_else(|| {
+        log::warn!(
+            "open_recording_note: {} resolved outside its vault",
+            target.display()
+        );
+        "Recording is outside its vault.".to_string()
+    })?;
+    uri::launch(&uri::open_file_uri(&owned.vault.id, &rel))
 }
 
 /// Open a finished recording's note (or transcript sidecar) — the
@@ -965,4 +1190,91 @@ pub fn open_transcript(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_recording(path: String) -> Result<(), String> {
     open_recording_note(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active(startup_wedged: bool, part: Option<PathBuf>) -> ActiveCapture {
+        let (control_tx, _rx) = mpsc::channel::<Control>();
+        // _rx dropped: sends become no-ops, which these pure-predicate
+        // tests never exercise anyway.
+        ActiveCapture {
+            control_tx,
+            vault_id: "v".to_string(),
+            started_at_ms: 0,
+            paused: false,
+            paused_total_ms: 0,
+            paused_since_ms: None,
+            part,
+            startup_wedged,
+        }
+    }
+
+    #[test]
+    fn shutdown_bypasses_only_a_wedged_startup_with_nothing_on_disk() {
+        // GAP-08: a wedged device open kept is_recording true forever —
+        // quit blocked forever, hide_buddy no-op'd forever, every Alt+F4
+        // spawned another permanently blocked close-finalize thread. The
+        // bypass must fire for exactly that state and nothing else.
+        assert!(bypasses_shutdown_wait(&active(true, None)));
+    }
+
+    #[test]
+    fn shutdown_still_waits_for_any_recording_that_reached_disk() {
+        // Never-lose-audio: once a .part exists, wait-forever stands — even
+        // if the wedged flag was set (belt and suspenders: the janitor
+        // records a late worker's part, closing the bypass mid-drain).
+        assert!(!bypasses_shutdown_wait(&active(
+            true,
+            Some(PathBuf::from(".x.mp3.part"))
+        )));
+        assert!(!bypasses_shutdown_wait(&active(
+            false,
+            Some(PathBuf::from(".x.mp3.part"))
+        )));
+    }
+
+    #[test]
+    fn shutdown_waits_for_a_normal_still_starting_recording() {
+        // part=None WITHOUT the wedged flag is an ordinary start in its
+        // first ten seconds — not bypassable.
+        assert!(!bypasses_shutdown_wait(&active(false, None)));
+    }
+
+    // GAP-20: the moved commands must be async — this only compiles when
+    // stop_capture returns a Future (fn-pointer bound, no runtime needed).
+    #[allow(dead_code)]
+    fn stop_capture_is_async() {
+        fn takes_async<F: std::future::Future>(_: fn(AppHandle) -> F) {}
+        takes_async(stop_capture);
+    }
+
+    // GAP-21: start_capture must be async — compiles only when the command
+    // returns a Future.
+    #[allow(dead_code)]
+    fn start_capture_is_async() {
+        fn takes_async<F: std::future::Future>(_: fn(AppHandle, String, Option<String>) -> F) {}
+        takes_async(start_capture);
+    }
+
+    // GAP-22: the read-only list commands must be async (blocking fs/COM
+    // work belongs on the blocking pool, not the main thread).
+    #[allow(dead_code)]
+    fn list_commands_are_async() {
+        fn takes_async1<F: std::future::Future>(_: fn(String) -> F) {}
+        fn takes_async0<F: std::future::Future>(_: fn() -> F) {}
+        takes_async1(list_recordings);
+        takes_async0(list_audio_devices);
+    }
+
+    #[test]
+    fn stop_outcome_maps_timeout_to_still_saving() {
+        // GAP-20 (related-low): the sync command returned a bare Ok(()) on
+        // the 15 s timeout, so the frontend saw success while the recording
+        // was still finalizing. The typed mapping is the fix's contract.
+        assert!(StopOutcomeDto::from_wait(StopWait::TimedOut).still_saving);
+        assert!(!StopOutcomeDto::from_wait(StopWait::Cleared).still_saving);
+    }
 }

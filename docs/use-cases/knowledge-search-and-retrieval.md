@@ -3,7 +3,7 @@ type: UseCase
 status: shipped
 domain: knowledge-retrieval
 shipped_in: "main (unreleased, post-v0.5.1)"
-source_prd: "docs/PRD - Product Vision.md"
+source_prd: "docs/PRD.md"
 related_specs:
   - "docs/superpowers/specs/2026-07-09-vault-search-design.md"
   - "docs/superpowers/specs/2026-07-09-search-polish-design.md"
@@ -17,8 +17,8 @@ tags: [use-case, knowledge-retrieval]
 
 ## Source
 
-Main PRD, [§14 Functional Requirements → Search](../PRD%20-%20Product%20Vision.md) and
-[§11 Core Capabilities → Knowledge Search](../PRD%20-%20Product%20Vision.md) — the
+Main PRD, [§14 Functional Requirements → Search](../PRD.md) and
+[§11 Core Capabilities → Knowledge Search](../PRD.md) — the
 *other* named gap in Phase 1 — Foundation alongside Tasks. Also Knowledge
 Lifecycle PRD, [Lifecycle Stage 5 — Knowledge
 Retrieval](../prds/knowledge-lifecycle.md), and Phase 2 — Productivity
