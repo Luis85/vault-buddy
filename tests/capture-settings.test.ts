@@ -43,6 +43,7 @@ const mountLoaded = async (
     tasksFolder?: string | null;
     onGetTasks?: () => unknown;
     onSetTasks?: (args: unknown) => unknown;
+    onListLists?: () => unknown;
   } = {},
 ) => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
@@ -56,6 +57,8 @@ const mountLoaded = async (
         ? overrides.onGetTasks()
         : { tasksFolder: overrides.tasksFolder ?? null };
     if (cmd === "set_tasks_config") return overrides.onSetTasks?.(args) ?? null;
+    // The embedded TaskListSettings card reads the vault's lists at mount.
+    if (cmd === "list_task_lists") return overrides.onListLists?.() ?? [];
   });
   // attachTo document.body so the SelectMenu's Teleported popups land in a
   // queryable place; afterEach unmounts and clears the body.
@@ -322,6 +325,35 @@ describe("CaptureSettings", () => {
       cmd: "set_tasks_config",
       args: { id: "v1", tasksFolder: "Work/Tasks" },
     });
+  });
+
+  it("reloads the lists card after the tasks folder is saved with a NEW value (Codex #53 re-review)", async () => {
+    // The lists card (TaskListSettings) reads lists/config only at mount; a
+    // persisted tasks-folder change swaps the root those lists live under, so
+    // the card must remount (reload) — else a default/order save from the
+    // stale card persists old-root list names against the new root. An
+    // unchanged save must NOT remount (it would discard unsaved card edits).
+    let lists = ["OldList"];
+    const { wrapper, calls } = await mountLoaded({
+      tasksFolder: "Tasks",
+      onListLists: () => lists,
+    });
+    const cardLoads = () => calls.filter((c) => c.cmd === "list_task_lists").length;
+    const before = cardLoads(); // the card's own mount-time read
+    expect(before).toBeGreaterThan(0);
+    // Change the folder on disk and in the input, then save the form. Two
+    // lists so the card's order rows render them as text (one list renders
+    // only inside the closed picker).
+    lists = ["NewList", "NewToo"];
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Other/Tasks");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(cardLoads()).toBe(before + 1); // remounted → re-read the lists
+    expect(wrapper.text()).toContain("NewList");
+    // A second save with the folder unchanged leaves the card alone.
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(cardLoads()).toBe(before + 1);
   });
 
   it("clears the tasks folder to the default on save when emptied", async () => {

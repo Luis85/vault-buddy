@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, type Ref, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
+import { useOptionalFolderField } from "../composables/useOptionalFolderField";
 import { logWarning } from "../logging";
 import type {
   AudioDevice,
@@ -59,6 +60,18 @@ const tasksFolderError = ref<string | null>(null);
 // RecordMode.vue's `loaded` persist gate.
 const tasksFolderLoaded = ref(false);
 const tasksFolderEdited = ref(false);
+// The lists card below (TaskListSettings) reads its lists + config only at
+// mount, but the tasks folder saved HERE decides which root those lists live
+// under — a persisted folder change swaps the lists universe out from under
+// the card, and saving a default/order from the stale card would persist
+// old-root list names against the new root (a later unpicked add would then
+// create that list there). savedTasksFolder is the last value known persisted
+// (null until the load reports it); a successful save that changes it bumps
+// listsCardNonce, whose :key remounts the card to reload. An unchanged save
+// leaves the card — and any unsaved edits in it — alone (Codex, PR #53
+// re-review).
+const savedTasksFolder = ref<string | null>(null);
+const listsCardNonce = ref(0);
 
 // The per-vault documents folder — same independent-command shape as
 // tasksFolder above (its own get/set_documents_config pair, saved with the
@@ -145,53 +158,10 @@ watch(
   },
 );
 
-// Load an optional per-vault folder field through its own command, off the
-// capture form's critical path: a failure warns and continues (the folder is
-// optional), and the resolved value is dropped if the user already started
-// typing (their edit owns the field — the same rule as RecordMode's pre-load
-// toggle guard). Shared verbatim by the tasks and documents folders so the
-// two reads can't drift apart.
-async function loadOptionalField<T>(
-  cmd: string,
-  editedRef: Ref<boolean>,
-  loadedRef: Ref<boolean>,
-  targetRef: Ref<string>,
-  extract: (cfg: T) => string | null,
-) {
-  try {
-    const cfg = await invoke<T>(cmd, { id: props.vaultId });
-    if (!editedRef.value) targetRef.value = extract(cfg) ?? "";
-    loadedRef.value = true;
-  } catch (e) {
-    logWarning(`${cmd} failed (vault ${props.vaultId}): ${String(e)}`);
-  }
-}
-
-// Save an optional per-vault folder field through its own command. Gated on
-// loaded-or-edited: a value that is neither is the default seed, and writing
-// it would clear the vault's real folder. A failure is a field-level error
-// (returned so the caller can withhold the "Saved ✓") — deliberately NOT
-// short-circuited by the capture-config save, so neither write can block the
-// other's. Shared verbatim by the tasks and documents folders.
-async function saveOptionalField(
-  cmd: string,
-  key: string,
-  value: string,
-  loaded: boolean,
-  edited: boolean,
-  errorRef: Ref<string | null>,
-): Promise<boolean> {
-  if (!loaded && !edited) return false;
-  const trimmed = value.trim();
-  try {
-    await invoke(cmd, { id: props.vaultId, [key]: trimmed === "" ? null : trimmed });
-    return false;
-  } catch (e) {
-    errorRef.value = String(e);
-    logWarning(`${cmd} failed (vault ${props.vaultId}): ${String(e)}`);
-    return true;
-  }
-}
+// The optional folders' shared load/save pair lives in the composable so the
+// tasks and documents reads/writes can't drift apart (and this form stays
+// under its LOC cap).
+const { loadOptionalField, saveOptionalField } = useOptionalFolderField(() => props.vaultId);
 
 onMounted(async () => {
   try {
@@ -224,6 +194,7 @@ onMounted(async () => {
     tasksFolderLoaded,
     tasksFolder,
     (cfg) => cfg.tasksFolder,
+    (persisted) => (savedTasksFolder.value = persisted),
   );
   await loadOptionalField<DocumentsConfig>(
     "get_documents_config",
@@ -272,6 +243,11 @@ async function save() {
   // commands — each independent (a failure of one can't block the other or
   // the capture save) and each a field-level error. The `|| failed` ordering
   // keeps a prior failure sticky while still ALWAYS attempting both writes.
+  // Mirror saveOptionalField's own run-gate: only a save that actually RAN
+  // (loaded-or-edited) can have persisted a change worth reloading the lists
+  // card for. `false` from the helper also means "skipped".
+  const tasksSaveRan = tasksFolderLoaded.value || tasksFolderEdited.value;
+  const savingTasksFolder = tasksFolder.value.trim();
   if (
     await saveOptionalField(
       "set_tasks_config",
@@ -283,6 +259,12 @@ async function save() {
     )
   ) {
     failed = true;
+  } else if (tasksSaveRan && savingTasksFolder !== savedTasksFolder.value) {
+    // Persisted value changed (a null baseline — failed load — counts as
+    // changed, the conservative side): the lists card's root moved; remount
+    // it so its lists/config reload against the new root.
+    savedTasksFolder.value = savingTasksFolder;
+    listsCardNonce.value += 1;
   }
   if (
     await saveOptionalField(
@@ -465,7 +447,10 @@ async function save() {
     />
     <!-- Self-contained (own load/save) so its lists-config failure can't
          block the capture/folder saves — the independent-save pattern. -->
-    <TaskListSettings :vault-id="vaultId" />
+    <TaskListSettings
+      :key="listsCardNonce"
+      :vault-id="vaultId"
+    />
     <VaultFolderSetting
       v-model="documentsFolder"
       heading="Document import"
