@@ -141,7 +141,7 @@ describe("Tasks — lists & sorting", () => {
       await wrapper.get('[data-testid="task-add-options"]').trigger("click");
       await wrapper.get('[data-testid="task-add-list"]').trigger("click");
       await flushPromises();
-      (document.body.querySelector('[data-testid="task-add-list-option-__new__"]') as HTMLElement).click();
+      (document.body.querySelector('[data-testid="task-add-list-option-.__new__"]') as HTMLElement).click();
       await flushPromises();
       await wrapper.get('[data-testid="task-add-list-new-name"]').setValue(" Someday ");
       await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");
@@ -167,7 +167,7 @@ describe("Tasks — lists & sorting", () => {
       await wrapper.get('[data-testid="task-add-options"]').trigger("click");
       await wrapper.get('[data-testid="task-add-list"]').trigger("click");
       await flushPromises();
-      (document.body.querySelector('[data-testid="task-add-list-option-__new__"]') as HTMLElement).click();
+      (document.body.querySelector('[data-testid="task-add-list-option-.__new__"]') as HTMLElement).click();
       await flushPromises();
       await wrapper.get('[data-testid="task-add-list-new-name"]').setValue("x");
       await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");

@@ -187,7 +187,34 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
             crate::capture_paths::candidate(&stem, attempt)
         ));
         match crate::capture_paths::rename_noreplace(&canon_path, &candidate) {
-            Ok(()) => return Ok(candidate),
+            Ok(()) => {
+                // `rename_noreplace`'s hard-link path is deliberately lenient:
+                // if it links to the destination but can't unlink the source
+                // (a Windows AV/indexer holding it open), it returns Ok and
+                // leaves the source behind — right for capture, where a stray
+                // `.part` is later re-finalized as a `(recovered)` duplicate
+                // and no audio is ever lost. A task move can't tolerate that:
+                // the same document at both the old and new path would surface
+                // as a DUPLICATE task in both lists on the next scan. So treat
+                // a surviving source as a FAILED move — roll back the copy we
+                // just linked into the destination (same inode; removing it
+                // leaves the original intact) and error, so the file stays at
+                // exactly one path and the caller doesn't adopt the new one
+                // (Codex, PR #53 re-review).
+                if canon_path.exists() {
+                    if let Err(e) = std::fs::remove_file(&candidate) {
+                        log::warn!(
+                            "move_task_to_list: source {canon_path:?} survived the move and the \
+                             rolled-back copy {candidate:?} could not be removed ({e})"
+                        );
+                    }
+                    return Err(
+                        "Could not move the task: the original file could not be removed"
+                            .to_string(),
+                    );
+                }
+                return Ok(candidate);
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(format!("Could not move the task: {e}")),
         }
@@ -442,5 +469,44 @@ mod tests {
         let link = root.join("linked.md");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(move_task_to_list(&root, &link, "Inbox").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_task_fails_and_rolls_back_when_source_cannot_be_removed() {
+        // rename_noreplace's hard-link path is lenient: it leaves the source
+        // behind when it can't unlink it (right for capture — a stray file is
+        // re-finalized as a `(recovered)` duplicate, never lost). A task move
+        // can't tolerate a surviving source: the same document would show in
+        // BOTH lists on the next scan. The move must detect it, roll back the
+        // linked copy, and fail (Codex, PR #53 re-review). Force the remove
+        // failure by making the SOURCE folder read-only — on Unix, unlinking a
+        // file needs write on its parent dir (creating the hard link only
+        // needs write on the TARGET dir, which stays writable). Root bypasses
+        // DAC, so probe and skip under root; CI's rust-core runs non-root and
+        // exercises the assertions.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(root.join("Done")).unwrap(); // target must pre-exist
+        let src = root.join("t.md");
+        std::fs::write(&src, TASK).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // If a write into the now-read-only dir still succeeds, perms are being
+        // bypassed (root) and the wall this test relies on doesn't hold — skip.
+        let bypassed = std::fs::write(root.join(".probe"), b"x").is_ok();
+        if bypassed {
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let res = move_task_to_list(&root, &src, "Done");
+        // Restore write BEFORE asserting so tempdir cleanup always succeeds.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(res.is_err(), "a surviving source must fail the move");
+        assert!(src.exists(), "the original must remain in place");
+        assert!(
+            !root.join("Done").join("t.md").exists(),
+            "the linked copy must be rolled back — no duplicate task"
+        );
     }
 }

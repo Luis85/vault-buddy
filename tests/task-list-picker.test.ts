@@ -45,7 +45,7 @@ describe("TaskListPicker", () => {
   it("New list… swaps to an inline input and emits create on confirm", async () => {
     const w = mountPicker();
     await w.get('[data-testid="list-picker"]').trigger("click");
-    (document.body.querySelector('[data-testid="list-picker-option-__new__"]') as HTMLElement).click();
+    (document.body.querySelector('[data-testid="list-picker-option-.__new__"]') as HTMLElement).click();
     await flushPromises();
     const input = w.get('[data-testid="list-picker-new-name"]');
     await input.setValue("Someday");
@@ -55,10 +55,31 @@ describe("TaskListPicker", () => {
     expect(w.emitted("update:modelValue")).toBeUndefined();
   });
 
+  it("selects a real list literally named __new__ instead of entering create mode (Codex #53 re-review)", async () => {
+    // is_valid_list_name allows "__new__" as a real list folder, so it must
+    // stay selectable — the create sentinel is dot-prefixed (".__new__") to
+    // avoid colliding with it.
+    const w = mountPicker({ lists: ["Inbox", "__new__"] });
+    await w.get('[data-testid="list-picker"]').trigger("click");
+    (document.body.querySelector('[data-testid="list-picker-option-__new__"]') as HTMLElement).click();
+    await flushPromises();
+    expect(w.emitted("update:modelValue")).toEqual([["__new__"]]);
+    // It did NOT flip into the new-list input.
+    expect(w.find('[data-testid="list-picker-new-name"]').exists()).toBe(false);
+  });
+
+  it("keeps a __new__ list selectable when creation is disabled (Codex #53 re-review)", async () => {
+    const w = mountPicker({ lists: ["__new__"], allowCreate: false });
+    await w.get('[data-testid="list-picker"]').trigger("click");
+    (document.body.querySelector('[data-testid="list-picker-option-__new__"]') as HTMLElement).click();
+    await flushPromises();
+    expect(w.emitted("update:modelValue")).toEqual([["__new__"]]);
+  });
+
   it("cancel and Escape leave new-list mode without emitting, keeping the prior pick", async () => {
     const w = mountPicker({ modelValue: "Inbox" });
     await w.get('[data-testid="list-picker"]').trigger("click");
-    (document.body.querySelector('[data-testid="list-picker-option-__new__"]') as HTMLElement).click();
+    (document.body.querySelector('[data-testid="list-picker-option-.__new__"]') as HTMLElement).click();
     await flushPromises();
     await w.get('[data-testid="list-picker-new-cancel"]').trigger("click");
     expect(w.find('[data-testid="list-picker-new-name"]').exists()).toBe(false);
@@ -69,7 +90,7 @@ describe("TaskListPicker", () => {
   it("Escape in the name input stays inside the picker (GAP-27 class)", async () => {
     const w = mountPicker();
     await w.get('[data-testid="list-picker"]').trigger("click");
-    (document.body.querySelector('[data-testid="list-picker-option-__new__"]') as HTMLElement).click();
+    (document.body.querySelector('[data-testid="list-picker-option-.__new__"]') as HTMLElement).click();
     await flushPromises();
     let reachedWindow = false;
     const spy = () => {
@@ -90,7 +111,7 @@ describe("TaskListPicker", () => {
   it("leaves new-list mode when the parent selects the created list", async () => {
     const w = mountPicker();
     await w.get('[data-testid="list-picker"]').trigger("click");
-    (document.body.querySelector('[data-testid="list-picker-option-__new__"]') as HTMLElement).click();
+    (document.body.querySelector('[data-testid="list-picker-option-.__new__"]') as HTMLElement).click();
     await flushPromises();
     await w.setProps({ modelValue: "Someday", lists: ["Inbox", "Next", "Someday"] });
     await flushPromises();

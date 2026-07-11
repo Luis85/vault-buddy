@@ -26,7 +26,16 @@ const emit = defineEmits<{
   (e: "create", name: string): void;
 }>();
 
-const NEW_SENTINEL = "__new__";
+// The "New list…" action rides the SelectMenu value channel, so its sentinel
+// MUST NOT collide with a real list value. is_valid_list_name accepts any
+// non-empty segment without a slash or leading dot, so a bare "__new__" is
+// itself a creatable/hand-addable list — picking that real list would wrongly
+// flip into create mode (and it couldn't be selected at all when allowCreate
+// is false). A leading dot makes the sentinel uncollidable: the backend's
+// task_lists walk skips dot-directories and create_task_list rejects leading
+// dots, so a dot-led value can never appear in props.lists (Codex, PR #53
+// re-review).
+const NEW_SENTINEL = ".__new__";
 const newMode = ref(false);
 const newName = ref("");
 
@@ -40,7 +49,9 @@ const options = () => {
 };
 
 function onPick(value: string | number) {
-  if (value === NEW_SENTINEL) {
+  // Gate on allowCreate too: only the create-enabled picker renders the
+  // sentinel option, so nothing else can ever be mistaken for the action.
+  if (props.allowCreate && value === NEW_SENTINEL) {
     newMode.value = true;
     newName.value = "";
     return;
