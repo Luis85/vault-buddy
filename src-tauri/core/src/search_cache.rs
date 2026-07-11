@@ -140,8 +140,15 @@ pub(crate) fn cached_lowered(path: &Path, cache: &SearchCache) -> Option<Arc<str
 
     // Miss (absent or stale): read + lowercase OUTSIDE the lock.
     let lowered: Option<Arc<str>> = match std::fs::read_to_string(path) {
-        Ok(text) => Some(Arc::from(text.to_lowercase())),
-        Err(_) => None, // non-UTF-8 / unreadable → Uncacheable below
+        Ok(text) => Some(Arc::<str>::from(text.to_lowercase())),
+        // Only genuine non-UTF-8 is a permanent property of this (mtime,size)
+        // and worth memoizing as Uncacheable below. A transient IO error
+        // (Windows sharing violation, AV/backup lock) after `metadata` already
+        // succeeded must NOT be memoized — the pre-cache search path retried
+        // every scan; return None WITHOUT recording an entry so the next search
+        // retries once the file is readable again.
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => None,
+        Err(_) => return None,
     };
 
     let mut map = cache.lock();
@@ -264,6 +271,22 @@ mod tests {
         assert!(c.is_uncacheable(&p));
         assert_eq!(c.cached_bytes(), 0);
         assert!(cached_lowered(&p, &c).is_none()); // still None on the second call
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transient_read_error_is_not_memoized() {
+        // Regression (PR #52 Codex P2): a read failure that is NOT invalid
+        // UTF-8 (here EISDIR, standing in for a Windows sharing/AV lock) must
+        // not be memoized as Uncacheable — the pre-cache search path retried
+        // every scan, so we return None without recording an entry.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.md");
+        std::fs::create_dir(&p).unwrap(); // a directory named like a note
+        let c = SearchCache::new();
+        assert!(cached_lowered(&p, &c).is_none());
+        assert!(!c.is_uncacheable(&p)); // NOT memoized — retried next search
+        assert_eq!(c.cached_bytes(), 0);
     }
 
     #[test]
