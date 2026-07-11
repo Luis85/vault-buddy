@@ -69,6 +69,27 @@ pub fn is_valid_list_name(name: &str) -> bool {
     !n.is_empty() && !n.contains('/') && !n.contains('\\') && !n.starts_with('.')
 }
 
+/// Normalize a caller-supplied list identity into `/`-joined `Normal`
+/// components (the safe_recording_root component rule): `..`, absolute
+/// paths, and Windows drive-prefixed forms are rejected; `CurDir` segments
+/// drop out; `""` — the tasks root — is valid and normalizes to itself.
+/// Shared by the move below and services::add_task so the two write gates
+/// can never disagree on what a list path is.
+pub fn normalize_list_rel(list: &str) -> Result<String, String> {
+    if list.contains('\\') && list.contains(':') {
+        return Err("List path must stay inside the tasks folder".to_string());
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for c in Path::new(list).components() {
+        match c {
+            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            _ => return Err("List path must stay inside the tasks folder".to_string()),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 /// Create the list folder `root/<name>` (creating `root` itself if needed).
 /// Idempotent — an existing folder is success, not a clobber (a folder is not
 /// data). Containment is asserted BEFORE creation (a symlink/junction at any
@@ -107,18 +128,13 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
     if !canon_path.starts_with(&canon_root) {
         return Err("Task file is outside the vault's tasks folder".to_string());
     }
-    // Lexical gate on the target list (safe_recording_root's component rule):
-    // only Normal/CurDir components may appear — `..`, absolute paths, and
-    // Windows drive-ish forms are rejected before any filesystem access.
-    let rel = Path::new(list);
-    let escapes = rel
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
-        || (list.contains('\\') && list.contains(':'));
-    if escapes {
-        return Err("List path must stay inside the tasks folder".to_string());
-    }
-    let target_dir = canon_root.join(rel);
+    // Lexical gate on the target list — rejected before any filesystem access.
+    let normalized = normalize_list_rel(list)?;
+    let target_dir = if normalized.is_empty() {
+        canon_root.clone()
+    } else {
+        canon_root.join(&normalized)
+    };
     crate::capture_paths::assert_path_inside_vault(&canon_root, &target_dir)?;
     std::fs::create_dir_all(&target_dir)
         .map_err(|e| format!("Could not create the list folder: {e}"))?;

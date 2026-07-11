@@ -203,7 +203,13 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
 /// (`YYYY-MM-DD`) is supplied by the caller — no clock in core. `due`,
 /// `priority`, and `tags` are written only when present and are assumed
 /// ALREADY VALIDATED by the caller's gate (the IPC command validates
-/// strictly; a caller passing raw input would write it verbatim).
+/// strictly; a caller passing raw input would write it verbatim). `list`
+/// picks the list folder the task lands in: `Some` is a caller's explicit
+/// choice (write-strict — an escaping path is an inline error; `Some("")`
+/// means the tasks root, overriding any default), `None` falls back to the
+/// vault's configured `default_list` (read-lenient — a hand-edited bad
+/// default degrades to the root with a warning; it must never block adds).
+#[allow(clippy::too_many_arguments)]
 pub fn add_task(
     paths: &ServicePaths,
     id: &str,
@@ -212,12 +218,26 @@ pub fn add_task(
     due: Option<&str>,
     priority: Option<&str>,
     tags: &[String],
+    list: Option<&str>,
 ) -> Result<TaskDto, String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("A task needs a title.".to_string());
     }
-    let (vault_path, root) = tasks_root_for(paths, id)?;
+    let vault = find_vault(paths, id)?;
+    let cfg = capture_config::vault_config(&app_config(paths), id);
+    let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
+    let vault_path = PathBuf::from(&vault.path);
+    let effective_list = match list {
+        Some(l) => tasks::normalize_list_rel(l)?,
+        None => {
+            let default = cfg.default_list.as_deref().unwrap_or("");
+            tasks::normalize_list_rel(default).unwrap_or_else(|e| {
+                log::warn!("add_task: ignoring unsafe configured defaultList {default:?}: {e}");
+                String::new()
+            })
+        }
+    };
     // The registry can list a vault whose folder was moved/deleted; without
     // this guard the create_dir_all below would RESURRECT the missing vault
     // path (+ Tasks) and write a task into a directory that is no longer a
@@ -229,14 +249,24 @@ pub fn add_task(
         log::warn!("add_task: vault folder missing: {}", vault_path.display());
         return Err("Vault folder not found — was it moved or deleted?".to_string());
     }
+    let target_root = if effective_list.is_empty() {
+        root.clone()
+    } else {
+        root.join(&effective_list)
+    };
     // Validate the folder resolves inside the vault BEFORE creating it: this
     // canonicalizes the nearest existing ancestor, so a symlink/junction at any
     // ancestor is caught even when the leaf doesn't exist yet — create_dir_all
     // then can't create a directory (or write a task) outside the vault. The
     // lexical safe_recording_root already rejected `..`/absolute components.
-    capture_paths::assert_path_inside_vault(&vault_path, &root)?;
-    std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
-    let path = tasks::create_task(&root, title, today, due, priority, tags)
+    capture_paths::assert_path_inside_vault(&vault_path, &target_root)?;
+    std::fs::create_dir_all(&target_root)
+        .map_err(|e| format!("Could not create tasks folder: {e}"))?;
+    // Post-create canonical assert closes the swap-in race (the
+    // document-import discipline) — a junction planted between the check and
+    // the create must not receive the task file.
+    capture_paths::assert_root_inside_vault(&vault_path, &target_root)?;
+    let path = tasks::create_task(&target_root, title, today, due, priority, tags)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
@@ -247,9 +277,62 @@ pub fn add_task(
         due: due.map(str::to_string),
         priority: priority.map(str::to_string),
         tags: tags.to_vec(),
-        list: String::new(),
+        list: effective_list,
         order: None,
     })
+}
+
+/// Read-only enumeration of a vault's list folders (empty ones included, so a
+/// just-created list appears before its first task). Unknown vault / unsafe
+/// or missing folder / escape → empty, never an error (mirrors list_tasks).
+pub fn list_task_lists(paths: &ServicePaths, id: &str) -> Vec<String> {
+    let Ok((vault_path, root)) = tasks_root_for(paths, id) else {
+        return Vec::new();
+    };
+    if root.exists() {
+        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
+            log::warn!("list_task_lists: tasks folder resolves outside the vault: {e}");
+            return Vec::new();
+        }
+    }
+    tasks::task_lists(&root)
+}
+
+/// Create a list folder in a vault's tasks root. Write-strict: the name is
+/// validated (single segment, no leading dot) and containment is asserted
+/// before AND after creation. Returns the created list's relative name.
+pub fn create_task_list(paths: &ServicePaths, id: &str, name: &str) -> Result<String, String> {
+    let (vault_path, root) = tasks_root_for(paths, id)?;
+    if !vault_path.is_dir() {
+        log::warn!(
+            "create_task_list: vault folder missing: {}",
+            vault_path.display()
+        );
+        return Err("Vault folder not found — was it moved or deleted?".to_string());
+    }
+    capture_paths::assert_path_inside_vault(&vault_path, &root)?;
+    std::fs::create_dir_all(&root).map_err(|e| format!("Could not create tasks folder: {e}"))?;
+    capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    tasks::create_task_list(&root, name)
+}
+
+/// Move a task file into another list's folder (the tasks domain's file
+/// move). The core layer re-validates source containment and lands on
+/// `rename_noreplace` + suffix retry; this layer adds the vault-level root
+/// assert every task write shares. Returns the landed absolute path (which
+/// may carry a collision suffix).
+pub fn move_task_to_list(
+    paths: &ServicePaths,
+    id: &str,
+    task_path: &str,
+    list: &str,
+) -> Result<String, String> {
+    let (vault_path, root) = tasks_root_for(paths, id)?;
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    }
+    let landed = tasks::move_task_to_list(&root, Path::new(task_path), list)?;
+    Ok(landed.to_string_lossy().into_owned())
 }
 
 /// Set a task's status. `status` must be one of new/done/archived. The path
@@ -471,6 +554,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .unwrap();
         assert_eq!(created.title, "Buy milk");
@@ -495,13 +579,14 @@ mod tests {
             "2026-07-09",
             None,
             None,
-            &[]
+            &[],
+            None,
         )
         .is_err());
         // The spec requires MCP/IPC failures to carry the same user-facing
         // message the panel shows ("was it removed from Obsidian?"), not a
         // terse internal one that leaks only a raw hex id.
-        let err = add_task(&paths, "unknown", "x", "2026-07-09", None, None, &[])
+        let err = add_task(&paths, "unknown", "x", "2026-07-09", None, None, &[], None)
             .err()
             .expect("unknown vault must fail");
         assert!(err.contains("was it removed from Obsidian?"), "got: {err}");
@@ -529,6 +614,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         )
         .err()
         .expect("missing vault dir must fail");
@@ -537,6 +623,142 @@ mod tests {
         // verbatim) and must match the shell's own start_capture copy.
         assert_eq!(err, "Vault folder not found — was it moved or deleted?");
         assert!(!err.contains(&vault_str), "got: {err}");
+    }
+
+    #[test]
+    fn add_task_lands_in_the_picked_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Inbox"),
+        )
+        .unwrap();
+        assert_eq!(created.list, "Inbox");
+        assert!(vault.join("Tasks").join("Inbox").is_dir());
+        assert!(std::path::Path::new(&created.path).starts_with(vault.join("Tasks").join("Inbox")));
+        let listed = list_tasks(&paths, "deadbeef01234567");
+        assert_eq!(listed[0].list, "Inbox");
+    }
+
+    #[test]
+    fn add_task_honors_the_config_default_list_and_explicit_root_overrides() {
+        // None → the vault's configured defaultList (so MCP adds follow it
+        // too); an explicit "" is the caller saying "the tasks root", which
+        // must override the default rather than fall back to it.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "defaultList": "Inbox" } } }"#,
+        )
+        .unwrap();
+        let defaulted = add_task(
+            &paths,
+            "deadbeef01234567",
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(defaulted.list, "Inbox");
+        assert!(vault.join("Tasks").join("Inbox").is_dir());
+        let rooted = add_task(
+            &paths,
+            "deadbeef01234567",
+            "B",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some(""),
+        )
+        .unwrap();
+        assert_eq!(rooted.list, "");
+        assert!(std::path::Path::new(&rooted.path)
+            .parent()
+            .unwrap()
+            .ends_with("Tasks"));
+    }
+
+    #[test]
+    fn add_task_rejects_an_escaping_list_but_degrades_a_bad_default() {
+        // Explicit input is write-strict (an inline error); a hand-edited
+        // config default is read-lenient (degrades to the root with a warn) —
+        // a bad default must never block adding tasks.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _) = fixture(dir.path(), "MyVault");
+        assert!(add_task(
+            &paths,
+            "deadbeef01234567",
+            "x",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("../escape"),
+        )
+        .is_err());
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "defaultList": "../escape" } } }"#,
+        )
+        .unwrap();
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "x",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(created.list, "", "bad default degrades to the root");
+    }
+
+    #[test]
+    fn task_list_services_enumerate_create_and_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        // Nothing yet — and an unknown vault is best-effort empty.
+        assert!(list_task_lists(&paths, "deadbeef01234567").is_empty());
+        assert!(list_task_lists(&paths, "unknown").is_empty());
+        // Create validates (write-strict) and creates the folder.
+        assert!(create_task_list(&paths, "deadbeef01234567", "a/b").is_err());
+        assert_eq!(
+            create_task_list(&paths, "deadbeef01234567", " Inbox ").unwrap(),
+            "Inbox"
+        );
+        assert!(vault.join("Tasks").join("Inbox").is_dir());
+        assert_eq!(list_task_lists(&paths, "deadbeef01234567"), vec!["Inbox"]);
+        // Move returns the landed absolute path and the list derives from it.
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some(""),
+        )
+        .unwrap();
+        let landed = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
+        assert!(std::path::Path::new(&landed).exists());
+        let listed = list_tasks(&paths, "deadbeef01234567");
+        assert_eq!(listed[0].list, "Inbox");
+        assert!(move_task_to_list(&paths, "unknown", &landed, "Inbox").is_err());
     }
 
     #[test]
