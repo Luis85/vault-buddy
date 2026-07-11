@@ -790,14 +790,17 @@ the main thread; a content scan there would freeze window show/hide and
 drags), wraps the walk in `spawn_blocking`, touches no window APIs and no
 locks, and returns `Result` — an infrastructure failure rejects so the
 panel keeps its previous results instead of blanking. Each call bumps a
-scan-generation atomic that the core walk polls per file
-(`search_vaults_with_cancel`), so superseded scans abort; per-vault scans
+scan-generation atomic that the core walk polls per file (the `is_cancelled`
+predicate the command threads into `search_vaults_with_cache`), so
+superseded scans abort; per-vault scans
 run in parallel on **named** scoped threads and merge in vault order
 (serial-identical output). The scan reads note content through the cache
 (`search_vaults_with_cache`); a shell-owned `static SEARCH_CACHE` (in
 `search_commands.rs`) is fed into the `spawn_blocking` scan, and a named
-`search-prewarm` thread (wired last in `setup`, paused per-vault while
-recording) warms it on launch so even the first search is fast. The cache
+`search-prewarm` thread (wired last in `setup`, gated on `is_recording`
+before each vault and polled per file so a recording starting mid-warm
+yields within one file instead of fighting the capture fsync) warms it on
+launch so even the first search is fast. The cache
 is touched only off the main thread, holds lowered text keyed by
 `(mtime,size)`, and never changes what a search returns. Core search types
 derive camelCase `Serialize` and cross the IPC boundary directly (no DTO
