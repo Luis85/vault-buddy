@@ -96,13 +96,27 @@ pub(super) fn strip_inline_comment(rest: &str) -> &str {
 /// (`tags: #work #home` → two tags), and that token's own leading `#` is
 /// whitespace-preceded too. The discriminator: a `#` starts a comment only
 /// when it is NOT glued to a following tag character — i.e. followed by
-/// whitespace or end-of-value (`tags: work # private note` strips at the
-/// first `#`); a `#` immediately followed by a non-whitespace character is
-/// another tag token and scanning continues past it. Codex review, PR #46
-/// round 2: the plain strip truncated `tags: #work #home` to `#work`,
-/// dropping every tag after the first from chips/filtering and from what a
-/// later tags edit would persist.
+/// whitespace or end-of-value (`tags: #work # areas` strips at the second
+/// `#`); a `#` immediately followed by a non-whitespace character is another
+/// tag token and scanning continues past it. Codex review, PR #46 round 2:
+/// the plain strip truncated `tags: #work #home` to `#work`, dropping every
+/// tag after the first from chips/filtering and from what a later tags edit
+/// would persist.
+///
+/// The glued-`#`-is-a-tag leniency belongs ONLY to that leading-`#` list form
+/// — a value that STARTS with `#`. A bare-first scalar (`tags: work #private
+/// note`) is plain YAML, where a whitespace-preceded `#` always starts a
+/// comment regardless of the next byte, so it falls back to
+/// `strip_inline_comment`. Codex review, PR #46 round 3: without this gate,
+/// `tags: work #private note` tokenized the comment into phantom `private`/
+/// `note` tags.
 fn strip_scalar_tags_comment(rest: &str) -> &str {
+    // Only the Obsidian leading-`#` tag-list form (value starts with `#`)
+    // treats a glued `#tag` after whitespace as another tag; everything else
+    // is plain YAML.
+    if !rest.trim_start().starts_with('#') {
+        return strip_inline_comment(rest);
+    }
     let b = rest.as_bytes();
     for i in 0..b.len() {
         if b[i] != b'#' {
@@ -393,6 +407,20 @@ mod tests {
         // The discriminator: `#` glued to the next character is another tag
         // token; `#` followed by whitespace (or end of value) is a comment.
         let content = "---\ntype: Task\ntitle: \"t\"\ntags: #work # areas\n---\n";
+        assert_eq!(note_tags(content), vec!["work"]);
+    }
+
+    #[test]
+    fn scalar_tag_bare_value_strips_a_compact_comment() {
+        // Codex PR #46 round 3: `tags: work #private note` — a bare-first
+        // scalar is plain YAML, so a whitespace-preceded `#` starts a comment
+        // even when glued to the next char (no space after `#`). The
+        // glued-`#`-is-another-tag leniency belongs only to the Obsidian
+        // leading-`#` list form, where the VALUE ITSELF starts with `#`
+        // (`tags: #work #home`). Without this the comment words tokenized into
+        // phantom `private`/`note` tags that rendered, filtered, and would
+        // persist on the next rewrite.
+        let content = "---\ntype: Task\ntitle: \"t\"\ntags: work #private note\n---\n";
         assert_eq!(note_tags(content), vec!["work"]);
     }
 
