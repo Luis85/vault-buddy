@@ -9,6 +9,8 @@ import TaskDragHandle from "./TaskDragHandle.vue";
 // editor's save/cancel bind to container handlers directly. `reorderable`
 // shows the grip handle (Manual sort, no filters); the raw pointer/key
 // events travel up — the container's reorder composable owns the drag.
+// `reorderBusy` (a view-wide rank write in flight) makes the grip inert
+// without unmounting it, so keyboard focus survives the write.
 withDefaults(
   defineProps<{
     task: AggTask;
@@ -16,10 +18,11 @@ withDefaults(
     isAggregate: boolean;
     editing: boolean;
     reorderable?: boolean;
+    reorderBusy?: boolean;
     dragging?: boolean;
     dropTarget?: boolean;
   }>(),
-  { reorderable: false, dragging: false, dropTarget: false },
+  { reorderable: false, reorderBusy: false, dragging: false, dropTarget: false },
 );
 defineEmits<{
   (e: "toggle"): void;
@@ -58,7 +61,7 @@ const isOverdue = (t: AggTask): boolean => {
       <TaskDragHandle
         v-if="reorderable"
         :title="task.title"
-        :busy="busy"
+        :busy="busy || reorderBusy"
         @handle-pointer-down="$emit('reorderPointerDown', $event)"
         @handle-keydown="$emit('reorderKeydown', $event)"
       />

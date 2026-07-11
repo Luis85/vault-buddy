@@ -378,6 +378,14 @@ dismissal are unchanged. Regression tests pin all three behaviors.
   one section also moves it relative to tasks in other sections when they
   meet in a different grouping. By design (one `order` field per task),
   documented in the spec.
+- A row write that was already in flight when a drag STARTED (e.g. a slow
+  toggle that then FAILS) can resolve mid-drag: its revert re-sorts the
+  rows, and the drop then commits from/to indices captured against the
+  pre-shuffle order, moving a neighbor instead. Needs a failing write
+  racing a sub-second drag; the reorder-vs-reorder and write-vs-write
+  interleavings are already blocked by the `reordering` guard and the
+  per-path busy checks (the busy row's grip is inert), so only this
+  revert-reshuffle window remains.
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before

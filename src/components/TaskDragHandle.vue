@@ -2,24 +2,33 @@
 // The manual-sort grip: a focusable handle that forwards its raw pointer /
 // key events up (the container's reorder composable owns the drag state
 // machine). Its own component so TaskRow's template stays under the
-// complexity threshold.
-defineProps<{ title: string; busy: boolean }>();
-defineEmits<{
+// complexity threshold. `busy` renders as aria-disabled + an emit guard,
+// NEVER the `disabled` attribute: a disabled control drops keyboard focus
+// to <body> mid-write, so consecutive Arrow steps would each cost a re-Tab.
+const props = defineProps<{ title: string; busy: boolean }>();
+const emit = defineEmits<{
   (e: "handlePointerDown", ev: PointerEvent): void;
   (e: "handleKeydown", ev: KeyboardEvent): void;
 }>();
+function onPointerDown(ev: PointerEvent) {
+  if (!props.busy) emit("handlePointerDown", ev);
+}
+function onKeydown(ev: KeyboardEvent) {
+  if (!props.busy) emit("handleKeydown", ev);
+}
 </script>
 
 <template>
   <button
     type="button"
     data-testid="task-drag"
-    :disabled="busy"
+    :aria-disabled="busy || undefined"
     :aria-label="`Reorder ${title} (arrow keys move it)`"
     title="Drag to reorder"
-    class="shrink-0 cursor-grab touch-none rounded p-0.5 text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-    @pointerdown="$emit('handlePointerDown', $event)"
-    @keydown="$emit('handleKeydown', $event)"
+    class="shrink-0 touch-none rounded p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+    :class="busy ? 'cursor-default text-slate-600 opacity-40' : 'cursor-grab text-slate-500 hover:text-slate-200'"
+    @pointerdown="onPointerDown"
+    @keydown="onKeydown"
   >
     <svg
       width="12"

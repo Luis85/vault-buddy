@@ -1,4 +1,4 @@
-import { type Ref,ref } from "vue";
+import { onScopeDispose, type Ref, ref } from "vue";
 
 // Pointer + keyboard reordering over the rendered task rows. Pointer-based
 // by necessity: Tauri's drag-drop interception (the buddy's document-drop
@@ -22,6 +22,13 @@ export function useTaskReorder(opts: {
   onHandleKeydown: (e: KeyboardEvent, sectionKey: string, index: number) => void;
 } {
   const dragState = ref<DragState | null>(null);
+
+  // The active drag's cancel hook. Its pointer listeners live on `window`, so
+  // a view unmounted mid-drag (a panel view switch) would leave them armed and
+  // the eventual pointerup would commit a reorder computed against the dead
+  // view's rows — tear the drag down with the owning scope instead.
+  let cancelActiveDrag: (() => void) | null = null;
+  onScopeDispose(() => cancelActiveDrag?.());
 
   // The slot the dragged row would occupy in the FINAL order: how many OTHER
   // rows' midpoints sit above the pointer.
@@ -51,6 +58,7 @@ export function useTaskReorder(opts: {
       };
     };
     const finish = (commitIt: boolean) => {
+      cancelActiveDrag = null;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
@@ -75,6 +83,7 @@ export function useTaskReorder(opts: {
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
     window.addEventListener("keydown", onKey, true);
+    cancelActiveDrag = () => finish(false);
   }
 
   // The accessible complement: the focused handle moves its row one slot per

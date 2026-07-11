@@ -140,18 +140,19 @@ function flipSortDir() {
 
 // Manual ordering: drag (or arrow-key) a row within its section; the landed
 // slot becomes an `order` rank via planReorder — one midpoint write in the
-// common case, a section-wide materialization when ranks need seeding.
-// Handles show only in Manual sort with NO filter active: reordering a
-// filtered subset would write ranks against invisible neighbors.
+// common case, a section-wide materialization when ranks need seeding. Grips
+// render in Manual sort with NO filter (a filtered subset would rank against
+// invisible neighbors) and stay MOUNTED but inert during a rank write —
+// unmounting (or `disabled`) drops keyboard focus on every Arrow step.
 const rootRef = ref<HTMLElement | null>(null);
 const reordering = ref(false);
-const reorderEnabled = computed(
+const reorderView = computed(
   () =>
     sortPref.value.key === "manual" &&
     filter.value.trim() === "" &&
-    tagFilter.value === null &&
-    !reordering.value,
+    tagFilter.value === null,
 );
+const reorderEnabled = computed(() => reorderView.value && !reordering.value);
 const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
   enabled: () => reorderEnabled.value,
   // Filter by dataset rather than interpolating sectionKey into an attribute
@@ -184,12 +185,10 @@ async function writeSingleRank(task: AggTask, order: number) {
   task.order = order;
   sortInPlace();
   busy.value.add(task.path);
-  // The view-level guard (same one materialization uses) disables ALL handles
-  // until this write resolves — not just the per-path busy flag. A second
-  // reorder of a DIFFERENT row would compute its rank against this optimistic,
-  // not-yet-persisted position; if this write then fails and reverts, that
-  // second rank would be relative to a slot that never landed, diverging from
-  // what the user asked for. Serialize reorders view-wide instead.
+  // The view-level guard (shared with materialization) makes every grip inert
+  // until this write resolves: a second reorder would compute its rank against
+  // this optimistic, not-yet-persisted position and diverge if this write
+  // later fails and reverts. Serialize reorders view-wide instead.
   reordering.value = true;
   try {
     await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order } });
@@ -499,7 +498,8 @@ async function add(payload: AddPayload) {
             :busy="isBusy(task.path)"
             :is-aggregate="isAggregate"
             :editing="editingKey === rowKey(bucket.key, task)"
-            :reorderable="reorderEnabled"
+            :reorderable="reorderView"
+            :reorder-busy="reordering"
             :dragging="dragState?.sectionKey === bucket.key && dragState.fromIndex === i"
             :drop-target="
               dragState?.sectionKey === bucket.key &&

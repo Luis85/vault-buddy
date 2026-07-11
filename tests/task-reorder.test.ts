@@ -186,23 +186,79 @@ describe("manual reordering", () => {
   });
 
   it("blocks further reorders until an in-flight single-rank write lands (Codex #53 re-review)", async () => {
-    // While a midpoint write is pending, every handle must disappear (the
-    // view-level guard) so a second reorder can't be computed against the
-    // optimistic, not-yet-persisted order — which would diverge if the first
-    // write later fails and reverts.
+    // While a midpoint write is pending, a second reorder must not be
+    // computed against the optimistic, not-yet-persisted order — it would
+    // diverge if the first write later fails and reverts. The guard is
+    // INERTNESS (aria-disabled + dropped events), never unmounting or
+    // `disabled`: both rip the grip out from under keyboard focus, so every
+    // Arrow step would strand the user on <body> and cost a re-Tab.
     let resolveWrite!: (v: unknown) => void;
-    const { wrapper } = mountManual([task("a", 1024), task("b", 2048), task("c", 3072)], {
+    const { wrapper, calls } = mountManual([task("a", 1024), task("b", 2048), task("c", 3072)], {
       update_task: () => new Promise((r) => (resolveWrite = r)),
     });
     await flushPromises();
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(3);
     await wrapper.findAll('[data-testid="task-drag"]')[0].trigger("keydown", { key: "ArrowDown" });
     await flushPromises();
-    // Guard engaged: no handle is reorderable until the write resolves.
-    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0);
+    // Guard engaged: the grips stay MOUNTED (focus survives) but inert.
+    const midFlight = wrapper.findAll('[data-testid="task-drag"]');
+    expect(midFlight).toHaveLength(3);
+    expect(midFlight.every((g) => g.attributes("aria-disabled") === "true")).toBe(true);
+    // A second reorder mid-flight is dropped, not ranked against the
+    // unpersisted order.
+    await midFlight[2].trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "update_task")).toHaveLength(1);
     resolveWrite(null);
     await flushPromises();
-    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(3);
+    // Released: grips re-arm and the next reorder goes through.
+    const after = wrapper.findAll('[data-testid="task-drag"]');
+    expect(after.every((g) => g.attributes("aria-disabled") === undefined)).toBe(true);
+    await after[0].trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "update_task")).toHaveLength(2);
+  });
+
+  it("keeps keyboard focus on the grip across an Arrow step (a11y: consecutive moves)", async () => {
+    // The keyboard fallback is consecutive Arrow presses. The old guard
+    // unmounted every grip during the rank write (and `disabled` dropped the
+    // busy row's), so each step kicked focus to <body> and the "fallback" was
+    // effectively single-shot. The SAME element must stay mounted, enabled,
+    // and focused through its own write so the next press keeps working.
+    const { wrapper, calls } = mountManual([task("a", 1024), task("b", 2048), task("c", 3072)]);
+    await flushPromises();
+    const grip = wrapper.findAll('[data-testid="task-drag"]')[0].element as HTMLElement;
+    grip.focus();
+    expect(document.activeElement).toBe(grip);
+    await wrapper.findAll('[data-testid="task-drag"]')[0].trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(rowTitles(wrapper)).toEqual(["b", "a", "c"]);
+    expect(document.activeElement).toBe(grip);
+    // …so the next Arrow continues from where the user stands: a → last.
+    grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "update_task")).toHaveLength(2);
+    expect(rowTitles(wrapper)).toEqual(["b", "c", "a"]);
+  });
+
+  it("a drag ended after the view unmounts never commits (listeners torn down)", async () => {
+    // The drag's pointer listeners live on `window`; without scope cleanup a
+    // view unmounted mid-drag (panel view switch) leaves them armed, and the
+    // eventual pointerup would commit a reorder computed against the dead
+    // view's rows.
+    const { wrapper, calls } = mountManual([task("a", 1024), task("b", 2048)]);
+    await flushPromises();
+    stackRowRects(wrapper);
+    await wrapper.findAll('[data-testid="task-drag"]')[0].trigger("pointerdown", {
+      pointerType: "mouse",
+      button: 0,
+      clientY: 5,
+    });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 55 }));
+    wrapper.unmount();
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
   });
 
   it("keeps already-written ranks on a partial materialize failure (Codex #53 re-review)", async () => {
