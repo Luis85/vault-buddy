@@ -694,23 +694,30 @@ mod tests {
     fn add_task_rejects_an_escaping_list_but_degrades_a_bad_default() {
         // Explicit input is write-strict (an inline error); a hand-edited
         // config default is read-lenient (degrades to the root with a warn) —
-        // a bad default must never block adding tasks.
+        // a bad default must never block adding tasks. `.hidden` is the second
+        // vector (Codex, PR #53): a dot-prefixed list would land the task in a
+        // walk-skipped folder, so it is rejected/degraded exactly like `..`.
         let dir = tempfile::tempdir().unwrap();
-        let (paths, _) = fixture(dir.path(), "MyVault");
-        assert!(add_task(
-            &paths,
-            "deadbeef01234567",
-            "x",
-            "2026-07-09",
-            None,
-            None,
-            &[],
-            Some("../escape"),
-        )
-        .is_err());
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        for explicit in ["../escape", ".hidden", "Work/.hidden"] {
+            assert!(
+                add_task(
+                    &paths,
+                    "deadbeef01234567",
+                    "x",
+                    "2026-07-09",
+                    None,
+                    None,
+                    &[],
+                    Some(explicit),
+                )
+                .is_err(),
+                "explicit list {explicit:?} must error"
+            );
+        }
         std::fs::write(
             paths.config_json.as_ref().unwrap(),
-            r#"{ "vaults": { "deadbeef01234567": { "defaultList": "../escape" } } }"#,
+            r#"{ "vaults": { "deadbeef01234567": { "defaultList": ".hidden" } } }"#,
         )
         .unwrap();
         let created = add_task(
@@ -725,6 +732,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(created.list, "", "bad default degrades to the root");
+        // And the task is really at the root, not a hidden folder.
+        assert_eq!(
+            std::path::Path::new(&created.path).parent().unwrap(),
+            vault.join("Tasks")
+        );
     }
 
     #[test]

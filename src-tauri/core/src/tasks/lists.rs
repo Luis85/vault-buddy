@@ -82,7 +82,21 @@ pub fn normalize_list_rel(list: &str) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
     for c in Path::new(list).components() {
         match c {
-            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            Component::Normal(s) => {
+                let seg = s.to_string_lossy();
+                // A dot-prefixed segment names a hidden folder that every task
+                // walk (task_lists + vault_walk) skips, so a task landed there
+                // would vanish from the view. Reject it the same way
+                // create_task_list does (is_valid_list_name) so this shared
+                // normalizer — used by add_task's config default,
+                // move_task_to_list, and set_task_lists_config — stays
+                // consistent with the create gate on ALL segments, not just a
+                // single-segment create (Codex, PR #53).
+                if seg.starts_with('.') {
+                    return Err("List folders cannot start with a dot.".to_string());
+                }
+                parts.push(seg.into_owned());
+            }
             Component::CurDir => {}
             _ => return Err("List path must stay inside the tasks folder".to_string()),
         }
@@ -247,6 +261,23 @@ mod tests {
     }
 
     #[test]
+    fn normalize_list_rel_rejects_dot_prefixed_segments() {
+        // A dot-prefixed folder is skipped by every task walk, so a task
+        // placed there would vanish from the view — the shared normalizer
+        // (add_task's config default, move, set_task_lists_config) must reject
+        // it on EVERY segment the same way create_task_list does, not only a
+        // single-segment create (Codex, PR #53).
+        for bad in [".hidden", "Work/.hidden", ".git/objects", "a/.b/c"] {
+            assert!(normalize_list_rel(bad).is_err(), "{bad:?} must be rejected");
+        }
+        // Non-dot names still normalize, including nested and the root.
+        assert_eq!(normalize_list_rel("Inbox").unwrap(), "Inbox");
+        assert_eq!(normalize_list_rel("Work/Q3").unwrap(), "Work/Q3");
+        assert_eq!(normalize_list_rel("").unwrap(), "");
+        assert_eq!(normalize_list_rel("./Inbox").unwrap(), "Inbox"); // CurDir drops out
+    }
+
+    #[test]
     fn create_task_list_creates_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
@@ -358,6 +389,9 @@ mod tests {
         write(&root, "t.md", TASK);
         assert!(move_task_to_list(&root, &root.join("t.md"), "../x").is_err());
         assert!(move_task_to_list(&root, &root.join("t.md"), "/abs").is_err());
+        // A dot-prefixed target would land the task in a walk-skipped folder.
+        assert!(move_task_to_list(&root, &root.join("t.md"), ".hidden").is_err());
+        assert!(move_task_to_list(&root, &root.join("t.md"), "Work/.hidden").is_err());
     }
 
     #[cfg(unix)]
