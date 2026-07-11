@@ -61,6 +61,17 @@ describe("RecordMode", () => {
     expect(transcribe).toBeGreaterThan(browse);
   });
 
+  it("orders Import Document before Browse recordings (Browse is the last action)", async () => {
+    // Since import joined the chooser, Browse recordings belongs at the bottom
+    // — the two capture actions (record + import) come first.
+    const { wrapper } = await mountView();
+    const html = wrapper.html();
+    const importDoc = html.indexOf('data-testid="import-document"');
+    const browse = html.indexOf('data-testid="mode-browse"');
+    expect(importDoc).toBeGreaterThan(-1);
+    expect(browse).toBeGreaterThan(importDoc);
+  });
+
   it("styles Browse recordings as a card like the recording options", async () => {
     const { wrapper } = await mountView();
     const browse = wrapper.get('[data-testid="mode-browse"]');

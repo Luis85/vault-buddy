@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import NotificationHost from "../src/components/NotificationHost.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
@@ -64,6 +64,25 @@ describe("NotificationHost", () => {
     expect(bgOf(1)).toContain("bg-amber-900"); // warning
     expect(bgOf(2)).toContain("bg-emerald-900"); // success
     expect(bgOf(3)).toContain("bg-slate-800"); // info
+  });
+
+  it("renders an action button that runs the action and dismisses the toast", async () => {
+    const n = useNotificationsStore();
+    const run = vi.fn();
+    n.notify("success", "Imported X", { action: { label: "Open", run } });
+    const w = mount(NotificationHost);
+    const action = w.get('[data-testid="notification-action"]');
+    expect(action.text()).toBe("Open");
+    await action.trigger("click");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(n.items).toHaveLength(0); // clicking the action dismisses the toast
+  });
+
+  it("renders no action button for a plain toast", () => {
+    const n = useNotificationsStore();
+    n.success("done");
+    const w = mount(NotificationHost);
+    expect(w.find('[data-testid="notification-action"]').exists()).toBe(false);
   });
 
   it("keeps the container pointer-events-none while each toast is pointer-events-auto", () => {

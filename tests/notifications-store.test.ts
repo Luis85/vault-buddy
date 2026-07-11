@@ -41,4 +41,31 @@ describe("notifications store", () => {
     n.clear();
     expect(n.items).toEqual([]);
   });
+
+  it("stores an action and keeps an actionable toast sticky past the success TTL", () => {
+    // A "Imported X — Open it?" toast must wait for the user's decision, so an
+    // action-carrying success toast overrides the normal 4s auto-dismiss.
+    const n = useNotificationsStore();
+    const run = vi.fn();
+    n.notify("success", "Imported X", { action: { label: "Open", run } });
+    const item = n.items[0]!;
+    expect(item.action?.label).toBe("Open");
+    expect(item.action?.run).toBe(run);
+    vi.advanceTimersByTime(10000);
+    expect(n.items).toHaveLength(1); // still there — the action must not vanish
+  });
+
+  it("does not dedupe actionable toasts so each keeps its own callback", () => {
+    // Two imports that happen to yield the same message must not collapse into
+    // one toast — the second's Open action would otherwise open the first note.
+    const n = useNotificationsStore();
+    const a = n.notify("success", "Imported X", {
+      action: { label: "Open", run: vi.fn() },
+    });
+    const b = n.notify("success", "Imported X", {
+      action: { label: "Open", run: vi.fn() },
+    });
+    expect(a).not.toBe(b);
+    expect(n.items).toHaveLength(2);
+  });
 });

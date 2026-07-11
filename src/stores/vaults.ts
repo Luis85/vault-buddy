@@ -23,7 +23,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "transcriptions"
       | "tasks"
       | "search"
-      | "importPicker",
+      | "importPicker"
+      | "documentImport",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -201,6 +202,12 @@ export const useVaultsStore = defineStore("vaults", {
     // back() needs no case: search falls through to the final else → showList.
     openSearch() {
       this.view = "search";
+    },
+    // The focused Pandoc setup screen the Import gates route to when Pandoc is
+    // missing/too old — a dedicated view rather than the buried settings card.
+    // back() needs no case: it falls through to the final else → showList.
+    openDocumentImport() {
+      this.view = "documentImport";
     },
     // Rust-owned buddy drop lands here (via `refresh`'s take_pending_import
     // consume). back() needs no case: it falls through to the final else →

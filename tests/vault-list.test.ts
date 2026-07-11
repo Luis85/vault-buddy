@@ -105,6 +105,14 @@ describe("VaultList", () => {
     expect(wrapper.emitted("capture")).toEqual([[sample[0].id]]);
   });
 
+  it("titles the capture button 'Capture knowledge' (not audio-only)", () => {
+    // The chooser now also imports documents, so the old
+    // "Capture knowledge (record audio)" tooltip misdescribed it.
+    const wrapper = mountList(sample);
+    const button = wrapper.find('[aria-label^="Capture knowledge in"]');
+    expect(button.attributes("title")).toBe("Capture knowledge");
+  });
+
   it("disables capture buttons when captureDisabled", () => {
     const wrapper = mountList(sample, null, null, true);
     expect(

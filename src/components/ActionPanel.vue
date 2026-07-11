@@ -6,6 +6,7 @@ import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
+import DocumentImportSettings from "./DocumentImportSettings.vue";
 import ImportVaultPicker from "./ImportVaultPicker.vue";
 import NotificationHost from "./NotificationHost.vue";
 import RecordingBar from "./RecordingBar.vue";
@@ -30,11 +31,12 @@ const VIEW_TITLES: Record<string, string> = {
   settings: "Buddy settings",
   captureSettings: "Vault settings",
   recordings: "Recordings",
-  recordMode: "Record",
+  recordMode: "Capture knowledge",
   transcriptions: "Transcriptions",
   tasks: "Tasks",
   search: "Search",
   importPicker: "Import document",
+  documentImport: "Document import",
 };
 const title = computed(() => VIEW_TITLES[view.value] ?? "Vaults");
 
@@ -304,6 +306,16 @@ watch(
       class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
     >
       <ImportVaultPicker />
+    </div>
+    <div
+      v-else-if="view === 'documentImport'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <p class="mb-2 text-xs text-slate-400">
+        Vault Buddy converts Word, ODT, and RTF files into notes using Pandoc —
+        set it up here, then import from a vault's Capture knowledge screen.
+      </p>
+      <DocumentImportSettings />
     </div>
     <div
       v-else

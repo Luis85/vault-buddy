@@ -1,6 +1,17 @@
 <script setup lang="ts">
+import type { Notification } from "../stores/notifications";
 import { useNotificationsStore } from "../stores/notifications";
 const notifications = useNotificationsStore();
+
+// Run a toast's call-to-action (e.g. "Open" the imported note), then dismiss
+// it — the action resolves the toast, so it shouldn't linger afterwards.
+async function runAction(item: Notification) {
+  try {
+    await item.action?.run();
+  } finally {
+    notifications.dismiss(item.id);
+  }
+}
 // Solid, high-contrast backgrounds — NOT the old low-alpha tints
 // (bg-red-500/20 etc.). The panel window is transparent, so a ~15-20% tint
 // left the toast text barely legible ("not readable due to its transparency").
@@ -28,6 +39,15 @@ const cls: Record<string, string> = {
       :class="['pointer-events-auto flex items-start justify-between gap-2 rounded-lg px-2 py-1 text-xs shadow-lg', cls[item.kind]]"
     >
       <span class="min-w-0 break-words">{{ item.message }}</span>
+      <button
+        v-if="item.action"
+        type="button"
+        data-testid="notification-action"
+        class="shrink-0 cursor-pointer rounded bg-white/15 px-1.5 py-0.5 font-medium hover:bg-white/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+        @click="runAction(item)"
+      >
+        {{ item.action.label }}
+      </button>
       <button
         type="button"
         data-testid="notification-dismiss"

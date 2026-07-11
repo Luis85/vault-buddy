@@ -388,6 +388,7 @@ pub fn run() {
             document_commands::set_pandoc_path,
             document_commands::begin_document_import,
             document_commands::take_pending_import,
+            document_commands::open_imported_document,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

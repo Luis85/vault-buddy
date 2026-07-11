@@ -46,6 +46,24 @@ pub fn daily_note_uri(vault_id: &str, vault_path: &Path, date: NaiveDate) -> Str
     }
 }
 
+/// The `obsidian://open` URI for an imported note. `note` is the path
+/// `convert_document` returns — vault-relative on success, or an absolute
+/// fallback when it couldn't strip the vault prefix — so a relative note is
+/// resolved under `vault_root` first. The final extension is dropped (Obsidian
+/// resolves `Documents/2026/07/Report` to `Report.md`). Returns `None` when the
+/// note resolves outside the vault, so the caller can refuse rather than open
+/// something unexpected. The vault is never written — this only opens.
+pub fn imported_note_uri(vault_id: &str, vault_root: &Path, note: &str) -> Option<String> {
+    let p = Path::new(note);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        vault_root.join(p)
+    };
+    let rel = uri::vault_relative_no_ext(&abs, vault_root)?;
+    Some(uri::open_file_uri(vault_id, &rel))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +71,40 @@ mod tests {
 
     fn date() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 7, 3).unwrap()
+    }
+
+    #[test]
+    fn imported_note_uri_from_relative_path_drops_the_extension() {
+        // convert_document returns a vault-relative path on success; the open
+        // URI resolves it under the vault and drops the final `.md`.
+        assert_eq!(
+            imported_note_uri("a1b2c3", Path::new("/vault"), "Documents/2026/07/Report.md")
+                .as_deref(),
+            Some("obsidian://open?vault=a1b2c3&file=Documents%2F2026%2F07%2FReport"),
+        );
+    }
+
+    #[test]
+    fn imported_note_uri_accepts_an_absolute_path_inside_the_vault() {
+        // convert_document falls back to an absolute path when it can't strip
+        // the vault prefix; opening it must still work.
+        assert_eq!(
+            imported_note_uri(
+                "a1b2c3",
+                Path::new("/vault"),
+                "/vault/Documents/2026/07/Report.md"
+            )
+            .as_deref(),
+            Some("obsidian://open?vault=a1b2c3&file=Documents%2F2026%2F07%2FReport"),
+        );
+    }
+
+    #[test]
+    fn imported_note_uri_outside_the_vault_is_none() {
+        assert_eq!(
+            imported_note_uri("a1b2c3", Path::new("/vault"), "/elsewhere/Report.md"),
+            None,
+        );
     }
 
     #[test]

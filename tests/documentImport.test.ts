@@ -373,7 +373,7 @@ describe("RecordMode — Import Document", () => {
     vi.mocked(logWarning).mockClear();
   });
 
-  it("imports a picked document and toasts success", async () => {
+  it("imports a picked document and offers to open the new note", async () => {
     const convertArgs: unknown[] = [];
     routeRecordMode({
       convert: (args) => {
@@ -392,9 +392,18 @@ describe("RecordMode — Import Document", () => {
 
     expect(convertArgs).toEqual([{ id: "v1", sourcePath: "/home/user/Report.docx" }]);
     const notes = useNotificationsStore();
-    expect(
-      notes.items.some((i) => i.kind === "success" && i.message.includes("Imported")),
-    ).toBe(true);
+    const toast = notes.items.find(
+      (i) => i.kind === "success" && i.message.includes("Imported"),
+    );
+    expect(toast).toBeDefined();
+    // The success toast offers to open the freshly-imported note in Obsidian.
+    expect(toast?.action?.label).toBe("Open in Obsidian");
+    mocks.invoke.mockClear();
+    await toast!.action!.run();
+    expect(mocks.invoke).toHaveBeenCalledWith("open_imported_document", {
+      id: "v1",
+      path: "Documents/2026/07/2026-07-10 Report.md",
+    });
   });
 
   it("keeps the button enabled and warns when detect_pandoc fails on mount", async () => {
@@ -416,23 +425,24 @@ describe("RecordMode — Import Document", () => {
     );
   });
 
-  it("routes a blocked click to Settings (not installed) instead of dead-ending", async () => {
+  it("routes a blocked click to the document-import view (not installed) instead of dead-ending", async () => {
     routeRecordMode({ pandoc: NOT_INSTALLED });
     const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
     await flushPromises();
 
     const button = wrapper.get('[data-testid="import-document"]');
     expect((button.element as HTMLButtonElement).disabled).toBe(false);
-    expect(wrapper.text()).toContain("Install Pandoc in Settings to import documents");
+    expect(wrapper.text()).toContain("Install Pandoc to import documents");
     await button.trigger("click");
     await flushPromises();
-    // Jumped to Settings; never opened the file picker or convert.
-    expect(useVaultsStore().view).toBe("settings");
+    // Jumped to the focused Pandoc setup screen — not the buried settings page,
+    // and never opened the file picker or convert.
+    expect(useVaultsStore().view).toBe("documentImport");
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.invoke.mock.calls.some((c) => c[0] === "convert_document")).toBe(false);
   });
 
-  it("routes a blocked click to Settings when Pandoc is too old for the sandbox", async () => {
+  it("routes a blocked click to the document-import view when Pandoc is too old for the sandbox", async () => {
     routeRecordMode({
       pandoc: installed({ version: "pandoc 2.14", sandboxSupported: false }),
     });
@@ -444,13 +454,13 @@ describe("RecordMode — Import Document", () => {
     expect(wrapper.text()).toContain("Update Pandoc (2.15+ needed)");
     await button.trigger("click");
     await flushPromises();
-    expect(useVaultsStore().view).toBe("settings");
+    expect(useVaultsStore().view).toBe("documentImport");
   });
 
-  it("disables Import while detection is in flight and never jumps to Settings early", async () => {
+  it("disables Import while detection is in flight and never jumps away early", async () => {
     // Hold detect_pandoc unresolved to simulate the pre-probe window: before a
-    // result exists, a blocked click must NOT route to Settings (it would with
-    // a valid Pandoc that just hadn't been detected yet).
+    // result exists, a blocked click must NOT route anywhere (it would with a
+    // valid Pandoc that just hadn't been detected yet).
     let resolveDetect: (v: unknown) => void = () => {};
     mocks.invoke.mockImplementation((cmd: string) => {
       if (cmd === "detect_pandoc") {
@@ -470,7 +480,7 @@ describe("RecordMode — Import Document", () => {
     expect(wrapper.text()).toContain("Checking Pandoc…");
     await button.trigger("click");
     await flushPromises();
-    expect(useVaultsStore().view).not.toBe("settings");
+    expect(useVaultsStore().view).not.toBe("documentImport");
 
     // Once the probe resolves to a valid install, the button enables normally.
     resolveDetect(installed());

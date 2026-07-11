@@ -449,6 +449,34 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Vault settings");
   });
 
+  it("titles the record chooser view 'Capture knowledge'", async () => {
+    // The chooser now also imports documents and browses recordings, so the
+    // old "Record" title misdescribed it — it matches the mic tooltip now.
+    const store = useVaultsStore();
+    store.openRecordMode("d4e5f6");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { RecordMode: true } },
+    });
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Capture knowledge");
+  });
+
+  it("routes the documentImport view to the Pandoc screen with a back button", async () => {
+    // The Pandoc-not-installed gate lands here (a focused setup screen) rather
+    // than the buried settings card; its back button returns to the list.
+    const store = useVaultsStore();
+    store.openDocumentImport();
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { DocumentImportSettings: true } },
+    });
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Document import");
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("list");
+  });
+
   it("routes the importPicker view to ImportVaultPicker with a back button", async () => {
     const store = useVaultsStore();
     store.openImportPicker("C:/x/Report.docx");
