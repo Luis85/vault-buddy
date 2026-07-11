@@ -109,22 +109,29 @@ config-clobber failure mode is already catalogued):
 widen to carry them, with `set_tasks_config` validating `default_list`
 lexically against the vault (safe join, containment class) before saving.
 
-## IPC surface (55 → 58)
+## IPC surface (55 → 59)
 
 | Command | Shape |
 | --- | --- |
 | `list_task_lists(id)` *(async)* | `Vec<String>` — best-effort empty on unknown vault/unsafe root, mirrors `list_tasks`. Read-only. |
 | `create_task_list(id, name)` *(async)* | `Result<String>` — the created list's relative path. |
 | `move_task_to_list(id, path, list)` *(async)* | `Result<String>` — the landed absolute path (may carry a collision suffix). |
+| `set_task_lists_config(id, default_list, list_order)` *(async)* | `Result<()>` — persists the lists settings object; preserves `tasks_folder` (and everything else) under `ConfigWriteLock`. |
 
 Widened existing commands: `add_task` gains `list: Option<String>`
 (`None` → config `default_list`; explicit `""` → root); `update_task`'s
 patch gains `order: Option<f64>` (validated finite; nothing un-ranks a
-task this slice, so no clear flag); `get_tasks_config`/`set_tasks_config` carry
-`defaultList`/`listOrder`. `TaskDto` gains `list` and `order` — additive
-for the frontend and the MCP `list_tasks` tool alike. All writes are
-async on the blocking pool (fsync'd vault I/O, GAP-22 class); the MCP
-tool surface gains NO new tools or params this slice.
+task this slice, so no clear flag); `get_tasks_config` carries
+`defaultList`/`listOrder`. `set_tasks_config` keeps its single-field
+shape (the folder save site is a generic one-field helper) and now
+PRESERVES the two new fields on its read-modify-write, exactly as
+`set_capture_config` preserves `tasks_folder` — the settings-object
+write is its own command so a lists-config failure can't block the
+folder save and vice versa (the CaptureSettings precedent). `TaskDto`
+gains `list` and `order` — additive for the frontend and the MCP
+`list_tasks` tool alike. All writes are async on the blocking pool
+(fsync'd vault I/O, GAP-22 class); the MCP tool surface gains NO new
+tools or params this slice.
 
 ## Frontend
 
@@ -253,7 +260,7 @@ tasks toast already names broken vaults). Per-vault mode issues one call.
 
 ## Docs
 
-AGENTS.md (IPC table 55→58, tasks-domain section, sanctioned-writes
+AGENTS.md (IPC table 55→59, tasks-domain section, sanctioned-writes
 list, frontend-state notes), CONTEXT.md (List, Order terms), DEVELOPMENT.md
 (config field reference), the Task Management PRD + aggregated use-case
 (the folders decision replaces "metadata rather than physical folders";
