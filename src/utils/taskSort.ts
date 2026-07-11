@@ -52,62 +52,54 @@ const dueKey = (t: AggTask) => {
 // refetch would put it): open first (due asc → priority tier → newest
 // created → title), done by newest created → title; both arms tiebreak
 // vaultName → path so equal tasks from different vaults order stably.
+const tiebreak = (a: AggTask, b: AggTask) =>
+  a.title.localeCompare(b.title) ||
+  a.vaultName.localeCompare(b.vaultName) ||
+  a.path.localeCompare(b.path);
+const doneChain = (a: AggTask, b: AggTask) =>
+  b.created.localeCompare(a.created) || tiebreak(a, b);
+const openChain = (a: AggTask, b: AggTask) =>
+  dueKey(a).localeCompare(dueKey(b)) ||
+  rank(a) - rank(b) ||
+  b.created.localeCompare(a.created) ||
+  tiebreak(a, b);
 function defaultCompare(a: AggTask, b: AggTask): number {
-  return (
-    Number(a.done) - Number(b.done) ||
-    (a.done
-      ? b.created.localeCompare(a.created) ||
-        a.title.localeCompare(b.title) ||
-        a.vaultName.localeCompare(b.vaultName) ||
-        a.path.localeCompare(b.path)
-      : dueKey(a).localeCompare(dueKey(b)) ||
-        rank(a) - rank(b) ||
-        b.created.localeCompare(a.created) ||
-        a.title.localeCompare(b.title) ||
-        a.vaultName.localeCompare(b.vaultName) ||
-        a.path.localeCompare(b.path))
-  );
+  return Number(a.done) - Number(b.done) || (a.done ? doneChain(a, b) : openChain(a, b));
 }
 
-// The chosen key's own comparison. Direction flips ONLY the present-value
-// comparison: an absent due and an unranked order sort last regardless of
-// direction (flipping "no value" to the top serves nobody), and an absent
-// priority stays in the middle tier by construction.
-function keyCompare(key: SortKey, dir: SortDir, a: AggTask, b: AggTask): number {
-  const flip = dir === "desc" ? -1 : 1;
-  switch (key) {
-    case "due": {
-      const da = dueOf(a);
-      const db = dueOf(b);
-      if (da === null || db === null) return Number(da === null) - Number(db === null);
-      return flip * da.localeCompare(db);
-    }
-    case "priority":
-      return flip * (rank(a) - rank(b));
-    case "created":
-      return flip * a.created.localeCompare(b.created);
-    case "title":
-      return flip * a.title.localeCompare(b.title);
-    case "manual": {
-      if (a.order === null || b.order === null)
-        return Number(a.order === null) - Number(b.order === null);
-      return a.order - b.order;
-    }
-    default:
-      return 0;
-  }
-}
+// The chosen key's own comparison, one small comparator per key. Direction
+// flips ONLY the present-value comparison: an absent due and an unranked
+// order sort last regardless of direction (flipping "no value" to the top
+// serves nobody), and an absent priority stays in the middle tier by
+// construction.
+type KeyComparator = (a: AggTask, b: AggTask, flip: number) => number;
+const KEY_COMPARATORS: Partial<Record<SortKey, KeyComparator>> = {
+  due: (a, b, flip) => {
+    const da = dueOf(a);
+    const db = dueOf(b);
+    if (da === null || db === null) return Number(da === null) - Number(db === null);
+    return flip * da.localeCompare(db);
+  },
+  priority: (a, b, flip) => flip * (rank(a) - rank(b)),
+  created: (a, b, flip) => flip * a.created.localeCompare(b.created),
+  title: (a, b, flip) => flip * a.title.localeCompare(b.title),
+  manual: (a, b) => {
+    if (a.order === null || b.order === null)
+      return Number(a.order === null) - Number(b.order === null);
+    return a.order - b.order;
+  },
+};
 
 /** Comparator for the view's sort preference. Done-last is universal (the
  * grouping modes give Done its own section either way); the chosen key
  * orders within that, and ties fall through to the Default chain so the
  * familiar clustering survives as a stable secondary order. */
 export function taskComparator(pref: TaskSortPref): (a: AggTask, b: AggTask) => number {
-  if (pref.key === "default") return defaultCompare;
+  const byKey = KEY_COMPARATORS[pref.key];
+  if (!byKey) return defaultCompare;
+  const flip = pref.dir === "desc" ? -1 : 1;
   return (a, b) =>
-    Number(a.done) - Number(b.done) ||
-    keyCompare(pref.key, pref.dir, a, b) ||
-    defaultCompare(a, b);
+    Number(a.done) - Number(b.done) || byKey(a, b, flip) || defaultCompare(a, b);
 }
 
 /** localStorage key; a JSON object keyed per view ("all" or a vault id). */

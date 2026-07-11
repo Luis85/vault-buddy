@@ -4,7 +4,7 @@ import { type Ref,ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskEditorPatch } from "../types";
+import type { AggTask, TaskEditorPatch, TaskPatch } from "../types";
 
 // The per-row write actions of the Tasks view (toggle / archive / open /
 // inline-editor save) plus the busy guard and editing-row state they share.
@@ -110,58 +110,63 @@ export function useTaskActions(opts: {
     editingKey.value = null;
   };
 
+  // Optimistic field save: apply locally (re-sort/re-bucket live), revert +
+  // toast on failure. Returns whether the write landed.
+  async function applyFieldPatch(task: AggTask, patch: TaskPatch): Promise<boolean> {
+    const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
+    if (patch.title) task.title = patch.title;
+    if (patch.clearDue) task.due = null;
+    else if (patch.due) task.due = patch.due;
+    if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
+    if (patch.tags !== undefined) task.tags = patch.tags;
+    sortInPlace();
+    try {
+      await invoke("update_task", { id: task.vaultId, path: task.path, patch });
+      return true;
+    } catch (e) {
+      Object.assign(task, before);
+      sortInPlace();
+      notifications.error(String(e));
+      logWarning(`update_task failed: ${String(e)}`);
+      return false;
+    }
+  }
+
+  // The list move. NOT optimistic: the landed path (which may carry a
+  // collision suffix) only exists in the command's answer, so the row adopts
+  // it on success. A failure keeps any just-saved fields (never silently
+  // half-reverted) — the toast names exactly what failed.
+  async function moveToList(task: AggTask, targetList: string, fieldsSaved: boolean) {
+    try {
+      const landed = await invoke<string>("move_task_to_list", {
+        id: task.vaultId,
+        path: task.path,
+        list: targetList,
+      });
+      task.path = landed;
+      task.list = targetList;
+      sortInPlace();
+    } catch (e) {
+      const prefix = fieldsSaved ? "Saved fields, but couldn't move" : "Couldn't move";
+      notifications.error(`${prefix} to "${targetList || "No list"}": ${String(e)}`);
+      logWarning(`move_task_to_list failed: ${String(e)}`);
+    }
+  }
+
   async function onEditorSave(task: AggTask, editorPatch: TaskEditorPatch) {
     editingKey.value = null;
     // The list move is not a frontmatter write — strip it off the field patch
     // and run it as its own step AFTER the fields land (the fields write
     // targets the OLD path; the move changes it).
     const { list: targetList, ...patch } = editorPatch;
-    if (Object.keys(patch).length === 0 && targetList === undefined) return;
+    const hasFields = Object.keys(patch).length > 0;
+    if (!hasFields && targetList === undefined) return;
     const oldPath = task.path;
     busy.value.add(oldPath);
     try {
-      if (Object.keys(patch).length > 0) {
-        // Optimistic: apply locally (re-sort/re-bucket live), revert on failure.
-        const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
-        if (patch.title) task.title = patch.title;
-        if (patch.clearDue) task.due = null;
-        else if (patch.due) task.due = patch.due;
-        if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
-        if (patch.tags !== undefined) task.tags = patch.tags;
-        sortInPlace();
-        try {
-          await invoke("update_task", { id: task.vaultId, path: task.path, patch });
-        } catch (e) {
-          Object.assign(task, before);
-          sortInPlace();
-          notifications.error(String(e));
-          logWarning(`update_task failed: ${String(e)}`);
-          // Fields failed — don't compound the situation by also moving.
-          return;
-        }
-      }
-      if (targetList !== undefined) {
-        // Not optimistic: the landed path (which may carry a collision
-        // suffix) only exists in the command's answer, so the row adopts it
-        // on success.
-        try {
-          const landed = await invoke<string>("move_task_to_list", {
-            id: task.vaultId,
-            path: task.path,
-            list: targetList,
-          });
-          task.path = landed;
-          task.list = targetList;
-          sortInPlace();
-        } catch (e) {
-          // Saved fields are kept (never silently half-reverted) — the toast
-          // names exactly what failed.
-          const prefix =
-            Object.keys(patch).length > 0 ? "Saved fields, but couldn't move" : "Couldn't move";
-          notifications.error(`${prefix} to "${targetList || "No list"}": ${String(e)}`);
-          logWarning(`move_task_to_list failed: ${String(e)}`);
-        }
-      }
+      // A failed field write aborts the move — don't compound the situation.
+      if (hasFields && !(await applyFieldPatch(task, patch))) return;
+      if (targetList !== undefined) await moveToList(task, targetList, hasFields);
     } finally {
       busy.value.delete(oldPath);
     }

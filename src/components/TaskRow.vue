@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AggTask } from "../types";
 import { dueOf, localToday } from "../utils/taskFields";
+import TaskDragHandle from "./TaskDragHandle.vue";
 
 // Presentational task row: the container owns all state and side effects; this
 // component only renders and reports intent up. When `editing`, it yields its
@@ -54,53 +55,13 @@ const isOverdue = (t: AggTask): boolean => {
   >
     <slot v-if="editing" />
     <template v-else>
-      <button
+      <TaskDragHandle
         v-if="reorderable"
-        type="button"
-        data-testid="task-drag"
-        :disabled="busy"
-        :aria-label="`Reorder ${task.title} (arrow keys move it)`"
-        title="Drag to reorder"
-        class="shrink-0 cursor-grab touch-none rounded p-0.5 text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-        @pointerdown="$emit('reorderPointerDown', $event)"
-        @keydown="$emit('reorderKeydown', $event)"
-      >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <circle
-            cx="9"
-            cy="5"
-            r="1.6"
-          /><circle
-            cx="15"
-            cy="5"
-            r="1.6"
-          />
-          <circle
-            cx="9"
-            cy="12"
-            r="1.6"
-          /><circle
-            cx="15"
-            cy="12"
-            r="1.6"
-          />
-          <circle
-            cx="9"
-            cy="19"
-            r="1.6"
-          /><circle
-            cx="15"
-            cy="19"
-            r="1.6"
-          />
-        </svg>
-      </button>
+        :title="task.title"
+        :busy="busy"
+        @handle-pointer-down="$emit('reorderPointerDown', $event)"
+        @handle-keydown="$emit('reorderKeydown', $event)"
+      />
       <input
         type="checkbox"
         data-testid="task-checkbox"

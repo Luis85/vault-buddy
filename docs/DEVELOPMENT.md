@@ -392,7 +392,11 @@ ever written into your vaults except recordings and their notes.
       "transcribe": false,         // opt in to local speech-to-text
       "transcriptionModel": "small", // "base" | "small" | "medium"
       "transcriptionLanguage": "es", // optional — omit to auto-detect per recording
-      "transcriptTimestamps": true  // prefix each segment with [HH:MM:SS]
+      "transcriptTimestamps": true, // prefix each segment with [HH:MM:SS]
+      "tasksFolder": "Tasks",      // optional — vault-relative home of task documents
+      "documentsFolder": "Documents", // optional — vault-relative home of imported documents
+      "defaultList": "Inbox",      // optional — the list (folder under tasksFolder) new tasks land in when none is picked
+      "listOrder": ["Inbox", "Next"] // optional — display order for list sections/pickers; unlisted folders append alphabetically
     }
   }
 }
@@ -412,6 +416,13 @@ ever written into your vaults except recordings and their notes.
   `"es"`; omit to auto-detect per recording.
 - `transcriptTimestamps` (bool, default `true`) — prefix each segment with
   `[HH:MM:SS]`.
+- `tasksFolder` (string, default `"Tasks"`) — vault-relative folder holding
+  the vault's task documents; its subfolders are the vault's task Lists.
+- `defaultList` / `listOrder` — the tasks domain's lists settings object:
+  where new tasks land when no list is picked (empty/omitted = the tasks
+  folder root) and how list sections and pickers are ordered. Folders on
+  disk remain the source of truth for which lists exist; these are
+  preferences about them, edited in Vault settings → Task lists.
 
 The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.
 

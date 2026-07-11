@@ -13,19 +13,17 @@ import { localToday } from "../utils/taskFields";
 import { planReorder } from "../utils/taskOrder";
 import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
 import {
-  directionApplies,
   loadSortPref,
   NATURAL_DIR,
   saveSortPref,
-  SORT_OPTIONS,
   type SortKey,
   taskComparator,
   type TaskSortPref,
 } from "../utils/taskSort";
-import SelectMenu from "./SelectMenu.vue";
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
+import TaskViewControls from "./TaskViewControls.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
 // Aggregate mode: one merged view across every vault (vaultId === null).
@@ -164,33 +162,38 @@ async function commitReorder(sectionKey: string, fromIndex: number, toIndex: num
   const section = buckets.value.find((b) => b.key === sectionKey)?.tasks ?? [];
   const plan = planReorder(section, fromIndex, toIndex);
   if (!plan) return;
-  if (plan.kind === "single") {
-    const task = section[fromIndex];
-    if (busy.value.has(task.path)) return;
-    const prev = task.order;
-    task.order = plan.order;
+  if (plan.kind === "single") await writeSingleRank(section[fromIndex], plan.order);
+  else await materializeRanks(section, plan.orders);
+}
+
+// One midpoint write, optimistic with revert — the common drop.
+async function writeSingleRank(task: AggTask, order: number) {
+  if (busy.value.has(task.path)) return;
+  const prev = task.order;
+  task.order = order;
+  sortInPlace();
+  busy.value.add(task.path);
+  try {
+    await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order } });
+  } catch (e) {
+    task.order = prev;
     sortInPlace();
-    busy.value.add(task.path);
-    try {
-      await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order: plan.order } });
-    } catch (e) {
-      task.order = prev;
-      sortInPlace();
-      notifications.error(String(e));
-      logWarning(`reorder failed: ${String(e)}`);
-    } finally {
-      busy.value.delete(task.path);
-    }
-    return;
+    notifications.error(String(e));
+    logWarning(`reorder failed: ${String(e)}`);
+  } finally {
+    busy.value.delete(task.path);
   }
-  // Materialization: seed spaced ranks across the section — optimistic for
-  // the whole batch, serialized writes (each its own file, possibly across
-  // vaults in the aggregate), one revert + toast if ANY write fails. The
-  // view-level guard keeps a second reorder from interleaving.
+}
+
+// Materialization: seed spaced ranks across the section — optimistic for
+// the whole batch, serialized writes (each its own file, possibly across
+// vaults in the aggregate), one revert + toast if ANY write fails. The
+// view-level guard keeps a second reorder from interleaving.
+async function materializeRanks(section: AggTask[], orders: Map<string, number>) {
   reordering.value = true;
-  const affected = section.filter((t) => plan.orders.has(t.path));
+  const affected = section.filter((t) => orders.has(t.path));
   const prevOrders = new Map(affected.map((t) => [t.path, t.order] as const));
-  for (const t of affected) t.order = plan.orders.get(t.path) ?? t.order;
+  for (const t of affected) t.order = orders.get(t.path) ?? t.order;
   sortInPlace();
   try {
     for (const t of affected) {
@@ -384,58 +387,14 @@ async function add(payload: AddPayload) {
       @vault-change="onComposerVaultChange"
     />
 
-    <div
+    <TaskViewControls
       v-if="!loading && !loadError && tasks.length > 0"
-      class="flex items-center gap-0.5"
-    >
-      <div
-        class="flex gap-0.5"
-        role="radiogroup"
-        aria-label="Group tasks by"
-      >
-        <button
-          v-for="g in [
-            { key: 'dates', label: 'Dates' },
-            { key: 'tags', label: 'Tags' },
-            { key: 'lists', label: 'Lists' },
-          ] as const"
-          :key="g.key"
-          type="button"
-          role="radio"
-          :data-testid="`task-grouping-${g.key}`"
-          :aria-checked="grouping === g.key"
-          class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :class="
-            grouping === g.key
-              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
-          "
-          @click="grouping = g.key"
-        >
-          {{ g.label }}
-        </button>
-      </div>
-      <div class="ml-auto flex items-center gap-1">
-        <SelectMenu
-          :model-value="sortPref.key"
-          :options="SORT_OPTIONS"
-          aria-label="Sort tasks"
-          data-testid="task-sort"
-          @update:model-value="setSortKey($event as SortKey)"
-        />
-        <button
-          type="button"
-          data-testid="task-sort-dir"
-          :disabled="!directionApplies(sortPref.key)"
-          :aria-label="`Sort direction: ${sortPref.dir === 'asc' ? 'ascending' : 'descending'}`"
-          :title="sortPref.dir === 'asc' ? 'Ascending' : 'Descending'"
-          class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
-          @click="flipSortDir"
-        >
-          {{ sortPref.dir === "asc" ? "↑" : "↓" }}
-        </button>
-      </div>
-    </div>
+      :grouping="grouping"
+      :sort-pref="sortPref"
+      @update:grouping="grouping = $event"
+      @set-sort-key="setSortKey"
+      @flip-sort-dir="flipSortDir"
+    />
 
     <p
       v-if="loading"

@@ -234,7 +234,10 @@ scanners.
 `safe_recording_root` accepts `Component::CurDir`, so `"."` makes the vault
 root the tasks root and `list_tasks` recursively reads *every* markdown
 file to completion (no analogue of search's 1 MiB cap) on each tasks-view
-open. A performance trap, not a containment violation.
+open. A performance trap, not a containment violation. The lists increment
+extends the blast radius cosmetically: `task_lists` enumeration would offer
+EVERY vault folder as a List in pickers and the Lists grouping (dirs-only
+scan, no content reads — cheap, just noisy).
 **Fix:** reject folders normalizing to empty; read only the frontmatter
 head in `collect_task_file`.
 
@@ -352,6 +355,29 @@ was closed out in a later pass: it now logs the path via `log::warn!` and
 returns the same path-free copy as `start_capture_blocking`.
 
 ## 4. Frontend defects & races
+
+### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
+User-reported on the All-tasks vault picker: the capture-phase `window`
+scroll listener closed the menu on every scroll event, including the
+popup's own `overflow-y-auto` option list, so with more than a handful of
+entries the lower options could not be reached by wheel or scrollbar.
+Scrolls inside the popup are now ignored (navigation, not dismissal) and
+outside scrolls re-anchor the position:fixed popup to its trigger via
+`positionPopup` instead of closing; pointerdown-outside and Escape
+dismissal are unchanged. Regression tests pin all three behaviors.
+
+### GAP-59 · Low · Lists/ordering increment residuals (accepted)
+- Aggregate mode fetches `get_tasks_config` lazily only for the composer's
+  target vault, so the inline editor's list picker orders OTHER vaults'
+  lists alphabetically (no `listOrder`) — cosmetic; sections in the
+  aggregate are deliberately alphabetical anyway.
+- Keyboard reordering writes one `order` rank per Arrow press — chatty
+  across a long travel (each write is a small fsync'd surgical edit);
+  batching on settle would be a polish item.
+- A task's manual rank is global, not per-list: reordering a task inside
+  one section also moves it relative to tasks in other sections when they
+  meet in a different grouping. By design (one `order` field per task),
+  documented in the spec.
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
@@ -703,7 +729,8 @@ review in the PR-43 ledger):
 - `McpSettings.vue`: guard the `mcp:status` listener registration against
   unmount-before-resolve (one leaked listener per fast settings visit).
 
-### GAP-56 · Low · Capture event-ordering corners after the async migration
+### GAP-57 · Low · Capture event-ordering corners after the async migration
+(Renumbered from a duplicate GAP-56 — two parallel branches minted the same id.)
 Catalogued by sub-pass B's final review (2026-07-10); both exotic, neither
 worse in kind than the pre-async behavior:
 - `capture:saved` can theoretically beat `capture:started`: the monitor

@@ -8,8 +8,8 @@
     "boundaryViolations": 0,
     "cloneGroups": 1,
     "duplicatedLines": 22,
-    "complexFunctions": 15,
+    "complexFunctions": 14,
     "criticalComplexity": 4,
-    "averageMaintainability": 91.4
+    "averageMaintainability": 91
   }
 }

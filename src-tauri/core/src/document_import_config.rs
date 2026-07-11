@@ -25,7 +25,6 @@ pub(crate) fn document_import_entry(entry: &serde_json::Value) -> DocumentImport
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::capture_config::{parse_config, serialize_config, AppConfig};
 
     #[test]

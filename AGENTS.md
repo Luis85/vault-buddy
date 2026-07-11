@@ -108,6 +108,7 @@ vault-buddy/
 │   │                           #   tray.rs, diagnostics.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths},
+│   │                           #   mcp_config + document_import_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
@@ -245,7 +246,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 55 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 59 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -253,7 +254,7 @@ Keep this table in sync when adding/removing commands.
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` *(async)* |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `list_tasks` *(async)*, `add_task` *(async)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -479,15 +480,21 @@ Invariants:
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. Five sanctioned write paths
+logged (`uri::launch`) as the audit trail. Six sanctioned write paths
 exist, each documented in its own domain section below:
 
 1. the **capture** domain — recordings and companion notes;
 2. the **transcription** domain — the `<base>.transcript.md` sidecar;
-3. the **tasks** domain — creating a task document (collision-safe);
+3. the **tasks** domain — creating a task document (collision-safe, into
+   its list folder) and creating a list folder (`create_task_list`,
+   directory-only, pre/post containment asserts);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
-   (status toggle, rename, due/priority/tags edit — one generalized writer);
-5. the **document-import** domain — a Pandoc-converted markdown note plus
+   (status toggle, rename, due/priority/tags edit, the manual `order`
+   rank — one generalized writer);
+5. the **tasks** domain — the in-root task file move between list folders
+   (`move_task_to_list`: `rename_noreplace` + ` (N)` suffix retry, never
+   clobbers, same-list no-op);
+6. the **document-import** domain — a Pandoc-converted markdown note plus
    its extracted-media sibling folder.
 
 All five ride the same never-clobber/atomic machinery in
@@ -918,6 +925,52 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   editor on one duplicate never expands the others, while the per-path
   `busy` guard still serializes writes for the underlying task across all its
   rendered rows.
+- **Lists (the lists increment): a List IS a folder** under the vault's
+  tasks root — the filesystem defines which lists exist (a hand-created
+  folder counts, the `type: Task` philosophy applied to folders; this
+  AMENDED the PRD's earlier metadata-not-folders draft). A task's `list` =
+  its parent folder relative to the canonical root, `/`-joined, `""` at the
+  root (rendered as **No list**, the No date/No tags precedent). Read
+  lenient / write strict: `tasks::task_lists` enumerates ANY folder
+  (empties included, dot-dirs skipped, `vault_walk` containment/cycle
+  discipline); `create_task_list` creates single segments only (no leading
+  dot — a `.foo` list would be invisible to every walk) with pre/post
+  containment asserts; `move_task_to_list` relocates the file on
+  `rename_noreplace` + the shared ` (N)` suffix scheme and recreates a
+  deleted target folder. The per-vault **lists settings object**
+  (`defaultList` — where unpicked adds land, honored by `services::add_task`
+  for MCP too; `listOrder` — section/picker display order) lives beside
+  `tasks_folder` in `config.json`, preserved by `set_capture_config` and
+  round-tripped by `serialize_config`; `set_task_lists_config` is its own
+  write command (the independent field-save pattern, edited in the Vault
+  settings view's self-contained `TaskListSettings.vue`). Frontend: the
+  grouping toggle is `Dates | Tags | Lists` (sections in `listOrder`-then-
+  alphabetical order, No list, Done; the aggregate merges same-named lists
+  case-insensitively — first-seen casing in sort order labels the section,
+  the tags precedent — and skips empty lists, while per-vault mode shows
+  them); the composer's options row and the inline editor share
+  `TaskListPicker.vue` (No list + lists + a composer-only "New list…"
+  inline-create flow); an editor save orders field-patch-then-move so the
+  fields write hits the OLD path, adopting the landed (possibly suffixed)
+  path afterward — a failed move keeps the saved fields and says so.
+- **Sorting & manual ordering.** A sort selector (Default / Due date /
+  Priority / Created / Title / Manual + an asc/desc toggle, disabled where
+  direction is meaningless) orders rows WITHIN sections; Default is
+  byte-identical to the historical chain and the preference persists per
+  view (`vault-buddy:task-sort` in localStorage, keyed vault id / `"all"`).
+  Manual rank = an optional `order:` frontmatter number (lenient read;
+  absent = unranked, sorted after ranked by the Default chain; never
+  written on create), written through the same surgical field writer via
+  `update_task`. Reordering is pointer-based (Tauri's drag-drop
+  interception breaks HTML5 DnD) with an ArrowUp/Down keyboard fallback on
+  the grip handle, shown only in Manual sort with no active filter
+  (reordering a filtered subset would rank against invisible neighbors);
+  a drop writes ONE midpoint rank (`utils/taskOrder.ts`), materializing
+  spaced ranks across the section (serialized writes, batch revert on
+  failure) only when neighbors are unranked or the gap is exhausted.
+  `Tasks.vue` splits its state into `useTaskActions`/`useTaskLists`/
+  `useTaskReorder` composables plus the pure `taskSort`/`taskSections`/
+  `taskOrder` utils (LOC cap + unit-testability).
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 
