@@ -106,7 +106,7 @@ vault-buddy/
 │   │                           #   capture_commands.rs, transcription.rs, task_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
 │   │                           #   tray.rs, diagnostics.rs, main.rs
-│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, tasks, services,
+│   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths},
 │   │                           #   document_import, companion_placement, checkpoint,
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
@@ -765,7 +765,10 @@ in the pure `core::tasks` crate (unit-tested on Linux); the shell
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 
-Cross-vault, read-only, on-demand search (no index): `core::search::search_vaults`
+Cross-vault, read-only, on-demand search — **no persistent index**, but backed
+by a process-lifetime, `(mtime,size)`-invalidated in-memory **content cache**
+(`core::search_cache`, 256 MiB fill-to-cap) so repeated and pre-warmed searches
+skip the read + lowercase that dominates a cold scan: `core::search::search_vaults`
 walks every registered vault via the shared `core::vault_walk` helper
 (canonical containment, cycle set, dot-dir skips, deterministic name-ordered
 walk — single-sourced with the tasks scan), matching case-insensitive
@@ -790,10 +793,17 @@ panel keeps its previous results instead of blanking. Each call bumps a
 scan-generation atomic that the core walk polls per file
 (`search_vaults_with_cancel`), so superseded scans abort; per-vault scans
 run in parallel on **named** scoped threads and merge in vault order
-(serial-identical output). Core search types derive camelCase `Serialize`
-and cross the IPC boundary directly (no DTO layer — `discovery::Vault`
-precedent). The panel's `search` view (parent: the vault list) is a
-self-contained `Search.vue` — 300 ms debounce, monotonic request ticket
+(serial-identical output). The scan reads note content through the cache
+(`search_vaults_with_cache`); a shell-owned `static SEARCH_CACHE` (in
+`search_commands.rs`) is fed into the `spawn_blocking` scan, and a named
+`search-prewarm` thread (wired last in `setup`, paused per-vault while
+recording) warms it on launch so even the first search is fast. The cache
+is touched only off the main thread, holds lowered text keyed by
+`(mtime,size)`, and never changes what a search returns. Core search types
+derive camelCase `Serialize` and cross the IPC boundary directly (no DTO
+layer — `discovery::Vault` precedent). The panel's `search` view (parent:
+the vault list) is a self-contained `Search.vue` — 300 ms debounce,
+monotonic request ticket
 against stale responses, vault-grouped rows with count chips and
 note/attachment icons, `HighlightText` (index-based, never a RegExp from
 user input), and keyboard navigation over the **visible** rows only
