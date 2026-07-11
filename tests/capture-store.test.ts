@@ -284,6 +284,27 @@ describe("capture store", () => {
     expect(moved.name).toBe("new (2)"); // display name recomputed from the new path
   });
 
+  it("transcribeRetargeted re-keys a TERMINAL (done) row after a rename", async () => {
+    // Codex review, PR #46 round 4: if transcription finishes before the user
+    // accepts the 30s rename prompt, the store keeps a terminal done/failed
+    // row keyed to the old mp3. The shell now emits the retarget on a sidecar
+    // move too (not only a queued-job match), and the store handler must move
+    // the terminal row so "open transcript"/retry point at the renamed file.
+    mockIPC((cmd) => cmd === "capture_status" ? { recording: false, vaultId: null, startedAtMs: null } : { active: null, queued: [], waitingForRecording: false });
+    const store = useCaptureStore();
+    await store.init();
+    store.transcriptions = {
+      "/v/old.mp3": { mp3: "/v/old.mp3", vaultId: "v1", name: "old", phase: "done", progress: 1, model: null, error: null, startedAtMs: 5 },
+    };
+    state.eventHandlers["capture:transcribeRetargeted"]!({ payload: { from: "/v/old.mp3", to: "/v/new.mp3" } });
+    expect(store.transcriptions["/v/old.mp3"]).toBeUndefined();
+    const moved = store.transcriptions["/v/new.mp3"];
+    expect(moved).toBeDefined();
+    expect(moved.phase).toBe("done"); // terminal state preserved
+    expect(moved.mp3).toBe("/v/new.mp3");
+    expect(moved.name).toBe("new");
+  });
+
   it("transcribeRetargeted is a no-op when no row was seeded for the old mp3", async () => {
     // The worker will emit capture:transcribing for the new name and seed it
     // fresh — the retarget event must not conjure a phantom row.

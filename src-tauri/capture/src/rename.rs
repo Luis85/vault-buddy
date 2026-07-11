@@ -14,6 +14,12 @@ pub struct RenameOutcome {
     pub mp3: PathBuf,
     pub note: Option<PathBuf>,
     pub warning: Option<String>,
+    /// Whether a `<old>.transcript.md` sidecar was actually moved onto the new
+    /// base. The shell uses this to re-key a store transcription row even when
+    /// no queue entry matched — a job that finished before the user accepted
+    /// the rename prompt leaves a terminal row keyed to the old mp3 (Codex,
+    /// PR #46 round 4).
+    pub transcript_moved: bool,
 }
 
 /// Move the transcript sidecar onto the reserved base, degrading any
@@ -129,6 +135,7 @@ pub fn execute(plan: &RenamePlan) -> Result<RenameOutcome, String> {
         mp3: mp3_to,
         note,
         warning,
+        transcript_moved,
     })
 }
 
@@ -164,6 +171,9 @@ mod tests {
         assert!(outcome.warning.is_none(), "{:?}", outcome.warning);
         assert!(!mp3.exists(), "old mp3 moved");
         assert!(!note.exists(), "old note moved");
+        // No sidecar existed, so nothing was moved — the shell must not emit a
+        // spurious retarget for a recording that was never transcribed.
+        assert!(!outcome.transcript_moved, "no sidecar to move");
         let text = std::fs::read_to_string(outcome.note.unwrap()).unwrap();
         assert!(text.contains("![[2026-07-04 1405 Standup.mp3]]"), "{text}");
         assert!(!text.contains("Meeting.mp3"), "old embed gone: {text}");
@@ -235,6 +245,9 @@ mod tests {
         let new_transcript = dir.path().join("2026-07-04 1405 Standup.transcript.md");
         assert!(new_transcript.is_file(), "transcript moved with the pair");
         assert!(!transcript.exists(), "old transcript gone");
+        // The shell re-keys a store transcription row (incl. a terminal
+        // done/failed one) off this flag (Codex, PR #46 round 4).
+        assert!(outcome.transcript_moved, "sidecar move reported");
         let text = std::fs::read_to_string(outcome.note.unwrap()).unwrap();
         assert!(
             text.contains("![[2026-07-04 1405 Standup.transcript]]"),

@@ -973,18 +973,22 @@ pub fn rename_capture(
     // placeholder stuck until the next launch's backfill re-runs inference.
     // `outcome.mp3` (not `mp3`/`plan`) is the actual landed name — it may
     // carry a collision suffix (` (2)`) the plan didn't predict.
-    if crate::transcription::retarget_pending_transcription(
+    let retargeted_queue = crate::transcription::retarget_pending_transcription(
         &app,
         Path::new(&mp3),
         outcome.mp3.clone(),
-    ) {
+    );
+    // Re-key the store's seeded row on a queue move OR a sidecar move: a job
+    // that FINISHED before the user accepted the 30s rename prompt leaves a
+    // terminal row keyed to the old mp3 with no queue entry to match, yet the
+    // sidecar + note embed were moved — "open transcript"/retry would use the
+    // moved-away path (Codex PR #46 round 4). The store no-ops when nothing is
+    // keyed to `from`; field names match the store's listener ({ from, to }).
+    if retargeted_queue || outcome.transcript_moved {
         let to = outcome.mp3.to_string_lossy().into_owned();
-        log::info!("transcribe: retargeted queued transcription from {mp3} to {to}");
-        // Tell every window to re-key its seeded row: the Rust queue moved,
-        // but a panel that already seeded transcriptions[old] from
-        // transcription_queue_status would otherwise strand it — no terminal
-        // event ever arrives for the old key (Codex PR #46). Field names match
-        // the capture store's listener payload ({ from, to }).
+        if retargeted_queue {
+            log::info!("transcribe: retargeted queued transcription from {mp3} to {to}");
+        }
         let _ = app.emit(
             "capture:transcribeRetargeted",
             serde_json::json!({ "from": mp3, "to": to }),
