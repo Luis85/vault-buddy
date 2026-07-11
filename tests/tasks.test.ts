@@ -443,6 +443,28 @@ describe("Tasks", () => {
     expect(wrapper.text()).toContain("New name"); // optimistic
   });
 
+  it("does not save an edit with a blank title, keeping the editor open (Codex PR #46)", async () => {
+    // Clearing the inline title dropped it from the changed-fields patch, so a
+    // simultaneous due/priority/tags change wrote while the empty title was
+    // silently retained — no error, no rejection. A blank title must block the
+    // whole save, mirroring the add-task composer's disabled Add button.
+    const { wrapper, calls } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/e.md", title: "Old name", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null, tags: [] },
+      ],
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-title"]').setValue("   ");
+    await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises();
+    // No write at all — not even the changed priority.
+    expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
+    // The editor stays open so the user can fix the title or cancel.
+    expect(wrapper.find('[data-testid="task-edit-title"]').exists()).toBe(true);
+  });
+
   it("clearing the due date sends clearDue", async () => {
     const { wrapper, calls } = mountView({
       list_tasks: () => [

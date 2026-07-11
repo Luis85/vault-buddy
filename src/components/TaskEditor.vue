@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import type { AggTask, TaskItem, TaskPatch } from "../types";
 import { dueOf, parseTagsInput } from "../utils/taskFields";
@@ -22,6 +22,12 @@ const editDue = ref(dueOf(props.task) ?? "");
 const editPriority = ref<string>(normalizedPriority(props.task));
 const editTags = ref(props.task.tags.join(", "));
 
+// A task must have a title (identity + display). A blank one must block the
+// save entirely — not just get dropped from the changed-fields patch, which
+// would silently retain the old title while still writing any due/priority/
+// tags change (Codex, PR #46). Mirrors the add-task composer's disabled Add.
+const titleValid = computed(() => editTitle.value.trim().length > 0);
+
 function buildPatch(): TaskPatch {
   const patch: TaskPatch = {};
   const title = editTitle.value.trim();
@@ -37,9 +43,11 @@ function buildPatch(): TaskPatch {
 }
 
 function save() {
-  // Ignore a save while this row's write is still pending (belt-and-suspenders
-  // with the disabled Save button) — a second write could land out of order.
-  if (props.busy) return;
+  // Ignore a save while this row's write is still pending, or with a blank
+  // title (belt-and-suspenders with the disabled Save button) — a second write
+  // could land out of order, and a blank title must never reach the backend as
+  // a silent no-op that keeps the old title while writing the other fields.
+  if (props.busy || !titleValid.value) return;
   emit("save", buildPatch());
 }
 
@@ -135,7 +143,7 @@ function onEditorEsc(e: KeyboardEvent) {
       <button
         type="button"
         data-testid="task-edit-save"
-        :disabled="busy"
+        :disabled="busy || !titleValid"
         class="cursor-pointer rounded-lg bg-violet-600/80 px-2 py-0.5 text-xs font-semibold text-white hover:bg-violet-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
         @click="save"
       >
