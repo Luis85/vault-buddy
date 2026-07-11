@@ -228,6 +228,42 @@ describe("Tasks — lists & sorting", () => {
       expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Someday" });
     });
 
+    it("a late New list… create does not overwrite a later explicit pick (Codex #53 re-review)", async () => {
+      // The picker stays usable while create_task_list is in flight (only Add
+      // is blocked), so the user can cancel the inline input and explicitly
+      // pick another list. The create's late resolution must NOT setList over
+      // that later choice — the next add would land in the just-created list
+      // instead of the one shown.
+      let resolveCreate!: (v: string) => void;
+      const { wrapper, calls } = mountView({
+        list_task_lists: () => ["Inbox"],
+        create_task_list: () => new Promise<string>((r) => (resolveCreate = r)),
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-.__new__"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-list-new-name"]').setValue("Someday");
+      await wrapper.get('[data-testid="task-add-list-new-confirm"]').trigger("click");
+      await flushPromises();
+      // Create pending: cancel the inline control, explicitly pick Inbox.
+      await wrapper.get('[data-testid="task-add-list-new-cancel"]').trigger("click");
+      await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-list-option-Inbox"]') as HTMLElement).click();
+      await flushPromises();
+      resolveCreate("Someday"); // lands AFTER the explicit pick
+      await flushPromises();
+      // The later pick wins — display and the add payload both.
+      expect(wrapper.get('[data-testid="task-add-list"]').text()).toContain("Inbox");
+      await wrapper.get('[data-testid="task-input"]').setValue("Where");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Inbox" });
+    });
+
     it("does not adopt a created list after switching the composer vault mid-create (Codex #53 re-review)", async () => {
       // Aggregate: create a list for va, switch the composer to vb before it
       // resolves — the va list must NOT be selected on the vb composer, or the

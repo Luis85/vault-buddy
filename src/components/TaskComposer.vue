@@ -60,12 +60,29 @@ const displayList = computed(() => (listTouched.value ? addList.value : props.de
 const addDisabled = computed(
   () => props.adding || props.creatingList || title.value.trim() === "",
 );
+// Pick-state generation (plain counters — read only in handlers, never
+// rendered): every explicit pick and every vault switch bumps it, and a
+// "New list…" confirm snapshots it. The picker stays usable while the create
+// is in flight (only Add is blocked), so the user can cancel the inline input
+// and pick another list; the create's LATE resolution must then not overwrite
+// that later explicit choice via setList (Codex, PR #53 re-review). A bare
+// cancel with no re-pick doesn't bump, so the confirmed create still lands
+// selected — same as the no-cancel flow.
+let pickGen = 0;
+let createPickGen = -1;
 function onListPicked(list: string) {
+  pickGen += 1;
   listTouched.value = true;
   addList.value = list;
 }
-// The container resolves the created list and re-selects it here.
+function onCreateConfirmed(name: string) {
+  createPickGen = pickGen;
+  emit("createList", name);
+}
+// The container resolves the created list and re-selects it here — unless the
+// pick state moved on while the create was in flight.
 function setList(list: string) {
+  if (pickGen !== createPickGen) return;
   listTouched.value = true;
   addList.value = list;
 }
@@ -87,7 +104,9 @@ watch(addVaultId, (id) => {
     // displayList falls back to the new vault's configured default (which the
     // container feeds in via props.defaultList). No addList assignment: the
     // computed tracks the default reactively, so there is no stale ref to
-    // clear or repopulate.
+    // clear or repopulate. The switch is a pick-state change: bump pickGen so
+    // an in-flight create's late setList can't resurrect a pre-switch pick.
+    pickGen += 1;
     listTouched.value = false;
     emit("vaultChange", id);
   }
@@ -244,7 +263,7 @@ defineExpose({ reset, setList });
         aria-label="List for the new task"
         data-testid="task-add-list"
         @update:model-value="onListPicked"
-        @create="emit('createList', $event)"
+        @create="onCreateConfirmed"
       />
     </div>
   </div>
