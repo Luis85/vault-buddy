@@ -208,6 +208,14 @@ async function writeSingleRank(task: AggTask, order: number) {
 async function materializeRanks(section: AggTask[], orders: Map<string, number>) {
   reordering.value = true;
   const affected = section.filter((t) => orders.has(t.path));
+  // Mark every row this batch writes busy — its update_task(order) and a
+  // toggle/edit/archive on the same row are both read-modify-write
+  // frontmatter saves, so leaving the row controls live would let a
+  // concurrent write clobber the order (or vice versa). The single-rank path
+  // busy-guards its one row; the batch must guard all of them. Only guard
+  // rows not already busy, so we don't clear another op's guard in `finally`.
+  const guarded = affected.filter((t) => !busy.value.has(t.path));
+  guarded.forEach((t) => busy.value.add(t.path));
   const prevOrders = new Map(affected.map((t) => [t.path, t.order] as const));
   for (const t of affected) t.order = orders.get(t.path) ?? t.order;
   sortInPlace();
@@ -235,6 +243,7 @@ async function materializeRanks(section: AggTask[], orders: Map<string, number>)
     notifications.error(`Couldn't save the new order: ${String(e)}`);
     logWarning(`reorder materialization failed: ${String(e)}`);
   } finally {
+    guarded.forEach((t) => busy.value.delete(t.path));
     reordering.value = false;
   }
 }

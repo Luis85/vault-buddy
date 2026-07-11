@@ -229,4 +229,32 @@ describe("manual reordering", () => {
     expect(orderOf("C:/v/Tasks/a.md")).toBe(1024); // untouched
     expect(notifications.items.some((n2) => n2.kind === "error")).toBe(true);
   });
+
+  it("marks every materialized row busy while the rank writes run (Codex #53 re-review)", async () => {
+    // A materialize write and a toggle/edit/archive on the same row are both
+    // read-modify-write frontmatter saves. The single-rank path busy-guards
+    // its one row; the batch must guard ALL the rows it will write up front,
+    // or a concurrent row action could clobber the order mid-batch. Hang the
+    // first of the serialized writes and assert both affected rows are busy.
+    let resolveFirst!: (v: unknown) => void;
+    let n = 0;
+    const { wrapper } = mountManual([task("a", 1024), task("b", null), task("c", null)], {
+      update_task: () => {
+        n += 1;
+        return n === 1 ? new Promise((r) => (resolveFirst = r)) : null;
+      },
+    });
+    await flushPromises();
+    // Move c up one slot: neighbor b is unranked → materialize writes b then c.
+    await wrapper.findAll('[data-testid="task-drag"]')[2].trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    const busy = (wrapper.vm as unknown as { busy: Set<string> }).busy;
+    expect(busy.has("C:/v/Tasks/b.md")).toBe(true);
+    expect(busy.has("C:/v/Tasks/c.md")).toBe(true);
+    expect(busy.has("C:/v/Tasks/a.md")).toBe(false); // untouched, never written
+    // Draining the batch clears the guard for every row.
+    resolveFirst(null);
+    await flushPromises();
+    expect(busy.size).toBe(0);
+  });
 });

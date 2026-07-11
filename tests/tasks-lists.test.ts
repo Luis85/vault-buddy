@@ -230,6 +230,35 @@ describe("Tasks — lists & sorting", () => {
       expect(call?.args).not.toHaveProperty("list"); // NOT the stale "Inbox"
       resolveVb({ tasksFolder: null, defaultList: "Waiting", listOrder: [] });
     });
+
+    it("still shows the default in the picker after switching to a vault with the SAME default (Codex #53 re-review)", async () => {
+      // Both vaults' configured default is "Inbox". The earlier fix mirrored
+      // props.defaultList into a ref via a watcher, but a watcher only fires
+      // on a value CHANGE — switching va→vb left props.defaultList at "Inbox",
+      // so the mirror never re-ran and the switch-cleared picker showed "No
+      // list" while the backend still applied the real default. displayList is
+      // now a computed that tracks the default reactively, so display and
+      // effective target can't drift.
+      const { wrapper, calls } = mountAggregateAttached({
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: [] }),
+        list_task_lists: () => ["Inbox"],
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+      expect(wrapper.get('[data-testid="task-add-list"]').text()).toContain("Inbox");
+      // Switch to vb, whose configured default is ALSO "Inbox".
+      await wrapper.get('[data-testid="task-add-vault"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-add-vault-option-vb"]') as HTMLElement).click();
+      await flushPromises();
+      // The picker still reflects the default, not a stale "No list".
+      expect(wrapper.get('[data-testid="task-add-list"]').text()).toContain("Inbox");
+      // And an untouched add still omits list so the backend applies it.
+      await wrapper.get('[data-testid="task-input"]').setValue("Cross");
+      await wrapper.get('[data-testid="task-add"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "add_task")?.args).not.toHaveProperty("list");
+    });
   });
 
   describe("editor list move", () => {

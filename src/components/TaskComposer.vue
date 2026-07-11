@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import { parseTagsInput } from "../utils/taskFields";
 import SelectMenu from "./SelectMenu.vue";
@@ -42,18 +42,18 @@ const showAddOptions = ref(false);
 const addDue = ref("");
 const addPriority = ref("normal");
 const addTags = ref("");
-// Where the new task lands ("" = the tasks root). Follows the vault's
-// configured default until the user picks explicitly — the config read
-// resolves async after mount, and a late default must not clobber a pick.
+// The user's explicit list pick ("" = an explicit No-list override); only
+// meaningful once listTouched. An UNTOUCHED picker derives its displayed
+// value from the vault's configured default REACTIVELY (displayList below),
+// rather than mirroring it into a ref via a watcher — a watcher only fires
+// on a value CHANGE, so switching between two vaults whose default is the
+// same string left the ref stale, showing "No list"/a carried-over pick
+// while the backend used the real default (Codex, PR #53 re-review). The
+// computed always tracks the current default, so display and effective
+// target can't drift.
 const addList = ref("");
 const listTouched = ref(false);
-watch(
-  () => props.defaultList,
-  (d) => {
-    if (!listTouched.value) addList.value = d;
-  },
-  { immediate: true },
-);
+const displayList = computed(() => (listTouched.value ? addList.value : props.defaultList));
 function onListPicked(list: string) {
   listTouched.value = true;
   addList.value = list;
@@ -77,17 +77,12 @@ watch(
 );
 watch(addVaultId, (id) => {
   if (id) {
-    // A new target vault means a new lists universe — drop the manual pick
-    // and re-follow that vault's default when it arrives. Clear to "" (NOT
-    // props.defaultList): at switch time the prop still holds the PREVIOUS
-    // vault's default (the container updates composerVaultId synchronously,
-    // but the recomputed default only propagates on the next flush), so
-    // copying it would send the old vault's list on a quick add before the
-    // new vault's config loads. "" + untouched makes submit() omit the list
-    // so the backend applies the NEW vault's default; the defaultList watcher
-    // repopulates addList once that config arrives (Codex, PR #53 re-review).
+    // A new target vault means a new lists universe — drop the manual pick so
+    // displayList falls back to the new vault's configured default (which the
+    // container feeds in via props.defaultList). No addList assignment: the
+    // computed tracks the default reactively, so there is no stale ref to
+    // clear or repopulate.
     listTouched.value = false;
-    addList.value = "";
     emit("vaultChange", id);
   }
 });
@@ -231,7 +226,7 @@ defineExpose({ reset, setList });
     >
       <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">List</span>
       <TaskListPicker
-        :model-value="addList"
+        :model-value="displayList"
         :lists="lists"
         :busy="creatingList"
         aria-label="List for the new task"
