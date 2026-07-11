@@ -22,6 +22,8 @@ function mountAggregate(handlers: Partial<Record<string, (args: unknown) => unkn
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_vaults") return vaultsFixture;
+    if (cmd === "list_task_lists") return [];
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
     if (cmd === "list_tasks") {
       const id = (args as { id: string }).id;
       return id === "va"
@@ -40,6 +42,8 @@ function mountAggregateAttached(handlers: Partial<Record<string, (args: unknown)
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_vaults") return vaultsFixture;
+    if (cmd === "list_task_lists") return [];
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
     if (cmd === "list_tasks") return [];
     if (cmd === "add_task") {
       const a = args as { id: string; title: string };
@@ -80,6 +84,8 @@ function mountView(handlers: Partial<Record<string, (args: unknown) => unknown>>
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
+    if (cmd === "list_task_lists") return [];
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
       const a = args as { title: string; due?: string; priority?: string; tags?: string[] };
@@ -97,13 +103,15 @@ describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
   afterEach(() => clearMocks());
 
-  it("loads tasks for the vault on mount", async () => {
+  it("loads tasks, lists, and the lists config for the vault on mount", async () => {
     const { calls } = mountView();
     await flushPromises();
     expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({ cmd: "list_tasks", args: { id: "v1" } });
-    // The folder setting moved to Vault settings — the Tasks view no longer
-    // reads the tasks config.
-    expect(calls.find((c) => c.cmd === "get_tasks_config")).toBeUndefined();
+    // The Lists increment reintroduced ONE config read (defaultList/
+    // listOrder feed the composer and the Lists grouping) plus the list
+    // enumeration; the folder setting itself still lives in Vault settings.
+    expect(calls.filter((c) => c.cmd === "get_tasks_config")).toHaveLength(1);
+    expect(calls.find((c) => c.cmd === "list_task_lists")).toEqual({ cmd: "list_task_lists", args: { id: "v1" } });
   });
 
   it("renders open tasks before done ones", async () => {
@@ -1078,6 +1086,51 @@ describe("Tasks", () => {
     const { wrapper } = mountView();
     await flushPromises();
     expect(wrapper.find('[data-testid="task-vault"]').exists()).toBe(false);
+  });
+
+  describe("lists grouping", () => {
+    it("shows list sections ordered by listOrder, with empty known lists, No list and Done", async () => {
+      const { wrapper } = mountView({
+        list_tasks: () => [
+          { path: "C:/v/Tasks/w.md", title: "W", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Waiting", order: null },
+          { path: "C:/v/Tasks/n.md", title: "N", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Next", order: null },
+          { path: "C:/v/Tasks/r.md", title: "Root", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null },
+          { path: "C:/v/Tasks/d.md", title: "Fin", status: "done", created: "2026-07-07", done: true, due: null, priority: null, tags: [], list: "Next", order: null },
+        ],
+        list_task_lists: () => ["Next", "Someday", "Waiting"],
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: ["Next"] }),
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+      const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+      // Next first (listOrder), then alphabetical (Someday empty but known,
+      // Waiting), then No list, then Done.
+      expect(headers).toEqual(["Next", "Someday", "Waiting", "No list", "Done"]);
+    });
+
+    it("aggregate mode fans out list_task_lists and merges same-named lists", async () => {
+      const { wrapper, calls } = mountAggregate({
+        list_tasks: (args: unknown) => {
+          const id = (args as { id: string }).id;
+          return id === "va"
+            ? [aggTask("va", "Alpha task", "2026-07-08", { list: "Next" })]
+            : [aggTask("vb", "Beta task", "2026-07-09", { list: "next" })];
+        },
+        list_task_lists: (args: unknown) =>
+          (args as { id: string }).id === "va" ? ["Next", "Empty-one"] : ["next"],
+      });
+      await flushPromises();
+      expect(calls.filter((c) => c.cmd === "list_task_lists")).toHaveLength(2);
+      await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+      const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+      // Merged case-insensitively; first-seen casing in SORT order labels the
+      // section (Beta's task is newest → "next"), the tags precedent. The
+      // aggregate skips empty lists (no cross-vault noise), so Empty-one and
+      // a second Next section must not appear.
+      expect(headers).toEqual(["next"]);
+      const rows = wrapper.findAll('[data-testid="task-row"]');
+      expect(rows).toHaveLength(2);
+    });
   });
 
   describe("sort control", () => {

@@ -5,8 +5,9 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskItem, TaskPatch, Vault } from "../types";
-import { dueOf, localToday } from "../utils/taskFields";
+import type { AggTask, TaskItem, TaskPatch, TasksConfig, Vault } from "../types";
+import { localToday } from "../utils/taskFields";
+import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
 import {
   directionApplies,
   loadSortPref,
@@ -109,76 +110,67 @@ function flipSortDir() {
   sortInPlace();
 }
 
-type Bucket = { key: string; label: string | null; tasks: AggTask[] };
-
 // Component-local; every panel visit starts back on dates (YAGNI: no
 // persistence this slice).
-const grouping = ref<"dates" | "tags">("dates");
+const grouping = ref<"dates" | "tags" | "lists">("dates");
+
+// A List is a folder under the vault's tasks root; enumeration is fetched
+// per vault (fan-out in aggregate mode, best-effort like the tasks load)
+// so the Lists grouping can show empty lists and the pickers can offer
+// every list. listOrder comes from the vault's lists settings object; the
+// aggregate keeps [] (a cross-vault order union is YAGNI — alphabetical).
+const vaultLists = ref(new Map<string, string[]>());
+const listOrder = ref<string[]>([]);
+const knownLists = computed(() => {
+  const seen = new Map<string, string>();
+  for (const lists of vaultLists.value.values())
+    for (const l of lists) {
+      const k = l.toLowerCase();
+      if (!seen.has(k)) seen.set(k, l);
+    }
+  return [...seen.values()];
+});
 
 const buckets = computed<Bucket[]>(() => {
-  if (grouping.value === "tags") {
-    // One section per tag (alphabetical, case-insensitive), a task under
-    // EACH of its tags — Obsidian tag-pane semantics; then No tags, then
-    // Done. Headers always render in tag mode. Order within sections is
-    // the global sort, untouched.
-    const byTag = new Map<string, { label: string; tasks: AggTask[] }>();
-    const notags: AggTask[] = [];
-    const done: AggTask[] = [];
-    for (const t of filteredTasks.value) {
-      if (t.done) {
-        done.push(t);
-        continue;
-      }
-      if (t.tags.length === 0) {
-        notags.push(t);
-        continue;
-      }
-      for (const tag of t.tags) {
-        const key = tag.toLowerCase();
-        const entry = byTag.get(key) ?? { label: tag, tasks: [] };
-        entry.tasks.push(t);
-        byTag.set(key, entry);
-      }
-    }
-    const sections: Bucket[] = [...byTag.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, { label, tasks }]) => ({ key: `tag:${key}`, label: `#${label}`, tasks }));
-    if (notags.length > 0) sections.push({ key: "notags", label: "No tags", tasks: notags });
-    if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });
-    return sections;
-  }
-  const today = localToday();
-  const groups: Record<string, AggTask[]> = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
-  for (const t of filteredTasks.value) {
-    if (t.done) groups.done.push(t);
-    else {
-      const d = dueOf(t);
-      if (!d) groups.nodate.push(t);
-      else if (d < today) groups.overdue.push(t);
-      else if (d === today) groups.today.push(t);
-      else groups.upcoming.push(t);
-    }
-  }
-  // Headers only once a dated open task exists — a vault that never uses due
-  // dates keeps the flat list it had before this feature.
-  const showHeaders =
-    groups.overdue.length + groups.today.length + groups.upcoming.length > 0;
-  return [
-    { key: "overdue", label: "Overdue" },
-    { key: "today", label: "Today" },
-    { key: "upcoming", label: "Upcoming" },
-    { key: "nodate", label: "No date" },
-    { key: "done", label: "Done" },
-  ]
-    .map(({ key, label }) => ({ key, label: showHeaders ? label : null, tasks: groups[key] }))
-    .filter((b) => b.tasks.length > 0);
+  if (grouping.value === "tags") return tagSections(filteredTasks.value);
+  if (grouping.value === "lists")
+    // Per-vault mode surfaces empty (fresh) lists; the aggregate skips them
+    // to avoid cross-vault noise.
+    return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
+      includeEmpty: !isAggregate.value,
+    });
+  return dateBuckets(filteredTasks.value, localToday());
 });
+
+// Best-effort per vault, like the tasks load: a vault whose enumeration
+// fails contributes no lists (log-only — the tasks toast already names a
+// broken vault) and the view still renders.
+async function loadVaultLists(id: string) {
+  try {
+    const lists = await invoke<string[]>("list_task_lists", { id });
+    vaultLists.value.set(id, Array.isArray(lists) ? lists : []);
+    vaultLists.value = new Map(vaultLists.value); // Map mutation isn't tracked
+  } catch (e) {
+    logWarning(`list_task_lists failed for vault ${id}: ${String(e)}`);
+  }
+}
 
 onMounted(async () => {
   try {
     if (props.vaultId !== null) {
-      const items = await invoke<TaskItem[]>("list_tasks", { id: props.vaultId });
       const id = props.vaultId;
+      const [items] = await Promise.all([
+        invoke<TaskItem[]>("list_tasks", { id }),
+        loadVaultLists(id),
+        // listOrder feeds the Lists grouping; a failed read degrades to
+        // alphabetical (log-only, same posture as the lists fetch).
+        invoke<TasksConfig>("get_tasks_config", { id }).then(
+          (cfg) => {
+            listOrder.value = Array.isArray(cfg?.listOrder) ? cfg.listOrder : [];
+          },
+          (e: unknown) => logWarning(`get_tasks_config failed for vault ${id}: ${String(e)}`),
+        ),
+      ]);
       tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
       // Core hands back Default order; a persisted non-default sort must
       // apply to the initial load too, not only after edits.
@@ -193,6 +185,9 @@ onMounted(async () => {
       const failed: string[] = [];
       const results = await Promise.all(
         vaults.map(async (v) => {
+          // The list enumeration rides the same fan-out (its own catch —
+          // a lists failure must not mark the vault's TASKS as failed).
+          void loadVaultLists(v.id);
           try {
             const items = await invoke<TaskItem[]>("list_tasks", { id: v.id });
             return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));
@@ -433,6 +428,7 @@ async function onEditorSave(task: AggTask, patch: TaskPatch) {
           v-for="g in [
             { key: 'dates', label: 'Dates' },
             { key: 'tags', label: 'Tags' },
+            { key: 'lists', label: 'Lists' },
           ] as const"
           :key="g.key"
           type="button"
