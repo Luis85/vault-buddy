@@ -32,29 +32,33 @@ function onInput(event: Event) {
     <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
       {{ heading }}
     </h2>
-    <label
-      :for="inputId"
-      class="mb-1 block text-sm text-slate-200"
-    >
-      {{ label }}
-      <span class="block text-xs text-slate-500">Inside the vault</span>
-    </label>
-    <input
-      :id="inputId"
-      :data-testid="inputTestid"
-      :value="modelValue"
-      :placeholder="placeholder"
-      :aria-label="label"
-      type="text"
-      class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-      @input="onInput"
-    >
-    <p
-      v-if="error"
-      :data-testid="errorTestid"
-      class="mt-1 text-xs text-red-300"
-    >
-      {{ error }}
-    </p>
+    <!-- Bordered card so this folder setting reads as one of the Buddy-settings
+         style section groups the rest of the vault-settings form now uses. -->
+    <div class="rounded-xl border border-white/10 bg-white/5 p-2">
+      <label
+        :for="inputId"
+        class="mb-1 block text-sm text-slate-200"
+      >
+        {{ label }}
+        <span class="block text-xs text-slate-500">Inside the vault</span>
+      </label>
+      <input
+        :id="inputId"
+        :data-testid="inputTestid"
+        :value="modelValue"
+        :placeholder="placeholder"
+        :aria-label="label"
+        type="text"
+        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        @input="onInput"
+      >
+      <p
+        v-if="error"
+        :data-testid="errorTestid"
+        class="mt-1 text-xs text-red-300"
+      >
+        {{ error }}
+      </p>
+    </div>
   </section>
 </template>

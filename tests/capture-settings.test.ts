@@ -90,6 +90,21 @@ describe("CaptureSettings", () => {
     clearMocks();
   });
 
+  it("groups the form into buddy-settings-style sections with uppercase headers", async () => {
+    // Aligns the vault-settings page with the Buddy settings page, which lays
+    // every group out as an uppercase section header over a bordered card.
+    const { wrapper } = await mountLoaded();
+    const headers = wrapper.findAll("h2");
+    const texts = headers.map((h) => h.text());
+    expect(texts).toContain("Recording");
+    expect(texts).toContain("Audio devices");
+    const recording = headers.find((h) => h.text() === "Recording")!;
+    expect(recording.classes()).toContain("uppercase");
+    expect(recording.classes()).toContain("tracking-wide");
+    // the section groups its controls inside a bordered card, like BuddySettings
+    expect(wrapper.findAll(".rounded-xl.border").length).toBeGreaterThan(0);
+  });
+
   it("loads the config into the form", async () => {
     const { wrapper, calls } = await mountLoaded();
     expect(calls.map((c) => c.cmd)).toContain("get_capture_config");
