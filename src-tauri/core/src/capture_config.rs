@@ -70,6 +70,14 @@ pub struct VaultCaptureConfig {
     pub tasks_folder: Option<String>,
     /// Vault-relative folder holding imported documents. None → "Documents".
     pub documents_folder: Option<String>,
+    /// The lists settings object (tasks domain): the list new tasks land in
+    /// when the caller doesn't pick one. None/empty → the tasks root. Folders
+    /// on disk remain the source of truth for which lists EXIST — these
+    /// fields only hold preferences about them.
+    pub default_list: Option<String>,
+    /// Display order for list sections and pickers; folders not named here
+    /// append alphabetically, names without folders are ignored.
+    pub list_order: Vec<String>,
 }
 
 impl Default for VaultCaptureConfig {
@@ -88,6 +96,8 @@ impl Default for VaultCaptureConfig {
             follow_up_template: true,
             tasks_folder: None,
             documents_folder: None,
+            default_list: None,
+            list_order: Vec::new(),
         }
     }
 }
@@ -129,22 +139,14 @@ impl VaultCaptureConfig {
     }
 }
 
-// The MCP section lives in its own module (LOC headroom for the tasks
-// fields); re-exported here so every existing `capture_config::McpConfig`
+// The MCP and Document Import sections live in their own modules (LOC
+// headroom for the tasks fields); re-exported here so every existing
+// `capture_config::McpConfig` / `capture_config::DocumentImportConfig`
 // caller keeps compiling unchanged.
+use crate::document_import_config::document_import_entry;
+pub use crate::document_import_config::DocumentImportConfig;
 use crate::mcp_config::mcp_entry;
 pub use crate::mcp_config::{McpConfig, DEFAULT_MCP_PORT};
-
-/// App-global Document Import settings. Pandoc is one system-wide binary,
-/// so its path override is app-global, not per-vault. Top-level
-/// `documentImport` section beside `vaults`/`mcp`; parsed per-field
-/// defensively for the same reason.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct DocumentImportConfig {
-    /// Manual override for a Pandoc not on PATH (a portable install).
-    /// None → detect on PATH only.
-    pub pandoc_path: Option<String>,
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct AppConfig {
@@ -237,17 +239,26 @@ fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("documentsFolder")
             .and_then(|v| v.as_str())
             .map(str::to_string),
-    }
-}
-
-fn document_import_entry(entry: &serde_json::Value) -> DocumentImportConfig {
-    DocumentImportConfig {
-        pandoc_path: entry
-            .get("pandocPath")
+        default_list: entry
+            .get("defaultList")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        list_order: entry
+            .get("listOrder")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                // Non-string items are dropped, not an error — one hand-edited
+                // entry must not discard the rest of the order.
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -361,6 +372,12 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
         }
         if let Some(folder) = &v.documents_folder {
             entry.insert("documentsFolder".to_string(), json!(folder));
+        }
+        if let Some(list) = &v.default_list {
+            entry.insert("defaultList".to_string(), json!(list));
+        }
+        if !v.list_order.is_empty() {
+            entry.insert("listOrder".to_string(), json!(v.list_order));
         }
         vaults.insert(id.clone(), Value::Object(entry));
     }
@@ -635,6 +652,8 @@ mod tests {
                 follow_up_template: true,
                 tasks_folder: Some("Inbox/Tasks".to_string()),
                 documents_folder: Some("Inbox/Documents".to_string()),
+                default_list: Some("Inbox".to_string()),
+                list_order: vec!["Inbox".to_string(), "Next".to_string()],
             },
         );
         cfg.vaults
@@ -766,6 +785,81 @@ mod tests {
     }
 
     #[test]
+    fn vault_entry_reads_lists_settings_defensively() {
+        // The per-vault lists settings object (defaultList + listOrder): one
+        // malformed entry defaults only itself, and non-string listOrder
+        // items are dropped — the file is hand-editable.
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": {
+                "defaultList": "Inbox",
+                "listOrder": ["Next", 5, "  ", "Waiting"]
+            } } }"#,
+        );
+        let v = vault_config(&cfg, "a");
+        assert_eq!(v.default_list.as_deref(), Some("Inbox"));
+        assert_eq!(v.list_order, vec!["Next", "Waiting"]);
+        // Malformed types default only themselves.
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": { "defaultList": 7, "listOrder": "Next", "mode": "voice-note" } } }"#,
+        );
+        let v = vault_config(&cfg, "a");
+        assert_eq!(v.default_list, None);
+        assert!(v.list_order.is_empty());
+        assert_eq!(v.mode, RecordingMode::VoiceNote);
+        // An empty/whitespace defaultList means "the tasks root" — stored as None.
+        let cfg = parse_config(r#"{ "vaults": { "a": { "defaultList": "  " } } }"#);
+        assert_eq!(vault_config(&cfg, "a").default_list, None);
+    }
+
+    #[test]
+    fn lists_settings_round_trip_and_stay_minimal() {
+        let mut cfg = AppConfig::default();
+        cfg.vaults.insert(
+            "a".to_string(),
+            VaultCaptureConfig {
+                default_list: Some("Inbox".to_string()),
+                list_order: vec!["Inbox".to_string(), "Next".to_string()],
+                ..VaultCaptureConfig::default()
+            },
+        );
+        let json = serialize_config(&cfg);
+        let parsed = parse_config(&json);
+        assert_eq!(parsed.vaults["a"].default_list.as_deref(), Some("Inbox"));
+        assert_eq!(parsed.vaults["a"].list_order, vec!["Inbox", "Next"]);
+        // Defaults are omitted — the hand-editable file stays minimal.
+        let mut cfg2 = AppConfig::default();
+        cfg2.vaults
+            .insert("b".to_string(), VaultCaptureConfig::default());
+        let json2 = serialize_config(&cfg2);
+        assert!(!json2.contains("defaultList"), "got: {json2}");
+        assert!(!json2.contains("listOrder"), "got: {json2}");
+    }
+
+    #[test]
+    fn capture_save_preserves_lists_settings() {
+        // The set_capture_config clobber class: a capture-settings save
+        // read-modify-writes the vault entry, and the value it writes must
+        // carry the lists settings it read — serialize_config dropping (or
+        // the DTO layer forgetting) either field would silently reset the
+        // lists object on every capture save.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{ "vaults": { "v": { "defaultList": "Inbox", "listOrder": ["Inbox","Next"], "bitrateKbps": 160 } } }"#,
+        )
+        .unwrap();
+        // A capture-shaped update that (correctly) round-trips the whole entry.
+        let mut v = parse_config(&std::fs::read_to_string(&path).unwrap()).vaults["v"].clone();
+        v.bitrate_kbps = 192;
+        update_vault_config_at(&path, "v", v).unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(cfg.vaults["v"].default_list.as_deref(), Some("Inbox"));
+        assert_eq!(cfg.vaults["v"].list_order, vec!["Inbox", "Next"]);
+        assert_eq!(cfg.vaults["v"].bitrate_kbps, 192);
+    }
+
+    #[test]
     fn tasks_folder_round_trips_and_defaults() {
         // Regression: a per-vault tasks folder must survive serialize→parse and
         // default to "Tasks" when absent, exactly like the recording folder does.
@@ -835,16 +929,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_document_import_section() {
-        let json = r#"{"documentImport":{"pandocPath":"C:\\pandoc\\pandoc.exe"},"vaults":{}}"#;
-        let cfg = parse_config(json);
-        assert_eq!(
-            cfg.document_import.pandoc_path.as_deref(),
-            Some("C:\\pandoc\\pandoc.exe")
-        );
-    }
-
-    #[test]
     fn parses_documents_folder_per_vault() {
         let json = r#"{"vaults":{"v1":{"documentsFolder":"Imports"}}}"#;
         let cfg = parse_config(json);
@@ -852,21 +936,5 @@ mod tests {
             cfg.vaults["v1"].documents_folder.as_deref(),
             Some("Imports")
         );
-    }
-
-    #[test]
-    fn serialize_roundtrips_document_import_section() {
-        // Regression: serialize_config once emitted only `vaults`; a save from
-        // another surface would silently delete this section. Mirrors the mcp test.
-        let mut cfg = AppConfig::default();
-        cfg.document_import.pandoc_path = Some("/usr/bin/pandoc".into());
-        let round = parse_config(&serialize_config(&cfg));
-        assert_eq!(round.document_import, cfg.document_import);
-    }
-
-    #[test]
-    fn serialize_omits_default_document_import_section() {
-        let cfg = AppConfig::default();
-        assert!(!serialize_config(&cfg).contains("documentImport"));
     }
 }

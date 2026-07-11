@@ -8,6 +8,7 @@ pub mod crash;
 pub mod daily_notes;
 pub mod discovery;
 pub mod document_import;
+pub mod document_import_config;
 pub mod mcp_config;
 pub mod process;
 pub mod recordings;
