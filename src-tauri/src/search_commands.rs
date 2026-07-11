@@ -5,6 +5,7 @@
 //! follow-up docs/superpowers/specs/2026-07-09-search-polish-design.md.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use vault_buddy_core::{discovery, search, uri};
 
 /// Bumped by every `search_vaults` call; a scan whose generation is no
@@ -12,6 +13,17 @@ use vault_buddy_core::{discovery, search, uri};
 /// stale multi-vault walk to completion. Relaxed suffices — it's a
 /// freshness hint, not a synchronization point.
 static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The process-lifetime search content cache. Lazily created on first use and
+/// shared by every `search_vaults` call and the `search-prewarm` thread, so
+/// searches reuse note content read once. Touched ONLY inside `spawn_blocking`
+/// / the prewarm thread — never on the main thread — so no window invariant is
+/// affected.
+static SEARCH_CACHE: OnceLock<search::SearchCache> = OnceLock::new();
+
+pub(crate) fn search_cache() -> &'static search::SearchCache {
+    SEARCH_CACHE.get_or_init(search::SearchCache::new)
+}
 
 /// Live search across every registered vault. ASYNC on purpose — the one
 /// deviation from this codebase's sync-command idiom: a sync command runs on
@@ -31,7 +43,7 @@ pub async fn search_vaults(query: String) -> Result<search::SearchResponse, Stri
         // irrelevant here, so no process check is needed.
         let vaults = discovery::discover_vaults();
         let stale = move || SCAN_GENERATION.load(Ordering::Relaxed) != my_gen;
-        search::search_vaults_with_cancel(&vaults, &query, &stale)
+        search::search_vaults_with_cache(&vaults, &query, search_cache(), &stale)
     })
     .await;
     match scanned {
