@@ -189,6 +189,57 @@ fn schedule_show_bubble(app: &tauri::AppHandle) {
     }
 }
 
+/// How many 5s waits the prewarm will sit through for an in-progress recording
+/// before leaving the rest of the warm to the lazy path — 720 × 5s ≈ 1h, far
+/// beyond a normal session, so a wedged recording state can't pin the thread.
+const PREWARM_MAX_RECORDING_WAITS: u32 = 720;
+
+/// Warm the search content cache in the background so the FIRST search of a
+/// launch is fast too (every later one already is, once the cache is warm).
+/// Scheduled last in `setup`, past the critical startup sequence, and settles
+/// briefly before touching the disk in bulk. Warms one vault at a time, pausing
+/// while a recording is active — the same coarse per-vault `is_recording` gate
+/// `run_recovery` uses — so it never contends with the capture MP3 stream's
+/// fsync. Best-effort and read-only: it only fills RAM, never writes, and is
+/// reclaimed on process exit like the metronome and `capture-recovery` threads.
+/// A spawn failure just skips the warm (the lazy path still warms on first use).
+fn schedule_search_prewarm(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("search-prewarm".into())
+        .spawn(move || {
+            // Let restore/tray/recovery/MCP settle before bulk disk reads.
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let cache = search_commands::search_cache();
+            for vault in vault_buddy_core::discovery::discover_vaults() {
+                // Coarse politeness: never warm while recording — wait it out
+                // (bounded) so we can't fight the encoder's fsync. One check
+                // per vault, exactly like capture recovery.
+                let mut waited = 0u32;
+                while capture_commands::is_recording(&app) {
+                    if waited >= PREWARM_MAX_RECORDING_WAITS {
+                        log::info!(
+                            "search-prewarm: still recording; leaving the rest to lazy warm"
+                        );
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    waited += 1;
+                }
+                vault_buddy_core::search::warm_vault(&vault, cache, &|| false);
+                // Stay low-priority: a short breath between vaults.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            log::info!(
+                "search-prewarm: content cache warmed ({} bytes)",
+                cache.cached_bytes()
+            );
+        });
+    if let Err(e) = spawned {
+        log::warn!("could not spawn search-prewarm thread: {e}");
+    }
+}
+
 pub fn run() {
     // Before anything else: a panic during builder construction or in any
     // thread should still be captured on disk.
@@ -479,6 +530,7 @@ pub fn run() {
             document_commands::run_import_recovery(app.handle());
             transcription::run_transcription(app.handle());
             mcp_commands::start_if_enabled(app.handle());
+            schedule_search_prewarm(app.handle());
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {
