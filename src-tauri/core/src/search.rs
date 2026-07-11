@@ -9,6 +9,9 @@ use crate::discovery::Vault;
 use crate::vault_walk::{walk_vault, Flow};
 use std::path::Path;
 
+use crate::search_cache::cached_lowered;
+pub use crate::search_cache::SearchCache;
+
 /// Trimmed CHARS (not bytes) a query needs before anything is scanned — a
 /// 1-char query would match nearly every file in every vault.
 pub const MIN_QUERY_CHARS: usize = 2;
@@ -63,20 +66,32 @@ const PER_VAULT_CAP: usize = MAX_RESULTS + 1;
 
 /// Search every vault, in the given order, until `MAX_RESULTS` hits are
 /// collected. A trimmed query shorter than `MIN_QUERY_CHARS` returns an empty
-/// response. Read-only, best-effort: missing/unreadable vaults, dirs and
-/// files degrade silently — scan noise, the same documented exception to the
-/// no-swallow rule as the tasks/recordings walks.
+/// response. Read-only, best-effort (see `scan_vault`).
 pub fn search_vaults(vaults: &[Vault], query: &str) -> SearchResponse {
     search_vaults_with_cancel(vaults, query, &|| false)
 }
 
-/// Cancellable variant: `is_cancelled` is polled once per file — a
-/// superseded scan stops walking instead of running a stale multi-vault
-/// walk to completion. A cancelled scan returns what it has; the caller is
-/// about to discard it. See `scan_vault` for the per-vault contract.
+/// Cancellable variant with a fresh, un-warmed cache (callers that don't hold a
+/// long-lived cache still get correct results, just no cross-call reuse).
 pub fn search_vaults_with_cancel(
     vaults: &[Vault],
     query: &str,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> SearchResponse {
+    search_vaults_with_cache(vaults, query, &SearchCache::new(), is_cancelled)
+}
+
+/// Cancellable search reusing a caller-owned `cache`, so repeated and
+/// pre-warmed searches skip the read + lowercase of unchanged notes. Output is
+/// identical to `search_vaults_with_cancel` — the cache only changes how
+/// content bytes are obtained. `is_cancelled` is polled once per file — a
+/// superseded scan stops walking instead of running a stale multi-vault
+/// walk to completion. A cancelled scan returns what it has; the caller is
+/// about to discard it. See `scan_vault` for the per-vault contract.
+pub fn search_vaults_with_cache(
+    vaults: &[Vault],
+    query: &str,
+    cache: &SearchCache,
     is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> SearchResponse {
     let trimmed = query.trim();
@@ -93,9 +108,12 @@ pub fn search_vaults_with_cancel(
         let mut pending = Vec::with_capacity(vaults.len());
         for (i, vault) in vaults.iter().enumerate() {
             let query_lower = &query_lower;
+            let cache = &*cache;
             let spawned = std::thread::Builder::new()
                 .name(format!("search-vault-{i}"))
-                .spawn_scoped(scope, move || scan_vault(vault, query_lower, is_cancelled));
+                .spawn_scoped(scope, move || {
+                    scan_vault(vault, query_lower, cache, is_cancelled)
+                });
             match spawned {
                 Ok(handle) => pending.push(Ok(handle)),
                 Err(e) => {
@@ -103,7 +121,7 @@ pub fn search_vaults_with_cancel(
                     // inline scan on this thread — never a panic, and the
                     // failure leaves a trace.
                     log::warn!("search: spawning scan thread failed: {e}");
-                    pending.push(Err(scan_vault(vault, query_lower, is_cancelled)));
+                    pending.push(Err(scan_vault(vault, query_lower, cache, is_cancelled)));
                 }
             }
         }
@@ -166,6 +184,7 @@ struct VaultHits {
 fn scan_vault(
     vault: &Vault,
     query_lower: &str,
+    cache: &SearchCache,
     is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<VaultHits> {
     let canon_root = std::fs::canonicalize(Path::new(&vault.path)).ok()?;
@@ -184,7 +203,7 @@ fn scan_vault(
             // content classification — but a name-matched note still reads
             // for its display snippet.
             let snippet = if name_matched || content_hits.len() < PER_VAULT_CAP {
-                content_snippet(path, query_lower)
+                content_snippet(path, query_lower, cache)
             } else {
                 None
             };
@@ -227,6 +246,32 @@ fn scan_vault(
     })
 }
 
+/// Populate `cache` with one vault's note content WITHOUT matching — the
+/// pre-warm's unit of work, so the warm and lazy search paths share
+/// `cached_lowered` and can never diverge. Walks the same reparse-safe walk a
+/// search does and polls `is_cancelled` per file (a shutdown or superseded warm
+/// stops promptly), and likewise stops once the cache reports itself full —
+/// past that point every read can only be lowercased and discarded, so
+/// continuing would burn disk I/O and CPU for nothing (PR #52 Codex P2); the
+/// unwarmed remainder still gets matched correctly by the lazy path during a
+/// live search. Best-effort: an unresolvable vault path is skipped, and
+/// per-file read failures degrade exactly as the live scan's do. Only notes are
+/// warmed — attachments are name-only, so there is nothing to cache for them.
+pub fn warm_vault(vault: &Vault, cache: &SearchCache, is_cancelled: &(dyn Fn() -> bool + Sync)) {
+    let Ok(canon_root) = std::fs::canonicalize(Path::new(&vault.path)) else {
+        return;
+    };
+    walk_vault(&canon_root, &mut |path, name| {
+        if is_cancelled() || cache.is_full() {
+            return Flow::Stop;
+        }
+        if !name.starts_with('.') && md_stem(name).is_some() {
+            let _ = cached_lowered(path, cache);
+        }
+        Flow::Continue
+    });
+}
+
 /// Case-insensitive `.md` note check returning the stem. The suffix is 3
 /// ASCII bytes, so the byte compare can't split a char boundary and
 /// `len - 3` is a valid boundary; `> 3` keeps the stem non-empty (a bare
@@ -240,25 +285,26 @@ fn md_stem(name: &str) -> Option<&str> {
     }
 }
 
-/// First matching line's snippet, or None: no match, file larger than
-/// `MAX_CONTENT_BYTES` (name matching still applies — only content is
-/// skipped), unreadable, or not UTF-8.
-fn content_snippet(path: &Path, query_lower: &str) -> Option<String> {
-    let meta = std::fs::metadata(path).ok()?;
-    if meta.len() > MAX_CONTENT_BYTES {
+/// Snippet for a content match, or `None` when the note doesn't match (or is
+/// oversize / unreadable / non-UTF-8). Matching reuses the cache — the lowered
+/// text is read + lowercased once per file-version, not per search — and the
+/// predicate stays the exact `contains` the pre-cache code ran. The display
+/// snippet re-reads the ORIGINAL so its casing is unchanged; if that re-read
+/// fails (the file changed since the cached read — best-effort), it falls back
+/// to the lowered text so the confirmed match still surfaces.
+fn content_snippet(path: &Path, query_lower: &str, cache: &SearchCache) -> Option<String> {
+    let lowered = cached_lowered(path, cache)?;
+    if !lowered.contains(query_lower) {
         return None;
     }
-    let content = std::fs::read_to_string(path).ok()?;
-    // One whole-file lowercase + contains, then a per-line pass only on the
-    // rare matching file — the per-line variant allocated a lowered String
-    // for every line of every file on the live-search hot path. (A query
-    // can only match within a line, so the pre-filter never lies.)
-    if !content.to_lowercase().contains(query_lower) {
-        return None;
-    }
-    content
-        .lines()
-        .find_map(|line| snippet_from_line(line, query_lower))
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|orig| orig.lines().find_map(|l| snippet_from_line(l, query_lower)))
+        .or_else(|| {
+            lowered
+                .lines()
+                .find_map(|l| snippet_from_line(l, query_lower))
+        })
 }
 
 /// Assemble a hit for `path` (inside `canon_root` by the walk's containment).
@@ -756,5 +802,24 @@ mod tests {
         std::os::unix::fs::symlink(&root, root.join("sub").join("loop")).unwrap();
         let r = search_vaults(&[vault("v1", "Work", &root)], "alpha");
         assert_eq!(r.hits.len(), 1); // terminates; counted exactly once
+    }
+
+    #[test]
+    fn with_cache_equals_plain_search() {
+        // A caller-supplied cache must not change results vs the cache-less entry
+        // point (the cache is a pure optimization).
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Notes/idea.md",
+            "intro\nProject Alpha kickoff\n",
+        );
+        write(dir.path(), "Alpha plan.md", "nothing relevant\n");
+        write(dir.path(), "slides/Alpha deck.pdf", "%PDF-fake");
+        let vs = [vault("v1", "Work", dir.path())];
+        let plain = search_vaults(&vs, "alpha");
+        let cache = SearchCache::new();
+        let cached = search_vaults_with_cache(&vs, "alpha", &cache, &|| false);
+        assert_eq!(plain, cached);
     }
 }

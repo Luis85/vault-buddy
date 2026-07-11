@@ -44,6 +44,14 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
+### GAP-56 · Low · Search content cache: fill-to-cap tail and dead entries
+`core/src/search_cache.rs`. The cache fills to 256 MiB then stops inserting
+(no eviction — uniform per-search access makes LRU pointless), so once total
+note text exceeds the cap the last-walked vaults' notes re-read on every search
+(still far cheaper than the pre-cache path). Entries for deleted files also
+linger until process exit, bounded by the cap. A per-walk mark-and-sweep and/or
+a larger/tunable cap would address both; deferred as documented in the spec.
+
 ### GAP-55 · Low (mitigated) · A document dropped during an in-flight import
 `src/components/ImportVaultPicker.vue` (`pick`) + `src/stores/vaults.ts`
 (`begin_document_import` → `refresh()` re-arms `pendingImportPath`). If a

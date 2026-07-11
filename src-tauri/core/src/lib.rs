@@ -11,6 +11,7 @@ pub mod document_import;
 pub mod process;
 pub mod recordings;
 pub mod search;
+pub mod search_cache;
 pub mod services;
 pub mod sync_util;
 pub mod tasks;
