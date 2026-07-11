@@ -250,7 +250,11 @@ fn scan_vault(
 /// pre-warm's unit of work, so the warm and lazy search paths share
 /// `cached_lowered` and can never diverge. Walks the same reparse-safe walk a
 /// search does and polls `is_cancelled` per file (a shutdown or superseded warm
-/// stops promptly). Best-effort: an unresolvable vault path is skipped, and
+/// stops promptly), and likewise stops once the cache reports itself full —
+/// past that point every read can only be lowercased and discarded, so
+/// continuing would burn disk I/O and CPU for nothing (PR #52 Codex P2); the
+/// unwarmed remainder still gets matched correctly by the lazy path during a
+/// live search. Best-effort: an unresolvable vault path is skipped, and
 /// per-file read failures degrade exactly as the live scan's do. Only notes are
 /// warmed — attachments are name-only, so there is nothing to cache for them.
 pub fn warm_vault(vault: &Vault, cache: &SearchCache, is_cancelled: &(dyn Fn() -> bool + Sync)) {
@@ -258,7 +262,7 @@ pub fn warm_vault(vault: &Vault, cache: &SearchCache, is_cancelled: &(dyn Fn() -
         return;
     };
     walk_vault(&canon_root, &mut |path, name| {
-        if is_cancelled() {
+        if is_cancelled() || cache.is_full() {
             return Flow::Stop;
         }
         if !name.starts_with('.') && md_stem(name).is_some() {

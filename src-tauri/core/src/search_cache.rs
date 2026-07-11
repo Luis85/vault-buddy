@@ -8,7 +8,7 @@
 use crate::search::MAX_CONTENT_BYTES;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -27,6 +27,12 @@ pub struct SearchCache {
     /// evicting budget. Atomic so the byte check needs no map lock.
     bytes: AtomicU64,
     cap_bytes: u64,
+    /// Latched once an insert is rejected for being over `cap_bytes`. Never
+    /// cleared: the cache only grows for the process lifetime, so once full it
+    /// stays full. Lets `warm_vault` stop walking instead of reading +
+    /// lowercasing notes it can only discard (PR #52 Codex P2) — a live search
+    /// ignores this flag, since it still needs the content to match.
+    full: AtomicBool,
 }
 
 enum CacheEntry {
@@ -70,12 +76,21 @@ impl SearchCache {
             entries: Mutex::new(HashMap::new()),
             bytes: AtomicU64::new(0),
             cap_bytes,
+            full: AtomicBool::new(false),
         }
     }
 
     /// Total cached lowered-text bytes. Diagnostics + tests.
     pub fn cached_bytes(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// Whether an insert has ever been rejected for being over `cap_bytes`.
+    /// `warm_vault` polls this to stop pre-warming once further reads can
+    /// only be discarded; a live search ignores it (matching still needs the
+    /// content even when it won't be retained).
+    pub fn is_full(&self) -> bool {
+        self.full.load(Ordering::Relaxed)
     }
 
     /// Recover a poisoned lock rather than propagate: a panicked scan thread
@@ -183,8 +198,10 @@ pub(crate) fn cached_lowered(path: &Path, cache: &SearchCache) -> Option<Arc<str
                 );
             } else {
                 // Over the cap: don't retain. Drop any stale entry so a later
-                // search can't serve it.
+                // search can't serve it, and latch `full` so warm_vault stops
+                // reading notes it can only discard (a live search ignores it).
                 map.remove(path);
+                cache.full.store(true, Ordering::Relaxed);
             }
         }
         None => {
@@ -350,6 +367,30 @@ mod tests {
         assert!(c.cached_bytes() <= 120); // ...but not stored past the cap
         assert!(c.peek_text(&b).is_none());
         assert!(c.peek_text(&a).is_some());
+    }
+
+    #[test]
+    fn warm_vault_stops_once_cache_is_full() {
+        // Regression (PR #52): once the cache hits its cap, warm_vault must
+        // stop walking instead of reading + lowercasing notes it can only
+        // discard. A tiny cap fits one ~100-byte note; the second trips
+        // `full`, and a later small note that WOULD fit the headroom is not
+        // warmed (it falls to the lazy path).
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.md", &"a".repeat(100));
+        write(dir.path(), "b.md", &"b".repeat(100));
+        let v = vault("v1", "W", dir.path());
+        let cache = SearchCache::with_cap(120); // fits one 100-byte note
+        warm_vault(&v, &cache, &|| false);
+        assert!(cache.is_full());
+        let after = cache.cached_bytes();
+        assert!(after <= 120);
+        // A second vault with a 10-byte note (fits the 20-byte headroom) must
+        // NOT be warmed now that `full` is latched.
+        let dir2 = tempfile::tempdir().unwrap();
+        write(dir2.path(), "c.md", &"c".repeat(10));
+        warm_vault(&vault("v2", "W2", dir2.path()), &cache, &|| false);
+        assert_eq!(cache.cached_bytes(), after); // is_full stopped the warm
     }
 
     #[test]
