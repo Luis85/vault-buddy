@@ -98,7 +98,8 @@ export interface TranscribeCancelled {
 
 export interface CaptureConfig {
   mode: "meeting" | "voice-note";
-  recordingFolder: string | null;
+  meetingFolder: string | null;
+  voiceNoteFolder: string | null;
   bitrateKbps: number;
   createNote: boolean;
   inputDevice: string | null;

@@ -6,7 +6,8 @@ import SelectMenu from "./SelectMenu.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 interface RecordingSettingsValue {
-  recordingFolder: string;
+  meetingFolder: string;
+  voiceNoteFolder: string;
   bitrateKbps: number;
   createNote: boolean;
   followUpTemplate: boolean;
@@ -34,9 +35,13 @@ function patch(change: Partial<RecordingSettingsValue>) {
   emit("update:modelValue", { ...props.modelValue, ...change });
 }
 
-const recordingFolder = computed({
-  get: () => props.modelValue.recordingFolder,
-  set: (v: string) => patch({ recordingFolder: v }),
+const meetingFolder = computed({
+  get: () => props.modelValue.meetingFolder,
+  set: (v: string) => patch({ meetingFolder: v }),
+});
+const voiceNoteFolder = computed({
+  get: () => props.modelValue.voiceNoteFolder,
+  set: (v: string) => patch({ voiceNoteFolder: v }),
 });
 const bitrateKbps = computed({
   get: () => props.modelValue.bitrateKbps,
@@ -109,27 +114,44 @@ const outputMenuOptions = computed(() => [
       <div>
         <label
           class="mb-1 block text-sm text-slate-200"
-          for="capture-folder"
+          for="capture-meeting-folder"
         >
-          Recording folder
+          Meeting folder
           <span class="block text-xs text-slate-500">Inside the vault</span>
         </label>
         <input
-          id="capture-folder"
-          v-model="recordingFolder"
-          data-testid="folder-input"
+          id="capture-meeting-folder"
+          v-model="meetingFolder"
+          data-testid="meeting-folder-input"
           type="text"
-          placeholder="Meetings or Voice Notes"
+          placeholder="Meetings"
           class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
         >
-        <p
-          v-if="folderError"
-          data-testid="folder-error"
-          class="mt-1 text-xs text-red-300"
-        >
-          {{ folderError }}
-        </p>
       </div>
+      <div>
+        <label
+          class="mb-1 block text-sm text-slate-200"
+          for="capture-voice-note-folder"
+        >
+          Voice Note folder
+          <span class="block text-xs text-slate-500">Inside the vault</span>
+        </label>
+        <input
+          id="capture-voice-note-folder"
+          v-model="voiceNoteFolder"
+          data-testid="voice-note-folder-input"
+          type="text"
+          placeholder="Voice Notes"
+          class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        >
+      </div>
+      <p
+        v-if="folderError"
+        data-testid="folder-error"
+        class="mt-1 text-xs text-red-300"
+      >
+        {{ folderError }}
+      </p>
     </div>
   </section>
   <section>

@@ -27,7 +27,8 @@ const folderError = ref<string | null>(null);
 // still sent back unchanged on save so the IPC contract and config.json
 // schema stay as they are.
 const mode = ref<"meeting" | "voice-note">("meeting");
-const recordingFolder = ref("");
+const meetingFolder = ref("");
+const voiceNoteFolder = ref("");
 const createNote = ref(true);
 const followUpTemplate = ref(true);
 const bitrateKbps = ref(128);
@@ -87,7 +88,8 @@ const documentsFolderEdited = ref(false);
 // adapter it replaces (RecordingSettings now owns that nested adapter).
 const recordingBundle = computed({
   get: () => ({
-    recordingFolder: recordingFolder.value,
+    meetingFolder: meetingFolder.value,
+    voiceNoteFolder: voiceNoteFolder.value,
     bitrateKbps: bitrateKbps.value,
     createNote: createNote.value,
     followUpTemplate: followUpTemplate.value,
@@ -99,7 +101,8 @@ const recordingBundle = computed({
     transcriptTimestamps: transcriptTimestamps.value,
   }),
   set: (v: {
-    recordingFolder: string;
+    meetingFolder: string;
+    voiceNoteFolder: string;
     bitrateKbps: number;
     createNote: boolean;
     followUpTemplate: boolean;
@@ -110,7 +113,8 @@ const recordingBundle = computed({
     transcriptionLanguage: string;
     transcriptTimestamps: boolean;
   }) => {
-    recordingFolder.value = v.recordingFolder;
+    meetingFolder.value = v.meetingFolder;
+    voiceNoteFolder.value = v.voiceNoteFolder;
     bitrateKbps.value = v.bitrateKbps;
     createNote.value = v.createNote;
     followUpTemplate.value = v.followUpTemplate;
@@ -128,7 +132,8 @@ const recordingBundle = computed({
 // no-ops; this only becomes visible after a save set it to "saved".
 watch(
   [
-    recordingFolder,
+    meetingFolder,
+    voiceNoteFolder,
     createNote,
     followUpTemplate,
     bitrateKbps,
@@ -158,7 +163,8 @@ onMounted(async () => {
       invoke<AudioDevices>("list_audio_devices"),
     ]);
     mode.value = cfg.mode;
-    recordingFolder.value = cfg.recordingFolder ?? "";
+    meetingFolder.value = cfg.meetingFolder ?? "";
+    voiceNoteFolder.value = cfg.voiceNoteFolder ?? "";
     createNote.value = cfg.createNote;
     followUpTemplate.value = cfg.followUpTemplate;
     bitrateKbps.value = cfg.bitrateKbps;
@@ -199,14 +205,14 @@ async function save() {
   folderError.value = null;
   tasksFolderError.value = null;
   documentsFolderError.value = null;
-  const folder = recordingFolder.value.trim();
   let failed = false;
   try {
     await invoke("set_capture_config", {
       id: props.vaultId,
       cfg: {
         mode: mode.value,
-        recordingFolder: folder ? folder : null,
+        meetingFolder: meetingFolder.value.trim() || null,
+        voiceNoteFolder: voiceNoteFolder.value.trim() || null,
         bitrateKbps: bitrateKbps.value,
         createNote: createNote.value,
         followUpTemplate: followUpTemplate.value,
@@ -297,8 +303,8 @@ async function save() {
         Recording
       </h2>
       <!-- Plain wrapper, not another bordered card: RecordingSettings already
-           renders its own bordered sub-cards (Recording, Companion note,
-           Transcription, Audio devices), same as VaultFolderSetting/
+           renders its own bordered sub-cards (Folders, Audio, Companion note,
+           Transcription), same as VaultFolderSetting/
            TaskListSettings do for the Tasks/Documents groups below — an
            extra border here would double-nest around each of them. -->
       <div class="flex flex-col gap-3">

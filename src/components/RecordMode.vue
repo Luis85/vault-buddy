@@ -29,8 +29,8 @@ const OPTIONS = [
 // below so recording is never blocked on the read, but a toggle made before
 // the read resolves must only update the local control, not hit disk: the
 // default-seeded `config` would otherwise persist() over the vault's real
-// recordingFolder/bitrateKbps/devices/createNote/followUpTemplate, and the
-// in-flight read would then clobber the toggle right back out of
+// meetingFolder/voiceNoteFolder/bitrateKbps/devices/createNote/followUpTemplate,
+// and the in-flight read would then clobber the toggle right back out of
 // `config.value` anyway. Mirrors CaptureSettings.vue's tasksFolderLoaded
 // success-only gate.
 const loaded = ref(false);
@@ -41,7 +41,8 @@ const loaded = ref(false);
 // the defaults even then.
 const config = ref<CaptureConfig>({
   mode: "meeting",
-  recordingFolder: null,
+  meetingFolder: null,
+  voiceNoteFolder: null,
   bitrateKbps: 128,
   createNote: true,
   followUpTemplate: true,

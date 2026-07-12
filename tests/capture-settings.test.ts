@@ -13,7 +13,8 @@ import { logWarning } from "../src/logging";
 
 const config = {
   mode: "meeting",
-  recordingFolder: "Meetings",
+  meetingFolder: "Meetings",
+  voiceNoteFolder: "Voice Notes",
   bitrateKbps: 160,
   createNote: true,
   inputDevice: "USB Mic",
@@ -130,8 +131,12 @@ describe("CaptureSettings", () => {
     const { wrapper, calls } = await mountLoaded();
     expect(calls.map((c) => c.cmd)).toContain("get_capture_config");
     expect(calls.map((c) => c.cmd)).toContain("list_audio_devices");
-    const folder = wrapper.get<HTMLInputElement>('[data-testid="folder-input"]');
-    expect(folder.element.value).toBe("Meetings");
+    const meetingFolder = wrapper.get<HTMLInputElement>('[data-testid="meeting-folder-input"]');
+    expect(meetingFolder.element.value).toBe("Meetings");
+    const voiceNoteFolder = wrapper.get<HTMLInputElement>(
+      '[data-testid="voice-note-folder-input"]',
+    );
+    expect(voiceNoteFolder.element.value).toBe("Voice Notes");
     expect(wrapper.get('[data-testid="bitrate-select"]').text()).toContain("160 kbps");
     expect(wrapper.get('[data-testid="input-device-select"]').text()).toContain("USB Mic");
   });
@@ -162,11 +167,19 @@ describe("CaptureSettings", () => {
     expect(wrapper.find('[data-testid="mode-meeting"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="mode-voice-note"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("Default recording mode");
-    // The folder placeholder was mode-dependent; with no mode control it names
-    // both per-type defaults.
+  });
+
+  it("shows a distinct placeholder naming each mode's default folder", async () => {
+    // One folder input per mode now (replacing the old single input whose
+    // placeholder had to name both defaults at once), so each names only its
+    // own mode's default.
+    const { wrapper } = await mountLoaded();
     expect(
-      wrapper.get('[data-testid="folder-input"]').attributes("placeholder"),
-    ).toBe("Meetings or Voice Notes");
+      wrapper.get('[data-testid="meeting-folder-input"]').attributes("placeholder"),
+    ).toBe("Meetings");
+    expect(
+      wrapper.get('[data-testid="voice-note-folder-input"]').attributes("placeholder"),
+    ).toBe("Voice Notes");
   });
 
   it("shows the output picker regardless of the stored mode", async () => {
@@ -178,7 +191,10 @@ describe("CaptureSettings", () => {
 
   it("saves the edited form through set_capture_config", async () => {
     const { wrapper, calls } = await mountLoaded();
-    await wrapper.get('[data-testid="folder-input"]').setValue("Inbox/Audio");
+    // Both folder inputs are edited so the recordingBundle adapter's
+    // round-trip is proven in both directions for both fields, not just one.
+    await wrapper.get('[data-testid="meeting-folder-input"]').setValue("Inbox/Audio");
+    await wrapper.get('[data-testid="voice-note-folder-input"]').setValue("Personal/Notes");
     await pickOption(wrapper, "bitrate-select", 192);
     await pickOption(wrapper, "input-device-select", "");
     await wrapper.get("form").trigger("submit");
@@ -188,7 +204,8 @@ describe("CaptureSettings", () => {
       id: "v1",
       cfg: {
         mode: "meeting",
-        recordingFolder: "Inbox/Audio",
+        meetingFolder: "Inbox/Audio",
+        voiceNoteFolder: "Personal/Notes",
         bitrateKbps: 192,
         createNote: true,
         followUpTemplate: true,
@@ -208,7 +225,7 @@ describe("CaptureSettings", () => {
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(wrapper.text()).toContain("Saved");
-    await wrapper.get('[data-testid="folder-input"]').setValue("Elsewhere");
+    await wrapper.get('[data-testid="meeting-folder-input"]').setValue("Elsewhere");
     expect(wrapper.text()).not.toContain("Saved ✓");
   });
 
@@ -218,13 +235,13 @@ describe("CaptureSettings", () => {
         throw "Configured recording folder must stay inside the vault: \"../x\"";
       },
     });
-    await wrapper.get('[data-testid="folder-input"]').setValue("../x");
+    await wrapper.get('[data-testid="meeting-folder-input"]').setValue("../x");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(wrapper.get('[data-testid="folder-error"]').text()).toContain(
       "must stay inside the vault",
     );
-    const folder = wrapper.get<HTMLInputElement>('[data-testid="folder-input"]');
+    const folder = wrapper.get<HTMLInputElement>('[data-testid="meeting-folder-input"]');
     expect(folder.element.value).toBe("../x");
   });
 
@@ -304,7 +321,8 @@ describe("CaptureSettings", () => {
       id: "v1",
       cfg: {
         mode: "meeting",
-        recordingFolder: "Meetings",
+        meetingFolder: "Meetings",
+        voiceNoteFolder: "Voice Notes",
         bitrateKbps: 160,
         createNote: true,
         followUpTemplate: true,
