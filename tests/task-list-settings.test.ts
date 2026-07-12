@@ -1,12 +1,17 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import TaskListSettings from "../src/components/TaskListSettings.vue";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 let active: ReturnType<typeof mount> | null = null;
+beforeEach(() => {
+  // TaskListSettings now uses useAutosave → the settingsStatus store.
+  setActivePinia(createPinia());
+});
 afterEach(() => {
   active?.unmount();
   active = null;
@@ -32,24 +37,43 @@ describe("TaskListSettings", () => {
   it("loads the vault's lists in effective order and seeds the default", async () => {
     const { wrapper } = mountSettings();
     await flushPromises();
-    const rows = wrapper.findAll('[data-testid="list-order-row"]').map((r) => r.text().replace(/[↑↓]/g, "").trim());
+    const rows = wrapper
+      .findAll('[data-testid="list-order-row"]')
+      .map((r) => r.text().replace(/[↑↓]/g, "").trim());
     // listOrder ("Next") first, the rest alphabetical.
     expect(rows).toEqual(["Next", "Inbox", "Waiting"]);
     expect(wrapper.get('[data-testid="default-list"]').text()).toContain("Inbox");
   });
 
-  it("moves a list up and saves the full settings object", async () => {
+  it("does not save on mount", async () => {
+    const { calls } = mountSettings();
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_task_lists_config")).toBe(false);
+  });
+
+  it("saves the new order immediately after a reorder (no Save button)", async () => {
     const { wrapper, calls } = mountSettings();
     await flushPromises();
+    expect(wrapper.find('[data-testid="task-lists-save"]').exists()).toBe(false);
     await wrapper.get('[data-testid="list-order-up-2"]').trigger("click"); // Waiting up one
-    await wrapper.get('[data-testid="task-lists-save"]').trigger("click");
     await flushPromises();
     expect(calls.find((c) => c.cmd === "set_task_lists_config")?.args).toEqual({
       id: "v1",
       defaultList: "Inbox",
       listOrder: ["Next", "Waiting", "Inbox"],
     });
-    expect(wrapper.text()).toContain("Saved");
+  });
+
+  it("saves immediately when the default list changes", async () => {
+    const { wrapper, calls } = mountSettings();
+    await flushPromises();
+    await wrapper.get('[data-testid="default-list"]').trigger("click");
+    await flushPromises();
+    (document.body.querySelector('[data-testid="default-list-option-Waiting"]') as HTMLElement).click();
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")?.args).toMatchObject({
+      defaultList: "Waiting",
+    });
   });
 
   it("clearing the default sends null (the tasks root)", async () => {
@@ -59,47 +83,9 @@ describe("TaskListSettings", () => {
     await flushPromises();
     (document.body.querySelector('[data-testid="default-list-option-"]') as HTMLElement).click();
     await flushPromises();
-    await wrapper.get('[data-testid="task-lists-save"]').trigger("click");
-    await flushPromises();
     expect(calls.find((c) => c.cmd === "set_task_lists_config")?.args).toMatchObject({
       defaultList: null,
     });
-  });
-
-  it("clears the Saved acknowledgement when the default list changes (Codex #53)", async () => {
-    // After a save, editing the default must drop "Saved" so the user can't
-    // navigate away thinking the new (unpersisted) default was saved.
-    const { wrapper } = mountSettings();
-    await flushPromises();
-    await wrapper.get('[data-testid="task-lists-save"]').trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain("Saved");
-    await wrapper.get('[data-testid="default-list"]').trigger("click");
-    await flushPromises();
-    (document.body.querySelector('[data-testid="default-list-option-Waiting"]') as HTMLElement).click();
-    await flushPromises();
-    expect(wrapper.text()).not.toContain("Saved");
-  });
-
-  it("does not show Saved when the form is edited while the save is in flight (Codex #53 re-review)", async () => {
-    // A save started, then the user edits a control before it resolves — the
-    // resolved request no longer matches the current form, so it must NOT
-    // claim "Saved" (the watcher can't clear a "saving" state).
-    let resolveSave!: (v: unknown) => void;
-    const { wrapper } = mountSettings({
-      set_task_lists_config: () => new Promise((r) => (resolveSave = r)),
-    });
-    await flushPromises();
-    await wrapper.get('[data-testid="task-lists-save"]').trigger("click"); // save now pending
-    await flushPromises();
-    // Edit the default list while the save is in flight.
-    await wrapper.get('[data-testid="default-list"]').trigger("click");
-    await flushPromises();
-    (document.body.querySelector('[data-testid="default-list-option-Waiting"]') as HTMLElement).click();
-    await flushPromises();
-    resolveSave(null); // the stale save resolves
-    await flushPromises();
-    expect(wrapper.text()).not.toContain("Saved");
   });
 
   it("shows a field-level error when the save fails", async () => {
@@ -109,7 +95,7 @@ describe("TaskListSettings", () => {
       },
     });
     await flushPromises();
-    await wrapper.get('[data-testid="task-lists-save"]').trigger("click");
+    await wrapper.get('[data-testid="list-order-up-2"]').trigger("click");
     await flushPromises();
     expect(wrapper.get('[data-testid="task-lists-error"]').text()).toContain("inside the tasks folder");
   });
