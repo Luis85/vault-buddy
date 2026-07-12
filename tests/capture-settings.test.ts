@@ -406,6 +406,64 @@ describe("CaptureSettings", () => {
     });
   });
 
+  it("hydrates the date-folders toggle from disk even when the folder input was edited first (shared edit-guard regression)", async () => {
+    // Regression: the date-folders toggle was added reusing
+    // documentsFolderEdited — the SAME flag that guards the documents FOLDER
+    // text input's hydration. Editing the folder before get_documents_config
+    // resolves wrongly gated off the checkbox's OWN hydration from that same
+    // response, leaving it stuck on its seeded default (true) and silently
+    // reverting a persisted "flat" (false) choice on the next save.
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="documents-folder-input"]').setValue("Mine");
+    resolveDocuments({ documentsFolder: "Stored/Docs", documentDateFolders: false });
+    await flushPromises();
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="document-date-folders-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Mine",
+      documentDateFolders: false,
+    });
+  });
+
+  it("keeps the folder input hydrating from disk when the date-folders toggle is clicked first (shared edit-guard regression, symmetric case)", async () => {
+    // Symmetric case: clicking the checkbox before get_documents_config
+    // resolves must not block the FOLDER input's own hydration from that same
+    // response — it would otherwise stay blank and Save would send
+    // documentsFolder: null, clearing a persisted custom folder path.
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="document-date-folders-toggle"]').setValue(false);
+    resolveDocuments({ documentsFolder: "Stored/Docs", documentDateFolders: true });
+    await flushPromises();
+    const input = wrapper.get<HTMLInputElement>('[data-testid="documents-folder-input"]');
+    expect(input.element.value).toBe("Stored/Docs");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Stored/Docs",
+      documentDateFolders: false,
+    });
+  });
+
   it("loads the tasks folder and saves it with the form Save (no dedicated button)", async () => {
     const { wrapper, calls } = await mountLoaded({ tasksFolder: "Inbox/Tasks" });
     const input = wrapper.get('[data-testid="tasks-folder-input"]');

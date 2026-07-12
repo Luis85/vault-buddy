@@ -86,9 +86,17 @@ const documentsFolderLoaded = ref(false);
 const documentsFolderEdited = ref(false);
 // Whether NEW imports land in a dated YYYY/MM subfolder. Rides the SAME
 // get_documents_config/set_documents_config round trip as documentsFolder
-// above (one command carries both fields), so it shares that field's
-// loaded/edited gate rather than needing one of its own.
+// above (one command carries both fields, and documentsFolderLoaded covers
+// "this command's response arrived" for both) — but it needs its OWN edited
+// flag. The two fields are independently editable while both are visible
+// before the read resolves; sharing documentsFolderEdited let touching
+// EITHER control silently block the OTHER's hydration from the same
+// response (a folder edit froze this toggle at its seeded default, and vice
+// versa a toggle click blanked the folder) — each silently reverting a
+// persisted value on the next save. See git history for the regression
+// tests that pin both directions.
 const documentDateFolders = ref(true);
+const documentDateFoldersEdited = ref(false);
 
 // Bundles the recording/note/transcription/device fields for
 // RecordingSettings' v-model. The setter fans a merged update back out to
@@ -215,8 +223,11 @@ onMounted(async () => {
     onLoaded: (cfg) => {
       // Same "don't clobber an edit with a late-resolving load" rule the
       // composable applies to documentsFolder itself — this field rides the
-      // same command's response, so it shares that guard.
-      if (!documentsFolderEdited.value) documentDateFolders.value = cfg.documentDateFolders;
+      // same command's response, but gates on its OWN edited flag (not
+      // documentsFolderEdited): the two controls are independently editable
+      // before this read resolves, so sharing one flag let an edit to
+      // EITHER block the OTHER's hydration from this same response.
+      if (!documentDateFoldersEdited.value) documentDateFolders.value = cfg.documentDateFolders;
     },
   });
 });
@@ -397,7 +408,7 @@ async function save() {
             data-testid="document-date-folders-toggle"
             type="checkbox"
             class="h-4 w-4 accent-violet-500"
-            @change="documentsFolderEdited = true"
+            @change="documentDateFoldersEdited = true"
           >
         </div>
       </div>
