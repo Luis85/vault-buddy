@@ -125,6 +125,24 @@ export interface AudioDevices {
   outputs: AudioDevice[];
 }
 
+/** The controlled bundle RecordingSettings.vue edits and RecordingConfigTab
+ * owns — every capture-config field the UI exposes. `mode` is a pass-through
+ * the tab keeps outside this bundle (the UI can't edit it). */
+export interface RecordingSettingsValue {
+  meetingFolder: string;
+  voiceNoteFolder: string;
+  bitrateKbps: number;
+  createNote: boolean;
+  followUpTemplate: boolean;
+  inputDevice: string;
+  outputDevice: string;
+  transcribe: boolean;
+  transcriptionModel: string;
+  transcriptionLanguage: string;
+  transcriptTimestamps: boolean;
+  recordingDateFolders: boolean;
+}
+
 export interface TaskItem {
   path: string;
   title: string;

@@ -8,6 +8,7 @@ import ActionPanel from "../src/components/ActionPanel.vue";
 import Tasks from "../src/components/Tasks.vue";
 import { useCaptureStore } from "../src/stores/capture";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useSettingsStatusStore } from "../src/stores/settingsStatus";
 import { useVaultsStore } from "../src/stores/vaults";
 
 const sampleVaults = [
@@ -602,5 +603,54 @@ describe("ActionPanel", () => {
     await wrapper.get('[data-testid="back-button"]').trigger("click");
     expect(store.view).toBe("list");
     expect(store.pendingImportPath).toBeNull();
+  });
+});
+
+describe("ActionPanel save indicator", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => clearMocks());
+
+  it("shows the transient save status only in a settings view", async () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    store.openSettings(); // view = "settings"
+    const status = useSettingsStatusStore();
+    status.saving(1);
+    const wrapper = mount(ActionPanel, { global: { stubs: { BuddySettings: true } } });
+    expect(wrapper.get('[data-testid="save-status"]').text()).toContain("Saving");
+    status.saved(1);
+    await flushPromises();
+    expect(wrapper.get('[data-testid="save-status"]').text()).toContain("Saved");
+  });
+
+  it("holds the error label when a save fails", () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    store.openSettings();
+    useSettingsStatusStore().failed(1, "disk full");
+    const wrapper = mount(ActionPanel, { global: { stubs: { BuddySettings: true } } });
+    expect(wrapper.get('[data-testid="save-status"]').text()).toContain("Couldn't save");
+  });
+
+  it("hides the indicator on the vault list view", () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    store.vaults = sampleVaults;
+    useSettingsStatusStore().saving(1);
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="save-status"]').exists()).toBe(false);
+  });
+
+  it("resets the status when the view changes", async () => {
+    const store = useVaultsStore();
+    store.loaded = true;
+    store.openSettings();
+    const status = useSettingsStatusStore();
+    status.failed(1, "boom");
+    const wrapper = mount(ActionPanel, { global: { stubs: { BuddySettings: true } } });
+    store.showList();
+    await flushPromises();
+    expect(status.state).toBe("idle");
+    void wrapper;
   });
 });

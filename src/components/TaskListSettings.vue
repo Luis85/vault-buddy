@@ -2,40 +2,41 @@
 import { invoke } from "@tauri-apps/api/core";
 import { onMounted, ref, watch } from "vue";
 
+import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import type { TasksConfig } from "../types";
 import { orderLists } from "../utils/taskSections";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // The per-vault lists settings object (defaultList + listOrder), rendered
-// inside the Vault settings view below the Tasks folder. Self-contained
-// (own load/save/error — the McpSettings/DocumentImportSettings precedent)
-// so CaptureSettings only mounts it. Folders on disk stay the source of
-// truth for which lists EXIST; this card only edits preferences about them.
+// inside the Vault settings Tasks tab. Self-contained (own load) and
+// auto-saved: a default-list pick or a reorder saves immediately through
+// set_task_lists_config. Folders on disk stay the source of truth for which
+// lists exist; this card only edits preferences about them.
 const props = defineProps<{ vaultId: string }>();
+// Surfaced so the parent (TasksConfigTab) can fence the tasks-folder input
+// while a list save is in flight — a folder change must not overlap a list
+// save, or the late list write lands old-root preferences on the new root.
+const emit = defineEmits<{ "saving-change": [value: boolean] }>();
 
 const loading = ref(true);
 const defaultList = ref("");
 // The vault's lists in effective display order (listOrder first, the rest
 // alphabetical — exactly what the sections and pickers render). Reordering
-// edits this array; Save persists it as the new listOrder.
+// edits this array; a save persists it as the new listOrder.
 const order = ref<string[]>([]);
-const saveState = ref<"idle" | "saving" | "saved">("idle");
-const error = ref<string | null>(null);
-// Monotonic edit counter (the Search view's stale-response-ticket pattern):
-// every edit bumps it, so a save that resolves can tell whether the controls
-// still match what it persisted.
-const editGen = ref(0);
 
-// Any edit bumps the generation and clears a stale "Saved" acknowledgement —
-// otherwise the UI keeps showing "Saved" over an unpersisted change
-// (default-list pick OR a reorder), so a user could navigate away thinking it
-// was saved. Covers both fields uniformly; the onMounted assignment fires this
-// while saveState is "idle", a harmless generation bump.
-watch([defaultList, order], () => {
-  editGen.value += 1;
-  if (saveState.value === "saved") saveState.value = "idle";
-});
+const autosave = useAutosave(
+  async () => {
+    await invoke("set_task_lists_config", {
+      id: props.vaultId,
+      defaultList: defaultList.value || null,
+      listOrder: order.value,
+    });
+  },
+  { label: "task lists" },
+);
+watch(autosave.saving, (value) => emit("saving-change", value));
 
 onMounted(async () => {
   try {
@@ -49,7 +50,7 @@ onMounted(async () => {
       Array.isArray(cfg?.listOrder) ? cfg.listOrder : [],
     );
   } catch (e) {
-    // Read failures degrade to an empty card (log-only) — the save still
+    // Read failures degrade to an empty card (log-only) — a later save still
     // field-errors if attempted, so nothing is silently lost.
     logWarning(`task list settings load failed: ${String(e)}`);
   } finally {
@@ -57,35 +58,19 @@ onMounted(async () => {
   }
 });
 
+// The picker and the reorder buttons fire only on user action (onMounted
+// assigns the refs directly), so saveNow() here never fires on load.
+function onDefaultChange(value: string) {
+  defaultList.value = value;
+  autosave.saveNow();
+}
 function move(index: number, delta: -1 | 1) {
   const target = index + delta;
   if (target < 0 || target >= order.value.length) return;
   const next = [...order.value];
   [next[index], next[target]] = [next[target], next[index]];
-  order.value = next; // the [defaultList, order] watcher clears a stale "Saved"
-}
-
-async function save() {
-  if (saveState.value === "saving") return;
-  saveState.value = "saving";
-  error.value = null;
-  // Snapshot the generation we're persisting. If the user edits a control
-  // while the request is in flight, the resolved save no longer reflects the
-  // current form, so it must NOT claim "Saved" (the watcher can't clear a
-  // "saving" state, so the stale success would otherwise stick).
-  const savedGen = editGen.value;
-  try {
-    await invoke("set_task_lists_config", {
-      id: props.vaultId,
-      defaultList: defaultList.value || null,
-      listOrder: order.value,
-    });
-    saveState.value = editGen.value === savedGen ? "saved" : "idle";
-  } catch (e) {
-    saveState.value = "idle";
-    error.value = String(e);
-    logWarning(`set_task_lists_config failed: ${String(e)}`);
-  }
+  order.value = next;
+  autosave.saveNow();
 }
 </script>
 
@@ -107,11 +92,12 @@ async function save() {
           <span class="block text-xs text-slate-500">Where a task lands when you don't pick a list</span>
         </label>
         <TaskListPicker
-          v-model="defaultList"
+          :model-value="defaultList"
           :lists="order"
           :allow-create="false"
           aria-label="Default list for new tasks"
           data-testid="default-list"
+          @update:model-value="onDefaultChange"
         />
         <template v-if="order.length > 1">
           <p class="mb-1 mt-2 text-sm text-slate-200">
@@ -155,27 +141,12 @@ async function save() {
         >
           No lists yet — create one from the tasks view's Add options.
         </p>
-        <div class="mt-2 flex items-center gap-2">
-          <button
-            type="button"
-            data-testid="task-lists-save"
-            :disabled="saveState === 'saving'"
-            class="cursor-pointer rounded-lg bg-violet-600/80 px-2 py-0.5 text-xs font-semibold text-white hover:bg-violet-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-            @click="save"
-          >
-            {{ saveState === "saving" ? "Saving…" : "Save lists settings" }}
-          </button>
-          <span
-            v-if="saveState === 'saved'"
-            class="text-xs text-emerald-300"
-          >Saved</span>
-        </div>
         <p
-          v-if="error"
+          v-if="autosave.error.value"
           data-testid="task-lists-error"
           class="mt-1 text-xs text-red-300"
         >
-          {{ error }}
+          {{ autosave.error.value }}
         </p>
       </template>
     </div>

@@ -14,6 +14,9 @@ defineProps<{
   errorTestid: string;
   modelValue: string;
   error: string | null;
+  // Disabled while a sibling save must not be raced (e.g. the Tasks tab locks
+  // the folder input during an in-flight list save). Optional; defaults off.
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -48,8 +51,9 @@ function onInput(event: Event) {
         :value="modelValue"
         :placeholder="placeholder"
         :aria-label="label"
+        :disabled="disabled"
         type="text"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none disabled:cursor-default disabled:opacity-50"
         @input="onInput"
       >
       <p
