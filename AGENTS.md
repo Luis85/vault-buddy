@@ -103,11 +103,12 @@ vault-buddy/
 │   ├── tauri.conf.json         # the 3 windows, updater endpoint, version
 │   ├── capabilities/           # single default capability (all 3 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
-│   │                           #   capture_commands.rs, transcription.rs, task_commands.rs,
+│   │                           #   capture_commands.rs, capture_config_commands.rs,
+│   │                           #   transcription.rs, task_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
 │   │                           #   tray.rs, diagnostics.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
-│   │                           #   transcript, recordings, capture_{config,note,paths},
+│   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
 │   │                           #   mcp_config + document_import_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
@@ -252,12 +253,13 @@ Keep this table in sync when adding/removing commands.
 | Defined in | Commands |
 | --- | --- |
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
-| `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `get_capture_config`, `set_capture_config`, `list_audio_devices` *(async)* |
+| `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
+| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config`, `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -560,11 +562,43 @@ found the failure it prevents:
   exclusive-created, finalization uses `rename_noreplace` (hard-link based;
   `std::fs::rename` replaces on every platform) with suffix-retry, and
   companion notes are written atomically via owned `.vault-buddy.tmp` temps.
-- **Recovery touches only our own files**: dated `YYYY/MM` layout only,
-  capture-pattern basenames only (`is_capture_base` lives beside
-  `base_name` with round-trip tests), marker-suffixed note temps only;
-  staleness-gated, postponed while a recording is active, retried while
-  work is pending.
+- **Per-mode recording folders.** `VaultCaptureConfig` carries
+  `meeting_folder: Option<String>` (None → `"Meetings"`) and
+  `voice_note_folder: Option<String>` (None → `"Voice Notes"`) instead of one
+  unified folder; `folder_for(mode)` resolves either, and
+  `effective_recording_folder()` (= `folder_for(self.mode)`) is what
+  `start_capture` writes into for the active mode. `recording_roots()` is the
+  deduped union of both modes' effective folders — the set a scan must cover
+  to see every recording (Recordings list, transcription backfill, capture
+  recovery); the dedup is lexical (`normalize_folder`, split-and-rejoin),
+  which catches hand-edit collisions like `"Audio"` vs `"Audio/."` but not
+  symlink/case aliasing (GAP-58). A pre-split config's unified
+  `recordingFolder` is read as a **per-field** fallback (`meetingFolder ??
+  recordingFolder`, `voiceNoteFolder ?? recordingFolder`) so an upgrade seeds
+  both modes from the old value with no data loss; `serialize_vault_entry`
+  never re-writes `recordingFolder`, so it retires on the vault's next
+  config save.
+- **Flat vs. dated layout, per domain, per vault.** `recording_date_folders`
+  (bool, default `true`) picks whether NEW recordings land under the dated
+  `<folder>/YYYY/MM` (the long-standing default) or flat, directly in
+  `<folder>`; `capture_paths::capture_dir(root, date, dated)` is the one
+  branch point the recording write path (`start_capture`'s dated-folder call
+  site) uses, so the companion note and transcript sidecar — which share the
+  same `dir` — follow automatically. Every READ/recovery path is
+  **layout-agnostic** rather than migrated: `transcript::capture_mp3s` (the
+  walker shared by `recordings::list_recordings` and
+  `transcript::pending_transcriptions`) and capture recovery's
+  `recover_root` (`capture/src/recovery.rs`) both check the flat root first,
+  then descend digit-named `YYYY`/`MM` dirs — the same ownership gates
+  (`is_capture_base`, owned-temp markers, no symlink follow) apply at both
+  levels. Flipping the toggle **never moves or rewrites existing files**
+  (that would be a mass vault mutation); old- and new-layout recordings
+  simply coexist and are both always found.
+- **Recovery touches only our own files**: the flat root **and** the dated
+  `YYYY/MM` layout (see the layout toggle above), capture-pattern basenames
+  only (`is_capture_base` lives beside `base_name` with round-trip tests),
+  marker-suffixed note temps only; staleness-gated, postponed while a
+  recording is active, retried while work is pending.
 - **The buddy is the recording indicator**: all hide paths funnel through
   `tray::hide_buddy` (the single guarded chokepoint); quit/close finalize
   on worker threads — never block the event loop — and the app exits only
@@ -640,6 +674,15 @@ because a review found the failure it prevents:
   and an **absolute** source — every OUTPUT path is relative so rewritten
   image links stay valid after publish; `--sandbox` blocks untrusted-doc
   resource fetches and the RTS heap cap bounds memory a timeout can't.
+- **Flat vs. dated layout (`document_date_folders`).** The same per-vault
+  toggle and `capture_paths::capture_dir` precedent as the capture domain:
+  `convert_blocking` targets the documents root directly (flat) instead of
+  `<root>/YYYY/MM` when the vault's `document_date_folders` is off; the
+  staging dir and the publish target both land in whichever dir was chosen.
+  Recovery is layout-agnostic (see Owned-temp recovery below), so flipping
+  the toggle never strands an orphan staged under the other shape, and —
+  like the recording folders — it only changes where NEW imports land, never
+  moving or rewriting an already-published document.
 - **Never clobber; publish is media-first with rollback.** Output lands at
   `<vault>/<documents_folder default "Documents">/YYYY/MM/YYYY-MM-DD <Original
   Name>.md` with `type: Document` / `tags: [vault-buddy-import]` /
@@ -661,8 +704,11 @@ because a review found the failure it prevents:
   swap-in race — the same discipline `start_capture` uses).
 - **Owned-temp recovery.** Interrupted conversions leave a hidden
   `.vault-buddy.tmp.import` staging dir; `run_import_recovery` (wired in
-  `setup` after capture recovery) sweeps only those — dated `YYYY/MM` layout,
-  canonical containment at every dated level (symlinks AND Windows junctions),
+  `setup` after capture recovery) sweeps BOTH layouts — directly at the
+  documents root (flat) and across the `YYYY/MM` subtree (dated) — since a
+  vault can accumulate orphans in either shape depending on what
+  `document_date_folders` was set to when a conversion crashed. Canonical
+  containment at every dated level (symlinks AND Windows junctions),
   deleting the owned staging ENTRY, never a symlink's resolved target — and
   reschedules for fresh orphans younger than the staleness window, mirroring
   capture's retry loop.
@@ -727,8 +773,10 @@ note (`core::transcript`):
   `Complete`, so a forced job that fails mid-flight leaves the original intact
   (the UI confirms before replacing a finished transcript). (Note: the panel
   currently routes all retries through `retranscribe`; see docs/Gaps.md.)
-- **Recovery backfill.** `pending_transcriptions` scans the dated `YYYY/MM`
-  capture layout for capture-named MP3s whose sidecar is missing, or a `pending`
+- **Recovery backfill.** `pending_transcriptions` scans the flat root **and**
+  the dated `YYYY/MM` capture layout (the same `capture_mp3s` walker
+  `recordings::list_recordings` uses, so the two always agree on what
+  exists) for capture-named MP3s whose sidecar is missing, or a `pending`
   placeholder from an attempt that didn't get to finish (e.g. a crash
   mid-download/mid-inference), and enqueues them — same layout/basename
   discipline as the recording recovery. A `failed` sidecar is deliberately
@@ -739,8 +787,9 @@ note (`core::transcript`):
 
 The **recordings list** (`core::recordings`) is a read-only surface over the same
 folders: `recording_roots` enumerates a vault's capture folders, `list_recordings`
-scans them and reads each companion note's frontmatter (`note_field` for `type` /
-title) plus `transcript_status`, returning `RecordingEntry` rows the panel groups
+scans each one's flat root and dated `YYYY/MM` (`capture_mp3s`) and reads each
+companion note's frontmatter (`note_field` for `type` / title) plus
+`transcript_status`, returning `RecordingEntry` rows the panel groups
 by type. Opening a row hands off to Obsidian via `open_recording` /
 `open_transcript` (`obsidian://`, read-only, `uri::launch`-logged) — it never
 writes.

@@ -20,6 +20,14 @@ _Avoid_: Journal entry, today's note
 The act of recording a piece of knowledge (voice, screenshot, clipboard, meeting, etc.) as the first stage of the Knowledge Lifecycle, before it has been turned into structured knowledge.
 _Avoid_: Recording — a Capture is not necessarily audio
 
+**Dated layout**:
+Vault Buddy's default on-disk layout for a capture/import domain: files land under `<folder>/YYYY/MM/`. The timestamped base name still encodes the full date, so the year/month folders are organizational, not identifying.
+_Avoid_: Archive structure — the folders exist for browsing, not retention policy
+
+**Flat layout**:
+The opt-in alternative to the Dated layout: files live directly in `<folder>`, with no year/month subfolders. It is a per-domain, per-vault choice (Recording and Document Import each have their own toggle) that changes only where **new** files are written — a domain's existing files stay exactly where they are and are still found regardless of which layout is active.
+_Avoid_: Migration — switching layouts never moves or rewrites existing files
+
 **Knowledge Lifecycle**:
 The seven-stage journey every piece of information follows inside Vault Buddy: Capture → Process → Organize → Act → Retrieve → Automate → Learn. Completing an action produces new knowledge, making the journey continuous.
 _Avoid_: Workflow — a Workflow is one concrete automation; the Lifecycle is the overarching journey every capability serves
