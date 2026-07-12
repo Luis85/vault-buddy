@@ -674,6 +674,16 @@ because a review found the failure it prevents:
   and an **absolute** source — every OUTPUT path is relative so rewritten
   image links stay valid after publish; `--sandbox` blocks untrusted-doc
   resource fetches and the RTS heap cap bounds memory a timeout can't.
+- **Pandoc children spawn headless (Windows).** `pandoc.rs::pandoc_command` —
+  the single chokepoint both the `--version` probe and the conversion build
+  their `Command` through — sets `CREATE_NO_WINDOW` (`child_creation_flags`) on
+  Windows. This app is `windows_subsystem = "windows"` in release, so it owns
+  no console; spawning `pandoc.exe` with default flags pops a NEW console
+  window that flashes AND grabs foreground focus, which blurs the panel and
+  trips its focus-out auto-hide (`schedule_focus_out_check`). The visible
+  symptom was opening Buddy settings (its Integrations tab mounts
+  `DocumentImportSettings`, which probes Pandoc on mount) flashing a terminal
+  then closing the settings panel. Piped stdout/stderr are unaffected.
 - **Flat vs. dated layout (`document_date_folders`).** The same per-vault
   toggle and `capture_paths::capture_dir` precedent as the capture domain:
   `convert_blocking` targets the documents root directly (flat) instead of

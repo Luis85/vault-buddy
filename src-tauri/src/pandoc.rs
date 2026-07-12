@@ -158,12 +158,45 @@ fn pandoc_candidates() -> Vec<String> {
     )
 }
 
+/// Windows process-creation flags for a spawned Pandoc child: `CREATE_NO_WINDOW`
+/// (0x0800_0000) on Windows, 0 elsewhere.
+///
+/// Vault Buddy is a GUI-subsystem app in release (`windows_subsystem =
+/// "windows"` in main.rs), so it owns no console. Spawning a console program
+/// like `pandoc.exe` with the default flags makes Windows allocate a NEW
+/// console window that flashes on screen AND grabs foreground focus. That focus
+/// theft blurs the panel and trips its focus-out auto-hide
+/// (`schedule_focus_out_check` in lib.rs) — so the Pandoc `--version` probe,
+/// which runs the moment `DocumentImportSettings` mounts (opening Buddy
+/// settings, the record chooser, or the import picker), flashed a terminal and
+/// slammed the settings panel shut. Spawning headless removes the window
+/// entirely; the piped stdout/stderr `run_capturing` relies on are unaffected.
+///
+/// `cfg!(windows)` (not `#[cfg]`) so both arms compile everywhere and the flag
+/// value stays unit-testable on Linux, where the shell crate's tests run.
+#[cfg_attr(not(windows), allow(dead_code))]
+const fn child_creation_flags() -> u32 {
+    if cfg!(windows) {
+        0x0800_0000 // CREATE_NO_WINDOW
+    } else {
+        0
+    }
+}
+
 /// Build a Command with the registry-augmented PATH so PATH lookup sees a
-/// fresh install.
+/// fresh install. On Windows the child is spawned headless (see
+/// `child_creation_flags`) so no probe or conversion pops a console window.
 pub(crate) fn pandoc_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     if let Some(path) = augmented_path() {
         cmd.env("PATH", path);
+    }
+    // One chokepoint for the no-console-window flag: BOTH the `--version` probe
+    // and the conversion build their Command here, so both inherit it.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(child_creation_flags());
     }
     cmd
 }
@@ -451,6 +484,27 @@ mod tests {
         assert!(sandbox_supported(2, 15));
         assert!(sandbox_supported(3, 1));
         assert!(sandbox_supported(2, 20));
+    }
+
+    #[test]
+    fn pandoc_children_are_spawned_headless_on_windows_only() {
+        // Regression (buddy-settings crash): Vault Buddy is a GUI-subsystem app
+        // in release (`windows_subsystem = "windows"`), so it owns no console.
+        // Spawning `pandoc.exe` WITHOUT CREATE_NO_WINDOW makes Windows allocate
+        // a NEW console window that flashes on screen AND grabs foreground
+        // focus. That focus theft blurs the panel and trips its focus-out
+        // auto-hide (schedule_focus_out_check in lib.rs) — so the `--version`
+        // probe that runs the moment DocumentImportSettings mounts (opening
+        // Buddy settings / the record chooser / the import picker) flashed a
+        // terminal and slammed the settings panel shut. Lock the flag value per
+        // platform: CREATE_NO_WINDOW on Windows, and never a stray flag on Unix.
+        if cfg!(windows) {
+            // 0x0800_0000 == winapi CREATE_NO_WINDOW.
+            assert_eq!(child_creation_flags(), 0x0800_0000);
+        } else {
+            // No console-window concept off Windows — spawn with default flags.
+            assert_eq!(child_creation_flags(), 0);
+        }
     }
 
     #[test]
