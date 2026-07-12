@@ -5,20 +5,16 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useOptionalFolderField } from "../composables/useOptionalFolderField";
 import { logWarning } from "../logging";
 import type {
-  AudioDevice,
   AudioDevices,
   CaptureConfig,
   DocumentsConfig,
   TasksConfig,
 } from "../types";
-import SelectMenu from "./SelectMenu.vue";
+import RecordingSettings from "./RecordingSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
-import TranscriptionSettings from "./TranscriptionSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 const props = defineProps<{ vaultId: string }>();
-
-const BITRATES = [128, 160, 192];
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -83,51 +79,43 @@ const documentsFolderError = ref<string | null>(null);
 const documentsFolderLoaded = ref(false);
 const documentsFolderEdited = ref(false);
 
-// A configured device that is not currently connected must stay
-// selectable (unplugging a headset must not silently rewrite the
-// config) — it is surfaced with a "(not connected)" suffix instead.
-function withConfigured(list: AudioDevice[], configured: string) {
-  const options = list.map((d) => ({ value: d.name, label: d.name }));
-  if (configured && !list.some((d) => d.name === configured)) {
-    options.push({ value: configured, label: `${configured} (not connected)` });
-  }
-  return options;
-}
-const inputOptions = computed(() =>
-  withConfigured(devices.value.inputs, inputDevice.value),
-);
-const outputOptions = computed(() =>
-  withConfigured(devices.value.outputs, outputDevice.value),
-);
-
-// Option list for the bitrate SelectMenu dropdown ({ value, label }).
-const bitrateOptions = BITRATES.map((b) => ({ value: b, label: `${b} kbps` }));
-const inputMenuOptions = computed(() => [
-  { value: "", label: "System default" },
-  ...inputOptions.value,
-]);
-const outputMenuOptions = computed(() => [
-  { value: "", label: "System default" },
-  ...outputOptions.value,
-]);
-
-// Bundles the four transcription fields for TranscriptionSettings' v-model.
-// The setter fans a merged update back out to the individual refs so
-// save()/onMounted()/watch (below) keep working on them unchanged — this
-// computed is purely an adapter for the extracted controlled component.
-const transcriptionSettings = computed({
+// Bundles the recording/note/transcription/device fields for
+// RecordingSettings' v-model. The setter fans a merged update back out to
+// the individual refs so save()/onMounted()/watch (below) keep working on
+// them unchanged — this computed is purely an adapter for the extracted
+// controlled component, same idiom as the former transcriptionSettings
+// adapter it replaces (RecordingSettings now owns that nested adapter).
+const recordingBundle = computed({
   get: () => ({
+    recordingFolder: recordingFolder.value,
+    bitrateKbps: bitrateKbps.value,
+    createNote: createNote.value,
+    followUpTemplate: followUpTemplate.value,
+    inputDevice: inputDevice.value,
+    outputDevice: outputDevice.value,
     transcribe: transcribe.value,
     transcriptionModel: transcriptionModel.value,
     transcriptionLanguage: transcriptionLanguage.value,
     transcriptTimestamps: transcriptTimestamps.value,
   }),
   set: (v: {
+    recordingFolder: string;
+    bitrateKbps: number;
+    createNote: boolean;
+    followUpTemplate: boolean;
+    inputDevice: string;
+    outputDevice: string;
     transcribe: boolean;
     transcriptionModel: string;
     transcriptionLanguage: string;
     transcriptTimestamps: boolean;
   }) => {
+    recordingFolder.value = v.recordingFolder;
+    bitrateKbps.value = v.bitrateKbps;
+    createNote.value = v.createNote;
+    followUpTemplate.value = v.followUpTemplate;
+    inputDevice.value = v.inputDevice;
+    outputDevice.value = v.outputDevice;
     transcribe.value = v.transcribe;
     transcriptionModel.value = v.transcriptionModel;
     transcriptionLanguage.value = v.transcriptionLanguage;
@@ -301,139 +289,11 @@ async function save() {
     class="flex flex-col gap-3"
     @submit.prevent="save"
   >
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Recording
-      </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <div>
-          <label
-            class="mb-1 block text-sm text-slate-200"
-            for="capture-folder"
-          >
-            Recording folder
-            <span class="block text-xs text-slate-500">Inside the vault</span>
-          </label>
-          <input
-            id="capture-folder"
-            v-model="recordingFolder"
-            data-testid="folder-input"
-            type="text"
-            placeholder="Meetings or Voice Notes"
-            class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-          >
-          <p
-            v-if="folderError"
-            data-testid="folder-error"
-            class="mt-1 text-xs text-red-300"
-          >
-            {{ folderError }}
-          </p>
-        </div>
-        <div class="flex items-center justify-between gap-2">
-          <label
-            for="capture-bitrate"
-            class="text-sm text-slate-200"
-          >Bitrate</label>
-          <SelectMenu
-            id="capture-bitrate"
-            v-model="bitrateKbps"
-            :options="bitrateOptions"
-            data-testid="bitrate-select"
-          />
-        </div>
-      </div>
-    </section>
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Companion note
-      </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <div class="flex items-center justify-between">
-          <label
-            for="capture-note-toggle"
-            class="text-sm text-slate-200"
-          >
-            Companion note
-            <span class="block text-xs text-slate-500">.md with metadata + embed</span>
-          </label>
-          <input
-            id="capture-note-toggle"
-            v-model="createNote"
-            data-testid="note-toggle"
-            type="checkbox"
-            class="h-4 w-4 accent-violet-500"
-          >
-        </div>
-        <div
-          v-if="createNote"
-          class="flex items-center justify-between border-l border-white/10 pl-3"
-        >
-          <label
-            for="capture-follow-up-toggle"
-            class="text-sm text-slate-200"
-          >
-            Follow-up template
-            <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
-          </label>
-          <input
-            id="capture-follow-up-toggle"
-            v-model="followUpTemplate"
-            data-testid="follow-up-toggle"
-            type="checkbox"
-            class="h-4 w-4 accent-violet-500"
-          >
-        </div>
-      </div>
-    </section>
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Transcription
-      </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <TranscriptionSettings v-model="transcriptionSettings" />
-      </div>
-    </section>
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Audio devices
-      </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <div>
-          <label
-            class="mb-1 block text-sm text-slate-200"
-            for="capture-input-device"
-          >
-            Microphone
-          </label>
-          <SelectMenu
-            id="capture-input-device"
-            v-model="inputDevice"
-            :options="inputMenuOptions"
-            aria-label="Microphone"
-            data-testid="input-device-select"
-            wide
-          />
-        </div>
-        <div>
-          <label
-            class="mb-1 block text-sm text-slate-200"
-            for="capture-output-device"
-          >
-            Desktop audio from
-            <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
-          </label>
-          <SelectMenu
-            id="capture-output-device"
-            v-model="outputDevice"
-            :options="outputMenuOptions"
-            aria-label="Desktop audio device"
-            data-testid="output-device-select"
-            wide
-          />
-        </div>
-      </div>
-    </section>
+    <RecordingSettings
+      v-model="recordingBundle"
+      :devices="devices"
+      :folder-error="folderError"
+    />
     <VaultFolderSetting
       v-model="tasksFolder"
       heading="Tasks"
