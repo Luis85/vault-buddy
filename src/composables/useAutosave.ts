@@ -39,6 +39,7 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false; // an invoke is awaiting
   let pending = false; // a save was requested mid-flight → run once more
+  let retired = false; // component unmounted — stop reporting to the shared header
 
   function clearTimer() {
     if (timer !== null) {
@@ -56,15 +57,18 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
     }
     running = true;
     saving.value = true;
-    status.saving(owner);
+    // A retired (unmounted) owner still persists a pending write, but reports
+    // nothing to the shared header — its completion must not strand a stale
+    // "Saved ✓"/"Couldn't save" in whatever view is showing when it settles.
+    if (!retired) status.saving(owner);
     error.value = null;
     try {
       await save();
-      status.saved(owner);
+      if (!retired) status.saved(owner);
     } catch (e) {
       const message = String(e);
       error.value = message;
-      status.failed(owner, message);
+      if (!retired) status.failed(owner, message);
       logWarning(`${opts.label ?? "settings"} autosave failed: ${message}`);
     } finally {
       running = false;
@@ -92,13 +96,16 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
 
   if (getCurrentInstance()) {
     onBeforeUnmount(() => {
+      // Retire first so the flush below (and any save already awaiting) reports
+      // nothing to the shared header once the component is gone.
+      retired = true;
       // A pending debounced save must not die with the component when the
-      // settings view navigates away (ActionPanel v-if-unmounts it).
+      // settings view navigates away (ActionPanel v-if-unmounts it) — persist
+      // it, silently.
       if (timer !== null) void run();
-      // Retire this owner from the shared status so a failure it reported isn't
-      // stranded in the header after the component (and its inline error) is
-      // gone — the TaskListSettings card unmounts on a folder change, and its
-      // remount gets a fresh owner that couldn't otherwise clear the old error.
+      // Drop this owner's in-flight/error markers so nothing it reported before
+      // unmount lingers (the TaskListSettings card unmounts on a folder change;
+      // its remount gets a fresh owner that couldn't otherwise clear them).
       status.release(owner);
     });
   }

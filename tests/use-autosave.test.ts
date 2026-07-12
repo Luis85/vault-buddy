@@ -1,6 +1,7 @@
-import { flushPromises } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent, h } from "vue";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 import { useAutosave } from "../src/composables/useAutosave";
@@ -85,6 +86,32 @@ describe("useAutosave", () => {
     await flushPromises();
     expect(status.state).toBe("error"); // still error, not "saved"
     expect(status.error).toBe("bad folder");
+  });
+
+  it("ignores a save completion after its component unmounts (Codex #55)", async () => {
+    // On a slow vault a save can still be awaiting when the user navigates away.
+    // Once the component unmounts (owner retired), its late saved()/failed()
+    // must NOT strand a stale "Saved ✓"/"Couldn't save" in a different view's
+    // header, and its in-flight marker must be dropped so nothing sticks on
+    // "Saving…".
+    const status = useSettingsStatusStore();
+    let resolveSave!: () => void;
+    const save = vi.fn().mockImplementation(() => new Promise<void>((r) => (resolveSave = r)));
+    let api!: ReturnType<typeof useAutosave>;
+    const Comp = defineComponent({
+      setup() {
+        api = useAutosave(save);
+        return () => h("div");
+      },
+    });
+    const wrapper = mount(Comp);
+    api.saveNow(); // slow save starts and hangs
+    expect(status.state).toBe("saving");
+    wrapper.unmount(); // component gone → owner retired + released
+    expect(status.state).toBe("idle"); // in-flight marker dropped
+    resolveSave(); // the save finally settles, after unmount
+    await flushPromises();
+    expect(status.state).toBe("idle"); // no stale report leaked into the header
   });
 
   it("coalesces a save requested mid-flight into exactly one trailing run", async () => {

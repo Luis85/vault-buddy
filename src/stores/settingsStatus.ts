@@ -18,17 +18,20 @@ function clearFade() {
 // The panel header's transient save indicator, shared across every auto-saving
 // settings field so one indicator covers the whole view. Because the Vault
 // settings tabs stay mounted (v-show), several useAutosave instances report
-// here at once, so failures are tracked PER OWNER: a success from one field
-// can't clear another field's still-unresolved error (Codex PR #55). `state`
-// and `error` are the public fields the header reads; the bookkeeping below
-// derives them via recompute().
+// here at once, so in-flight saves AND failures are tracked PER OWNER: a
+// success from one field can't clear another field's still-unresolved error,
+// and an unmounted field can be retired cleanly (Codex PR #55). `state` and
+// `error` are the public fields the header reads; the bookkeeping below derives
+// them via recompute().
 export const useSettingsStatusStore = defineStore("settingsStatus", {
   state: () => ({
     state: "idle" as SaveState,
     error: null as string | null,
-    // How many saves are in flight, and the outstanding failures keyed by the
-    // reporting useAutosave instance's owner id.
-    inFlight: 0,
+    // In-flight saves and outstanding failures, each keyed by the reporting
+    // useAutosave instance's owner id. Per-owner (not a global count) so
+    // release() can drop exactly one owner's markers without a late completion
+    // leaving a stranded "Saving…" or error.
+    savingOwners: {} as Record<number, true>,
     errorsByOwner: {} as Record<number, string>,
     // Drives the transient "Saved ✓" once nothing is failing or in flight.
     savedFlash: false,
@@ -44,12 +47,12 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
         return;
       }
       this.error = null;
-      if (this.inFlight > 0) this.state = "saving";
+      if (Object.keys(this.savingOwners).length > 0) this.state = "saving";
       else this.state = this.savedFlash ? "saved" : "idle";
     },
     saving(owner: number) {
       clearFade();
-      this.inFlight++;
+      this.savingOwners[owner] = true;
       // A retry drops this owner's prior failure before it re-attempts.
       delete this.errorsByOwner[owner];
       this.savedFlash = false;
@@ -57,7 +60,7 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
     },
     saved(owner: number) {
       clearFade();
-      this.inFlight = Math.max(0, this.inFlight - 1);
+      delete this.savingOwners[owner];
       delete this.errorsByOwner[owner];
       this.savedFlash = true;
       this.recompute();
@@ -76,22 +79,23 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
     // because a different field saved.
     failed(owner: number, message: string) {
       clearFade();
-      this.inFlight = Math.max(0, this.inFlight - 1);
+      delete this.savingOwners[owner];
       this.errorsByOwner[owner] = message;
       this.savedFlash = false;
       this.recompute();
     },
-    // Retire one owner from the shared status — called when its component
-    // unmounts, so a failure it reported doesn't linger in errorsByOwner after
-    // the component (and its inline error) is gone. A remount gets a fresh
-    // owner and otherwise could never clear the old one's error (Codex PR #55).
+    // Retire an unmounted owner: drop its in-flight AND error markers so a
+    // late-settling save can't strand status in the header (the component and
+    // its inline error are gone). useAutosave also stops reporting for a retired
+    // owner, so no later saved()/failed() re-adds a marker.
     release(owner: number) {
+      delete this.savingOwners[owner];
       delete this.errorsByOwner[owner];
       this.recompute();
     },
     reset() {
       clearFade();
-      this.inFlight = 0;
+      this.savingOwners = {};
       this.errorsByOwner = {};
       this.savedFlash = false;
       this.recompute();
