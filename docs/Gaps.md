@@ -275,7 +275,7 @@ tested.
   refactor away from being copied into a vault path. Reuse
   `write_atomic_replacing`.
 
-### GAP-58 · Low · `recording_roots` dedup is lexical, not canonical
+### GAP-61 · Low · `recording_roots` dedup is lexical, not canonical
 `src-tauri/core/src/vault_config.rs` (`normalize_folder` + `recording_roots`).
 The dedup compares lexically-normalized folder paths (splitting on `/` and
 `\`, dropping empty and `.` components), which catches hand-edit collisions
