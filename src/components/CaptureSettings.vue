@@ -97,6 +97,18 @@ const documentsFolderEdited = ref(false);
 // tests that pin both directions.
 const documentDateFolders = ref(true);
 const documentDateFoldersEdited = ref(false);
+// save() must not act on documentsFolder/documentDateFolders until THIS
+// mount's get_documents_config response has landed (or failed) — Save is
+// clickable well before then (the capture `loading` gate above flips on the
+// capture-config/devices Promise.all alone). Stashed here so save() can
+// await the SAME load onMounted kicked off below, rather than racing it:
+// loadOptionalField always resolves (it swallows read failures), so
+// awaiting it settles both documents fields one way or another before
+// save() reads them — closing the pending window where a checkbox-only
+// edit could be silently skipped (loaded=false, the folder's own edited
+// flag untouched) or a folder-only edit could save the still-seeded
+// default over a persisted toggle value the read hadn't hydrated yet.
+let documentsLoadPromise: Promise<void> | undefined;
 
 // Bundles the recording/note/transcription/device fields for
 // RecordingSettings' v-model. The setter fans a merged update back out to
@@ -214,7 +226,10 @@ onMounted(async () => {
     extract: (cfg) => cfg.tasksFolder,
     onPersisted: (persisted) => (savedTasksFolder.value = persisted),
   });
-  await loadOptionalField<DocumentsConfig>({
+  // Stored (not just awaited inline) so save() below can await this SAME
+  // load instead of reading documentsFolderLoaded/documentDateFolders while
+  // it may still be in flight.
+  documentsLoadPromise = loadOptionalField<DocumentsConfig>({
     cmd: "get_documents_config",
     editedRef: documentsFolderEdited,
     loadedRef: documentsFolderLoaded,
@@ -294,13 +309,26 @@ async function save() {
     savedTasksFolder.value = savingTasksFolder;
     listsCardNonce.value += 1;
   }
+  // Unlike tasks (a single field, whose read is left to race independently —
+  // see the "does not write the tasks config while its read is still in
+  // flight" test), documents carries TWO fields off ONE command — the folder
+  // text AND the checkbox. Save is clickable before get_documents_config
+  // resolves (the same pending window tasks has), so this write waits for
+  // THIS mount's load to settle first (success or failure — loadOptionalField
+  // swallows read errors, so this always resolves): reading either field
+  // before that settles risked sending the still-seeded default
+  // documentDateFolders over a persisted value the read hadn't hydrated yet
+  // (a silent clobber). The edited check below ALSO covers a checkbox-only
+  // edit (previously gated on documentsFolderEdited alone), so toggling just
+  // the checkbox is never mistaken for "nothing changed" and dropped.
+  if (documentsLoadPromise) await documentsLoadPromise;
   if (
     await saveOptionalField({
       cmd: "set_documents_config",
       key: "documentsFolder",
       value: documentsFolder.value,
       loaded: documentsFolderLoaded.value,
-      edited: documentsFolderEdited.value,
+      edited: documentsFolderEdited.value || documentDateFoldersEdited.value,
       errorRef: documentsFolderError,
       extra: { documentDateFolders: documentDateFolders.value },
     })

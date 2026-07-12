@@ -464,6 +464,67 @@ describe("CaptureSettings", () => {
     });
   });
 
+  it("saves a checkbox-only edit even though the documents-config read was still in flight at save time (P2 drop regression)", async () => {
+    // Regression: Save becomes clickable as soon as the capture-config
+    // Promise.all resolves — well before get_documents_config returns.
+    // Toggling ONLY the checkbox (the folder text stays untouched) and
+    // saving while that read is still pending used to gate the WHOLE
+    // documents save off documentsFolderEdited alone (loaded=false,
+    // edited=false — the checkbox's own edit wasn't counted), skipping
+    // set_documents_config entirely and silently dropping the checkbox
+    // change while the form still showed "Saved ✓".
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="document-date-folders-toggle"]').setValue(false);
+    await wrapper.get("form").trigger("submit");
+    // Let save() run as far as it can while the read is still pending (this
+    // is the pending-load window itself) before resolving it — otherwise the
+    // resolve could race ahead of save()'s own gate check and mask the bug.
+    await flushPromises();
+    resolveDocuments({ documentsFolder: null, documentDateFolders: true });
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: null,
+      documentDateFolders: false,
+    });
+  });
+
+  it("does not clobber a persisted documentDateFolders with the seeded default when the folder is edited before the read resolves (P2 clobber regression)", async () => {
+    // Regression: editing the folder text (which already satisfies the
+    // loaded-or-edited gate via documentsFolderEdited) while
+    // get_documents_config is still pending used to save IMMEDIATELY, with
+    // documentDateFolders still at its seeded default (true) rather than the
+    // disk's real value — overwriting a persisted "flat" (false) choice the
+    // user never touched.
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="documents-folder-input"]').setValue("Mine");
+    await wrapper.get("form").trigger("submit");
+    // Same reasoning as the drop-regression test above: give save() a chance
+    // to act while the read is still unresolved before resolving it.
+    await flushPromises();
+    resolveDocuments({ documentsFolder: "Mine", documentDateFolders: false });
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Mine",
+      documentDateFolders: false,
+    });
+  });
+
   it("loads the tasks folder and saves it with the form Save (no dedicated button)", async () => {
     const { wrapper, calls } = await mountLoaded({ tasksFolder: "Inbox/Tasks" });
     const input = wrapper.get('[data-testid="tasks-folder-input"]');
