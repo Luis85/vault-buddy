@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
@@ -14,6 +14,10 @@ import TaskListPicker from "./TaskListPicker.vue";
 // set_task_lists_config. Folders on disk stay the source of truth for which
 // lists exist; this card only edits preferences about them.
 const props = defineProps<{ vaultId: string }>();
+// Surfaced so the parent (TasksConfigTab) can fence the tasks-folder input
+// while a list save is in flight — a folder change must not overlap a list
+// save, or the late list write lands old-root preferences on the new root.
+const emit = defineEmits<{ "saving-change": [value: boolean] }>();
 
 const loading = ref(true);
 const defaultList = ref("");
@@ -32,6 +36,7 @@ const autosave = useAutosave(
   },
   { label: "task lists" },
 );
+watch(autosave.saving, (value) => emit("saving-change", value));
 
 onMounted(async () => {
   try {

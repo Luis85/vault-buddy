@@ -22,6 +22,12 @@ const tasksFolder = ref("");
 // default/order save from the stale card would target the old root.
 const savedFolder = ref<string | null>(null);
 const listsNonce = ref(0);
+// True while the lists card has a save in flight. The folder input is disabled
+// then, so a folder change can't overlap an in-flight list save and land
+// old-root list preferences on the new root (Codex PR #55). Together with
+// pendingFolderChange (which hides the lists card once the folder diverges),
+// a folder change and a list save are mutually exclusive.
+const listSaving = ref(false);
 
 const autosave = useAutosave(
   async () => {
@@ -86,6 +92,7 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
         input-testid="tasks-folder-input"
         error-testid="tasks-folder-error"
         :error="autosave.error.value"
+        :disabled="listSaving"
         @update:model-value="onFolderInput"
       />
       <!-- Self-contained (own load/save); remounts on a persisted folder
@@ -95,6 +102,7 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
         v-if="!pendingFolderChange"
         :key="listsNonce"
         :vault-id="vaultId"
+        @saving-change="listSaving = $event"
       />
       <p
         v-else

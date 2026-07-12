@@ -25,6 +25,7 @@ function mountTab(
     onGet?: () => unknown;
     onSet?: (a: unknown) => unknown;
     onListLists?: () => unknown;
+    onSetLists?: (a: unknown) => unknown;
   } = {},
 ) {
   const calls: Array<{ cmd: string; args: unknown }> = [];
@@ -34,7 +35,7 @@ function mountTab(
       return opts.onGet ? opts.onGet() : { tasksFolder: opts.tasksFolder ?? null, defaultList: null, listOrder: [] };
     if (cmd === "list_task_lists") return opts.onListLists?.() ?? [];
     if (cmd === "set_tasks_config") return opts.onSet?.(args) ?? null;
-    if (cmd === "set_task_lists_config") return null;
+    if (cmd === "set_task_lists_config") return opts.onSetLists?.(args) ?? null;
   });
   active = mount(TasksConfigTab, { props: { vaultId: "v1" }, attachTo: document.body });
   return { wrapper: active, calls };
@@ -108,6 +109,32 @@ describe("TasksConfigTab", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Task lists");
     expect(wrapper.find('[data-testid="tasks-lists-pending"]').exists()).toBe(false);
+  });
+
+  it("disables the tasks-folder input while a list save is in flight (Codex #55 follow-up)", async () => {
+    // The v-if gate stops NEW list edits once the folder diverges, but an
+    // already-started set_task_lists_config survives the card unmount. Fence
+    // the other direction too: while a list save is in flight the folder input
+    // is disabled, so a folder change can't overlap it and land old-root list
+    // preferences onto the new root.
+    let resolveListSave!: () => void;
+    const { wrapper } = mountTab({
+      tasksFolder: "Tasks",
+      onListLists: () => ["Inbox", "Next"],
+      onSetLists: () => new Promise<void>((r) => (resolveListSave = r)),
+    });
+    await flushPromises();
+    const folderDisabled = () =>
+      wrapper.get<HTMLInputElement>('[data-testid="tasks-folder-input"]').element.disabled;
+    expect(folderDisabled()).toBe(false);
+    // Reorder → a list save starts and hangs.
+    await wrapper.get('[data-testid="list-order-up-1"]').trigger("click");
+    await flushPromises();
+    expect(folderDisabled()).toBe(true);
+    // Once it resolves, the folder is editable again.
+    resolveListSave();
+    await flushPromises();
+    expect(folderDisabled()).toBe(false);
   });
 
   it("shows a save error inline", async () => {

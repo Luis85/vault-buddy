@@ -31,6 +31,11 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
   const status = useSettingsStatusStore();
   const owner = nextOwner++;
   const error = ref<string | null>(null);
+  // Reactive mirror of `running` (which stays true across a coalesced trailing
+  // run), so a consumer can fence a conflicting action while a save is in
+  // flight — e.g. the Tasks tab disables the folder input while a list save
+  // runs, so a folder change can't overlap and land stale prefs on the new root.
+  const saving = ref(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false; // an invoke is awaiting
   let pending = false; // a save was requested mid-flight → run once more
@@ -50,6 +55,7 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
       return;
     }
     running = true;
+    saving.value = true;
     status.saving(owner);
     error.value = null;
     try {
@@ -64,8 +70,11 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
       running = false;
       if (pending) {
         // A trailing run for the edit(s) made mid-flight, with latest values.
+        // saving stays true — run() re-enters and sets it again immediately.
         pending = false;
         void run();
+      } else {
+        saving.value = false;
       }
     }
   }
@@ -89,5 +98,5 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
     });
   }
 
-  return { schedule, flush, saveNow, error };
+  return { schedule, flush, saveNow, error, saving };
 }
