@@ -323,7 +323,7 @@ fn start_capture_blocking(
             let now = chrono::Local::now();
             use chrono::Timelike;
             let date = now.date_naive();
-            let dir = capture_paths::dated_folder(&root, date);
+            let dir = capture_paths::capture_dir(&root, date, cfg.recording_date_folders);
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 let _ = ready_tx.send(Err(format!("Cannot create recording folder: {e}")));
                 return;
