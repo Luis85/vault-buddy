@@ -286,10 +286,11 @@ describe("BuddySettings tabs", () => {
 
   it("puts the autostart control under the System tab and MCP under Integrations", () => {
     const wrapper = mount(BuddySettings);
-    expect(
-      wrapper.get('[data-testid="panel-system"]').find('[data-testid="autostart-toggle"]').exists(),
-    ).toBe(true);
+    // Panels are eager-mounted (v-show); assert the autostart toggle's markup
+    // lives inside the System panel, not just anywhere.
+    expect(wrapper.find('[data-testid="autostart-toggle"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="panel-system"]').html()).toContain("autostart-toggle");
     // McpSettings + DocumentImportSettings render inside the Integrations panel.
-    expect(wrapper.get('[data-testid="panel-integrations"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="panel-integrations"]').exists()).toBe(true);
   });
 });
