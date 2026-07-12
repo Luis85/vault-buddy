@@ -18,7 +18,8 @@ pub const TRANSCRIPTION_MODELS: [&str; 3] = ["base", "small", "medium"];
 #[serde(rename_all = "camelCase")]
 pub struct CaptureConfigDto {
     pub mode: String,
-    pub recording_folder: Option<String>,
+    pub meeting_folder: Option<String>,
+    pub voice_note_folder: Option<String>,
     pub bitrate_kbps: u32,
     pub create_note: bool,
     pub input_device: Option<String>,
@@ -34,7 +35,8 @@ impl CaptureConfigDto {
     fn from_config(v: &capture_config::VaultCaptureConfig) -> Self {
         Self {
             mode: v.mode.as_key().to_string(),
-            recording_folder: v.recording_folder.clone(),
+            meeting_folder: v.meeting_folder.clone(),
+            voice_note_folder: v.voice_note_folder.clone(),
             bitrate_kbps: v.bitrate_kbps,
             create_note: v.create_note,
             input_device: v.input_device.clone(),
@@ -57,6 +59,16 @@ pub fn get_capture_config(id: String) -> CaptureConfigDto {
     ))
 }
 
+/// Trim an optional folder override to `None` when blank, so a
+/// whitespace-only field behaves like an absent one (falls back to the
+/// mode default) instead of resolving to a literal blank-named folder.
+fn clean_folder(raw: &Option<String>) -> Option<String> {
+    raw.as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+}
+
 #[tauri::command]
 pub fn set_capture_config(
     lock: tauri::State<ConfigWriteLock>,
@@ -74,16 +86,12 @@ pub fn set_capture_config(
             cfg.transcription_model
         ));
     }
-    // Validate the folder against the real vault path BEFORE writing —
+    // Validate BOTH folders against the real vault path BEFORE writing —
     // an invalid folder is an inline field error, nothing gets written.
     let vault = crate::commands::find_vault(&id)?;
-    let folder = cfg
-        .recording_folder
-        .as_deref()
-        .map(str::trim)
-        .filter(|f| !f.is_empty())
-        .map(str::to_string);
-    if let Some(folder) = &folder {
+    let meeting_folder = clean_folder(&cfg.meeting_folder);
+    let voice_note_folder = clean_folder(&cfg.voice_note_folder);
+    for folder in [&meeting_folder, &voice_note_folder].into_iter().flatten() {
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
     let _guard = lock_ignoring_poison(&lock.0);
@@ -95,7 +103,8 @@ pub fn set_capture_config(
     let existing = capture_config::vault_config(&capture_config::load_config(), &id);
     let value = capture_config::VaultCaptureConfig {
         mode,
-        recording_folder: folder,
+        meeting_folder,
+        voice_note_folder,
         bitrate_kbps: cfg.bitrate_kbps,
         create_note: cfg.create_note,
         input_device: cfg.input_device.clone().filter(|d| !d.is_empty()),
@@ -118,9 +127,10 @@ pub fn set_capture_config(
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {
         log::info!(
-            "capture config saved for vault {id}: mode={}, folder={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}, transcribe={}",
+            "capture config saved for vault {id}: mode={}, meeting={:?}, voice_note={:?}, bitrate={}kbps, note={}, input={:?}, output={:?}, transcribe={}",
             value.mode.as_key(),
-            value.recording_folder,
+            value.meeting_folder,
+            value.voice_note_folder,
             value.bitrate_kbps,
             value.create_note,
             value.input_device,
@@ -129,4 +139,27 @@ pub fn set_capture_config(
         );
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_folder_blanks_to_none_and_trims_both_folders_the_same_way() {
+        // The two-folder validation/construction branch in set_capture_config
+        // leans on this helper treating meeting_folder and voice_note_folder
+        // identically: whitespace-only collapses to None (mode default),
+        // surrounding whitespace is trimmed, and an absent field stays absent.
+        assert_eq!(clean_folder(&None), None);
+        assert_eq!(clean_folder(&Some("   ".to_string())), None);
+        assert_eq!(
+            clean_folder(&Some("  Meetings/2026  ".to_string())),
+            Some("Meetings/2026".to_string())
+        );
+        assert_eq!(
+            clean_folder(&Some("Voice".to_string())),
+            Some("Voice".to_string())
+        );
+    }
 }
