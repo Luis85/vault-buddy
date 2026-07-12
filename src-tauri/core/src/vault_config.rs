@@ -110,6 +110,19 @@ impl Default for VaultCaptureConfig {
     }
 }
 
+/// Lexically normalize a vault-relative folder for dedup: split on BOTH
+/// separators, drop empty and `.` components, rejoin with `/`. Catches the
+/// realistic hand-edit collisions ("Audio" vs "Audio/" vs "Audio/.") without
+/// filesystem access. NOT canonical: symlink or case aliasing of two distinct
+/// configured folders still double-scans (accepted low-severity edge, Gaps.md).
+fn normalize_folder(folder: &str) -> String {
+    folder
+        .split(['/', '\\'])
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 impl VaultCaptureConfig {
     /// The vault-relative folder for a given mode: the configured override, or
     /// the mode default (the PRD gives meetings and voice notes distinct homes).
@@ -132,7 +145,7 @@ impl VaultCaptureConfig {
     pub fn recording_roots(&self) -> Vec<&str> {
         let m = self.folder_for(RecordingMode::Meeting);
         let v = self.folder_for(RecordingMode::VoiceNote);
-        if m == v {
+        if normalize_folder(m) == normalize_folder(v) {
             vec![m]
         } else {
             vec![m, v]
@@ -710,5 +723,29 @@ mod tests {
         let jf = crate::capture_config::serialize_config(&has_false);
         assert!(jf.contains("\"recordingDateFolders\": false"));
         assert!(jf.contains("\"documentDateFolders\": false"));
+    }
+
+    #[test]
+    fn recording_roots_dedups_paths_that_normalize_equal() {
+        // Two DIFFERENT strings resolving to the same dir must not double-scan.
+        let c = VaultCaptureConfig {
+            meeting_folder: Some("Audio".into()),
+            voice_note_folder: Some("Audio/.".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(c.recording_roots(), vec!["Audio"]); // deduped to the meeting string
+        let d = VaultCaptureConfig {
+            meeting_folder: Some("Audio".into()),
+            voice_note_folder: Some("Audio/".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(d.recording_roots(), vec!["Audio"]);
+        // Genuinely distinct folders still yield both.
+        let e = VaultCaptureConfig {
+            meeting_folder: Some("A".into()),
+            voice_note_folder: Some("B".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(e.recording_roots(), vec!["A", "B"]);
     }
 }

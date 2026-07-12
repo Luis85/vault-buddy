@@ -275,6 +275,20 @@ tested.
   refactor away from being copied into a vault path. Reuse
   `write_atomic_replacing`.
 
+### GAP-58 · Low · `recording_roots` dedup is lexical, not canonical
+`src-tauri/core/src/vault_config.rs` (`normalize_folder` + `recording_roots`).
+The dedup compares lexically-normalized folder paths (splitting on `/` and
+`\`, dropping empty and `.` components), which catches hand-edit collisions
+like `"Audio"` vs `"Audio/"` vs `"Audio/."`, but skips symlink/junction
+aliasing and case-insensitive filesystem aliasing — two DISTINCT configured
+folders that resolve to the same directory via either mechanism will
+double-scan and duplicate in the Recordings browser. Failure scenario: a user
+with symlink-aliased `meetingFolder` and `voiceNoteFolder` (rare, low user
+count). Blast radius: Recordings browser only (recovery is idempotent, the
+transcription queue dedups by path). **Fix:** a caller-side canonical dedup
+(after `canonicalize` the nearest-existing ancestor per AGENTS.md containment
+discipline) would be the full fix; deferred as a low-frequency edge.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
