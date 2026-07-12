@@ -3,6 +3,7 @@ import { storeToRefs } from "pinia";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { useCaptureStore } from "../stores/capture";
+import { useSettingsStatusStore } from "../stores/settingsStatus";
 import { useVaultsStore } from "../stores/vaults";
 import AppIcon from "./AppIcon.vue";
 import BuddySettings from "./BuddySettings.vue";
@@ -26,6 +27,24 @@ const capture = useCaptureStore();
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
 const { view } = storeToRefs(store);
+
+// The shared auto-save status, shown as a transient indicator beside the title
+// while in a settings view (Buddy or Vault settings).
+const saveStatus = useSettingsStatusStore();
+const isSettingsView = computed(
+  () => view.value === "settings" || view.value === "captureSettings",
+);
+const saveStatusLabel = computed(() => {
+  if (saveStatus.state === "saving") return "Saving…";
+  if (saveStatus.state === "saved") return "Saved ✓";
+  if (saveStatus.state === "error") return "⚠ Couldn't save";
+  return "";
+});
+// A stale saving/saved/error must not linger when navigating between views.
+watch(
+  () => store.view,
+  () => saveStatus.reset(),
+);
 
 // One line per view; the fallback is the vault list's title.
 const VIEW_TITLES: Record<string, string> = {
@@ -133,11 +152,25 @@ watch(
   <div
     class="relative flex h-full w-full flex-col rounded-2xl border border-white/10 bg-slate-900/90 p-3 shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur"
   >
-    <div class="mb-2 flex items-center justify-between">
-      <h1 class="text-sm font-bold text-slate-100">
-        {{ title }}
-      </h1>
-      <div class="flex items-center gap-2">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <div class="flex min-w-0 items-center gap-2">
+        <h1 class="truncate text-sm font-bold text-slate-100">
+          {{ title }}
+        </h1>
+        <span
+          v-if="isSettingsView && saveStatus.state !== 'idle'"
+          data-testid="save-status"
+          role="status"
+          aria-live="polite"
+          class="shrink-0 text-xs"
+          :class="{
+            'text-slate-400': saveStatus.state === 'saving',
+            'text-emerald-300': saveStatus.state === 'saved',
+            'text-red-300': saveStatus.state === 'error',
+          }"
+        >{{ saveStatusLabel }}</span>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
         <span
           v-if="view === 'list' && store.vaults.length > 0"
           class="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
