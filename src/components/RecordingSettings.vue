@@ -103,7 +103,7 @@ const outputMenuOptions = computed(() => [
 <template>
   <section>
     <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-      Recording
+      Folders
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
       <div>
@@ -130,6 +130,13 @@ const outputMenuOptions = computed(() => [
           {{ folderError }}
         </p>
       </div>
+    </div>
+  </section>
+  <section>
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      Audio
+    </h2>
+    <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
       <div class="flex items-center justify-between gap-2">
         <label
           for="capture-bitrate"
@@ -140,6 +147,39 @@ const outputMenuOptions = computed(() => [
           v-model="bitrateKbps"
           :options="bitrateOptions"
           data-testid="bitrate-select"
+        />
+      </div>
+      <div>
+        <label
+          class="mb-1 block text-sm text-slate-200"
+          for="capture-input-device"
+        >
+          Microphone
+        </label>
+        <SelectMenu
+          id="capture-input-device"
+          v-model="inputDevice"
+          :options="inputMenuOptions"
+          aria-label="Microphone"
+          data-testid="input-device-select"
+          wide
+        />
+      </div>
+      <div>
+        <label
+          class="mb-1 block text-sm text-slate-200"
+          for="capture-output-device"
+        >
+          Desktop audio from
+          <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
+        </label>
+        <SelectMenu
+          id="capture-output-device"
+          v-model="outputDevice"
+          :options="outputMenuOptions"
+          aria-label="Desktop audio device"
+          data-testid="output-device-select"
+          wide
         />
       </div>
     </div>
@@ -192,46 +232,6 @@ const outputMenuOptions = computed(() => [
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
       <TranscriptionSettings v-model="transcriptionBundle" />
-    </div>
-  </section>
-  <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-      Audio devices
-    </h2>
-    <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-      <div>
-        <label
-          class="mb-1 block text-sm text-slate-200"
-          for="capture-input-device"
-        >
-          Microphone
-        </label>
-        <SelectMenu
-          id="capture-input-device"
-          v-model="inputDevice"
-          :options="inputMenuOptions"
-          aria-label="Microphone"
-          data-testid="input-device-select"
-          wide
-        />
-      </div>
-      <div>
-        <label
-          class="mb-1 block text-sm text-slate-200"
-          for="capture-output-device"
-        >
-          Desktop audio from
-          <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
-        </label>
-        <SelectMenu
-          id="capture-output-device"
-          v-model="outputDevice"
-          :options="outputMenuOptions"
-          aria-label="Desktop audio device"
-          data-testid="output-device-select"
-          wide
-        />
-      </div>
     </div>
   </section>
 </template>

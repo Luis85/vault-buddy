@@ -100,7 +100,7 @@ describe("CaptureSettings", () => {
     const headers = wrapper.findAll("h2");
     const texts = headers.map((h) => h.text());
     expect(texts).toContain("Recording");
-    expect(texts).toContain("Audio devices");
+    expect(texts).toContain("Audio");
     const recording = headers.find((h) => h.text() === "Recording")!;
     expect(recording.classes()).toContain("uppercase");
     expect(recording.classes()).toContain("tracking-wide");
