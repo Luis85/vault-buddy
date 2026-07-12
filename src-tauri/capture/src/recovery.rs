@@ -186,10 +186,20 @@ fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
     out
 }
 
-/// Vault Buddy writes only under `<root>/YYYY/MM` — recovery looks
-/// nowhere else, so a capture-named file a user moved into an arbitrary
-/// subfolder (or the root itself) is never touched.
+/// Vault Buddy writes under `<root>/YYYY/MM` (dated) OR directly in `<root>`
+/// (flat), per the vault's date-folder setting — recovery sweeps BOTH so a
+/// crash orphan is finalized regardless. It still descends no further (an
+/// arbitrary user subfolder is never touched). The visit closure's ownership
+/// gates (capture-base + owned-temp markers) keep foreign files safe at the
+/// flat level.
 fn walk(root: &Path, visit: &mut dyn FnMut(&Path)) {
+    // Flat layout: our files directly under the root.
+    for (file_path, file_ft, _) in dir_entries(root) {
+        if file_ft.is_file() {
+            visit(&file_path);
+        }
+    }
+    // Dated layout: <root>/YYYY/MM.
     for (year_path, year_ft, year_name) in dir_entries(root) {
         if !year_ft.is_dir() || !is_digit_dir(&year_name, 4) {
             continue;
@@ -220,8 +230,10 @@ mod tests {
         v
     }
 
-    /// Vault Buddy only ever writes under `<root>/YYYY/MM` — recovery
-    /// walks nowhere else, so tests must place capture-named files there.
+    /// Places files under the dated `<root>/YYYY/MM` layer specifically, to
+    /// exercise that half of `walk` (recovery also sweeps the flat root
+    /// directly — see the flat-layout tests, e.g.
+    /// `recovers_a_flat_layout_orphan_part`, which write to `root` itself).
     fn month_dir(root: &std::path::Path) -> std::path::PathBuf {
         let d = root.join("2026").join("07");
         std::fs::create_dir_all(&d).unwrap();
@@ -407,25 +419,36 @@ mod tests {
     }
 
     #[test]
-    fn root_level_parts_are_ignored() {
-        // A capture-named .part left directly at the vault root (not under
-        // <root>/YYYY/MM) is outside the layout recovery is allowed to
-        // touch.
-        let dir = tempfile::tempdir().unwrap();
-        let part = dir.path().join(format!(".{BASE}.mp3.part"));
+    fn recovers_a_flat_layout_orphan_part() {
+        let root = tempfile::tempdir().unwrap();
+        // A stale, framed .part directly under the root (flat layout).
+        let part = root.path().join(".2026-07-04 1405 Flat.mp3.part");
         std::fs::write(&part, mp3_bytes()).unwrap();
-        let actions = recover_root(dir.path(), "Work", Duration::ZERO, true, false);
-        assert!(
-            actions.is_empty(),
-            "root-level part produced actions: {actions:?}"
-        );
-        assert!(part.exists());
+        // Force staleness by using a zero window.
+        let actions = recover_root(root.path(), "Work", Duration::from_secs(0), false, false);
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, RecoveryAction::Recovered { .. })));
+        assert!(root
+            .path()
+            .join("2026-07-04 1405 Flat (recovered).mp3")
+            .exists());
+    }
+
+    #[test]
+    fn a_foreign_part_at_the_flat_root_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let foreign = root.path().join(".something.download.mp3.part");
+        std::fs::write(&foreign, b"x").unwrap();
+        recover_root(root.path(), "Work", Duration::from_secs(0), false, false);
+        assert!(foreign.exists(), "foreign .part must survive");
     }
 
     #[test]
     fn non_dated_subfolders_are_ignored() {
         // A capture-named .part a user moved into an arbitrary subfolder
-        // must survive — recovery only looks under <root>/YYYY/MM.
+        // must survive — recovery only looks at the flat root and
+        // <root>/YYYY/MM, never an arbitrary subfolder like this one.
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("Project");
         std::fs::create_dir_all(&sub).unwrap();
