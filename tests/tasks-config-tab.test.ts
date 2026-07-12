@@ -90,6 +90,26 @@ describe("TasksConfigTab", () => {
     expect(cardLoads()).toBe(before + 1);
   });
 
+  it("hides the lists card while a tasks-folder change is pending, then restores it after the save (Codex #55)", async () => {
+    // Regression: with autosave the lists card used to stay mounted while a
+    // folder edit was still debounced/in-flight, so a default/order pick in
+    // that window persisted old-root list names onto the about-to-change root.
+    const { wrapper } = mountTab({ tasksFolder: "Tasks", onListLists: () => ["Inbox", "Next"] });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Task lists"); // card visible initially
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Work/Tasks");
+    await flushPromises();
+    // The folder differs from what's persisted → the card is gone, replaced by
+    // a hint, so no stale list-preference save can land against the old root.
+    expect(wrapper.text()).not.toContain("Task lists");
+    expect(wrapper.find('[data-testid="tasks-lists-pending"]').exists()).toBe(true);
+    // Once the folder save lands, the card remounts against the new root.
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(wrapper.text()).toContain("Task lists");
+    expect(wrapper.find('[data-testid="tasks-lists-pending"]').exists()).toBe(false);
+  });
+
   it("shows a save error inline", async () => {
     const { wrapper } = mountTab({
       tasksFolder: "Tasks",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
@@ -46,6 +46,15 @@ function onFolderInput(value: string) {
   tasksFolder.value = value;
   autosave.schedule();
 }
+
+// True while the typed folder differs from what's persisted (a folder save is
+// debounced/in-flight). The lists card below reads lists for the CURRENT
+// persisted root, so while the root is about to change it must not be editable
+// — a default/order pick then would persist old-root list names, which the
+// pending set_tasks_config preserves onto the new root (Codex PR #55). When the
+// folder save lands, savedFolder matches and listsNonce remounts the card
+// against the new root; a failed save keeps it pending (the folder error shows).
+const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !== savedFolder.value);
 </script>
 
 <template>
@@ -79,11 +88,21 @@ function onFolderInput(value: string) {
         :error="autosave.error.value"
         @update:model-value="onFolderInput"
       />
-      <!-- Self-contained (own load/save); remounts on a persisted folder change. -->
+      <!-- Self-contained (own load/save); remounts on a persisted folder
+           change. Hidden while a folder change is pending so it can't save
+           old-root list preferences onto the about-to-change root. -->
       <TaskListSettings
+        v-if="!pendingFolderChange"
         :key="listsNonce"
         :vault-id="vaultId"
       />
+      <p
+        v-else
+        data-testid="tasks-lists-pending"
+        class="rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-slate-500"
+      >
+        List settings reload once the tasks folder is saved…
+      </p>
     </template>
   </div>
 </template>
