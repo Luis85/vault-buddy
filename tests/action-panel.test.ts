@@ -615,10 +615,10 @@ describe("ActionPanel save indicator", () => {
     store.loaded = true;
     store.openSettings(); // view = "settings"
     const status = useSettingsStatusStore();
-    status.saving();
+    status.saving(1);
     const wrapper = mount(ActionPanel, { global: { stubs: { BuddySettings: true } } });
     expect(wrapper.get('[data-testid="save-status"]').text()).toContain("Saving");
-    status.saved();
+    status.saved(1);
     await flushPromises();
     expect(wrapper.get('[data-testid="save-status"]').text()).toContain("Saved");
   });
@@ -627,7 +627,7 @@ describe("ActionPanel save indicator", () => {
     const store = useVaultsStore();
     store.loaded = true;
     store.openSettings();
-    useSettingsStatusStore().failed("disk full");
+    useSettingsStatusStore().failed(1, "disk full");
     const wrapper = mount(ActionPanel, { global: { stubs: { BuddySettings: true } } });
     expect(wrapper.get('[data-testid="save-status"]').text()).toContain("Couldn't save");
   });
@@ -636,7 +636,7 @@ describe("ActionPanel save indicator", () => {
     const store = useVaultsStore();
     store.loaded = true;
     store.vaults = sampleVaults;
-    useSettingsStatusStore().saving();
+    useSettingsStatusStore().saving(1);
     const wrapper = mount(ActionPanel);
     expect(wrapper.find('[data-testid="save-status"]').exists()).toBe(false);
   });
@@ -646,7 +646,7 @@ describe("ActionPanel save indicator", () => {
     store.loaded = true;
     store.openSettings();
     const status = useSettingsStatusStore();
-    status.failed("boom");
+    status.failed(1, "boom");
     const wrapper = mount(ActionPanel, { global: { stubs: { BuddySettings: true } } });
     store.showList();
     await flushPromises();

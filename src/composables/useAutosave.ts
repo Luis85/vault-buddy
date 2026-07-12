@@ -6,6 +6,10 @@ import { useSettingsStatusStore } from "../stores/settingsStatus";
 // Debounce window for typed fields; a blur/flush or a toggle bypasses it.
 const DEBOUNCE_MS = 600;
 
+// Stable per-instance id so the shared status store can track each field's
+// failure independently — one field's success must not clear another's error.
+let nextOwner = 0;
+
 /**
  * Wraps an async save fn with the mechanics every auto-saving settings field
  * needs, so no card re-implements them:
@@ -25,6 +29,7 @@ const DEBOUNCE_MS = 600;
  */
 export function useAutosave(save: () => Promise<void>, opts: { label?: string } = {}) {
   const status = useSettingsStatusStore();
+  const owner = nextOwner++;
   const error = ref<string | null>(null);
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false; // an invoke is awaiting
@@ -45,15 +50,15 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
       return;
     }
     running = true;
-    status.saving();
+    status.saving(owner);
     error.value = null;
     try {
       await save();
-      status.saved();
+      status.saved(owner);
     } catch (e) {
       const message = String(e);
       error.value = message;
-      status.failed(message);
+      status.failed(owner, message);
       logWarning(`${opts.label ?? "settings"} autosave failed: ${message}`);
     } finally {
       running = false;

@@ -71,6 +71,22 @@ describe("useAutosave", () => {
     expect(logWarning).toHaveBeenCalledWith(expect.stringContaining("docs autosave failed"));
   });
 
+  it("one field's success does not clear another field's error in the shared status (Codex #55)", async () => {
+    // Two auto-saving fields report to the same header. A failing save on one
+    // must stay visible even when a different field saves successfully just
+    // after (its inline error may be on a now-hidden tab).
+    const status = useSettingsStatusStore();
+    const failing = useAutosave(vi.fn().mockRejectedValue("bad folder"));
+    const ok = useAutosave(vi.fn().mockResolvedValue(undefined));
+    failing.saveNow();
+    await flushPromises();
+    expect(status.state).toBe("error");
+    ok.saveNow();
+    await flushPromises();
+    expect(status.state).toBe("error"); // still error, not "saved"
+    expect(status.error).toBe("bad folder");
+  });
+
   it("coalesces a save requested mid-flight into exactly one trailing run", async () => {
     let resolveFirst!: () => void;
     const save = vi
