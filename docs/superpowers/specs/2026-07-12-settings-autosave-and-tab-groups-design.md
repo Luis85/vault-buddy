@@ -83,10 +83,15 @@ A presentational, accessible tabbed container used by both settings views.
 - **Props:** `tabs: { id: string; label: string }[]`, optional
   `initial?: string` (defaults to the first tab).
 - **Renders:** a horizontal tab bar (text labels; the active tab underlined in
-  the app's violet accent, matching existing focus/selection styling) and a
-  single active panel via a named/scoped slot per tab (`<template #recording>`
-  …) so **only the active tab's content is mounted** (lazy — a tab's config
-  loads when first shown, not all up front).
+  the app's violet accent, matching existing focus/selection styling) and one
+  panel per tab via a named slot (`<template #recording>` …). Every panel is
+  **mounted, and only the active one is shown** (`v-show`), so each tab still
+  owns its own self-contained load, a pending debounced save keeps running when
+  you switch tabs (the component isn't torn down), and the tab content is
+  present in the DOM for existing tests to read. (Chosen over `v-if`/lazy: the
+  eager mount avoids a tab-switch unmount interrupting a queued save and avoids
+  churning the many `BuddySettings` tests that read tab content directly; the
+  per-tab load isolation the split gives us does not depend on lazy mounting.)
 - **Accessibility:** `role="tablist"` / `role="tab"` / `role="tabpanel"`,
   `aria-selected`, `aria-controls`, roving `tabindex`, Left/Right (and
   Home/End) arrow-key navigation between tabs — the same keyboard rigor the
@@ -112,11 +117,12 @@ field needs, so no card re-implements them:
 - **Status + error reporting.** On start → `saving`; on success → `saved`; on
   failure → `error` with the message. Reports into the shared status store
   (below) and exposes a local `error` ref for the card's inline field error.
-- **Lifecycle safety.** Flushes any pending debounced save on `beforeUnmount`,
-  so switching tabs (which unmounts the inactive tab's content) or closing the
-  panel never drops a queued write. (Blur already covers the common case,
-  since clicking a tab blurs the focused input first; the unmount flush is the
-  belt-and-braces net.)
+- **Lifecycle safety.** Flushes any pending debounced save on blur (`@focusout`
+  on the tab container) and on `beforeUnmount` (the settings view navigating
+  away/closing unmounts the tab component), so a queued write is never dropped.
+  With `v-show` tabs a tab switch does not unmount, so its debounce simply keeps
+  running; blur (clicking the tab blurs the focused input first) flushes it
+  anyway, and the unmount flush is the belt-and-braces net for leaving settings.
 
 The card supplies only the fn that builds its payload and invokes its command;
 `useAutosave` owns the timing, serialization, and status.
@@ -186,12 +192,13 @@ cap ("when a file grows large, it's doing too much").
 
 Each tab component **loads its own config on mount and renders its form only
 after the load resolves** (the existing `v-if="loading"` → "Loading…"
-pattern). Because the tab is mounted only when active (lazy), and a save fires
-only from a user edit of an already-rendered, already-loaded field, **there is
-no "save before load" window** — the whole `loaded` / `edited` /
-`documentsLoadPromise` guard apparatus in `CaptureSettings` +
-`useOptionalFolderField` collapses. What remains of `useOptionalFolderField`
-(if anything) is a plain load + a plain autosaved write.
+pattern); a **failed** load shows an inline error and renders no editable
+fields. Because a save fires only from a user edit of an already-rendered,
+already-loaded field, **there is no "save before load" window** — the whole
+`loaded` / `edited` / `documentsLoadPromise` guard apparatus in
+`CaptureSettings` + `useOptionalFolderField` collapses, and
+`useOptionalFolderField` is deleted (each tab does a plain load + a plain
+autosaved write inline).
 
 Race-guards we still keep, and why:
 
