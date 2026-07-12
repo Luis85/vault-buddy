@@ -268,3 +268,28 @@ describe("BuddySettings", () => {
     expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
   });
 });
+
+describe("BuddySettings tabs", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setActivePinia(createPinia());
+  });
+
+  it("groups settings into Buddy / System / Integrations tabs", () => {
+    const wrapper = mount(BuddySettings);
+    for (const id of ["buddy", "system", "integrations"]) {
+      expect(wrapper.find(`[data-testid="tab-${id}"]`).exists()).toBe(true);
+    }
+    // Character grid lives under the (default) Buddy tab, visible on mount.
+    expect(wrapper.get('[data-testid="panel-buddy"]').isVisible()).toBe(true);
+  });
+
+  it("puts the autostart control under the System tab and MCP under Integrations", () => {
+    const wrapper = mount(BuddySettings);
+    expect(
+      wrapper.get('[data-testid="panel-system"]').find('[data-testid="autostart-toggle"]').exists(),
+    ).toBe(true);
+    // McpSettings + DocumentImportSettings render inside the Integrations panel.
+    expect(wrapper.get('[data-testid="panel-integrations"]').exists()).toBe(true);
+  });
+});
