@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { onMounted, ref } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
-import { logWarning } from "../logging";
+import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { DocumentsConfig } from "../types";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
@@ -14,8 +14,7 @@ import VaultFolderSetting from "./VaultFolderSetting.vue";
 // failed to read.
 const props = defineProps<{ vaultId: string }>();
 
-const loading = ref(true);
-const loadError = ref<string | null>(null);
+const { loading, loadError, load } = useSettingsLoad();
 const documentsFolder = ref("");
 const documentDateFolders = ref(true);
 
@@ -30,18 +29,12 @@ const autosave = useAutosave(
   { label: "documents settings" },
 );
 
-onMounted(async () => {
-  try {
-    const cfg = await invoke<DocumentsConfig>("get_documents_config", { id: props.vaultId });
+onMounted(() =>
+  load<DocumentsConfig>("get_documents_config", props.vaultId, (cfg) => {
     documentsFolder.value = cfg.documentsFolder ?? "";
     documentDateFolders.value = cfg.documentDateFolders;
-  } catch (e) {
-    loadError.value = String(e);
-    logWarning(`get_documents_config failed (vault ${props.vaultId}): ${String(e)}`);
-  } finally {
-    loading.value = false;
-  }
-});
+  }),
+);
 
 // Typed folder edits debounce; the toggle saves immediately. onMounted assigns
 // the refs directly (not via these handlers), so neither fires on load.

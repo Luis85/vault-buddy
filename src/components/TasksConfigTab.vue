@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { onMounted, ref } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
-import { logWarning } from "../logging";
+import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { TasksConfig } from "../types";
 import TaskListSettings from "./TaskListSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
@@ -15,8 +15,7 @@ import VaultFolderSetting from "./VaultFolderSetting.vue";
 // — still renders.
 const props = defineProps<{ vaultId: string }>();
 
-const loading = ref(true);
-const loadError = ref<string | null>(null);
+const { loading, loadError, load } = useSettingsLoad();
 const tasksFolder = ref("");
 // Last value known persisted (null = tasks root / none). A save that changes
 // it remounts the lists card so its lists reload against the new root — else a
@@ -36,18 +35,12 @@ const autosave = useAutosave(
   { label: "tasks folder" },
 );
 
-onMounted(async () => {
-  try {
-    const cfg = await invoke<TasksConfig>("get_tasks_config", { id: props.vaultId });
+onMounted(() =>
+  load<TasksConfig>("get_tasks_config", props.vaultId, (cfg) => {
     tasksFolder.value = cfg.tasksFolder ?? "";
     savedFolder.value = cfg.tasksFolder ?? null;
-  } catch (e) {
-    loadError.value = String(e);
-    logWarning(`get_tasks_config failed (vault ${props.vaultId}): ${String(e)}`);
-  } finally {
-    loading.value = false;
-  }
-});
+  }),
+);
 
 function onFolderInput(value: string) {
   tasksFolder.value = value;

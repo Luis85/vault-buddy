@@ -4,23 +4,12 @@ import { computed, onMounted, ref } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
-import type { AudioDevices, CaptureConfig } from "../types";
+import type { AudioDevices, CaptureConfig, RecordingSettingsValue } from "../types";
 import RecordingSettings from "./RecordingSettings.vue";
 
-interface RecordingValue {
-  meetingFolder: string;
-  voiceNoteFolder: string;
-  bitrateKbps: number;
-  createNote: boolean;
-  followUpTemplate: boolean;
-  inputDevice: string;
-  outputDevice: string;
-  transcribe: boolean;
-  transcriptionModel: string;
-  transcriptionLanguage: string;
-  transcriptTimestamps: boolean;
-  recordingDateFolders: boolean;
-}
+// Folders are the only free-text fields in the bundle → debounce; everything
+// else is a toggle/select → save immediately.
+const TEXT_KEYS = new Set<keyof RecordingSettingsValue>(["meetingFolder", "voiceNoteFolder"]);
 
 // The Recording tab of Vault settings. Owns the capture-config + devices load,
 // hosts the controlled RecordingSettings, and auto-saves the whole
@@ -33,7 +22,7 @@ const loading = ref(true);
 const loadError = ref<string | null>(null);
 const mode = ref<"meeting" | "voice-note">("meeting");
 const devices = ref<AudioDevices>({ inputs: [], outputs: [] });
-const rec = ref<RecordingValue>({
+const rec = ref<RecordingSettingsValue>({
   meetingFolder: "",
   voiceNoteFolder: "",
   bitrateKbps: 128,
@@ -73,26 +62,18 @@ const autosave = useAutosave(
   { label: "capture settings" },
 );
 
-// Folders are the only free-text fields → debounce; everything else is a
-// toggle/select → save immediately. RecordingSettings emits the whole bundle
-// on any change and only on user interaction (never on the load assignment
-// below), so this handler is a safe single trigger point.
-function onUpdate(next: RecordingValue) {
+// RecordingSettings emits the whole bundle on any change and only on user
+// interaction (never on the load assignment below), so this handler is a safe
+// single trigger point. Diff which keys changed: a change confined to the
+// free-text folder fields debounces; anything else (a toggle/select) saves now.
+function onUpdate(next: RecordingSettingsValue) {
   const cur = rec.value;
-  const onlyFolders =
-    (next.meetingFolder !== cur.meetingFolder || next.voiceNoteFolder !== cur.voiceNoteFolder) &&
-    next.bitrateKbps === cur.bitrateKbps &&
-    next.createNote === cur.createNote &&
-    next.followUpTemplate === cur.followUpTemplate &&
-    next.inputDevice === cur.inputDevice &&
-    next.outputDevice === cur.outputDevice &&
-    next.transcribe === cur.transcribe &&
-    next.transcriptionModel === cur.transcriptionModel &&
-    next.transcriptionLanguage === cur.transcriptionLanguage &&
-    next.transcriptTimestamps === cur.transcriptTimestamps &&
-    next.recordingDateFolders === cur.recordingDateFolders;
+  const changed = (Object.keys(next) as (keyof RecordingSettingsValue)[]).filter(
+    (k) => next[k] !== cur[k],
+  );
   rec.value = next;
-  if (onlyFolders) autosave.schedule();
+  if (changed.length === 0) return;
+  if (changed.every((k) => TEXT_KEYS.has(k))) autosave.schedule();
   else autosave.saveNow();
 }
 

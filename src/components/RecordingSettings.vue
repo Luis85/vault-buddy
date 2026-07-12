@@ -1,24 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import type { AudioDevice, AudioDevices } from "../types";
+import type { AudioDevice, AudioDevices, RecordingSettingsValue } from "../types";
 import SelectMenu from "./SelectMenu.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
-
-interface RecordingSettingsValue {
-  meetingFolder: string;
-  voiceNoteFolder: string;
-  bitrateKbps: number;
-  createNote: boolean;
-  followUpTemplate: boolean;
-  inputDevice: string;
-  outputDevice: string;
-  transcribe: boolean;
-  transcriptionModel: string;
-  transcriptionLanguage: string;
-  transcriptTimestamps: boolean;
-  recordingDateFolders: boolean;
-}
 
 // Controlled component: no persistence of its own — same idiom as
 // TranscriptionSettings.vue. Every field is a computed get/set proxy onto

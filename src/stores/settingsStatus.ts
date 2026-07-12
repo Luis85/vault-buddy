@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 
-export type SaveState = "idle" | "saving" | "saved" | "error";
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 // How long the "Saved" acknowledgement lingers before fading to idle.
 const SAVED_LINGER_MS = 2000;
