@@ -143,13 +143,24 @@ fn convert_blocking(
     let vault_root = Path::new(&vault.path);
     let safe = capture_paths::safe_recording_root(vault_root, &documents_folder)?;
     capture_paths::assert_path_inside_vault(vault_root, &safe)?;
-    let dir = document_import::target_dir(vault_root, &documents_folder, year, month);
+    // NEW imports land flat (no YYYY/MM) when the vault opted out of dated
+    // folders — same per-vault toggle and precedent as start_capture's
+    // capture_dir branch; recovery's clean_stale_staging_at sweeps both
+    // layouts so a crash orphan is reaped either way.
+    let dated = cfg.document_date_folders;
+    let dir = if dated {
+        document_import::target_dir(vault_root, &documents_folder, year, month)
+    } else {
+        safe.clone()
+    };
     // Guard the FULLY DATED dir BEFORE creating it — the folder-root check
     // above is lexical and can't see a `Documents/2026` or `2026/07`
     // symlink/junction that escapes the vault. `assert_path_inside_vault`
     // canonicalizes the nearest EXISTING ancestor, so a pre-existing dated
     // symlink is caught here before `create_dir_all` follows it and creates
-    // directories outside the vault (Codex review).
+    // directories outside the vault (Codex review). Unconditional: when flat,
+    // `dir` IS `safe`, so this just repeats the already-passed check above —
+    // harmless, and keeps one code path instead of a branch around it.
     capture_paths::assert_path_inside_vault(vault_root, &dir)?;
     // Resolve the ` (N)` suffix for BOTH note and media folder up front — the
     // target dir must exist for the existence checks, and Pandoc bakes the
@@ -165,8 +176,9 @@ fn convert_blocking(
     // permits such a link, but the recovery sweeper only descends real in-place
     // dated dirs — so staging through a link would strand an unrecoverable
     // orphan on a crash. Keeping import and recovery to the same layout closes
-    // that gap (Codex review).
-    if !document_import::is_real_dated_dir(&safe, &dir, year, month) {
+    // that gap (Codex review). Dated-only: a flat `dir` is just `safe`, already
+    // asserted in-vault above — there is no dated level for a link to redirect.
+    if dated && !document_import::is_real_dated_dir(&safe, &dir, year, month) {
         return Err(
             "Import destination resolves through a link; use a real Documents folder.".into(),
         );
