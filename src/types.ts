@@ -109,6 +109,10 @@ export interface CaptureConfig {
   transcriptionLanguage: string | null;
   transcriptTimestamps: boolean;
   followUpTemplate: boolean;
+  /** Whether NEW recordings land in a dated `YYYY/MM` subfolder (true) or
+   * flat in the recording root (false). Existing files in either layout are
+   * still found — this only decides where new captures land. */
+  recordingDateFolders: boolean;
 }
 
 export interface AudioDevice {
@@ -170,6 +174,10 @@ export interface TasksConfig {
  * set_documents_config, the same shape as TasksConfig/get_tasks_config. */
 export interface DocumentsConfig {
   documentsFolder: string | null;
+  /** Whether NEW imports land in a dated `YYYY/MM` subfolder (true) or flat
+   * in the documents root (false). Same toggle/semantics as
+   * CaptureConfig.recordingDateFolders, for the document-import domain. */
+  documentDateFolders: boolean;
 }
 
 /** App-global Pandoc install status (detect_pandoc). configuredPath seeds

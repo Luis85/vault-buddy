@@ -52,6 +52,7 @@ const config = ref<CaptureConfig>({
   transcriptionModel: "small",
   transcriptionLanguage: null,
   transcriptTimestamps: true,
+  recordingDateFolders: true,
 });
 
 // How many recordings the vault already holds, for the Browse card's pill.

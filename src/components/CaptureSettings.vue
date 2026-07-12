@@ -39,6 +39,11 @@ const transcribe = ref(false);
 const transcriptionModel = ref("small");
 const transcriptionLanguage = ref(""); // "" = auto-detect (maps to null on save)
 const transcriptTimestamps = ref(true);
+// Whether NEW recordings land in a dated YYYY/MM subfolder. Part of the same
+// CaptureConfig load/save round trip as the fields above (no separate
+// loaded/edited race to guard — get_capture_config/set_capture_config always
+// carry the whole config together).
+const recordingDateFolders = ref(true);
 
 // The per-vault tasks folder lives in the same app-side config but keeps its
 // own command pair (the capture-config save already preserves tasks_folder).
@@ -79,6 +84,11 @@ const documentsFolder = ref(""); // "" shows the "Documents" placeholder / clear
 const documentsFolderError = ref<string | null>(null);
 const documentsFolderLoaded = ref(false);
 const documentsFolderEdited = ref(false);
+// Whether NEW imports land in a dated YYYY/MM subfolder. Rides the SAME
+// get_documents_config/set_documents_config round trip as documentsFolder
+// above (one command carries both fields), so it shares that field's
+// loaded/edited gate rather than needing one of its own.
+const documentDateFolders = ref(true);
 
 // Bundles the recording/note/transcription/device fields for
 // RecordingSettings' v-model. The setter fans a merged update back out to
@@ -99,6 +109,7 @@ const recordingBundle = computed({
     transcriptionModel: transcriptionModel.value,
     transcriptionLanguage: transcriptionLanguage.value,
     transcriptTimestamps: transcriptTimestamps.value,
+    recordingDateFolders: recordingDateFolders.value,
   }),
   set: (v: {
     meetingFolder: string;
@@ -112,6 +123,7 @@ const recordingBundle = computed({
     transcriptionModel: string;
     transcriptionLanguage: string;
     transcriptTimestamps: boolean;
+    recordingDateFolders: boolean;
   }) => {
     meetingFolder.value = v.meetingFolder;
     voiceNoteFolder.value = v.voiceNoteFolder;
@@ -124,6 +136,7 @@ const recordingBundle = computed({
     transcriptionModel.value = v.transcriptionModel;
     transcriptionLanguage.value = v.transcriptionLanguage;
     transcriptTimestamps.value = v.transcriptTimestamps;
+    recordingDateFolders.value = v.recordingDateFolders;
   },
 });
 
@@ -143,8 +156,10 @@ watch(
     transcriptionModel,
     transcriptionLanguage,
     transcriptTimestamps,
+    recordingDateFolders,
     tasksFolder,
     documentsFolder,
+    documentDateFolders,
   ],
   () => {
     if (saveState.value === "saved") saveState.value = "idle";
@@ -175,6 +190,7 @@ onMounted(async () => {
     transcriptionModel.value = cfg.transcriptionModel;
     transcriptionLanguage.value = cfg.transcriptionLanguage ?? "";
     transcriptTimestamps.value = cfg.transcriptTimestamps;
+    recordingDateFolders.value = cfg.recordingDateFolders;
   } catch (e) {
     loadError.value = String(e);
   } finally {
@@ -182,21 +198,27 @@ onMounted(async () => {
   }
   // Separate invokes (not in the Promise.all above) so an optional-folder read
   // can't block the capture form from loading — both folders are optional.
-  await loadOptionalField<TasksConfig>(
-    "get_tasks_config",
-    tasksFolderEdited,
-    tasksFolderLoaded,
-    tasksFolder,
-    (cfg) => cfg.tasksFolder,
-    (persisted) => (savedTasksFolder.value = persisted),
-  );
-  await loadOptionalField<DocumentsConfig>(
-    "get_documents_config",
-    documentsFolderEdited,
-    documentsFolderLoaded,
-    documentsFolder,
-    (cfg) => cfg.documentsFolder,
-  );
+  await loadOptionalField<TasksConfig>({
+    cmd: "get_tasks_config",
+    editedRef: tasksFolderEdited,
+    loadedRef: tasksFolderLoaded,
+    targetRef: tasksFolder,
+    extract: (cfg) => cfg.tasksFolder,
+    onPersisted: (persisted) => (savedTasksFolder.value = persisted),
+  });
+  await loadOptionalField<DocumentsConfig>({
+    cmd: "get_documents_config",
+    editedRef: documentsFolderEdited,
+    loadedRef: documentsFolderLoaded,
+    targetRef: documentsFolder,
+    extract: (cfg) => cfg.documentsFolder,
+    onLoaded: (cfg) => {
+      // Same "don't clobber an edit with a late-resolving load" rule the
+      // composable applies to documentsFolder itself — this field rides the
+      // same command's response, so it shares that guard.
+      if (!documentsFolderEdited.value) documentDateFolders.value = cfg.documentDateFolders;
+    },
+  });
 });
 
 async function save() {
@@ -222,6 +244,7 @@ async function save() {
         transcriptionModel: transcriptionModel.value,
         transcriptionLanguage: transcriptionLanguage.value.trim() || null,
         transcriptTimestamps: transcriptTimestamps.value,
+        recordingDateFolders: recordingDateFolders.value,
       },
     });
   } catch (e) {
@@ -243,14 +266,14 @@ async function save() {
   const tasksSaveRan = tasksFolderLoaded.value || tasksFolderEdited.value;
   const savingTasksFolder = tasksFolder.value.trim();
   if (
-    await saveOptionalField(
-      "set_tasks_config",
-      "tasksFolder",
-      tasksFolder.value,
-      tasksFolderLoaded.value,
-      tasksFolderEdited.value,
-      tasksFolderError,
-    )
+    await saveOptionalField({
+      cmd: "set_tasks_config",
+      key: "tasksFolder",
+      value: tasksFolder.value,
+      loaded: tasksFolderLoaded.value,
+      edited: tasksFolderEdited.value,
+      errorRef: tasksFolderError,
+    })
   ) {
     failed = true;
   } else if (tasksSaveRan && savingTasksFolder !== savedTasksFolder.value) {
@@ -261,14 +284,15 @@ async function save() {
     listsCardNonce.value += 1;
   }
   if (
-    await saveOptionalField(
-      "set_documents_config",
-      "documentsFolder",
-      documentsFolder.value,
-      documentsFolderLoaded.value,
-      documentsFolderEdited.value,
-      documentsFolderError,
-    )
+    await saveOptionalField({
+      cmd: "set_documents_config",
+      key: "documentsFolder",
+      value: documentsFolder.value,
+      loaded: documentsFolderLoaded.value,
+      edited: documentsFolderEdited.value,
+      errorRef: documentsFolderError,
+      extra: { documentDateFolders: documentDateFolders.value },
+    })
   ) {
     failed = true;
   }
@@ -359,6 +383,23 @@ async function save() {
           :error="documentsFolderError"
           @edit="documentsFolderEdited = true"
         />
+        <div class="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-2">
+          <label
+            for="document-date-folders"
+            class="text-sm text-slate-200"
+          >
+            Organize into year/month folders
+            <span class="block text-xs text-slate-500">Off = one flat folder</span>
+          </label>
+          <input
+            id="document-date-folders"
+            v-model="documentDateFolders"
+            data-testid="document-date-folders-toggle"
+            type="checkbox"
+            class="h-4 w-4 accent-violet-500"
+            @change="documentsFolderEdited = true"
+          >
+        </div>
       </div>
     </section>
     <p

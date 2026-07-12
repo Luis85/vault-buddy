@@ -15,21 +15,29 @@ export function useOptionalFolderField(vaultId: () => string) {
   // rule as RecordMode's pre-load toggle guard). `onPersisted` reports the
   // PERSISTED value even when an edit owns the input — the tasks folder uses
   // it to seed the lists-card reload baseline, which must track disk, not the
-  // draft.
-  async function loadOptionalField<T>(
-    cmd: string,
-    editedRef: Ref<boolean>,
-    loadedRef: Ref<boolean>,
-    targetRef: Ref<string>,
-    extract: (cfg: T) => string | null,
-    onPersisted?: (value: string) => void,
-  ) {
+  // draft. `onLoaded` hands back the whole parsed config for a command that
+  // carries MORE than the one folder field (documents also carries the
+  // date-folders toggle) — the caller gates its own extra ref the same way,
+  // so a late-resolving load can't clobber an edit made before it returned.
+  // One options object (not positional params): the field count already sits
+  // at ESLint's max-params ceiling.
+  async function loadOptionalField<T>(opts: {
+    cmd: string;
+    editedRef: Ref<boolean>;
+    loadedRef: Ref<boolean>;
+    targetRef: Ref<string>;
+    extract: (cfg: T) => string | null;
+    onPersisted?: (value: string) => void;
+    onLoaded?: (cfg: T) => void;
+  }) {
+    const { cmd, editedRef, loadedRef, targetRef, extract, onPersisted, onLoaded } = opts;
     try {
       const cfg = await invoke<T>(cmd, { id: vaultId() });
       const persisted = extract(cfg) ?? "";
       if (!editedRef.value) targetRef.value = persisted;
       loadedRef.value = true;
       onPersisted?.(persisted);
+      onLoaded?.(cfg);
     } catch (e) {
       logWarning(`${cmd} failed (vault ${vaultId()}): ${String(e)}`);
     }
@@ -40,18 +48,24 @@ export function useOptionalFolderField(vaultId: () => string) {
   // vault's real folder. A failure is a field-level error (returned true so
   // the caller can withhold the "Saved ✓") — deliberately NOT short-circuited
   // by the capture-config save, so neither write can block the other's.
-  async function saveOptionalField(
-    cmd: string,
-    key: string,
-    value: string,
-    loaded: boolean,
-    edited: boolean,
-    errorRef: Ref<string | null>,
-  ): Promise<boolean> {
+  // `extra` merges additional fields into the same invoke (documents also
+  // saves its date-folders toggle through this command) — gated by the SAME
+  // loaded/edited check as the folder, since both come from the one command's
+  // response, so one flag correctly covers either field being unresolved.
+  async function saveOptionalField(opts: {
+    cmd: string;
+    key: string;
+    value: string;
+    loaded: boolean;
+    edited: boolean;
+    errorRef: Ref<string | null>;
+    extra?: Record<string, unknown>;
+  }): Promise<boolean> {
+    const { cmd, key, value, loaded, edited, errorRef, extra = {} } = opts;
     if (!loaded && !edited) return false;
     const trimmed = value.trim();
     try {
-      await invoke(cmd, { id: vaultId(), [key]: trimmed === "" ? null : trimmed });
+      await invoke(cmd, { id: vaultId(), [key]: trimmed === "" ? null : trimmed, ...extra });
       return false;
     } catch (e) {
       errorRef.value = String(e);

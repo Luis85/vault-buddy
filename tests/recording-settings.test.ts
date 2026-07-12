@@ -15,6 +15,7 @@ const value = {
   transcriptionModel: "small",
   transcriptionLanguage: "",
   transcriptTimestamps: true,
+  recordingDateFolders: true,
 };
 const devices = { inputs: [{ name: "USB Mic", isDefault: false }], outputs: [{ name: "Speakers", isDefault: true }] };
 
@@ -45,5 +46,14 @@ describe("RecordingSettings", () => {
   it("shows the folder error", () => {
     const w = mount(RecordingSettings, { props: { modelValue: value, devices, folderError: "bad folder" } });
     expect(w.get('[data-testid="folder-error"]').text()).toContain("bad folder");
+  });
+
+  it("emits the dated-folders toggle", async () => {
+    const v = { ...value, recordingDateFolders: true };
+    const w = mount(RecordingSettings, { props: { modelValue: v, devices, folderError: null } });
+    await w.get('[data-testid="recording-date-folders-toggle"]').setValue(false);
+    const emits = w.emitted("update:modelValue");
+    const last = emits![emits!.length - 1][0] as typeof v;
+    expect(last.recordingDateFolders).toBe(false);
   });
 });

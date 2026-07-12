@@ -24,6 +24,7 @@ const config = {
   transcriptionLanguage: null as string | null,
   transcriptTimestamps: true,
   followUpTemplate: true,
+  recordingDateFolders: true,
 };
 
 const devices = {
@@ -45,21 +46,40 @@ const mountLoaded = async (
     onGetTasks?: () => unknown;
     onSetTasks?: (args: unknown) => unknown;
     onListLists?: () => unknown;
+    documentsFolder?: string | null;
+    documentDateFolders?: boolean;
+    onGetDocuments?: () => unknown;
+    onSetDocuments?: (args: unknown) => unknown;
   } = {},
 ) => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
+  // A dispatch table (not an if-chain): each command gets its own small,
+  // independently-scored handler instead of one long branchy function —
+  // keeps this mock under fallow's per-function complexity ceiling as the
+  // command list grows.
+  const handlers: Record<string, (args: unknown) => unknown> = {
+    get_capture_config: () => ({ ...config, ...overrides.config }),
+    list_audio_devices: () => overrides.devices ?? devices,
+    set_capture_config: (args) => overrides.onSet?.(args),
+    get_tasks_config: () =>
+      overrides.onGetTasks
+        ? overrides.onGetTasks()
+        : { tasksFolder: overrides.tasksFolder ?? null },
+    set_tasks_config: (args) => overrides.onSetTasks?.(args) ?? null,
+    // The embedded TaskListSettings card reads the vault's lists at mount.
+    list_task_lists: () => overrides.onListLists?.() ?? [],
+    get_documents_config: () =>
+      overrides.onGetDocuments
+        ? overrides.onGetDocuments()
+        : {
+            documentsFolder: overrides.documentsFolder ?? null,
+            documentDateFolders: overrides.documentDateFolders ?? true,
+          },
+    set_documents_config: (args) => overrides.onSetDocuments?.(args) ?? null,
+  };
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
-    if (cmd === "get_capture_config") return { ...config, ...overrides.config };
-    if (cmd === "list_audio_devices") return overrides.devices ?? devices;
-    if (cmd === "set_capture_config") return overrides.onSet?.(args);
-    if (cmd === "get_tasks_config")
-      return overrides.onGetTasks
-        ? overrides.onGetTasks()
-        : { tasksFolder: overrides.tasksFolder ?? null };
-    if (cmd === "set_tasks_config") return overrides.onSetTasks?.(args) ?? null;
-    // The embedded TaskListSettings card reads the vault's lists at mount.
-    if (cmd === "list_task_lists") return overrides.onListLists?.() ?? [];
+    return handlers[cmd]?.(args);
   });
   // attachTo document.body so the SelectMenu's Teleported popups land in a
   // queryable place; afterEach unmounts and clears the body.
@@ -215,6 +235,7 @@ describe("CaptureSettings", () => {
         transcriptionModel: "small",
         transcriptionLanguage: null,
         transcriptTimestamps: true,
+        recordingDateFolders: true,
       },
     });
     expect(wrapper.text()).toContain("Saved");
@@ -332,6 +353,7 @@ describe("CaptureSettings", () => {
         transcriptionModel: "medium",
         transcriptionLanguage: "es",
         transcriptTimestamps: true,
+        recordingDateFolders: true,
       },
     });
   });
@@ -347,6 +369,41 @@ describe("CaptureSettings", () => {
     await wrapper.get('[data-testid="save-button"]').trigger("click");
     await flushPromises();
     expect(saved?.cfg.followUpTemplate).toBe(false);
+  });
+
+  it("round-trips the recording date-folders toggle through the recordingBundle adapter", async () => {
+    // Proves recordingBundle carries recordingDateFolders on BOTH the get half
+    // (loaded config -> checkbox) and the set half (checkbox edit -> saved
+    // payload) — a dropped field on either half would silently break this.
+    const { wrapper, calls } = await mountLoaded({ config: { recordingDateFolders: true } });
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="recording-date-folders-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(true);
+    await toggle.setValue(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_capture_config");
+    expect(
+      (set?.args as { cfg: { recordingDateFolders: boolean } }).cfg.recordingDateFolders,
+    ).toBe(false);
+  });
+
+  it("shows the documents date-folders toggle and saves it through set_documents_config", async () => {
+    const { wrapper, calls } = await mountLoaded({ documentDateFolders: true });
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="document-date-folders-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(true);
+    await toggle.setValue(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: null,
+      documentDateFolders: false,
+    });
   });
 
   it("loads the tasks folder and saves it with the form Save (no dedicated button)", async () => {

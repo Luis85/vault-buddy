@@ -29,6 +29,9 @@ pub struct CaptureConfigDto {
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
     pub follow_up_template: bool,
+    /// Whether NEW recordings land in a dated `YYYY/MM` subfolder — the
+    /// Recording settings surface for `VaultCaptureConfig::recording_date_folders`.
+    pub recording_date_folders: bool,
 }
 
 impl CaptureConfigDto {
@@ -46,6 +49,7 @@ impl CaptureConfigDto {
             transcription_language: v.transcription_language.clone(),
             transcript_timestamps: v.transcript_timestamps,
             follow_up_template: v.follow_up_template,
+            recording_date_folders: v.recording_date_folders,
         }
     }
 }
@@ -123,10 +127,13 @@ pub fn set_capture_config(
         // it): a capture save must never reset the default list or the order.
         default_list: existing.default_list,
         list_order: existing.list_order,
-        // The layout toggles get their own settings surface later; preserve
-        // both from the existing config so a capture-settings save can't
-        // reset them in the meantime.
-        recording_date_folders: existing.recording_date_folders,
+        // recording_date_folders is this form's own field now (Vault settings
+        // → Recording → Folders) — written from the DTO like every other
+        // capture field. document_date_folders belongs to the Documents
+        // settings surface (set_documents_config owns it), so it stays
+        // preserved from the existing config, same read-inside-the-lock
+        // discipline as tasks_folder/documents_folder above.
+        recording_date_folders: cfg.recording_date_folders,
         document_date_folders: existing.document_date_folders,
     };
     let result = capture_config::update_vault_config(&id, value.clone());

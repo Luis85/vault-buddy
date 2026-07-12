@@ -280,6 +280,9 @@ pub async fn detect_pandoc() -> PandocStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DocumentsConfigDto {
     pub documents_folder: Option<String>,
+    /// Whether NEW imports land in a dated `YYYY/MM` subfolder — the
+    /// Documents settings surface for `VaultCaptureConfig::document_date_folders`.
+    pub document_date_folders: bool,
 }
 
 /// Per-vault documents folder (or None → the frontend shows the "Documents"
@@ -289,18 +292,22 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
     let vault = capture_config::vault_config(&capture_config::load_config(), &id);
     DocumentsConfigDto {
         documents_folder: vault.documents_folder,
+        document_date_folders: vault.document_date_folders,
     }
 }
 
-/// Persist the vault's documents folder. Validates containment BEFORE writing
-/// (the effective folder — explicit or the "Documents" default — must stay in
-/// the vault), serialized behind ConfigWriteLock. Read-modify-write preserves
-/// the vault's other config. Mirrors set_tasks_config exactly.
+/// Persist the vault's documents folder + layout toggle. Validates containment
+/// BEFORE writing (the effective folder — explicit or the "Documents"
+/// default — must stay in the vault), serialized behind ConfigWriteLock.
+/// Read-modify-write preserves the vault's other config (recording_date_folders
+/// included — that field belongs to set_capture_config). Mirrors
+/// set_tasks_config exactly, plus the one extra bool field.
 #[tauri::command]
 pub fn set_documents_config(
     lock: tauri::State<ConfigWriteLock>,
     id: String,
     documents_folder: Option<String>,
+    document_date_folders: bool,
 ) -> Result<(), String> {
     let vault = discovery::discover_vaults()
         .into_iter()
@@ -317,6 +324,7 @@ pub fn set_documents_config(
     let _guard = lock_ignoring_poison(&lock.0);
     let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
     v.documents_folder = folder;
+    v.document_date_folders = document_date_folders;
     capture_config::update_vault_config(&id, v)
 }
 

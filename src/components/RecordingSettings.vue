@@ -17,6 +17,7 @@ interface RecordingSettingsValue {
   transcriptionModel: string;
   transcriptionLanguage: string;
   transcriptTimestamps: boolean;
+  recordingDateFolders: boolean;
 }
 
 // Controlled component: no persistence of its own — same idiom as
@@ -62,6 +63,10 @@ const inputDevice = computed({
 const outputDevice = computed({
   get: () => props.modelValue.outputDevice,
   set: (v: string) => patch({ outputDevice: v }),
+});
+const recordingDateFolders = computed({
+  get: () => props.modelValue.recordingDateFolders,
+  set: (v: boolean) => patch({ recordingDateFolders: v }),
 });
 
 // Bundles the four transcription fields for TranscriptionSettings' v-model —
@@ -152,6 +157,22 @@ const outputMenuOptions = computed(() => [
       >
         {{ folderError }}
       </p>
+      <div class="flex items-center justify-between">
+        <label
+          for="recording-date-folders"
+          class="text-sm text-slate-200"
+        >
+          Organize into year/month folders
+          <span class="block text-xs text-slate-500">Off = one flat folder</span>
+        </label>
+        <input
+          id="recording-date-folders"
+          v-model="recordingDateFolders"
+          data-testid="recording-date-folders-toggle"
+          type="checkbox"
+          class="h-4 w-4 accent-violet-500"
+        >
+      </div>
     </div>
   </section>
   <section>
