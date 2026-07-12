@@ -1,0 +1,118 @@
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
+import TasksConfigTab from "../src/components/TasksConfigTab.vue";
+
+let active: ReturnType<typeof mount> | null = null;
+beforeEach(() => {
+  setActivePinia(createPinia());
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  active?.unmount();
+  active = null;
+  vi.useRealTimers();
+  clearMocks();
+  document.body.innerHTML = "";
+});
+
+function mountTab(
+  opts: {
+    tasksFolder?: string | null;
+    onGet?: () => unknown;
+    onSet?: (a: unknown) => unknown;
+    onListLists?: () => unknown;
+  } = {},
+) {
+  const calls: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    calls.push({ cmd, args });
+    if (cmd === "get_tasks_config")
+      return opts.onGet ? opts.onGet() : { tasksFolder: opts.tasksFolder ?? null, defaultList: null, listOrder: [] };
+    if (cmd === "list_task_lists") return opts.onListLists?.() ?? [];
+    if (cmd === "set_tasks_config") return opts.onSet?.(args) ?? null;
+    if (cmd === "set_task_lists_config") return null;
+  });
+  active = mount(TasksConfigTab, { props: { vaultId: "v1" }, attachTo: document.body });
+  return { wrapper: active, calls };
+}
+
+describe("TasksConfigTab", () => {
+  it("loads the tasks folder from disk", async () => {
+    const { wrapper } = mountTab({ tasksFolder: "Inbox/Tasks" });
+    await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('[data-testid="tasks-folder-input"]').element.value).toBe("Inbox/Tasks");
+  });
+
+  it("does not save on mount", async () => {
+    const { calls } = mountTab({ tasksFolder: "Inbox/Tasks" });
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_tasks_config")).toBe(false);
+  });
+
+  it("debounces a folder edit and trims on save", async () => {
+    const { wrapper, calls } = mountTab({ tasksFolder: "Tasks" });
+    await flushPromises();
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("  Work/Tasks  ");
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_tasks_config")?.args).toEqual({ id: "v1", tasksFolder: "Work/Tasks" });
+  });
+
+  it("empties to null on save", async () => {
+    const { wrapper, calls } = mountTab({ tasksFolder: "Tasks" });
+    await flushPromises();
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("");
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_tasks_config")?.args).toEqual({ id: "v1", tasksFolder: null });
+  });
+
+  it("remounts the lists card only when the persisted folder changes", async () => {
+    let lists = ["OldList", "OldToo"];
+    const { wrapper, calls } = mountTab({ tasksFolder: "Tasks", onListLists: () => lists });
+    await flushPromises();
+    const cardLoads = () => calls.filter((c) => c.cmd === "list_task_lists").length;
+    const before = cardLoads();
+    expect(before).toBeGreaterThan(0);
+    lists = ["NewList", "NewToo"];
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Other/Tasks");
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(cardLoads()).toBe(before + 1); // remounted → re-read the lists
+    // A second save with the folder unchanged does not remount.
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Other/Tasks");
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(cardLoads()).toBe(before + 1);
+  });
+
+  it("shows a save error inline", async () => {
+    const { wrapper } = mountTab({
+      tasksFolder: "Tasks",
+      onSet: () => {
+        throw "Configured tasks folder must stay inside the vault";
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("../x");
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(wrapper.get('[data-testid="tasks-folder-error"]').text()).toContain("inside the vault");
+  });
+
+  it("shows a load error (no folder input) but still renders the lists card when the read fails", async () => {
+    const { wrapper } = mountTab({
+      onGet: () => {
+        throw "config unreadable";
+      },
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="tasks-load-error"]').text()).toContain("config unreadable");
+    expect(wrapper.find('[data-testid="tasks-folder-input"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Task lists"); // TaskListSettings still mounted
+  });
+});
