@@ -108,6 +108,24 @@ describe("CaptureSettings", () => {
     expect(wrapper.findAll(".rounded-xl.border").length).toBeGreaterThan(0);
   });
 
+  it("renders the three domain super-group headings", async () => {
+    // The form is further grouped into Recording/Tasks/Documents domain
+    // super-groups, one level above the buddy-settings-style sections above
+    // (e.g. "Companion note", "Tasks folder") — each wrapper carries its own
+    // data-testid and a domain h2 as ITS OWN first heading, so this is
+    // precise about which h2 belongs to the group vs. a nested sub-card.
+    const { wrapper } = await mountLoaded();
+    const groups: Array<[string, string]> = [
+      ["group-recording", "Recording"],
+      ["group-tasks", "Tasks"],
+      ["group-documents", "Documents"],
+    ];
+    for (const [testid, heading] of groups) {
+      const group = wrapper.get(`[data-testid="${testid}"]`);
+      expect(group.get("h2").text()).toBe(heading);
+    }
+  });
+
   it("loads the config into the form", async () => {
     const { wrapper, calls } = await mountLoaded();
     expect(calls.map((c) => c.cmd)).toContain("get_capture_config");

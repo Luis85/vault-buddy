@@ -289,39 +289,72 @@ async function save() {
     class="flex flex-col gap-3"
     @submit.prevent="save"
   >
-    <RecordingSettings
-      v-model="recordingBundle"
-      :devices="devices"
-      :folder-error="folderError"
-    />
-    <VaultFolderSetting
-      v-model="tasksFolder"
-      heading="Tasks"
-      label="Tasks folder"
-      placeholder="Tasks"
-      input-id="tasks-folder"
-      input-testid="tasks-folder-input"
-      error-testid="tasks-folder-error"
-      :error="tasksFolderError"
-      @edit="tasksFolderEdited = true"
-    />
-    <!-- Self-contained (own load/save) so its lists-config failure can't
-         block the capture/folder saves — the independent-save pattern. -->
-    <TaskListSettings
-      :key="listsCardNonce"
-      :vault-id="vaultId"
-    />
-    <VaultFolderSetting
-      v-model="documentsFolder"
-      heading="Document import"
-      label="Documents folder"
-      placeholder="Documents"
-      input-id="documents-folder"
-      input-testid="documents-folder-input"
-      error-testid="documents-folder-error"
-      :error="documentsFolderError"
-      @edit="documentsFolderEdited = true"
-    />
+    <!-- Three domain super-groups, one level above the buddy-settings-style
+         sub-cards below (Companion note, Tasks folder, …): each carries its
+         own data-testid and a domain h2 as ITS OWN first heading. -->
+    <section data-testid="group-recording">
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Recording
+      </h2>
+      <!-- Plain wrapper, not another bordered card: RecordingSettings already
+           renders its own bordered sub-cards (Recording, Companion note,
+           Transcription, Audio devices), same as VaultFolderSetting/
+           TaskListSettings do for the Tasks/Documents groups below — an
+           extra border here would double-nest around each of them. -->
+      <div class="flex flex-col gap-3">
+        <RecordingSettings
+          v-model="recordingBundle"
+          :devices="devices"
+          :folder-error="folderError"
+        />
+      </div>
+    </section>
+    <section data-testid="group-tasks">
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Tasks
+      </h2>
+      <div class="flex flex-col gap-3">
+        <!-- heading is the field label, not "Tasks" again — the group h2
+             above already carries the domain name. -->
+        <VaultFolderSetting
+          v-model="tasksFolder"
+          heading="Tasks folder"
+          label="Tasks folder"
+          placeholder="Tasks"
+          input-id="tasks-folder"
+          input-testid="tasks-folder-input"
+          error-testid="tasks-folder-error"
+          :error="tasksFolderError"
+          @edit="tasksFolderEdited = true"
+        />
+        <!-- Self-contained (own load/save) so its lists-config failure can't
+             block the capture/folder saves — the independent-save pattern. -->
+        <TaskListSettings
+          :key="listsCardNonce"
+          :vault-id="vaultId"
+        />
+      </div>
+    </section>
+    <section data-testid="group-documents">
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Documents
+      </h2>
+      <div class="flex flex-col gap-3">
+        <!-- heading is the field label, not "Documents" again — the group h2
+             above already carries the domain name. -->
+        <VaultFolderSetting
+          v-model="documentsFolder"
+          heading="Documents folder"
+          label="Documents folder"
+          placeholder="Documents"
+          input-id="documents-folder"
+          input-testid="documents-folder-input"
+          error-testid="documents-folder-error"
+          :error="documentsFolderError"
+          @edit="documentsFolderEdited = true"
+        />
+      </div>
+    </section>
     <p
       v-if="saveError"
       data-testid="save-error"
