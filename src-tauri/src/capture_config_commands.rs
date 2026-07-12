@@ -123,6 +123,11 @@ pub fn set_capture_config(
         // it): a capture save must never reset the default list or the order.
         default_list: existing.default_list,
         list_order: existing.list_order,
+        // The layout toggles get their own settings surface later; preserve
+        // both from the existing config so a capture-settings save can't
+        // reset them in the meantime.
+        recording_date_folders: existing.recording_date_folders,
+        document_date_folders: existing.document_date_folders,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {

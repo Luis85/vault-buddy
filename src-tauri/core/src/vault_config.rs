@@ -76,6 +76,13 @@ pub struct VaultCaptureConfig {
     /// Display order for list sections and pickers; folders not named here
     /// append alphabetically, names without folders are ignored.
     pub list_order: Vec<String>,
+    /// Whether NEW recordings land in a dated `YYYY/MM` subfolder (true, the
+    /// long-standing default) or flat in the recording root (false).
+    /// Existing files in either layout are still found — flipping this only
+    /// changes where new captures land.
+    pub recording_date_folders: bool,
+    /// Same toggle for the document-import domain's write path.
+    pub document_date_folders: bool,
 }
 
 impl Default for VaultCaptureConfig {
@@ -97,6 +104,8 @@ impl Default for VaultCaptureConfig {
             documents_folder: None,
             default_list: None,
             list_order: Vec::new(),
+            recording_date_folders: true,
+            document_date_folders: true,
         }
     }
 }
@@ -233,6 +242,14 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
                     .collect()
             })
             .unwrap_or_default(),
+        recording_date_folders: entry
+            .get("recordingDateFolders")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        document_date_folders: entry
+            .get("documentDateFolders")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
     }
 }
 
@@ -280,6 +297,12 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     }
     if !v.list_order.is_empty() {
         entry.insert("listOrder".to_string(), json!(v.list_order));
+    }
+    if !v.recording_date_folders {
+        entry.insert("recordingDateFolders".to_string(), json!(false));
+    }
+    if !v.document_date_folders {
+        entry.insert("documentDateFolders".to_string(), json!(false));
     }
     entry
 }
@@ -517,6 +540,8 @@ mod tests {
                 documents_folder: Some("Inbox/Documents".to_string()),
                 default_list: Some("Inbox".to_string()),
                 list_order: vec!["Inbox".to_string(), "Next".to_string()],
+                recording_date_folders: false,
+                document_date_folders: false,
             },
         );
         cfg.vaults
@@ -651,5 +676,39 @@ mod tests {
             cfg.vaults["v1"].documents_folder.as_deref(),
             Some("Imports")
         );
+    }
+
+    #[test]
+    fn date_folder_toggles_default_true_and_round_trip() {
+        let d = VaultCaptureConfig::default();
+        assert!(d.recording_date_folders);
+        assert!(d.document_date_folders);
+        // Absent → true; present false parses.
+        let cfg = crate::capture_config::parse_config(
+            r#"{ "vaults": { "a": { "recordingDateFolders": false, "documentDateFolders": false } } }"#,
+        );
+        let a = crate::capture_config::vault_config(&cfg, "a");
+        assert!(!a.recording_date_folders);
+        assert!(!a.document_date_folders);
+        // Serialize omits when true, writes when false.
+        let mut only_true = crate::capture_config::AppConfig::default();
+        only_true
+            .vaults
+            .insert("t".into(), VaultCaptureConfig::default());
+        let jt = crate::capture_config::serialize_config(&only_true);
+        assert!(!jt.contains("recordingDateFolders"));
+        assert!(!jt.contains("documentDateFolders"));
+        let mut has_false = crate::capture_config::AppConfig::default();
+        has_false.vaults.insert(
+            "f".into(),
+            VaultCaptureConfig {
+                recording_date_folders: false,
+                document_date_folders: false,
+                ..VaultCaptureConfig::default()
+            },
+        );
+        let jf = crate::capture_config::serialize_config(&has_false);
+        assert!(jf.contains("\"recordingDateFolders\": false"));
+        assert!(jf.contains("\"documentDateFolders\": false"));
     }
 }
