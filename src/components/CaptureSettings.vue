@@ -218,7 +218,15 @@ onMounted(async () => {
   }
   // Separate invokes (not in the Promise.all above) so an optional-folder read
   // can't block the capture form from loading — both folders are optional.
-  await loadOptionalField<TasksConfig>({
+  // Both loads are STARTED here, synchronously, before either is awaited:
+  // assigning documentsLoadPromise only after `await`ing the tasks load (as
+  // this used to do) left it undefined for the whole tasks-pending window,
+  // so save()'s `if (documentsLoadPromise) await documentsLoadPromise;` guard
+  // had nothing to wait on and skipped — reintroducing the exact drop/clobber
+  // the guard exists to prevent, just shifted into the tasks-loading window.
+  // Starting both concurrently is safe: the two reads are independent config
+  // fetches over the same file.
+  const tasksLoadPromise = loadOptionalField<TasksConfig>({
     cmd: "get_tasks_config",
     editedRef: tasksFolderEdited,
     loadedRef: tasksFolderLoaded,
@@ -245,6 +253,8 @@ onMounted(async () => {
       if (!documentDateFoldersEdited.value) documentDateFolders.value = cfg.documentDateFolders;
     },
   });
+  await tasksLoadPromise;
+  await documentsLoadPromise;
 });
 
 async function save() {

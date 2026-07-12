@@ -525,6 +525,42 @@ describe("CaptureSettings", () => {
     });
   });
 
+  it("does not clobber a persisted documentDateFolders with the seeded default when the TASKS read is still pending at save time (tasks-window residual gap)", async () => {
+    // Residual regression: documentsLoadPromise used to be assigned only
+    // AFTER the tasks-config `loadOptionalField` call was awaited in
+    // onMounted. So while get_tasks_config was still pending,
+    // documentsLoadPromise stayed undefined — save()'s defensive
+    // `if (documentsLoadPromise) await documentsLoadPromise;` had nothing to
+    // wait on and skipped, AND the documents read hadn't even been started
+    // yet (its invoke sits after the tasks await in the buggy ordering), so
+    // documentDateFolders was still at its seeded default (true) rather than
+    // the persisted value (false) — the exact clobber the earlier fix
+    // closed, just moved into the tasks-loading window instead of the
+    // documents one.
+    let resolveTasks!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetTasks: () =>
+        new Promise((resolve) => {
+          resolveTasks = resolve;
+        }),
+      documentsFolder: "Docs",
+      documentDateFolders: false,
+    });
+    await wrapper.get('[data-testid="documents-folder-input"]').setValue("Mine");
+    await wrapper.get("form").trigger("submit");
+    // Give save() a chance to act while get_tasks_config is still unresolved
+    // (the exact window this regression targets) before resolving it.
+    await flushPromises();
+    resolveTasks({ tasksFolder: null });
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Mine",
+      documentDateFolders: false,
+    });
+  });
+
   it("loads the tasks folder and saves it with the form Save (no dedicated button)", async () => {
     const { wrapper, calls } = await mountLoaded({ tasksFolder: "Inbox/Tasks" });
     const input = wrapper.get('[data-testid="tasks-folder-input"]');
