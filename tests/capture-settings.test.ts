@@ -13,7 +13,8 @@ import { logWarning } from "../src/logging";
 
 const config = {
   mode: "meeting",
-  recordingFolder: "Meetings",
+  meetingFolder: "Meetings",
+  voiceNoteFolder: "Voice Notes",
   bitrateKbps: 160,
   createNote: true,
   inputDevice: "USB Mic",
@@ -23,6 +24,7 @@ const config = {
   transcriptionLanguage: null as string | null,
   transcriptTimestamps: true,
   followUpTemplate: true,
+  recordingDateFolders: true,
 };
 
 const devices = {
@@ -44,21 +46,40 @@ const mountLoaded = async (
     onGetTasks?: () => unknown;
     onSetTasks?: (args: unknown) => unknown;
     onListLists?: () => unknown;
+    documentsFolder?: string | null;
+    documentDateFolders?: boolean;
+    onGetDocuments?: () => unknown;
+    onSetDocuments?: (args: unknown) => unknown;
   } = {},
 ) => {
   const calls: Array<{ cmd: string; args: unknown }> = [];
+  // A dispatch table (not an if-chain): each command gets its own small,
+  // independently-scored handler instead of one long branchy function —
+  // keeps this mock under fallow's per-function complexity ceiling as the
+  // command list grows.
+  const handlers: Record<string, (args: unknown) => unknown> = {
+    get_capture_config: () => ({ ...config, ...overrides.config }),
+    list_audio_devices: () => overrides.devices ?? devices,
+    set_capture_config: (args) => overrides.onSet?.(args),
+    get_tasks_config: () =>
+      overrides.onGetTasks
+        ? overrides.onGetTasks()
+        : { tasksFolder: overrides.tasksFolder ?? null },
+    set_tasks_config: (args) => overrides.onSetTasks?.(args) ?? null,
+    // The embedded TaskListSettings card reads the vault's lists at mount.
+    list_task_lists: () => overrides.onListLists?.() ?? [],
+    get_documents_config: () =>
+      overrides.onGetDocuments
+        ? overrides.onGetDocuments()
+        : {
+            documentsFolder: overrides.documentsFolder ?? null,
+            documentDateFolders: overrides.documentDateFolders ?? true,
+          },
+    set_documents_config: (args) => overrides.onSetDocuments?.(args) ?? null,
+  };
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
-    if (cmd === "get_capture_config") return { ...config, ...overrides.config };
-    if (cmd === "list_audio_devices") return overrides.devices ?? devices;
-    if (cmd === "set_capture_config") return overrides.onSet?.(args);
-    if (cmd === "get_tasks_config")
-      return overrides.onGetTasks
-        ? overrides.onGetTasks()
-        : { tasksFolder: overrides.tasksFolder ?? null };
-    if (cmd === "set_tasks_config") return overrides.onSetTasks?.(args) ?? null;
-    // The embedded TaskListSettings card reads the vault's lists at mount.
-    if (cmd === "list_task_lists") return overrides.onListLists?.() ?? [];
+    return handlers[cmd]?.(args);
   });
   // attachTo document.body so the SelectMenu's Teleported popups land in a
   // queryable place; afterEach unmounts and clears the body.
@@ -100,7 +121,7 @@ describe("CaptureSettings", () => {
     const headers = wrapper.findAll("h2");
     const texts = headers.map((h) => h.text());
     expect(texts).toContain("Recording");
-    expect(texts).toContain("Audio devices");
+    expect(texts).toContain("Audio");
     const recording = headers.find((h) => h.text() === "Recording")!;
     expect(recording.classes()).toContain("uppercase");
     expect(recording.classes()).toContain("tracking-wide");
@@ -108,12 +129,34 @@ describe("CaptureSettings", () => {
     expect(wrapper.findAll(".rounded-xl.border").length).toBeGreaterThan(0);
   });
 
+  it("renders the three domain super-group headings", async () => {
+    // The form is further grouped into Recording/Tasks/Documents domain
+    // super-groups, one level above the buddy-settings-style sections above
+    // (e.g. "Companion note", "Tasks folder") — each wrapper carries its own
+    // data-testid and a domain h2 as ITS OWN first heading, so this is
+    // precise about which h2 belongs to the group vs. a nested sub-card.
+    const { wrapper } = await mountLoaded();
+    const groups: Array<[string, string]> = [
+      ["group-recording", "Recording"],
+      ["group-tasks", "Tasks"],
+      ["group-documents", "Documents"],
+    ];
+    for (const [testid, heading] of groups) {
+      const group = wrapper.get(`[data-testid="${testid}"]`);
+      expect(group.get("h2").text()).toBe(heading);
+    }
+  });
+
   it("loads the config into the form", async () => {
     const { wrapper, calls } = await mountLoaded();
     expect(calls.map((c) => c.cmd)).toContain("get_capture_config");
     expect(calls.map((c) => c.cmd)).toContain("list_audio_devices");
-    const folder = wrapper.get<HTMLInputElement>('[data-testid="folder-input"]');
-    expect(folder.element.value).toBe("Meetings");
+    const meetingFolder = wrapper.get<HTMLInputElement>('[data-testid="meeting-folder-input"]');
+    expect(meetingFolder.element.value).toBe("Meetings");
+    const voiceNoteFolder = wrapper.get<HTMLInputElement>(
+      '[data-testid="voice-note-folder-input"]',
+    );
+    expect(voiceNoteFolder.element.value).toBe("Voice Notes");
     expect(wrapper.get('[data-testid="bitrate-select"]').text()).toContain("160 kbps");
     expect(wrapper.get('[data-testid="input-device-select"]').text()).toContain("USB Mic");
   });
@@ -144,11 +187,19 @@ describe("CaptureSettings", () => {
     expect(wrapper.find('[data-testid="mode-meeting"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="mode-voice-note"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("Default recording mode");
-    // The folder placeholder was mode-dependent; with no mode control it names
-    // both per-type defaults.
+  });
+
+  it("shows a distinct placeholder naming each mode's default folder", async () => {
+    // One folder input per mode now (replacing the old single input whose
+    // placeholder had to name both defaults at once), so each names only its
+    // own mode's default.
+    const { wrapper } = await mountLoaded();
     expect(
-      wrapper.get('[data-testid="folder-input"]').attributes("placeholder"),
-    ).toBe("Meetings or Voice Notes");
+      wrapper.get('[data-testid="meeting-folder-input"]').attributes("placeholder"),
+    ).toBe("Meetings");
+    expect(
+      wrapper.get('[data-testid="voice-note-folder-input"]').attributes("placeholder"),
+    ).toBe("Voice Notes");
   });
 
   it("shows the output picker regardless of the stored mode", async () => {
@@ -160,7 +211,10 @@ describe("CaptureSettings", () => {
 
   it("saves the edited form through set_capture_config", async () => {
     const { wrapper, calls } = await mountLoaded();
-    await wrapper.get('[data-testid="folder-input"]').setValue("Inbox/Audio");
+    // Both folder inputs are edited so the recordingBundle adapter's
+    // round-trip is proven in both directions for both fields, not just one.
+    await wrapper.get('[data-testid="meeting-folder-input"]').setValue("Inbox/Audio");
+    await wrapper.get('[data-testid="voice-note-folder-input"]').setValue("Personal/Notes");
     await pickOption(wrapper, "bitrate-select", 192);
     await pickOption(wrapper, "input-device-select", "");
     await wrapper.get("form").trigger("submit");
@@ -170,7 +224,8 @@ describe("CaptureSettings", () => {
       id: "v1",
       cfg: {
         mode: "meeting",
-        recordingFolder: "Inbox/Audio",
+        meetingFolder: "Inbox/Audio",
+        voiceNoteFolder: "Personal/Notes",
         bitrateKbps: 192,
         createNote: true,
         followUpTemplate: true,
@@ -180,6 +235,7 @@ describe("CaptureSettings", () => {
         transcriptionModel: "small",
         transcriptionLanguage: null,
         transcriptTimestamps: true,
+        recordingDateFolders: true,
       },
     });
     expect(wrapper.text()).toContain("Saved");
@@ -190,7 +246,7 @@ describe("CaptureSettings", () => {
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(wrapper.text()).toContain("Saved");
-    await wrapper.get('[data-testid="folder-input"]').setValue("Elsewhere");
+    await wrapper.get('[data-testid="meeting-folder-input"]').setValue("Elsewhere");
     expect(wrapper.text()).not.toContain("Saved ✓");
   });
 
@@ -200,13 +256,13 @@ describe("CaptureSettings", () => {
         throw "Configured recording folder must stay inside the vault: \"../x\"";
       },
     });
-    await wrapper.get('[data-testid="folder-input"]').setValue("../x");
+    await wrapper.get('[data-testid="meeting-folder-input"]').setValue("../x");
     await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(wrapper.get('[data-testid="folder-error"]').text()).toContain(
       "must stay inside the vault",
     );
-    const folder = wrapper.get<HTMLInputElement>('[data-testid="folder-input"]');
+    const folder = wrapper.get<HTMLInputElement>('[data-testid="meeting-folder-input"]');
     expect(folder.element.value).toBe("../x");
   });
 
@@ -286,7 +342,8 @@ describe("CaptureSettings", () => {
       id: "v1",
       cfg: {
         mode: "meeting",
-        recordingFolder: "Meetings",
+        meetingFolder: "Meetings",
+        voiceNoteFolder: "Voice Notes",
         bitrateKbps: 160,
         createNote: true,
         followUpTemplate: true,
@@ -296,6 +353,7 @@ describe("CaptureSettings", () => {
         transcriptionModel: "medium",
         transcriptionLanguage: "es",
         transcriptTimestamps: true,
+        recordingDateFolders: true,
       },
     });
   });
@@ -311,6 +369,196 @@ describe("CaptureSettings", () => {
     await wrapper.get('[data-testid="save-button"]').trigger("click");
     await flushPromises();
     expect(saved?.cfg.followUpTemplate).toBe(false);
+  });
+
+  it("round-trips the recording date-folders toggle through the recordingBundle adapter", async () => {
+    // Proves recordingBundle carries recordingDateFolders on BOTH the get half
+    // (loaded config -> checkbox) and the set half (checkbox edit -> saved
+    // payload) — a dropped field on either half would silently break this.
+    const { wrapper, calls } = await mountLoaded({ config: { recordingDateFolders: true } });
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="recording-date-folders-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(true);
+    await toggle.setValue(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_capture_config");
+    expect(
+      (set?.args as { cfg: { recordingDateFolders: boolean } }).cfg.recordingDateFolders,
+    ).toBe(false);
+  });
+
+  it("shows the documents date-folders toggle and saves it through set_documents_config", async () => {
+    const { wrapper, calls } = await mountLoaded({ documentDateFolders: true });
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="document-date-folders-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(true);
+    await toggle.setValue(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: null,
+      documentDateFolders: false,
+    });
+  });
+
+  it("hydrates the date-folders toggle from disk even when the folder input was edited first (shared edit-guard regression)", async () => {
+    // Regression: the date-folders toggle was added reusing
+    // documentsFolderEdited — the SAME flag that guards the documents FOLDER
+    // text input's hydration. Editing the folder before get_documents_config
+    // resolves wrongly gated off the checkbox's OWN hydration from that same
+    // response, leaving it stuck on its seeded default (true) and silently
+    // reverting a persisted "flat" (false) choice on the next save.
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="documents-folder-input"]').setValue("Mine");
+    resolveDocuments({ documentsFolder: "Stored/Docs", documentDateFolders: false });
+    await flushPromises();
+    const toggle = wrapper.get<HTMLInputElement>(
+      '[data-testid="document-date-folders-toggle"]',
+    );
+    expect(toggle.element.checked).toBe(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Mine",
+      documentDateFolders: false,
+    });
+  });
+
+  it("keeps the folder input hydrating from disk when the date-folders toggle is clicked first (shared edit-guard regression, symmetric case)", async () => {
+    // Symmetric case: clicking the checkbox before get_documents_config
+    // resolves must not block the FOLDER input's own hydration from that same
+    // response — it would otherwise stay blank and Save would send
+    // documentsFolder: null, clearing a persisted custom folder path.
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="document-date-folders-toggle"]').setValue(false);
+    resolveDocuments({ documentsFolder: "Stored/Docs", documentDateFolders: true });
+    await flushPromises();
+    const input = wrapper.get<HTMLInputElement>('[data-testid="documents-folder-input"]');
+    expect(input.element.value).toBe("Stored/Docs");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Stored/Docs",
+      documentDateFolders: false,
+    });
+  });
+
+  it("saves a checkbox-only edit even though the documents-config read was still in flight at save time (P2 drop regression)", async () => {
+    // Regression: Save becomes clickable as soon as the capture-config
+    // Promise.all resolves — well before get_documents_config returns.
+    // Toggling ONLY the checkbox (the folder text stays untouched) and
+    // saving while that read is still pending used to gate the WHOLE
+    // documents save off documentsFolderEdited alone (loaded=false,
+    // edited=false — the checkbox's own edit wasn't counted), skipping
+    // set_documents_config entirely and silently dropping the checkbox
+    // change while the form still showed "Saved ✓".
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="document-date-folders-toggle"]').setValue(false);
+    await wrapper.get("form").trigger("submit");
+    // Let save() run as far as it can while the read is still pending (this
+    // is the pending-load window itself) before resolving it — otherwise the
+    // resolve could race ahead of save()'s own gate check and mask the bug.
+    await flushPromises();
+    resolveDocuments({ documentsFolder: null, documentDateFolders: true });
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: null,
+      documentDateFolders: false,
+    });
+  });
+
+  it("does not clobber a persisted documentDateFolders with the seeded default when the folder is edited before the read resolves (P2 clobber regression)", async () => {
+    // Regression: editing the folder text (which already satisfies the
+    // loaded-or-edited gate via documentsFolderEdited) while
+    // get_documents_config is still pending used to save IMMEDIATELY, with
+    // documentDateFolders still at its seeded default (true) rather than the
+    // disk's real value — overwriting a persisted "flat" (false) choice the
+    // user never touched.
+    let resolveDocuments!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetDocuments: () =>
+        new Promise((resolve) => {
+          resolveDocuments = resolve;
+        }),
+    });
+    await wrapper.get('[data-testid="documents-folder-input"]').setValue("Mine");
+    await wrapper.get("form").trigger("submit");
+    // Same reasoning as the drop-regression test above: give save() a chance
+    // to act while the read is still unresolved before resolving it.
+    await flushPromises();
+    resolveDocuments({ documentsFolder: "Mine", documentDateFolders: false });
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Mine",
+      documentDateFolders: false,
+    });
+  });
+
+  it("does not clobber a persisted documentDateFolders with the seeded default when the TASKS read is still pending at save time (tasks-window residual gap)", async () => {
+    // Residual regression: documentsLoadPromise used to be assigned only
+    // AFTER the tasks-config `loadOptionalField` call was awaited in
+    // onMounted. So while get_tasks_config was still pending,
+    // documentsLoadPromise stayed undefined — save()'s defensive
+    // `if (documentsLoadPromise) await documentsLoadPromise;` had nothing to
+    // wait on and skipped, AND the documents read hadn't even been started
+    // yet (its invoke sits after the tasks await in the buggy ordering), so
+    // documentDateFolders was still at its seeded default (true) rather than
+    // the persisted value (false) — the exact clobber the earlier fix
+    // closed, just moved into the tasks-loading window instead of the
+    // documents one.
+    let resolveTasks!: (v: unknown) => void;
+    const { wrapper, calls } = await mountLoaded({
+      onGetTasks: () =>
+        new Promise((resolve) => {
+          resolveTasks = resolve;
+        }),
+      documentsFolder: "Docs",
+      documentDateFolders: false,
+    });
+    await wrapper.get('[data-testid="documents-folder-input"]').setValue("Mine");
+    await wrapper.get("form").trigger("submit");
+    // Give save() a chance to act while get_tasks_config is still unresolved
+    // (the exact window this regression targets) before resolving it.
+    await flushPromises();
+    resolveTasks({ tasksFolder: null });
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_documents_config");
+    expect(set?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Mine",
+      documentDateFolders: false,
+    });
   });
 
   it("loads the tasks folder and saves it with the form Save (no dedicated button)", async () => {

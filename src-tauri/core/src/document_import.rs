@@ -169,11 +169,14 @@ pub fn is_real_dated_dir(documents_root: &Path, dir: &Path, year: &str, month: &
 }
 
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
-/// Documents folder (walking its `YYYY/MM` subtree — that's where staging
-/// dirs live). Staleness-gated with an injected `now` so a clock jump giving
-/// a live dir a future mtime can't make it look stale (mirrors capture's
-/// `is_stale_at`). Returns what was removed AND how many fresh orphans remain
-/// (so the caller can reschedule).
+/// Documents folder — directly at its root (the flat layout `document_date_folders`
+/// produces when off) AND across its `YYYY/MM` subtree (the dated layout, the
+/// default) — since a vault can accumulate orphans from either shape depending
+/// on what the toggle was set to when a conversion crashed. Staleness-gated
+/// with an injected `now` so a clock jump giving a live dir a future mtime
+/// can't make it look stale (mirrors capture's `is_stale_at`). Returns what
+/// was removed AND how many fresh orphans remain (so the caller can
+/// reschedule).
 ///
 /// **Canonical containment at every level** (Codex review): a symlinked OR
 /// junctioned dated subfolder (`Documents/2026`, `2026/07`) must never let the
@@ -190,7 +193,10 @@ pub fn is_real_dated_dir(documents_root: &Path, dir: &Path, year: &str, month: &
 /// points at — real vault data still *inside* the vault, so the containment
 /// check wouldn't catch it. An owned staging dir is a real directory we created,
 /// so it canonicalizes to itself; the leaf is deleted only when `canon == path`
-/// and the ORIGINAL entry path is removed (never a resolved target).
+/// and the ORIGINAL entry path is removed (never a resolved target). This holds
+/// at the flat root exactly as it does under a dated month: `canon_root` is
+/// already canonicalized (and asserted in-vault by the caller), so a real
+/// in-place staging dir directly under it canonicalizes to itself the same way.
 pub fn clean_stale_staging_at(
     documents_root: &Path,
     now: std::time::SystemTime,
@@ -224,63 +230,73 @@ pub fn clean_stale_staging_at(
             })
             .collect()
     };
-    // Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
-    for year in contained_subdirs(&canon_root, is_year_dir) {
-        for month in contained_subdirs(&year, is_month_dir) {
-            let Ok(entries) = std::fs::read_dir(&month) else {
+    // One directory's worth of the sweep — shared by the flat root and every
+    // dated month, so the two layouts can never drift in what they guard.
+    // `dir` must already be canonical (canon_root, or a canonicalized month
+    // from `contained_subdirs`) for the `canon == path` self-equality below to
+    // mean what it says.
+    let sweep_dir = |dir: &Path, sweep: &mut StagingSweep| {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path(); // <dir>/<name>
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !is_import_staging_dir(&name) {
+                continue;
+            }
+            // Delete ONLY a REAL, owned, in-place staging directory — never
+            // the target a symlink/junction resolves to (Codex review). An
+            // owned staging dir is one we created as a real directory, so
+            // it canonicalizes to ITSELF (its parent `dir` is already
+            // canonical). A symlink/junction named like a staging dir
+            // canonicalizes to a DIFFERENT path — the containment check
+            // alone would still pass for an in-vault target, so
+            // remove_dir_all on the resolved target would erase real vault
+            // data. The `canon == path` self-equality test rejects it, and
+            // we remove `path` (the entry in place), not any resolved
+            // target.
+            let Ok(canon) = path.canonicalize() else {
                 continue;
             };
-            for entry in entries.flatten() {
-                let path = entry.path(); // <month_canon>/<name>
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !is_import_staging_dir(&name) {
-                    continue;
-                }
-                // Delete ONLY a REAL, owned, in-place staging directory — never
-                // the target a symlink/junction resolves to (Codex review). An
-                // owned staging dir is one we created as a real directory, so
-                // it canonicalizes to ITSELF (its parent `month` is already
-                // canonical). A symlink/junction named like a staging dir
-                // canonicalizes to a DIFFERENT path — the containment check
-                // alone would still pass for an in-vault target, so
-                // remove_dir_all on the resolved target would erase real vault
-                // data. The `canon == path` self-equality test rejects it, and
-                // we remove `path` (the entry in place), not any resolved
-                // target.
-                let Ok(canon) = path.canonicalize() else {
-                    continue;
-                };
-                if canon != path || !canon.is_dir() {
-                    continue; // symlink/junction/reparse redirect → skip
-                }
-                // Staleness: age from mtime, guarding a future mtime (clock jump).
-                // symlink_metadata (no-follow) is correct here — path is a real
-                // dir, but never resolve a link for the age check either.
-                let stale = std::fs::symlink_metadata(&path)
-                    .and_then(|m| m.modified())
-                    .map(|mtime| match now.duration_since(mtime) {
-                        Ok(age) => age >= stale_after,
-                        Err(_) => false, // mtime in the future → treat as fresh
-                    })
-                    .unwrap_or(false);
-                if stale {
-                    match std::fs::remove_dir_all(&path) {
-                        Ok(()) => sweep.removed.push(path),
-                        Err(e) => {
-                            // A locked file (Windows AV/indexing, or a surviving
-                            // Pandoc descendant still holding one open) can fail
-                            // the delete. Count it as pending so the recovery
-                            // loop RETRIES rather than treating the pass as clean
-                            // and leaving the orphan until the next launch (Codex
-                            // review).
-                            log::warn!("import-recovery: failed to remove {path:?}: {e}");
-                            sweep.pending += 1;
-                        }
-                    }
-                } else {
-                    sweep.pending += 1; // fresh orphan → caller reschedules
-                }
+            if canon != path || !canon.is_dir() {
+                continue; // symlink/junction/reparse redirect → skip
             }
+            // Staleness: age from mtime, guarding a future mtime (clock jump).
+            // symlink_metadata (no-follow) is correct here — path is a real
+            // dir, but never resolve a link for the age check either.
+            let stale = std::fs::symlink_metadata(&path)
+                .and_then(|m| m.modified())
+                .map(|mtime| match now.duration_since(mtime) {
+                    Ok(age) => age >= stale_after,
+                    Err(_) => false, // mtime in the future → treat as fresh
+                })
+                .unwrap_or(false);
+            if stale {
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => sweep.removed.push(path),
+                    Err(e) => {
+                        // A locked file (Windows AV/indexing, or a surviving
+                        // Pandoc descendant still holding one open) can fail
+                        // the delete. Count it as pending so the recovery
+                        // loop RETRIES rather than treating the pass as clean
+                        // and leaving the orphan until the next launch (Codex
+                        // review).
+                        log::warn!("import-recovery: failed to remove {path:?}: {e}");
+                        sweep.pending += 1;
+                    }
+                }
+            } else {
+                sweep.pending += 1; // fresh orphan → caller reschedules
+            }
+        }
+    };
+    // Flat layout: Documents/.<name>.<unique>.vault-buddy.tmp.import
+    sweep_dir(&canon_root, &mut sweep);
+    // Dated layout: Documents/<YYYY>/<MM>/.<name>.<unique>.vault-buddy.tmp.import
+    for year in contained_subdirs(&canon_root, is_year_dir) {
+        for month in contained_subdirs(&year, is_month_dir) {
+            sweep_dir(&month, &mut sweep);
         }
     }
     sweep
@@ -653,6 +669,24 @@ mod tests {
         assert_eq!(sweep.removed.len(), 1);
         assert!(!owned.exists()); // dated orphan swept
         assert!(outside.exists()); // non-dated path left alone
+    }
+
+    #[test]
+    fn sweeps_a_stale_staging_dir_in_the_flat_layout() {
+        use std::time::{Duration, SystemTime};
+        // `document_date_folders: false` writes imports directly under the
+        // documents root — recovery must sweep an orphan staging dir sitting
+        // there too, not just under a `YYYY/MM` month.
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join(".Doc.123-0.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        // now = far future so the fresh staging dir counts as stale.
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        let sweep = clean_stale_staging_at(root.path(), now, Duration::from_secs(600));
+        assert_eq!(sweep.removed.len(), 1);
+        assert_eq!(sweep.pending, 0);
+        assert!(!staging.exists());
     }
 
     #[test]

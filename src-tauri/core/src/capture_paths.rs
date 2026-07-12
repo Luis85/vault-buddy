@@ -20,6 +20,17 @@ pub fn dated_folder(root: &Path, date: NaiveDate) -> PathBuf {
         .join(date.format("%m").to_string())
 }
 
+/// The directory a capture (or import) writes into: the dated `<root>/YYYY/MM`
+/// when `dated`, or the flat `root` itself when not. Scanners and recovery
+/// look in BOTH layouts, so flipping this only changes where NEW files land.
+pub fn capture_dir(root: &Path, date: NaiveDate, dated: bool) -> PathBuf {
+    if dated {
+        dated_folder(root, date)
+    } else {
+        root.to_path_buf()
+    }
+}
+
 pub fn base_name(date: NaiveDate, hour: u32, minute: u32, label: &str) -> String {
     format!("{} {hour:02}{minute:02} {label}", date.format("%Y-%m-%d"))
 }
@@ -423,6 +434,16 @@ mod tests {
     fn dated_folder_is_year_slash_month() {
         let dir = dated_folder(Path::new("/v/Meetings"), date());
         assert_eq!(dir, Path::new("/v/Meetings/2026/07"));
+    }
+
+    #[test]
+    fn capture_dir_is_dated_or_flat() {
+        let root = Path::new("/v/Meetings");
+        assert_eq!(
+            capture_dir(root, date(), true),
+            Path::new("/v/Meetings/2026/07")
+        );
+        assert_eq!(capture_dir(root, date(), false), Path::new("/v/Meetings"));
     }
 
     #[test]

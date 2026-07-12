@@ -1,4 +1,5 @@
 mod capture_commands;
+mod capture_config_commands;
 mod commands;
 mod diagnostics;
 mod document_commands;
@@ -429,8 +430,8 @@ pub fn run() {
             capture_commands::open_transcript,
             capture_commands::list_recordings,
             capture_commands::open_recording,
-            capture_commands::get_capture_config,
-            capture_commands::set_capture_config,
+            capture_config_commands::get_capture_config,
+            capture_config_commands::set_capture_config,
             capture_commands::list_audio_devices,
             capture_commands::pause_capture,
             capture_commands::resume_capture,

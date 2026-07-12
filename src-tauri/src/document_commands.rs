@@ -143,13 +143,24 @@ fn convert_blocking(
     let vault_root = Path::new(&vault.path);
     let safe = capture_paths::safe_recording_root(vault_root, &documents_folder)?;
     capture_paths::assert_path_inside_vault(vault_root, &safe)?;
-    let dir = document_import::target_dir(vault_root, &documents_folder, year, month);
+    // NEW imports land flat (no YYYY/MM) when the vault opted out of dated
+    // folders — same per-vault toggle and precedent as start_capture's
+    // capture_dir branch; recovery's clean_stale_staging_at sweeps both
+    // layouts so a crash orphan is reaped either way.
+    let dated = cfg.document_date_folders;
+    let dir = if dated {
+        document_import::target_dir(vault_root, &documents_folder, year, month)
+    } else {
+        safe.clone()
+    };
     // Guard the FULLY DATED dir BEFORE creating it — the folder-root check
     // above is lexical and can't see a `Documents/2026` or `2026/07`
     // symlink/junction that escapes the vault. `assert_path_inside_vault`
     // canonicalizes the nearest EXISTING ancestor, so a pre-existing dated
     // symlink is caught here before `create_dir_all` follows it and creates
-    // directories outside the vault (Codex review).
+    // directories outside the vault (Codex review). Unconditional: when flat,
+    // `dir` IS `safe`, so this just repeats the already-passed check above —
+    // harmless, and keeps one code path instead of a branch around it.
     capture_paths::assert_path_inside_vault(vault_root, &dir)?;
     // Resolve the ` (N)` suffix for BOTH note and media folder up front — the
     // target dir must exist for the existence checks, and Pandoc bakes the
@@ -165,8 +176,9 @@ fn convert_blocking(
     // permits such a link, but the recovery sweeper only descends real in-place
     // dated dirs — so staging through a link would strand an unrecoverable
     // orphan on a crash. Keeping import and recovery to the same layout closes
-    // that gap (Codex review).
-    if !document_import::is_real_dated_dir(&safe, &dir, year, month) {
+    // that gap (Codex review). Dated-only: a flat `dir` is just `safe`, already
+    // asserted in-vault above — there is no dated level for a link to redirect.
+    if dated && !document_import::is_real_dated_dir(&safe, &dir, year, month) {
         return Err(
             "Import destination resolves through a link; use a real Documents folder.".into(),
         );
@@ -268,6 +280,9 @@ pub async fn detect_pandoc() -> PandocStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DocumentsConfigDto {
     pub documents_folder: Option<String>,
+    /// Whether NEW imports land in a dated `YYYY/MM` subfolder — the
+    /// Documents settings surface for `VaultCaptureConfig::document_date_folders`.
+    pub document_date_folders: bool,
 }
 
 /// Per-vault documents folder (or None → the frontend shows the "Documents"
@@ -277,18 +292,22 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
     let vault = capture_config::vault_config(&capture_config::load_config(), &id);
     DocumentsConfigDto {
         documents_folder: vault.documents_folder,
+        document_date_folders: vault.document_date_folders,
     }
 }
 
-/// Persist the vault's documents folder. Validates containment BEFORE writing
-/// (the effective folder — explicit or the "Documents" default — must stay in
-/// the vault), serialized behind ConfigWriteLock. Read-modify-write preserves
-/// the vault's other config. Mirrors set_tasks_config exactly.
+/// Persist the vault's documents folder + layout toggle. Validates containment
+/// BEFORE writing (the effective folder — explicit or the "Documents"
+/// default — must stay in the vault), serialized behind ConfigWriteLock.
+/// Read-modify-write preserves the vault's other config (recording_date_folders
+/// included — that field belongs to set_capture_config). Mirrors
+/// set_tasks_config exactly, plus the one extra bool field.
 #[tauri::command]
 pub fn set_documents_config(
     lock: tauri::State<ConfigWriteLock>,
     id: String,
     documents_folder: Option<String>,
+    document_date_folders: bool,
 ) -> Result<(), String> {
     let vault = discovery::discover_vaults()
         .into_iter()
@@ -305,6 +324,7 @@ pub fn set_documents_config(
     let _guard = lock_ignoring_poison(&lock.0);
     let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
     v.documents_folder = folder;
+    v.document_date_folders = document_date_folders;
     capture_config::update_vault_config(&id, v)
 }
 

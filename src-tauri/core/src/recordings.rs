@@ -1,12 +1,12 @@
 //! Read-only enumeration of a vault's past recordings for the in-app
-//! Recordings list. Scans the same `<root>/YYYY/MM` layout capture writes
-//! (capture-named `.mp3`s only, no symlink follow — identical discipline to
-//! `transcript::pending_transcriptions`) and pairs each recording with the
+//! Recordings list. Scans the shared `transcript::capture_mp3s` walk — the
+//! flat root AND the dated `<root>/YYYY/MM` layout (capture-named `.mp3`s
+//! only, no symlink follow — identical discipline to
+//! `transcript::pending_transcriptions`) — and pairs each recording with the
 //! `type`/`duration` read back from its companion note. Never writes.
 
 use crate::capture_note::note_field;
-use crate::capture_paths::is_capture_base;
-use crate::transcript::{dir_entries, is_digit_dir, transcript_status, TranscriptStatus};
+use crate::transcript::{capture_mp3s, transcript_status, TranscriptStatus};
 use std::path::{Path, PathBuf};
 
 /// One recording surfaced in the list. `title`/`recorded_at` come from the
@@ -28,33 +28,15 @@ pub struct RecordingEntry {
 /// Chars of the `YYYY-MM-DD HHmm ` prefix (10 date + space + 4 time + space).
 const PREFIX_CHARS: usize = 16;
 
-/// Every capture recording under the given roots' `YYYY/MM` layout, newest
-/// first. Read-only: reads each companion `<base>.md` for type/duration but
-/// never writes. Missing/unreadable roots and notes degrade silently.
+/// Every capture recording under the given roots (flat or dated `YYYY/MM`,
+/// see `capture_mp3s`), newest first. Read-only: reads each companion
+/// `<base>.md` for type/duration but never writes. Missing/unreadable roots
+/// and notes degrade silently.
 pub fn list_recordings(roots: &[PathBuf]) -> Vec<RecordingEntry> {
     let mut out = Vec::new();
     for root in roots {
-        for (year, yft, yname) in dir_entries(root) {
-            if !yft.is_dir() || !is_digit_dir(&yname, 4) {
-                continue;
-            }
-            for (month, mft, mname) in dir_entries(&year) {
-                if !mft.is_dir() || !is_digit_dir(&mname, 2) {
-                    continue;
-                }
-                for (path, fft, name) in dir_entries(&month) {
-                    if !fft.is_file() {
-                        continue;
-                    }
-                    let Some(base) = name.strip_suffix(".mp3") else {
-                        continue;
-                    };
-                    if !is_capture_base(base) {
-                        continue;
-                    }
-                    out.push(entry_for(&path, base));
-                }
-            }
+        for (path, base) in capture_mp3s(root) {
+            out.push(entry_for(&path, &base));
         }
     }
     // Newest first. Base names begin with a lexically-sortable
@@ -228,6 +210,36 @@ mod tests {
     fn a_missing_root_yields_no_entries() {
         let list = list_recordings(&[PathBuf::from("/no/such/place")]);
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn lists_recordings_from_both_flat_and_dated_layouts() {
+        let root = tempfile::tempdir().unwrap();
+        // dated
+        write_recording(
+            root.path(),
+            "2026",
+            "07",
+            "2026-07-04 0900 Dated",
+            Some("Meeting"),
+        );
+        // flat: mp3 directly under the root
+        std::fs::write(root.path().join("2026-07-04 1000 Flat.mp3"), b"id3").unwrap();
+        let list = list_recordings(&[root.path().to_path_buf()]);
+        let titles: Vec<_> = list.iter().map(|e| e.title.as_str()).collect();
+        assert!(titles.contains(&"Flat"));
+        assert!(titles.contains(&"Dated"));
+    }
+
+    #[test]
+    fn ignores_foreign_and_part_files_at_the_flat_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("holiday.mp3"), b"x").unwrap(); // not a capture base
+        std::fs::write(root.path().join(".2026-07-04 1405 Live.mp3.part"), b"x").unwrap(); // in-progress
+        std::fs::write(root.path().join("2026-07-04 1405 Real.mp3"), b"id3").unwrap();
+        let list = list_recordings(&[root.path().to_path_buf()]);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].title, "Real");
     }
 
     #[test]

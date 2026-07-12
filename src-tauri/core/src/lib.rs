@@ -20,6 +20,7 @@ pub mod tasks;
 pub mod throttle;
 pub mod transcript;
 pub mod uri;
+pub mod vault_config;
 pub mod vault_walk;
 
 use chrono::NaiveDate;

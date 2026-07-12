@@ -5,20 +5,16 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useOptionalFolderField } from "../composables/useOptionalFolderField";
 import { logWarning } from "../logging";
 import type {
-  AudioDevice,
   AudioDevices,
   CaptureConfig,
   DocumentsConfig,
   TasksConfig,
 } from "../types";
-import SelectMenu from "./SelectMenu.vue";
+import RecordingSettings from "./RecordingSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
-import TranscriptionSettings from "./TranscriptionSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 const props = defineProps<{ vaultId: string }>();
-
-const BITRATES = [128, 160, 192];
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -31,7 +27,8 @@ const folderError = ref<string | null>(null);
 // still sent back unchanged on save so the IPC contract and config.json
 // schema stay as they are.
 const mode = ref<"meeting" | "voice-note">("meeting");
-const recordingFolder = ref("");
+const meetingFolder = ref("");
+const voiceNoteFolder = ref("");
 const createNote = ref(true);
 const followUpTemplate = ref(true);
 const bitrateKbps = ref(128);
@@ -42,6 +39,11 @@ const transcribe = ref(false);
 const transcriptionModel = ref("small");
 const transcriptionLanguage = ref(""); // "" = auto-detect (maps to null on save)
 const transcriptTimestamps = ref(true);
+// Whether NEW recordings land in a dated YYYY/MM subfolder. Part of the same
+// CaptureConfig load/save round trip as the fields above (no separate
+// loaded/edited race to guard — get_capture_config/set_capture_config always
+// carry the whole config together).
+const recordingDateFolders = ref(true);
 
 // The per-vault tasks folder lives in the same app-side config but keeps its
 // own command pair (the capture-config save already preserves tasks_folder).
@@ -82,56 +84,79 @@ const documentsFolder = ref(""); // "" shows the "Documents" placeholder / clear
 const documentsFolderError = ref<string | null>(null);
 const documentsFolderLoaded = ref(false);
 const documentsFolderEdited = ref(false);
+// Whether NEW imports land in a dated YYYY/MM subfolder. Rides the SAME
+// get_documents_config/set_documents_config round trip as documentsFolder
+// above (one command carries both fields, and documentsFolderLoaded covers
+// "this command's response arrived" for both) — but it needs its OWN edited
+// flag. The two fields are independently editable while both are visible
+// before the read resolves; sharing documentsFolderEdited let touching
+// EITHER control silently block the OTHER's hydration from the same
+// response (a folder edit froze this toggle at its seeded default, and vice
+// versa a toggle click blanked the folder) — each silently reverting a
+// persisted value on the next save. See git history for the regression
+// tests that pin both directions.
+const documentDateFolders = ref(true);
+const documentDateFoldersEdited = ref(false);
+// save() must not act on documentsFolder/documentDateFolders until THIS
+// mount's get_documents_config response has landed (or failed) — Save is
+// clickable well before then (the capture `loading` gate above flips on the
+// capture-config/devices Promise.all alone). Stashed here so save() can
+// await the SAME load onMounted kicked off below, rather than racing it:
+// loadOptionalField always resolves (it swallows read failures), so
+// awaiting it settles both documents fields one way or another before
+// save() reads them — closing the pending window where a checkbox-only
+// edit could be silently skipped (loaded=false, the folder's own edited
+// flag untouched) or a folder-only edit could save the still-seeded
+// default over a persisted toggle value the read hadn't hydrated yet.
+let documentsLoadPromise: Promise<void> | undefined;
 
-// A configured device that is not currently connected must stay
-// selectable (unplugging a headset must not silently rewrite the
-// config) — it is surfaced with a "(not connected)" suffix instead.
-function withConfigured(list: AudioDevice[], configured: string) {
-  const options = list.map((d) => ({ value: d.name, label: d.name }));
-  if (configured && !list.some((d) => d.name === configured)) {
-    options.push({ value: configured, label: `${configured} (not connected)` });
-  }
-  return options;
-}
-const inputOptions = computed(() =>
-  withConfigured(devices.value.inputs, inputDevice.value),
-);
-const outputOptions = computed(() =>
-  withConfigured(devices.value.outputs, outputDevice.value),
-);
-
-// Option list for the bitrate SelectMenu dropdown ({ value, label }).
-const bitrateOptions = BITRATES.map((b) => ({ value: b, label: `${b} kbps` }));
-const inputMenuOptions = computed(() => [
-  { value: "", label: "System default" },
-  ...inputOptions.value,
-]);
-const outputMenuOptions = computed(() => [
-  { value: "", label: "System default" },
-  ...outputOptions.value,
-]);
-
-// Bundles the four transcription fields for TranscriptionSettings' v-model.
-// The setter fans a merged update back out to the individual refs so
-// save()/onMounted()/watch (below) keep working on them unchanged — this
-// computed is purely an adapter for the extracted controlled component.
-const transcriptionSettings = computed({
+// Bundles the recording/note/transcription/device fields for
+// RecordingSettings' v-model. The setter fans a merged update back out to
+// the individual refs so save()/onMounted()/watch (below) keep working on
+// them unchanged — this computed is purely an adapter for the extracted
+// controlled component, same idiom as the former transcriptionSettings
+// adapter it replaces (RecordingSettings now owns that nested adapter).
+const recordingBundle = computed({
   get: () => ({
+    meetingFolder: meetingFolder.value,
+    voiceNoteFolder: voiceNoteFolder.value,
+    bitrateKbps: bitrateKbps.value,
+    createNote: createNote.value,
+    followUpTemplate: followUpTemplate.value,
+    inputDevice: inputDevice.value,
+    outputDevice: outputDevice.value,
     transcribe: transcribe.value,
     transcriptionModel: transcriptionModel.value,
     transcriptionLanguage: transcriptionLanguage.value,
     transcriptTimestamps: transcriptTimestamps.value,
+    recordingDateFolders: recordingDateFolders.value,
   }),
   set: (v: {
+    meetingFolder: string;
+    voiceNoteFolder: string;
+    bitrateKbps: number;
+    createNote: boolean;
+    followUpTemplate: boolean;
+    inputDevice: string;
+    outputDevice: string;
     transcribe: boolean;
     transcriptionModel: string;
     transcriptionLanguage: string;
     transcriptTimestamps: boolean;
+    recordingDateFolders: boolean;
   }) => {
+    meetingFolder.value = v.meetingFolder;
+    voiceNoteFolder.value = v.voiceNoteFolder;
+    bitrateKbps.value = v.bitrateKbps;
+    createNote.value = v.createNote;
+    followUpTemplate.value = v.followUpTemplate;
+    inputDevice.value = v.inputDevice;
+    outputDevice.value = v.outputDevice;
     transcribe.value = v.transcribe;
     transcriptionModel.value = v.transcriptionModel;
     transcriptionLanguage.value = v.transcriptionLanguage;
     transcriptTimestamps.value = v.transcriptTimestamps;
+    recordingDateFolders.value = v.recordingDateFolders;
   },
 });
 
@@ -140,7 +165,8 @@ const transcriptionSettings = computed({
 // no-ops; this only becomes visible after a save set it to "saved".
 watch(
   [
-    recordingFolder,
+    meetingFolder,
+    voiceNoteFolder,
     createNote,
     followUpTemplate,
     bitrateKbps,
@@ -150,8 +176,10 @@ watch(
     transcriptionModel,
     transcriptionLanguage,
     transcriptTimestamps,
+    recordingDateFolders,
     tasksFolder,
     documentsFolder,
+    documentDateFolders,
   ],
   () => {
     if (saveState.value === "saved") saveState.value = "idle";
@@ -170,7 +198,8 @@ onMounted(async () => {
       invoke<AudioDevices>("list_audio_devices"),
     ]);
     mode.value = cfg.mode;
-    recordingFolder.value = cfg.recordingFolder ?? "";
+    meetingFolder.value = cfg.meetingFolder ?? "";
+    voiceNoteFolder.value = cfg.voiceNoteFolder ?? "";
     createNote.value = cfg.createNote;
     followUpTemplate.value = cfg.followUpTemplate;
     bitrateKbps.value = cfg.bitrateKbps;
@@ -181,6 +210,7 @@ onMounted(async () => {
     transcriptionModel.value = cfg.transcriptionModel;
     transcriptionLanguage.value = cfg.transcriptionLanguage ?? "";
     transcriptTimestamps.value = cfg.transcriptTimestamps;
+    recordingDateFolders.value = cfg.recordingDateFolders;
   } catch (e) {
     loadError.value = String(e);
   } finally {
@@ -188,21 +218,43 @@ onMounted(async () => {
   }
   // Separate invokes (not in the Promise.all above) so an optional-folder read
   // can't block the capture form from loading — both folders are optional.
-  await loadOptionalField<TasksConfig>(
-    "get_tasks_config",
-    tasksFolderEdited,
-    tasksFolderLoaded,
-    tasksFolder,
-    (cfg) => cfg.tasksFolder,
-    (persisted) => (savedTasksFolder.value = persisted),
-  );
-  await loadOptionalField<DocumentsConfig>(
-    "get_documents_config",
-    documentsFolderEdited,
-    documentsFolderLoaded,
-    documentsFolder,
-    (cfg) => cfg.documentsFolder,
-  );
+  // Both loads are STARTED here, synchronously, before either is awaited:
+  // assigning documentsLoadPromise only after `await`ing the tasks load (as
+  // this used to do) left it undefined for the whole tasks-pending window,
+  // so save()'s `if (documentsLoadPromise) await documentsLoadPromise;` guard
+  // had nothing to wait on and skipped — reintroducing the exact drop/clobber
+  // the guard exists to prevent, just shifted into the tasks-loading window.
+  // Starting both concurrently is safe: the two reads are independent config
+  // fetches over the same file.
+  const tasksLoadPromise = loadOptionalField<TasksConfig>({
+    cmd: "get_tasks_config",
+    editedRef: tasksFolderEdited,
+    loadedRef: tasksFolderLoaded,
+    targetRef: tasksFolder,
+    extract: (cfg) => cfg.tasksFolder,
+    onPersisted: (persisted) => (savedTasksFolder.value = persisted),
+  });
+  // Stored (not just awaited inline) so save() below can await this SAME
+  // load instead of reading documentsFolderLoaded/documentDateFolders while
+  // it may still be in flight.
+  documentsLoadPromise = loadOptionalField<DocumentsConfig>({
+    cmd: "get_documents_config",
+    editedRef: documentsFolderEdited,
+    loadedRef: documentsFolderLoaded,
+    targetRef: documentsFolder,
+    extract: (cfg) => cfg.documentsFolder,
+    onLoaded: (cfg) => {
+      // Same "don't clobber an edit with a late-resolving load" rule the
+      // composable applies to documentsFolder itself — this field rides the
+      // same command's response, but gates on its OWN edited flag (not
+      // documentsFolderEdited): the two controls are independently editable
+      // before this read resolves, so sharing one flag let an edit to
+      // EITHER block the OTHER's hydration from this same response.
+      if (!documentDateFoldersEdited.value) documentDateFolders.value = cfg.documentDateFolders;
+    },
+  });
+  await tasksLoadPromise;
+  await documentsLoadPromise;
 });
 
 async function save() {
@@ -211,14 +263,14 @@ async function save() {
   folderError.value = null;
   tasksFolderError.value = null;
   documentsFolderError.value = null;
-  const folder = recordingFolder.value.trim();
   let failed = false;
   try {
     await invoke("set_capture_config", {
       id: props.vaultId,
       cfg: {
         mode: mode.value,
-        recordingFolder: folder ? folder : null,
+        meetingFolder: meetingFolder.value.trim() || null,
+        voiceNoteFolder: voiceNoteFolder.value.trim() || null,
         bitrateKbps: bitrateKbps.value,
         createNote: createNote.value,
         followUpTemplate: followUpTemplate.value,
@@ -228,6 +280,7 @@ async function save() {
         transcriptionModel: transcriptionModel.value,
         transcriptionLanguage: transcriptionLanguage.value.trim() || null,
         transcriptTimestamps: transcriptTimestamps.value,
+        recordingDateFolders: recordingDateFolders.value,
       },
     });
   } catch (e) {
@@ -249,14 +302,14 @@ async function save() {
   const tasksSaveRan = tasksFolderLoaded.value || tasksFolderEdited.value;
   const savingTasksFolder = tasksFolder.value.trim();
   if (
-    await saveOptionalField(
-      "set_tasks_config",
-      "tasksFolder",
-      tasksFolder.value,
-      tasksFolderLoaded.value,
-      tasksFolderEdited.value,
-      tasksFolderError,
-    )
+    await saveOptionalField({
+      cmd: "set_tasks_config",
+      key: "tasksFolder",
+      value: tasksFolder.value,
+      loaded: tasksFolderLoaded.value,
+      edited: tasksFolderEdited.value,
+      errorRef: tasksFolderError,
+    })
   ) {
     failed = true;
   } else if (tasksSaveRan && savingTasksFolder !== savedTasksFolder.value) {
@@ -266,15 +319,29 @@ async function save() {
     savedTasksFolder.value = savingTasksFolder;
     listsCardNonce.value += 1;
   }
+  // Unlike tasks (a single field, whose read is left to race independently —
+  // see the "does not write the tasks config while its read is still in
+  // flight" test), documents carries TWO fields off ONE command — the folder
+  // text AND the checkbox. Save is clickable before get_documents_config
+  // resolves (the same pending window tasks has), so this write waits for
+  // THIS mount's load to settle first (success or failure — loadOptionalField
+  // swallows read errors, so this always resolves): reading either field
+  // before that settles risked sending the still-seeded default
+  // documentDateFolders over a persisted value the read hadn't hydrated yet
+  // (a silent clobber). The edited check below ALSO covers a checkbox-only
+  // edit (previously gated on documentsFolderEdited alone), so toggling just
+  // the checkbox is never mistaken for "nothing changed" and dropped.
+  if (documentsLoadPromise) await documentsLoadPromise;
   if (
-    await saveOptionalField(
-      "set_documents_config",
-      "documentsFolder",
-      documentsFolder.value,
-      documentsFolderLoaded.value,
-      documentsFolderEdited.value,
-      documentsFolderError,
-    )
+    await saveOptionalField({
+      cmd: "set_documents_config",
+      key: "documentsFolder",
+      value: documentsFolder.value,
+      loaded: documentsFolderLoaded.value,
+      edited: documentsFolderEdited.value || documentDateFoldersEdited.value,
+      errorRef: documentsFolderError,
+      extra: { documentDateFolders: documentDateFolders.value },
+    })
   ) {
     failed = true;
   }
@@ -301,167 +368,89 @@ async function save() {
     class="flex flex-col gap-3"
     @submit.prevent="save"
   >
-    <section>
+    <!-- Three domain super-groups, one level above the buddy-settings-style
+         sub-cards below (Companion note, Tasks folder, …): each carries its
+         own data-testid and a domain h2 as ITS OWN first heading. -->
+    <section data-testid="group-recording">
       <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
         Recording
       </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <div>
-          <label
-            class="mb-1 block text-sm text-slate-200"
-            for="capture-folder"
-          >
-            Recording folder
-            <span class="block text-xs text-slate-500">Inside the vault</span>
-          </label>
-          <input
-            id="capture-folder"
-            v-model="recordingFolder"
-            data-testid="folder-input"
-            type="text"
-            placeholder="Meetings or Voice Notes"
-            class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-          >
-          <p
-            v-if="folderError"
-            data-testid="folder-error"
-            class="mt-1 text-xs text-red-300"
-          >
-            {{ folderError }}
-          </p>
-        </div>
-        <div class="flex items-center justify-between gap-2">
-          <label
-            for="capture-bitrate"
-            class="text-sm text-slate-200"
-          >Bitrate</label>
-          <SelectMenu
-            id="capture-bitrate"
-            v-model="bitrateKbps"
-            :options="bitrateOptions"
-            data-testid="bitrate-select"
-          />
-        </div>
+      <!-- Plain wrapper, not another bordered card: RecordingSettings already
+           renders its own bordered sub-cards (Folders, Audio, Companion note,
+           Transcription), same as VaultFolderSetting/
+           TaskListSettings do for the Tasks/Documents groups below — an
+           extra border here would double-nest around each of them. -->
+      <div class="flex flex-col gap-3">
+        <RecordingSettings
+          v-model="recordingBundle"
+          :devices="devices"
+          :folder-error="folderError"
+        />
       </div>
     </section>
-    <section>
+    <section data-testid="group-tasks">
       <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Companion note
+        Tasks
       </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <div class="flex items-center justify-between">
+      <div class="flex flex-col gap-3">
+        <!-- heading is the field label, not "Tasks" again — the group h2
+             above already carries the domain name. -->
+        <VaultFolderSetting
+          v-model="tasksFolder"
+          heading="Tasks folder"
+          label="Tasks folder"
+          placeholder="Tasks"
+          input-id="tasks-folder"
+          input-testid="tasks-folder-input"
+          error-testid="tasks-folder-error"
+          :error="tasksFolderError"
+          @edit="tasksFolderEdited = true"
+        />
+        <!-- Self-contained (own load/save) so its lists-config failure can't
+             block the capture/folder saves — the independent-save pattern. -->
+        <TaskListSettings
+          :key="listsCardNonce"
+          :vault-id="vaultId"
+        />
+      </div>
+    </section>
+    <section data-testid="group-documents">
+      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Documents
+      </h2>
+      <div class="flex flex-col gap-3">
+        <!-- heading is the field label, not "Documents" again — the group h2
+             above already carries the domain name. -->
+        <VaultFolderSetting
+          v-model="documentsFolder"
+          heading="Documents folder"
+          label="Documents folder"
+          placeholder="Documents"
+          input-id="documents-folder"
+          input-testid="documents-folder-input"
+          error-testid="documents-folder-error"
+          :error="documentsFolderError"
+          @edit="documentsFolderEdited = true"
+        />
+        <div class="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-2">
           <label
-            for="capture-note-toggle"
+            for="document-date-folders"
             class="text-sm text-slate-200"
           >
-            Companion note
-            <span class="block text-xs text-slate-500">.md with metadata + embed</span>
+            Organize into year/month folders
+            <span class="block text-xs text-slate-500">Off = one flat folder</span>
           </label>
           <input
-            id="capture-note-toggle"
-            v-model="createNote"
-            data-testid="note-toggle"
+            id="document-date-folders"
+            v-model="documentDateFolders"
+            data-testid="document-date-folders-toggle"
             type="checkbox"
             class="h-4 w-4 accent-violet-500"
-          >
-        </div>
-        <div
-          v-if="createNote"
-          class="flex items-center justify-between border-l border-white/10 pl-3"
-        >
-          <label
-            for="capture-follow-up-toggle"
-            class="text-sm text-slate-200"
-          >
-            Follow-up template
-            <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
-          </label>
-          <input
-            id="capture-follow-up-toggle"
-            v-model="followUpTemplate"
-            data-testid="follow-up-toggle"
-            type="checkbox"
-            class="h-4 w-4 accent-violet-500"
+            @change="documentDateFoldersEdited = true"
           >
         </div>
       </div>
     </section>
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Transcription
-      </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <TranscriptionSettings v-model="transcriptionSettings" />
-      </div>
-    </section>
-    <section>
-      <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Audio devices
-      </h2>
-      <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
-        <div>
-          <label
-            class="mb-1 block text-sm text-slate-200"
-            for="capture-input-device"
-          >
-            Microphone
-          </label>
-          <SelectMenu
-            id="capture-input-device"
-            v-model="inputDevice"
-            :options="inputMenuOptions"
-            aria-label="Microphone"
-            data-testid="input-device-select"
-            wide
-          />
-        </div>
-        <div>
-          <label
-            class="mb-1 block text-sm text-slate-200"
-            for="capture-output-device"
-          >
-            Desktop audio from
-            <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
-          </label>
-          <SelectMenu
-            id="capture-output-device"
-            v-model="outputDevice"
-            :options="outputMenuOptions"
-            aria-label="Desktop audio device"
-            data-testid="output-device-select"
-            wide
-          />
-        </div>
-      </div>
-    </section>
-    <VaultFolderSetting
-      v-model="tasksFolder"
-      heading="Tasks"
-      label="Tasks folder"
-      placeholder="Tasks"
-      input-id="tasks-folder"
-      input-testid="tasks-folder-input"
-      error-testid="tasks-folder-error"
-      :error="tasksFolderError"
-      @edit="tasksFolderEdited = true"
-    />
-    <!-- Self-contained (own load/save) so its lists-config failure can't
-         block the capture/folder saves — the independent-save pattern. -->
-    <TaskListSettings
-      :key="listsCardNonce"
-      :vault-id="vaultId"
-    />
-    <VaultFolderSetting
-      v-model="documentsFolder"
-      heading="Document import"
-      label="Documents folder"
-      placeholder="Documents"
-      input-id="documents-folder"
-      input-testid="documents-folder-input"
-      error-testid="documents-folder-error"
-      :error="documentsFolderError"
-      @edit="documentsFolderEdited = true"
-    />
     <p
       v-if="saveError"
       data-testid="save-error"

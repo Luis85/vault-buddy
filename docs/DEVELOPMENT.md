@@ -383,7 +383,9 @@ ever written into your vaults except recordings and their notes.
   "vaults": {
     "<vault-id>": {
       "mode": "meeting",          // "meeting" (mic + desktop audio) | "voice-note" (mic only)
-      "recordingFolder": "Meetings", // optional — omit for the mode default ("Meetings" / "Voice Notes")
+      "meetingFolder": "Meetings",     // optional — omit for the mode default "Meetings"
+      "voiceNoteFolder": "Voice Notes", // optional — omit for the mode default "Voice Notes"
+      "recordingDateFolders": true, // optional — omit → true; dated YYYY/MM subfolders; false = flat, written only when false
       "bitrateKbps": 128,          // 128 | 160 | 192
       "createNote": true,          // companion .md with metadata + embed
       "followUpTemplate": true,    // append a "## Follow-up" scaffold to the companion note (needs createNote)
@@ -395,6 +397,7 @@ ever written into your vaults except recordings and their notes.
       "transcriptTimestamps": true, // prefix each segment with [HH:MM:SS]
       "tasksFolder": "Tasks",      // optional — vault-relative home of task documents
       "documentsFolder": "Documents", // optional — vault-relative home of imported documents
+      "documentDateFolders": true, // optional — omit → true; same dated/flat toggle as recordings, for imports
       "defaultList": "Inbox",      // optional — the list (folder under tasksFolder) new tasks land in when none is picked
       "listOrder": ["Inbox", "Next"] // optional — display order for list sections/pickers; unlisted folders append alphabetically
     }
@@ -402,6 +405,21 @@ ever written into your vaults except recordings and their notes.
 }
 ```
 
+- `meetingFolder` / `voiceNoteFolder` (string or omit, defaults `"Meetings"` /
+  `"Voice Notes"`) — the vault-relative folder each recording mode saves
+  into; replaces the old unified `recordingFolder`. A config written before
+  this split keeps working: `recordingFolder` is still read as a **fallback**
+  for whichever of the two keys is absent, so an upgrade seeds both modes
+  from the old value with no data loss. Saving the vault's Recording settings
+  writes only the two new keys — `recordingFolder` never reappears.
+- `recordingDateFolders` / `documentDateFolders` (bool, default `true`) —
+  whether NEW recordings/imports land in a dated `YYYY/MM` subfolder (the
+  long-standing layout) or flat, directly in the folder. Existing files are
+  always found in **either** layout regardless of the current setting —
+  flipping it only changes where the next capture/import lands, it never
+  moves or rewrites what's already there. Omitted when `true` (the default);
+  written only when `false`, so existing configs stay untouched until a user
+  opts into the flat layout.
 - `followUpTemplate` (bool, default `true`) — append a `## Follow-up`
   scaffold (action items, decisions, notes) to each recording's companion
   note. Only applies when `createNote` is on.

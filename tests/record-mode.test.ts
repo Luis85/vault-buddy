@@ -146,7 +146,8 @@ describe("RecordMode", () => {
   it("saves a changed transcription setting to the vault config, preserving the rest", async () => {
     const cfg = {
       mode: "meeting",
-      recordingFolder: "Meetings",
+      meetingFolder: "Meetings",
+      voiceNoteFolder: "Voice Notes",
       bitrateKbps: 160,
       createNote: true,
       followUpTemplate: false,
@@ -182,7 +183,8 @@ describe("RecordMode", () => {
     // save button/banner of its own, unlike CaptureSettings).
     const cfg = {
       mode: "meeting",
-      recordingFolder: "Meetings",
+      meetingFolder: "Meetings",
+      voiceNoteFolder: "Voice Notes",
       bitrateKbps: 160,
       createNote: true,
       followUpTemplate: false,
@@ -225,13 +227,14 @@ describe("RecordMode", () => {
     // get_capture_config resolves in onMounted. Toggling a transcription
     // field before that read resolves used to persist() the default-seeded
     // config to disk — silently clobbering the vault's real
-    // recordingFolder/bitrateKbps/devices/createNote/followUpTemplate — and
-    // the in-flight read would then overwrite config.value with the
+    // meetingFolder/voiceNoteFolder/bitrateKbps/devices/createNote/followUpTemplate
+    // — and the in-flight read would then overwrite config.value with the
     // pre-persist config anyway, discarding the toggle too. persist() must
     // stay gated until the real config has loaded (or the load has failed).
     const cfg = {
       mode: "voice-note",
-      recordingFolder: "Meetings",
+      meetingFolder: "Meetings",
+      voiceNoteFolder: "Voice Notes",
       bitrateKbps: 160,
       createNote: true,
       followUpTemplate: false,
@@ -286,7 +289,7 @@ describe("RecordMode", () => {
   it("does not persist after a failed config load (GAP-30)", async () => {
     // loadConfig's finally set loaded=true even on failure, so one
     // transcription toggle persisted the default-seeded config — wiping the
-    // vault's real recordingFolder/bitrate/devices on disk.
+    // vault's real meetingFolder/voiceNoteFolder/bitrate/devices on disk.
     const calls: string[] = [];
     mockIPC((cmd) => {
       calls.push(cmd);
