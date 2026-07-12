@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 import TasksConfigTab from "../src/components/TasksConfigTab.vue";
+import { useSettingsStatusStore } from "../src/stores/settingsStatus";
 
 let active: ReturnType<typeof mount> | null = null;
 beforeEach(() => {
@@ -135,6 +136,29 @@ describe("TasksConfigTab", () => {
     resolveListSave();
     await flushPromises();
     expect(folderDisabled()).toBe(false);
+  });
+
+  it("clears a failed list save's error from the header when the lists card unmounts on a folder change (Codex #55)", async () => {
+    // Regression: a failed list save left its owner in the shared header's
+    // errorsByOwner; editing the folder unmounted the card, so the stale error
+    // stuck (the remount got a new owner) until a view change. Unmount must
+    // retire the owner.
+    const status = useSettingsStatusStore();
+    const { wrapper } = mountTab({
+      tasksFolder: "Tasks",
+      onListLists: () => ["Inbox", "Next"],
+      onSetLists: () => {
+        throw "bad list path";
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="list-order-up-1"]').trigger("click"); // list save fails
+    await flushPromises();
+    expect(status.state).toBe("error");
+    // Editing the folder unmounts the lists card → its failed owner is retired.
+    await wrapper.get('[data-testid="tasks-folder-input"]').setValue("Work/Tasks");
+    await flushPromises();
+    expect(status.state).not.toBe("error");
   });
 
   it("shows a save error inline", async () => {

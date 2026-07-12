@@ -90,11 +90,16 @@ export function useAutosave(save: () => Promise<void>, opts: { label?: string } 
     void run();
   }
 
-  // A pending debounced save must not die with the component when the settings
-  // view navigates away (ActionPanel v-if-unmounts the settings component).
   if (getCurrentInstance()) {
     onBeforeUnmount(() => {
+      // A pending debounced save must not die with the component when the
+      // settings view navigates away (ActionPanel v-if-unmounts it).
       if (timer !== null) void run();
+      // Retire this owner from the shared status so a failure it reported isn't
+      // stranded in the header after the component (and its inline error) is
+      // gone — the TaskListSettings card unmounts on a folder change, and its
+      // remount gets a fresh owner that couldn't otherwise clear the old error.
+      status.release(owner);
     });
   }
 

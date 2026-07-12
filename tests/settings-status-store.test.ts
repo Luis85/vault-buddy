@@ -76,6 +76,27 @@ describe("settingsStatus store", () => {
     expect(s.state).toBe("saving"); // the old fade timer was cancelled
   });
 
+  it("release(owner) retires that owner's outstanding error (component unmounted)", () => {
+    const s = useSettingsStatusStore();
+    s.saving(1);
+    s.failed(1, "boom");
+    expect(s.state).toBe("error");
+    s.release(1);
+    expect(s.state).toBe("idle");
+    expect(s.error).toBeNull();
+  });
+
+  it("release only retires the given owner, leaving others' errors intact", () => {
+    const s = useSettingsStatusStore();
+    s.saving(1);
+    s.failed(1, "a");
+    s.saving(2);
+    s.failed(2, "b");
+    s.release(1);
+    expect(s.state).toBe("error"); // owner 2 still failing
+    expect(s.error).toBe("b");
+  });
+
   it("reset() returns to idle and clears every outstanding error", () => {
     const s = useSettingsStatusStore();
     s.saving(1);

@@ -81,6 +81,14 @@ export const useSettingsStatusStore = defineStore("settingsStatus", {
       this.savedFlash = false;
       this.recompute();
     },
+    // Retire one owner from the shared status — called when its component
+    // unmounts, so a failure it reported doesn't linger in errorsByOwner after
+    // the component (and its inline error) is gone. A remount gets a fresh
+    // owner and otherwise could never clear the old one's error (Codex PR #55).
+    release(owner: number) {
+      delete this.errorsByOwner[owner];
+      this.recompute();
+    },
     reset() {
       clearFade();
       this.inFlight = 0;
