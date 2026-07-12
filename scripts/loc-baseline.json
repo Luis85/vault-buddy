@@ -3,11 +3,11 @@
     "frontend": 500,
     "rust": 800
   },
-  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs \u2014 higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
+  "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
   "allowlist": {
     "src-tauri/src/capture_commands.rs": {
       "loc": 1219,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1211->1215: rename retarget on transcript-sidecar moves (Codex PR #46 round 4). 1215->1219: set_capture_config must also preserve the per-vault lists settings object (defaultList/listOrder, the tasks_folder preservation rule extended) \u2014 two fields + the invariant comment."
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1211->1215: rename retarget on transcript-sidecar moves (Codex PR #46 round 4). 1215->1219: set_capture_config must also preserve the per-vault lists settings object (defaultList/listOrder, the tasks_folder preservation rule extended) — two fields + the invariant comment."
     },
     "src-tauri/src/transcription.rs": {
       "loc": 1086,
@@ -17,9 +17,9 @@
       "loc": 1041,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
-    "src-tauri/core/src/capture_config.rs": {
-      "loc": 876,
-      "reason": "Crossed the 800 cap adding the app-global DocumentImportConfig section + per-vault documents_folder (Document Import via Pandoc). Bumped 853->893 for the GAP-02 save-side fix (load_config_for_update aborts a save on a non-missing config read error instead of defaulting + clobbering all sections) plus its two regression tests; 893->900 when the task-branch merge layered a log::warn! diagnostic onto that helper's error arm. Sits beside the existing VaultCaptureConfig/McpConfig sections and their parse/serialize; splitting config into per-section modules is a separate refactor. Shrink only."
+    "src-tauri/core/src/services.rs": {
+      "loc": 927,
+      "reason": "Crossed the 800 cap adding the tasks-root containment guard in add_task (a list symlinked/junctioned outside the tasks root would accept the write but hide the task from the walkers) plus its symlink-escape regression test (Codex PR #53 re-review). 821->857: hardened that guard to validate the list dir against the resolved root BEFORE create_dir_all, so an escaping (incl. nested-through-a-link) list is rejected before a stray folder is mkdir'd outside the root, plus its nested-escape regression test. 857->927: a configured DEFAULT list that escapes the root now degrades to the tasks root instead of erroring every unpicked add (the read-lenient posture), plus its degrade regression test. The services layer already holds vault/tasks/recordings functions over one ServicePaths; splitting it into per-domain modules is a separate refactor. Shrink only; split when next touched."
     },
     "src-tauri/transcribe/src/model.rs": {
       "loc": 846,
@@ -29,17 +29,13 @@
       "loc": 835,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
-    "src-tauri/core/src/services.rs": {
-      "loc": 927,
-      "reason": "Crossed the 800 cap adding the tasks-root containment guard in add_task (a list symlinked/junctioned outside the tasks root would accept the write but hide the task from the walkers) plus its symlink-escape regression test (Codex PR #53 re-review). 821->857: hardened that guard to validate the list dir against the resolved root BEFORE create_dir_all, so an escaping (incl. nested-through-a-link) list is rejected before a stray folder is mkdir'd outside the root, plus its nested-escape regression test. 857->927: a configured DEFAULT list that escapes the root now degrades to the tasks root instead of erroring every unpicked add (the read-lenient posture), plus its degrade regression test. The services layer already holds vault/tasks/recordings functions over one ServicePaths; splitting it into per-domain modules is a separate refactor. Shrink only; split when next touched."
+    "src/stores/capture.ts": {
+      "loc": 642,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
     },
     "src/components/Tasks.vue": {
       "loc": 505,
       "reason": "The Tasks view (the codebase's churn hotspot per fallow) crossed the 500 cap under a run of Codex PR #53 re-review guards — the empty-list visibility fix (hasDisplayableLists + the buckets/empty-state split) and the Lists-grouping filter no-match fix (filterActive gating includeEmpty). It is already split into useTaskActions/useTaskLists/useTaskReorder composables + the taskSort/taskSections/taskOrder utils; extracting the grouping/display-state (buckets + its helpers) into a composable is the next split. Shrink only; split when next touched."
-    },
-    "src/stores/capture.ts": {
-      "loc": 642,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
     }
   }
 }
