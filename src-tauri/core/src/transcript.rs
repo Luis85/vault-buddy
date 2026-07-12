@@ -302,11 +302,26 @@ fn write_sidecar_atomic(transcript_path: &Path, content: &str) -> std::io::Resul
     write_atomic_replacing(transcript_path, content)
 }
 
-/// Capture MP3s under `<root>/YYYY/MM` that still need a transcript (missing
-/// or one of our regenerable sidecars). Same layout discipline as recovery:
-/// only `YYYY/MM`, only capture-named files, never follows symlinks.
-pub fn pending_transcriptions(root: &Path) -> Vec<PathBuf> {
+/// Capture `.mp3` files (path + base name) under `root` in BOTH layouts:
+/// directly in `root` (flat) and under `<root>/YYYY/MM` (dated). Capture-named
+/// files only; never follows symlinks (dir_entries reads the dirent no-follow).
+/// Shared by the recordings list and the transcription backfill so both agree
+/// on where a recording can live regardless of the vault's date-folder setting.
+pub(crate) fn capture_mp3s(root: &Path) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
+    let mut push_from = |dir: &Path| {
+        for (path, ft, name) in dir_entries(dir) {
+            if !ft.is_file() {
+                continue;
+            }
+            if let Some(base) = name.strip_suffix(".mp3") {
+                if is_capture_base(base) {
+                    out.push((path, base.to_string()));
+                }
+            }
+        }
+    };
+    push_from(root); // flat layout
     for (year, yft, yname) in dir_entries(root) {
         if !yft.is_dir() || !is_digit_dir(&yname, 4) {
             continue;
@@ -315,23 +330,22 @@ pub fn pending_transcriptions(root: &Path) -> Vec<PathBuf> {
             if !mft.is_dir() || !is_digit_dir(&mname, 2) {
                 continue;
             }
-            for (path, fft, name) in dir_entries(&month) {
-                if !fft.is_file() {
-                    continue;
-                }
-                let Some(base) = name.strip_suffix(".mp3") else {
-                    continue;
-                };
-                if !is_capture_base(base) {
-                    continue;
-                }
-                if needs_transcription(&path) {
-                    out.push(path);
-                }
-            }
+            push_from(&month); // dated layout
         }
     }
     out
+}
+
+/// Capture MP3s under `root` (flat or `<root>/YYYY/MM`, see `capture_mp3s`)
+/// that still need a transcript (missing or one of our regenerable
+/// sidecars). Same layout discipline as recovery: only capture-named files,
+/// never follows symlinks.
+pub fn pending_transcriptions(root: &Path) -> Vec<PathBuf> {
+    capture_mp3s(root)
+        .into_iter()
+        .map(|(path, _base)| path)
+        .filter(|path| needs_transcription(path))
+        .collect()
 }
 
 pub(crate) fn is_digit_dir(name: &str, len: usize) -> bool {
@@ -650,14 +664,25 @@ mod tests {
     }
 
     #[test]
-    fn scan_ignores_non_dated_and_root_level_files() {
+    fn scan_ignores_arbitrary_non_dated_subfolders() {
+        // capture_mp3s only ever walks the flat root and YYYY/MM — an
+        // arbitrary subfolder (neither) must still be ignored. (Superseded
+        // by the layout change: a root-level file is now IN scope, covered
+        // by pending_transcriptions_finds_flat_layout_recordings below.)
         let dir = tempfile::tempdir().unwrap();
-        // capture-named mp3 directly at the root (not under YYYY/MM)
-        std::fs::write(dir.path().join("2026-07-04 1405 Meeting.mp3"), b"a").unwrap();
         let sub = dir.path().join("Project");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(sub.join("2026-07-04 1405 Meeting.mp3"), b"a").unwrap();
         assert!(pending_transcriptions(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn pending_transcriptions_finds_flat_layout_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("2026-07-04 1000 Flat.mp3"), b"id3").unwrap();
+        let pending = pending_transcriptions(root.path());
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].ends_with("2026-07-04 1000 Flat.mp3"));
     }
 
     #[test]
