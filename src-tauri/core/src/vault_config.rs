@@ -49,7 +49,8 @@ impl RecordingMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VaultCaptureConfig {
     pub mode: RecordingMode,
-    pub recording_folder: Option<String>,
+    pub meeting_folder: Option<String>,
+    pub voice_note_folder: Option<String>,
     pub bitrate_kbps: u32,
     pub create_note: bool,
     /// cpal device names; None = system default. A configured device
@@ -81,7 +82,8 @@ impl Default for VaultCaptureConfig {
     fn default() -> Self {
         Self {
             mode: RecordingMode::Meeting,
-            recording_folder: None,
+            meeting_folder: None,
+            voice_note_folder: None,
             bitrate_kbps: 128,
             create_note: true,
             input_device: None,
@@ -100,28 +102,31 @@ impl Default for VaultCaptureConfig {
 }
 
 impl VaultCaptureConfig {
-    /// Configured folder, or the mode's default (the PRD gives meetings
-    /// and voice notes distinct homes).
-    pub fn effective_recording_folder(&self) -> &str {
-        match &self.recording_folder {
-            Some(folder) => folder,
-            None => match self.mode {
-                RecordingMode::Meeting => "Meetings",
-                RecordingMode::VoiceNote => "Voice Notes",
-            },
+    /// The vault-relative folder for a given mode: the configured override, or
+    /// the mode default (the PRD gives meetings and voice notes distinct homes).
+    pub fn folder_for(&self, mode: RecordingMode) -> &str {
+        match mode {
+            RecordingMode::Meeting => self.meeting_folder.as_deref().unwrap_or("Meetings"),
+            RecordingMode::VoiceNote => self.voice_note_folder.as_deref().unwrap_or("Voice Notes"),
         }
     }
 
-    /// Folders that may hold this vault's recordings, for scans that must see
-    /// EVERY past recording (the Recordings list, recovery, transcription
-    /// backfill). A configured custom folder holds them all; without one,
-    /// meetings and voice notes live in their two distinct default homes and
-    /// the mode may have changed over the vault's life, so scan both. This is
-    /// the union of `effective_recording_folder`'s branches.
+    /// The folder the ACTIVE mode records into.
+    pub fn effective_recording_folder(&self) -> &str {
+        self.folder_for(self.mode)
+    }
+
+    /// Every folder a vault's recordings may live in — the deduped union of both
+    /// modes' effective folders, so scans that must see EVERY recording (the
+    /// Recordings list, recovery, transcription backfill) cover exactly the
+    /// folders in use and no more.
     pub fn recording_roots(&self) -> Vec<&str> {
-        match &self.recording_folder {
-            Some(folder) => vec![folder.as_str()],
-            None => vec!["Meetings", "Voice Notes"],
+        let m = self.folder_for(RecordingMode::Meeting);
+        let v = self.folder_for(RecordingMode::VoiceNote);
+        if m == v {
+            vec![m]
+        } else {
+            vec![m, v]
         }
     }
 
@@ -142,15 +147,25 @@ impl VaultCaptureConfig {
 /// vault back to meeting mode (and thus desktop-audio capture).
 pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
     let defaults = VaultCaptureConfig::default();
+    // Pre-split configs stored one unified `recordingFolder`. Fall back to it
+    // per field so an upgrade seeds BOTH modes from the old value instead of
+    // losing it — an explicit new key still wins over this legacy fallback.
+    let legacy = entry.get("recordingFolder").and_then(|v| v.as_str());
     VaultCaptureConfig {
         mode: entry
             .get("mode")
             .and_then(|v| v.as_str())
             .and_then(RecordingMode::from_key)
             .unwrap_or(defaults.mode),
-        recording_folder: entry
-            .get("recordingFolder")
+        meeting_folder: entry
+            .get("meetingFolder")
             .and_then(|v| v.as_str())
+            .or(legacy)
+            .map(str::to_string),
+        voice_note_folder: entry
+            .get("voiceNoteFolder")
+            .and_then(|v| v.as_str())
+            .or(legacy)
             .map(str::to_string),
         bitrate_kbps: entry
             .get("bitrateKbps")
@@ -227,8 +242,11 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     use serde_json::{json, Map};
     let mut entry = Map::new();
     entry.insert("mode".to_string(), json!(v.mode.as_key()));
-    if let Some(folder) = &v.recording_folder {
-        entry.insert("recordingFolder".to_string(), json!(folder));
+    if let Some(folder) = &v.meeting_folder {
+        entry.insert("meetingFolder".to_string(), json!(folder));
+    }
+    if let Some(folder) = &v.voice_note_folder {
+        entry.insert("voiceNoteFolder".to_string(), json!(folder));
     }
     entry.insert("bitrateKbps".to_string(), json!(v.bitrate_kbps));
     entry.insert("createNote".to_string(), json!(v.create_note));
@@ -282,21 +300,85 @@ mod tests {
     }
 
     #[test]
-    fn folder_defaults_follow_the_mode_but_config_overrides() {
-        let cfg = parse_config(
+    fn folder_for_is_per_mode_with_defaults_and_overrides() {
+        let cfg = crate::capture_config::parse_config(
             r#"{ "vaults": {
-                "a": { "mode": "voice-note" },
-                "b": { "mode": "voice-note", "recordingFolder": "Inbox" }
+                "a": {},
+                "b": { "meetingFolder": "Mtgs" },
+                "c": { "meetingFolder": "Mtgs", "voiceNoteFolder": "Notes" }
             } }"#,
         );
-        assert_eq!(
-            vault_config(&cfg, "a").effective_recording_folder(),
-            "Voice Notes"
+        let a = crate::capture_config::vault_config(&cfg, "a");
+        assert_eq!(a.folder_for(RecordingMode::Meeting), "Meetings");
+        assert_eq!(a.folder_for(RecordingMode::VoiceNote), "Voice Notes");
+        let b = crate::capture_config::vault_config(&cfg, "b");
+        assert_eq!(b.folder_for(RecordingMode::Meeting), "Mtgs");
+        assert_eq!(b.folder_for(RecordingMode::VoiceNote), "Voice Notes"); // untouched → default
+        let c = crate::capture_config::vault_config(&cfg, "c");
+        assert_eq!(c.folder_for(RecordingMode::VoiceNote), "Notes");
+    }
+
+    #[test]
+    fn effective_folder_follows_the_active_mode() {
+        let mut v = VaultCaptureConfig {
+            meeting_folder: Some("M".into()),
+            voice_note_folder: Some("V".into()),
+            ..VaultCaptureConfig::default()
+        };
+        v.mode = RecordingMode::Meeting;
+        assert_eq!(v.effective_recording_folder(), "M");
+        v.mode = RecordingMode::VoiceNote;
+        assert_eq!(v.effective_recording_folder(), "V");
+    }
+
+    #[test]
+    fn recording_roots_is_the_deduped_union_of_both_modes() {
+        // none → both defaults
+        let none = VaultCaptureConfig::default();
+        assert_eq!(none.recording_roots(), vec!["Meetings", "Voice Notes"]);
+        // both custom, distinct → both
+        let both = VaultCaptureConfig {
+            meeting_folder: Some("A".into()),
+            voice_note_folder: Some("B".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(both.recording_roots(), vec!["A", "B"]);
+        // both custom, same → deduped to one
+        let same = VaultCaptureConfig {
+            meeting_folder: Some("Audio".into()),
+            voice_note_folder: Some("Audio".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(same.recording_roots(), vec!["Audio"]);
+        // one custom → custom + the other default
+        let one = VaultCaptureConfig {
+            meeting_folder: Some("Audio".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(one.recording_roots(), vec!["Audio", "Voice Notes"]);
+    }
+
+    #[test]
+    fn legacy_recording_folder_seeds_both_and_retires_on_reserialize() {
+        // A pre-split config with the unified key seeds BOTH modes (no data loss).
+        let cfg = crate::capture_config::parse_config(
+            r#"{ "vaults": { "v": { "recordingFolder": "Audio" } } }"#,
         );
-        assert_eq!(
-            vault_config(&cfg, "b").effective_recording_folder(),
-            "Inbox"
+        let v = crate::capture_config::vault_config(&cfg, "v");
+        assert_eq!(v.meeting_folder.as_deref(), Some("Audio"));
+        assert_eq!(v.voice_note_folder.as_deref(), Some("Audio"));
+        // Explicit new keys win over the legacy fallback, per field.
+        let cfg2 = crate::capture_config::parse_config(
+            r#"{ "vaults": { "v": { "recordingFolder": "Audio", "voiceNoteFolder": "Notes" } } }"#,
         );
+        let v2 = crate::capture_config::vault_config(&cfg2, "v");
+        assert_eq!(v2.meeting_folder.as_deref(), Some("Audio")); // fell back
+        assert_eq!(v2.voice_note_folder.as_deref(), Some("Notes")); // explicit
+                                                                    // Re-serialize writes the two new keys, never the legacy one.
+        let json = crate::capture_config::serialize_config(&cfg);
+        assert!(json.contains("meetingFolder"));
+        assert!(json.contains("voiceNoteFolder"));
+        assert!(!json.contains("recordingFolder"));
     }
 
     #[test]
@@ -313,7 +395,8 @@ mod tests {
         let v = vault_config(&cfg, "abc");
         assert_eq!(v.mode, RecordingMode::VoiceNote);
         assert!(!v.create_note);
-        assert_eq!(v.recording_folder, None);
+        assert_eq!(v.meeting_folder, None);
+        assert_eq!(v.voice_note_folder, None);
         assert_eq!(v.bitrate_kbps, 128);
     }
 
@@ -389,23 +472,6 @@ mod tests {
     }
 
     #[test]
-    fn recording_roots_are_the_custom_folder_or_both_defaults() {
-        let cfg = parse_config(
-            r#"{ "vaults": {
-                "a": { "mode": "voice-note" },
-                "b": { "recordingFolder": "Inbox" }
-            } }"#,
-        );
-        // No custom folder → scan both mode homes (mode may have changed).
-        assert_eq!(
-            vault_config(&cfg, "a").recording_roots(),
-            vec!["Meetings", "Voice Notes"]
-        );
-        // Custom folder → it holds every recording, scan just it.
-        assert_eq!(vault_config(&cfg, "b").recording_roots(), vec!["Inbox"]);
-    }
-
-    #[test]
     fn device_fields_parse_and_default_to_none() {
         let cfg = parse_config(
             r#"{ "vaults": { "a": {
@@ -436,7 +502,8 @@ mod tests {
             "abc".to_string(),
             VaultCaptureConfig {
                 mode: RecordingMode::VoiceNote,
-                recording_folder: Some("Inbox/Audio".to_string()),
+                meeting_folder: Some("Inbox/Audio".to_string()),
+                voice_note_folder: Some("Inbox/Voice".to_string()),
                 bitrate_kbps: 192,
                 create_note: false,
                 input_device: Some("USB Mic".to_string()),
@@ -465,8 +532,9 @@ mod tests {
         cfg.vaults
             .insert("a".to_string(), VaultCaptureConfig::default());
         let json = serialize_config(&cfg);
+        assert!(!json.contains("meetingFolder"), "omitted when None: {json}");
         assert!(
-            !json.contains("recordingFolder"),
+            !json.contains("voiceNoteFolder"),
             "omitted when None: {json}"
         );
         assert!(!json.contains("inputDevice"), "omitted when None: {json}");
