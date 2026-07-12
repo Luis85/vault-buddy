@@ -19,7 +19,7 @@ function select(id: string) {
 // Roving-tabindex arrow-key navigation over the tab bar; wraps at both ends.
 async function onKeydown(event: KeyboardEvent, index: number) {
   const n = props.tabs.length;
-  let target = index;
+  let target: number;
   if (event.key === "ArrowRight" || event.key === "ArrowDown") target = (index + 1) % n;
   else if (event.key === "ArrowLeft" || event.key === "ArrowUp") target = (index - 1 + n) % n;
   else if (event.key === "Home") target = 0;
