@@ -76,6 +76,12 @@ pub struct VaultCaptureConfig {
     /// Display order for list sections and pickers; folders not named here
     /// append alphabetically, names without folders are ignored.
     pub list_order: Vec<String>,
+    /// Whether NEW/edited tasks get a generated ID written under
+    /// `task_id_property` (opt-in, default false).
+    pub task_id_enabled: bool,
+    /// Frontmatter property the generated task ID is written under.
+    /// None → the default "task-id".
+    pub task_id_property: Option<String>,
     /// Whether NEW recordings land in a dated `YYYY/MM` subfolder (true, the
     /// long-standing default) or flat in the recording root (false).
     /// Existing files in either layout are still found — flipping this only
@@ -104,6 +110,8 @@ impl Default for VaultCaptureConfig {
             documents_folder: None,
             default_list: None,
             list_order: Vec::new(),
+            task_id_enabled: false,
+            task_id_property: None,
             recording_date_folders: true,
             document_date_folders: true,
         }
@@ -155,6 +163,16 @@ impl VaultCaptureConfig {
     /// The vault-relative folder holding this vault's task documents.
     pub fn tasks_root(&self) -> &str {
         self.tasks_folder.as_deref().unwrap_or("Tasks")
+    }
+
+    /// The effective frontmatter property for generated task IDs
+    /// (empty/None → the default "task-id").
+    pub fn task_id_property_name(&self) -> &str {
+        self.task_id_property
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("task-id")
     }
 
     /// The vault-relative folder holding imported documents. None → "Documents".
@@ -255,6 +273,16 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
                     .collect()
             })
             .unwrap_or_default(),
+        task_id_enabled: entry
+            .get("taskIdEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.task_id_enabled),
+        task_id_property: entry
+            .get("taskIdProperty")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         recording_date_folders: entry
             .get("recordingDateFolders")
             .and_then(|v| v.as_bool())
@@ -310,6 +338,12 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     }
     if !v.list_order.is_empty() {
         entry.insert("listOrder".to_string(), json!(v.list_order));
+    }
+    if v.task_id_enabled {
+        entry.insert("taskIdEnabled".to_string(), json!(true));
+    }
+    if let Some(prop) = &v.task_id_property {
+        entry.insert("taskIdProperty".to_string(), json!(prop));
     }
     if !v.recording_date_folders {
         entry.insert("recordingDateFolders".to_string(), json!(false));
@@ -553,6 +587,8 @@ mod tests {
                 documents_folder: Some("Inbox/Documents".to_string()),
                 default_list: Some("Inbox".to_string()),
                 list_order: vec!["Inbox".to_string(), "Next".to_string()],
+                task_id_enabled: true,
+                task_id_property: Some("uid".to_string()),
                 recording_date_folders: false,
                 document_date_folders: false,
             },
@@ -747,5 +783,52 @@ mod tests {
             ..VaultCaptureConfig::default()
         };
         assert_eq!(e.recording_roots(), vec!["A", "B"]);
+    }
+
+    #[test]
+    fn task_id_settings_default_off_and_resolve_property() {
+        let v = VaultCaptureConfig::default();
+        assert!(!v.task_id_enabled);
+        assert_eq!(v.task_id_property, None);
+        assert_eq!(v.task_id_property_name(), "task-id"); // None → default
+        let custom = VaultCaptureConfig {
+            task_id_property: Some("uid".into()),
+            ..VaultCaptureConfig::default()
+        };
+        assert_eq!(custom.task_id_property_name(), "uid");
+    }
+
+    #[test]
+    fn task_id_settings_parse_defensively_and_round_trip() {
+        // Trimmed on read; one malformed field defaults only itself.
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": { "taskIdEnabled": true, "taskIdProperty": "  uid  " } } }"#,
+        );
+        let a = vault_config(&cfg, "a");
+        assert!(a.task_id_enabled);
+        assert_eq!(a.task_id_property.as_deref(), Some("uid"));
+        let bad = parse_config(
+            r#"{ "vaults": { "a": { "taskIdEnabled": "yes", "taskIdProperty": 7, "mode": "voice-note" } } }"#,
+        );
+        let a = vault_config(&bad, "a");
+        assert!(!a.task_id_enabled);
+        assert_eq!(a.task_id_property, None);
+        assert_eq!(a.mode, RecordingMode::VoiceNote);
+        // Round-trip preserves; serialize omits defaults.
+        let mut c = AppConfig::default();
+        c.vaults.insert(
+            "a".into(),
+            VaultCaptureConfig {
+                task_id_enabled: true,
+                task_id_property: Some("uid".into()),
+                ..VaultCaptureConfig::default()
+            },
+        );
+        assert_eq!(parse_config(&serialize_config(&c)).vaults, c.vaults);
+        let mut d = AppConfig::default();
+        d.vaults.insert("b".into(), VaultCaptureConfig::default());
+        let jd = serialize_config(&d);
+        assert!(!jd.contains("taskIdEnabled"));
+        assert!(!jd.contains("taskIdProperty"));
     }
 }

@@ -127,6 +127,11 @@ pub fn set_capture_config(
         // it): a capture save must never reset the default list or the order.
         default_list: existing.default_list,
         list_order: existing.list_order,
+        // The Task ID settings own their command (set_task_id_config); a
+        // capture save must never reset them (same read-inside-the-lock
+        // preserve as default_list/list_order above).
+        task_id_enabled: existing.task_id_enabled,
+        task_id_property: existing.task_id_property,
         // recording_date_folders is this form's own field now (Vault settings
         // → Recording → Folders) — written from the DTO like every other
         // capture field. document_date_folders belongs to the Documents
