@@ -186,6 +186,10 @@ export interface TasksConfig {
    * root) and the display order for list sections/pickers. */
   defaultList: string | null;
   listOrder: string[];
+  /** Whether generated task IDs are enabled for this vault. */
+  taskIdEnabled: boolean;
+  /** The resolved id property name (default "task-id"). */
+  taskIdProperty: string;
 }
 
 /** Per-vault imported-documents folder — get_documents_config/

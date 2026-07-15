@@ -27,16 +27,20 @@ function mountTab(
     onSet?: (a: unknown) => unknown;
     onListLists?: () => unknown;
     onSetLists?: (a: unknown) => unknown;
+    onSetId?: (a: unknown) => unknown;
   } = {},
 ) {
   const calls: Array<{ cmd: string; args: unknown }> = [];
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
     if (cmd === "get_tasks_config")
-      return opts.onGet ? opts.onGet() : { tasksFolder: opts.tasksFolder ?? null, defaultList: null, listOrder: [] };
+      return opts.onGet
+        ? opts.onGet()
+        : { tasksFolder: opts.tasksFolder ?? null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_task_lists") return opts.onListLists?.() ?? [];
     if (cmd === "set_tasks_config") return opts.onSet?.(args) ?? null;
     if (cmd === "set_task_lists_config") return opts.onSetLists?.(args) ?? null;
+    if (cmd === "set_task_id_config") return opts.onSetId?.(args) ?? null;
   });
   active = mount(TasksConfigTab, { props: { vaultId: "v1" }, attachTo: document.body });
   return { wrapper: active, calls };
@@ -185,5 +189,58 @@ describe("TasksConfigTab", () => {
     expect(wrapper.get('[data-testid="tasks-load-error"]').text()).toContain("config unreadable");
     expect(wrapper.find('[data-testid="tasks-folder-input"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("Task lists"); // TaskListSettings still mounted
+  });
+
+  it("enabling task ids and setting a property saves via set_task_id_config", async () => {
+    const saved: unknown[] = [];
+    const { wrapper } = mountTab({ onSetId: (a) => (saved.push(a), null) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(true);
+    await flushPromises();
+    await wrapper.get('[data-testid="task-id-property"]').setValue("uid");
+    await wrapper.get('[data-testid="task-id-property"]').trigger("blur");
+    await flushPromises();
+    expect(saved).toContainEqual({ id: "v1", enabled: true, property: "uid" });
+  });
+
+  it("hides the property field until task ids are enabled", async () => {
+    const { wrapper } = mountTab();
+    await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('[data-testid="task-id-enabled"]').element.checked).toBe(false);
+    expect(wrapper.find('[data-testid="task-id-property"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(true);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-id-property"]').exists()).toBe(true);
+  });
+
+  it("shows the default property name as a placeholder rather than pre-filling it", async () => {
+    const { wrapper } = mountTab({
+      onGet: () => ({ tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: true, taskIdProperty: "task-id" }),
+    });
+    await flushPromises();
+    const input = wrapper.get<HTMLInputElement>('[data-testid="task-id-property"]');
+    expect(input.element.value).toBe("");
+    expect(input.element.placeholder).toBe("task-id");
+  });
+
+  it("pre-fills a non-default persisted property name", async () => {
+    const { wrapper } = mountTab({
+      onGet: () => ({ tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: true, taskIdProperty: "uid" }),
+    });
+    await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('[data-testid="task-id-property"]').element.value).toBe("uid");
+  });
+
+  it("shows a task-id save error inline without clobbering the folder autosave's error", async () => {
+    const { wrapper } = mountTab({
+      onSetId: () => {
+        throw "Invalid ID property name";
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(true);
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-id-error"]').text()).toContain("Invalid ID property name");
+    expect(wrapper.find('[data-testid="tasks-folder-error"]').exists()).toBe(false);
   });
 });

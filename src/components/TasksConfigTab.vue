@@ -41,16 +41,44 @@ const autosave = useAutosave(
   { label: "tasks folder" },
 );
 
+const taskIdEnabled = ref(false);
+// Empty means "use the default"; the default name is shown as a placeholder.
+const taskIdProperty = ref("");
+
+const idAutosave = useAutosave(
+  async () => {
+    await invoke("set_task_id_config", {
+      id: props.vaultId,
+      enabled: taskIdEnabled.value,
+      property: taskIdProperty.value.trim() || null,
+    });
+  },
+  { label: "task ids" },
+);
+
 onMounted(() =>
   load<TasksConfig>("get_tasks_config", props.vaultId, (cfg) => {
     tasksFolder.value = cfg.tasksFolder ?? "";
     savedFolder.value = cfg.tasksFolder ?? null;
+    taskIdEnabled.value = cfg.taskIdEnabled ?? false;
+    // Show the resolved name only when the user set a non-default one, so the
+    // placeholder communicates the default without pre-filling it.
+    taskIdProperty.value = cfg.taskIdProperty && cfg.taskIdProperty !== "task-id" ? cfg.taskIdProperty : "";
   }),
 );
 
 function onFolderInput(value: string) {
   tasksFolder.value = value;
   autosave.schedule();
+}
+
+function onIdEnabledChange(value: boolean) {
+  taskIdEnabled.value = value;
+  idAutosave.saveNow();
+}
+function onIdPropertyInput(value: string) {
+  taskIdProperty.value = value;
+  idAutosave.schedule();
 }
 
 // True while the typed folder differs from what's persisted (a folder save is
@@ -111,6 +139,59 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
       >
         List settings reload once the tasks folder is saved…
       </p>
+      <section v-if="!loadError">
+        <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Task IDs
+        </h2>
+        <div class="rounded-xl border border-white/10 bg-white/5 p-2">
+          <div class="flex items-center justify-between gap-2">
+            <label
+              for="task-id-enabled"
+              class="text-sm text-slate-200"
+            >
+              Generate an ID for each task
+              <span class="block text-xs text-slate-500">Written to new tasks and stamped on the next edit</span>
+            </label>
+            <input
+              id="task-id-enabled"
+              data-testid="task-id-enabled"
+              type="checkbox"
+              class="h-4 w-4 accent-violet-500"
+              :checked="taskIdEnabled"
+              @change="onIdEnabledChange(($event.target as HTMLInputElement).checked)"
+            >
+          </div>
+          <div
+            v-if="taskIdEnabled"
+            class="mt-2"
+          >
+            <label
+              for="task-id-property"
+              class="mb-1 block text-sm text-slate-200"
+            >
+              Property name
+              <span class="block text-xs text-slate-500">Frontmatter key the ID is saved under</span>
+            </label>
+            <input
+              id="task-id-property"
+              data-testid="task-id-property"
+              type="text"
+              placeholder="task-id"
+              class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+              :value="taskIdProperty"
+              @input="onIdPropertyInput(($event.target as HTMLInputElement).value)"
+              @blur="idAutosave.flush()"
+            >
+            <p
+              v-if="idAutosave.error.value"
+              data-testid="task-id-error"
+              class="mt-1 text-xs text-red-300"
+            >
+              {{ idAutosave.error.value }}
+            </p>
+          </div>
+        </div>
+      </section>
     </template>
   </div>
 </template>

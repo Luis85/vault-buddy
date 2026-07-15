@@ -34,7 +34,7 @@ export function mountAggregate(handlers: Handlers = {}) {
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_vaults") return vaultsFixture;
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_tasks") {
       const id = (args as { id: string }).id;
       return id === "va"
@@ -54,7 +54,7 @@ export function mountAggregateAttached(handlers: Handlers = {}) {
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_vaults") return vaultsFixture;
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_tasks") return [];
     if (cmd === "add_task") {
       const a = args as { id: string; title: string };
@@ -80,7 +80,7 @@ export function mountView(handlers: Handlers = {}) {
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
       const a = args as { title: string; due?: string; priority?: string; tags?: string[] };
