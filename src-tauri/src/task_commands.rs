@@ -176,15 +176,19 @@ pub async fn move_task_to_list(id: String, path: String, list: String) -> Result
     .map_err(|e| format!("move_task_to_list: task failed: {e}"))?
 }
 
-/// Resolve a vault id to (vault path, lexically-safe tasks root). The shell
-/// keeps its own copy for update_task/open_task (services' equivalent is
-/// private); the canonical escape check is applied per-command since it
-/// needs the folder to exist.
-fn tasks_root_for(id: &str) -> Result<(PathBuf, PathBuf), String> {
+/// Resolve a vault id to (vault path, lexically-safe tasks root, the loaded
+/// vault config). The shell keeps its own copy for update_task/open_task
+/// (services' equivalent is private); the canonical escape check is applied
+/// per-command since it needs the folder to exist. Callers that also need
+/// per-vault config fields (e.g. update_task's task-id stamping) get it here
+/// instead of re-reading config.json a second time.
+fn tasks_root_for(
+    id: &str,
+) -> Result<(PathBuf, PathBuf, capture_config::VaultCaptureConfig), String> {
     let vault = crate::commands::find_vault(id)?;
     let cfg = capture_config::vault_config(&capture_config::load_config(), id);
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
-    Ok((PathBuf::from(&vault.path), root))
+    Ok((PathBuf::from(&vault.path), root, cfg))
 }
 
 /// Validate an optional due date for a write. Ok(None) when absent.
@@ -406,7 +410,7 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         return Ok(());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let (vault_path, root) = tasks_root_for(&id)?;
+        let (vault_path, root, cfg) = tasks_root_for(&id)?;
         if root.exists() {
             capture_paths::assert_root_inside_vault(&vault_path, &root)?;
         }
@@ -415,7 +419,10 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         // Stamp a generated ID when the vault opted in and the task lacks one
         // (update_task_fields only writes an ensure key that is absent). Any
         // update_task write — a field edit OR an order-only reorder — stamps.
-        let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+        // cfg comes from tasks_root_for, which already loaded config.json for
+        // the folder resolution above — reusing it here avoids a second
+        // uncached read and the TOCTOU window a second read would open
+        // against a concurrent config write.
         let generated_id = cfg.task_id_enabled.then(tasks::new_task_id);
         let ensure: Vec<(&str, &str)> = match &generated_id {
             Some(idv) => vec![(cfg.task_id_property_name(), idv.as_str())],
@@ -434,7 +441,7 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
 /// `obsidian://open` launch, logged by `uri::launch` like every vault open.
 #[tauri::command]
 pub fn open_task(id: String, path: String) -> Result<(), String> {
-    let (vault_path, root) = tasks_root_for(&id)?;
+    let (vault_path, root, _cfg) = tasks_root_for(&id)?;
     let canon_root =
         std::fs::canonicalize(&root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
     let canon_path = std::fs::canonicalize(Path::new(&path))
