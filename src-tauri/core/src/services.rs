@@ -301,7 +301,14 @@ pub fn add_task(
             Err(e) => return Err(e),
         }
     };
-    let path = tasks::create_task(&target_root, title, today, due, priority, tags, None)
+    // Generate a task ID when the vault opted in — written into the initial
+    // file content by render_task. Borrows are valid for the create call:
+    // the property name borrows `cfg`, the id borrows `generated_id`.
+    let generated_id = cfg.task_id_enabled.then(tasks::new_task_id);
+    let task_id = generated_id
+        .as_deref()
+        .map(|id| (cfg.task_id_property_name(), id));
+    let path = tasks::create_task(&target_root, title, today, due, priority, tags, task_id)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
@@ -601,6 +608,58 @@ mod tests {
         let title = set_task_status(&paths, "deadbeef01234567", &created.path, "done").unwrap();
         assert_eq!(title, "Buy milk");
         assert_eq!(count_open_tasks(&paths, "deadbeef01234567"), 0);
+    }
+
+    #[test]
+    fn add_task_writes_a_generated_id_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "uid" } } }"#,
+        )
+        .unwrap();
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let body = std::fs::read_to_string(&created.path).unwrap();
+        let line = body
+            .lines()
+            .find(|l| l.starts_with("uid: "))
+            .expect("id line present");
+        let id = line.trim_start_matches("uid: ");
+        assert_eq!(id.len(), 8);
+        assert!(id
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
+    }
+
+    #[test]
+    fn add_task_writes_no_id_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert!(!std::fs::read_to_string(&created.path)
+            .unwrap()
+            .contains("task-id"));
     }
 
     #[test]
