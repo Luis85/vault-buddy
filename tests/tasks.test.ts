@@ -300,6 +300,9 @@ describe("Tasks", () => {
         ],
       });
       await flushPromises();
+      // Lists is the default grouping now — switch to Dates to exercise its
+      // bucket-header behavior.
+      await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
       expect(headers).toEqual(["Overdue", "Today", "Upcoming", "No date", "Done"]);
     } finally {
@@ -312,6 +315,9 @@ describe("Tasks", () => {
     // only once dated open tasks exist.
     const { wrapper } = mountView(); // sample: one undated open + one done
     await flushPromises();
+    // Lists is the default grouping now — switch to Dates to exercise its
+    // bucket-header behavior.
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
     expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
   });
 
@@ -325,6 +331,9 @@ describe("Tasks", () => {
         ],
       });
       await flushPromises();
+      // Lists is the default grouping now — switch to Dates to exercise its
+      // bucket-header behavior.
+      await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
       expect(headers).toEqual(["Upcoming", "No date"]);
     } finally {
@@ -884,17 +893,17 @@ describe("Tasks", () => {
     expect(headers).toEqual(["#home", "#work"]);
   });
 
-  it("grouping defaults to dates and the toggle switches back", async () => {
+  it("grouping defaults to lists and the toggle switches to dates", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
         { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"], list: "", order: null },
       ],
     });
     await flushPromises();
-    // Dates mode by default: an undated list shows no headers.
-    expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
-    await wrapper.get('[data-testid="task-grouping-tags"]').trigger("click");
+    // Lists mode by default: a root task shows the "No list" section header.
+    expect(wrapper.get('[data-testid="task-grouping-lists"]').attributes("aria-checked")).toBe("true");
     expect(wrapper.findAll('[data-testid="task-bucket-header"]').length).toBeGreaterThan(0);
+    // Switching to dates: an undated list shows no headers.
     await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
     expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
   });

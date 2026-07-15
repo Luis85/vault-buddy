@@ -22,9 +22,9 @@ defineEmits<{
 }>();
 
 const GROUPINGS = [
+  { key: "lists", label: "Lists" },
   { key: "dates", label: "Dates" },
   { key: "tags", label: "Tags" },
-  { key: "lists", label: "Lists" },
 ] as const;
 </script>
 

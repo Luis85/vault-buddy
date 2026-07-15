@@ -498,7 +498,9 @@ describe("Tasks — lists & sorting", () => {
     it("re-sorts rows when a sort key is picked and persists the choice", async () => {
       const { wrapper } = mountView({ list_tasks: undated });
       await flushPromises();
-      expect(rowTitles(wrapper)).toEqual(["Carrot", "Beta", "Alpha"]); // default: newest created first
+      // Default is now Manual: ranked tasks first by order asc (Beta 1024,
+      // Carrot 2048), unranked Alpha last.
+      expect(rowTitles(wrapper)).toEqual(["Beta", "Carrot", "Alpha"]);
       await pickSort(wrapper, "title");
       expect(rowTitles(wrapper)).toEqual(["Alpha", "Beta", "Carrot"]);
       expect(localStorage.getItem("vault-buddy:task-sort")).toContain('"title"');

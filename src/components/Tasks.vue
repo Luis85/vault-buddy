@@ -262,9 +262,9 @@ async function materializeRanks(section: AggTask[], orders: Map<string, number>)
   }
 }
 
-// Component-local; every panel visit starts back on dates (YAGNI: no
+// Component-local; every panel visit starts back on Lists (YAGNI: no
 // persistence this slice).
-const grouping = ref<"dates" | "tags" | "lists">("dates");
+const grouping = ref<"dates" | "tags" | "lists">("lists");
 
 const buckets = computed<Bucket[]>(() => {
   if (grouping.value === "tags") return tagSections(filteredTasks.value);

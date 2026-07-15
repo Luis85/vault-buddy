@@ -104,7 +104,7 @@ export function taskComparator(pref: TaskSortPref): (a: AggTask, b: AggTask) => 
 
 /** localStorage key; a JSON object keyed per view ("all" or a vault id). */
 const STORAGE_KEY = "vault-buddy:task-sort";
-const DEFAULT_PREF: TaskSortPref = { key: "default", dir: "asc" };
+const DEFAULT_PREF: TaskSortPref = { key: "manual", dir: "asc" };
 const SORT_KEYS = new Set(SORT_OPTIONS.map((o) => o.value));
 
 function readAll(): Record<string, unknown> {
