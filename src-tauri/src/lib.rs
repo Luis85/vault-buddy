@@ -439,6 +439,7 @@ pub fn run() {
             task_commands::get_tasks_config,
             task_commands::set_tasks_config,
             task_commands::set_task_lists_config,
+            task_commands::set_task_id_config,
             task_commands::list_tasks,
             task_commands::add_task,
             task_commands::set_task_status,

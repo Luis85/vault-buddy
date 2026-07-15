@@ -13,6 +13,11 @@ pub struct TasksConfigDto {
     /// tasks root) and the display order for list sections/pickers.
     pub default_list: Option<String>,
     pub list_order: Vec<String>,
+    /// Whether generated task IDs are enabled for this vault.
+    pub task_id_enabled: bool,
+    /// The RESOLVED id property name (default "task-id" when unset) — the UI
+    /// shows it as the placeholder/current value.
+    pub task_id_property: String,
 }
 
 /// The vault's configured tasks folder (or None → the frontend shows the
@@ -21,7 +26,10 @@ pub struct TasksConfigDto {
 #[tauri::command]
 pub fn get_tasks_config(id: String) -> TasksConfigDto {
     let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    let task_id_property = cfg.task_id_property_name().to_string();
     TasksConfigDto {
+        task_id_enabled: cfg.task_id_enabled,
+        task_id_property,
         tasks_folder: cfg.tasks_folder,
         default_list: cfg.default_list,
         list_order: cfg.list_order,
@@ -92,6 +100,37 @@ pub async fn set_task_lists_config(
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.default_list = default_list;
     value.list_order = list_order;
+    capture_config::update_vault_config(&id, value)
+}
+
+/// Persist the vault's Task ID settings (enable + frontmatter property),
+/// preserving every other per-vault field via the same read-modify-write
+/// under ConfigWriteLock. Write-strict on the property: empty → the default
+/// (stored as None); an invalid or reserved name is an inline error. Its own
+/// command — the independent field-save pattern of set_task_lists_config.
+///
+/// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
+#[tauri::command]
+pub async fn set_task_id_config(
+    lock: tauri::State<'_, ConfigWriteLock>,
+    id: String,
+    enabled: bool,
+    property: Option<String>,
+) -> Result<(), String> {
+    crate::commands::find_vault(&id)?;
+    let property = match property.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(p) if tasks::is_valid_id_property(p) => Some(p.to_string()),
+        Some(p) => {
+            return Err(format!(
+                "Invalid ID property name (letters, digits, - and _ only; not a reserved task field): {p}"
+            ))
+        }
+    };
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
+    value.task_id_enabled = enabled;
+    value.task_id_property = property;
     capture_config::update_vault_config(&id, value)
 }
 
@@ -373,7 +412,16 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         }
         let refs: Vec<(&str, Option<&str>)> =
             updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-        tasks::update_task_fields(&root, Path::new(&path), &refs, &[])
+        // Stamp a generated ID when the vault opted in and the task lacks one
+        // (update_task_fields only writes an ensure key that is absent). Any
+        // update_task write — a field edit OR an order-only reorder — stamps.
+        let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+        let generated_id = cfg.task_id_enabled.then(tasks::new_task_id);
+        let ensure: Vec<(&str, &str)> = match &generated_id {
+            Some(idv) => vec![(cfg.task_id_property_name(), idv.as_str())],
+            None => Vec::new(),
+        };
+        tasks::update_task_fields(&root, Path::new(&path), &refs, &ensure)
     })
     .await
     .map_err(|e| format!("update_task: task failed: {e}"))?
