@@ -301,7 +301,7 @@ pub fn add_task(
             Err(e) => return Err(e),
         }
     };
-    let path = tasks::create_task(&target_root, title, today, due, priority, tags)
+    let path = tasks::create_task(&target_root, title, today, due, priority, tags, None)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
