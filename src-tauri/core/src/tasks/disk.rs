@@ -110,6 +110,7 @@ pub fn update_task_fields(
     root: &Path,
     path: &Path,
     updates: &[(&str, Option<&str>)],
+    ensure_absent: &[(&str, &str)],
 ) -> Result<(), String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -120,7 +121,16 @@ pub fn update_task_fields(
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    let updated = set_fields(&content, updates).ok_or(
+    // Stamp-if-absent keys (the generated task ID): included in the write only
+    // when the property is not already present, so an existing/hand-authored
+    // value is never overwritten and IDs stay stable.
+    let mut effective: Vec<(&str, Option<&str>)> = updates.to_vec();
+    for (key, val) in ensure_absent {
+        if super::parse::scalar_field(&content, key).is_none() {
+            effective.push((key, Some(val)));
+        }
+    }
+    let updated = set_fields(&content, &effective).ok_or(
         "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
     )?;
     crate::capture_note::write_atomic_replacing(&canon_path, &updated)
@@ -129,7 +139,7 @@ pub fn update_task_fields(
 
 /// Set a task's `status:` frontmatter on disk (see `update_task_fields`).
 pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
-    update_task_fields(root, path, &[("status", Some(new_status))])
+    update_task_fields(root, path, &[("status", Some(new_status))], &[])
 }
 
 #[cfg(test)]
@@ -339,5 +349,39 @@ mod tests {
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("task-id: abcd1234\n"));
+    }
+
+    #[test]
+    fn update_task_fields_stamps_an_absent_ensure_key_but_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
+        // Absent → stamped alongside the edit.
+        update_task_fields(
+            &root,
+            &p,
+            &[("status", Some("done"))],
+            &[("task-id", "abcd1234")],
+        )
+        .unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("status: done\n"));
+        assert!(body.contains("task-id: abcd1234\n"));
+        // Present → never overwritten (a second stamp with a new id is a no-op).
+        update_task_fields(&root, &p, &[], &[("task-id", "zzzz9999")]).unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("task-id: abcd1234\n"));
+    }
+
+    #[test]
+    fn set_task_status_does_not_stamp_any_id() {
+        // A checkbox toggle is not an "edit": set_task_status passes no
+        // ensure keys, so toggling never adds an id.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
+        set_task_status(&root, &p, "done").unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("task-id"));
     }
 }

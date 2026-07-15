@@ -373,7 +373,7 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         }
         let refs: Vec<(&str, Option<&str>)> =
             updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-        tasks::update_task_fields(&root, Path::new(&path), &refs)
+        tasks::update_task_fields(&root, Path::new(&path), &refs, &[])
     })
     .await
     .map_err(|e| format!("update_task: task failed: {e}"))?
