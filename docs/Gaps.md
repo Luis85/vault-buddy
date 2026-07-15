@@ -607,6 +607,21 @@ predicate.
   ("whoever holds it can ship updates to every user" — DEVELOPMENT.md) and
   no CHANGELOG (release bodies are boilerplate install instructions).
 
+### GAP-62 · Low · `services.rs` outgrew its LOC-baseline ceiling without a baseline update
+`scripts/loc-baseline.json` grandfathers `src-tauri/core/src/services.rs` at
+927 nonblank lines (shrink-only, per `scripts/check-loc.mjs`'s policy); the
+file is 984 lines as of 2026-07-15, so `npm run check:loc` — part of the
+documented frontend gate chain (AGENTS.md § Commands) — fails on every PR
+regardless of what it touches. Confirmed pre-existing and unrelated to any
+one change via `git stash`: the failure reproduces on a clean checkout of
+`main` with no working-tree edits. Found while landing the tasks Lists-view
+"New list" control (a frontend-only task not positioned to judge whether the
+extra ~57 Rust lines are a justified crossing or a sign the file should
+split — its own baseline entry already flags "splitting it into per-domain
+modules is a separate refactor"). Fix: whoever grew the file writes a
+justified reason string and bumps the baseline entry (mirroring its existing
+changelog-style reason text), or splits the file per that note.
+
 ## 7. Untested paths
 
 What has no automated coverage today, by area. (The Vitest suite and the

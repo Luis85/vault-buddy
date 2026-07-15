@@ -82,6 +82,14 @@ async function onCreateList(name: string) {
   if (created !== null && composerVaultId.value === target) composer.value?.setList(created);
 }
 
+// The Lists-view "New list" control: create + cache in this vault's lists so
+// the empty section appears immediately (createList is composerVaultId ??
+// vaultId scoped — in per-vault mode that is this vault). Failures are toasted
+// by the composable.
+async function onControlsCreateList(name: string) {
+  await createList(name);
+}
+
 // done / total of the visible (non-archived) list; drives the progress bar.
 const progress = computed(() => {
   const total = tasks.value.length;
@@ -452,9 +460,12 @@ async function add(payload: AddPayload) {
       v-if="!loading && !loadError && (tasks.length > 0 || hasDisplayableLists)"
       :grouping="grouping"
       :sort-pref="sortPref"
+      :is-aggregate="isAggregate"
+      :creating-list="creatingList"
       @update:grouping="grouping = $event"
       @set-sort-key="setSortKey"
       @flip-sort-dir="flipSortDir"
+      @create-list="onControlsCreateList"
     />
 
     <p

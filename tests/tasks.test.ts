@@ -908,6 +908,95 @@ describe("Tasks", () => {
     expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
   });
 
+  it("creates a new list from the Lists view controls and shows the empty section", async () => {
+    const created: string[] = [];
+    const { wrapper } = mountView({
+      list_task_lists: () => [],
+      create_task_list: (args) => {
+        const name = (args as { name: string }).name;
+        created.push(name);
+        return name; // the landed list name
+      },
+    });
+    await flushPromises();
+    // Lists grouping is the default → the New list button is visible.
+    await wrapper.get('[data-testid="task-newlist"]').trigger("click");
+    await wrapper.get('[data-testid="task-newlist-input"]').setValue("Inbox");
+    await wrapper.get('[data-testid="task-newlist-confirm"]').trigger("click");
+    await flushPromises();
+    expect(created).toEqual(["Inbox"]);
+    const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
+    expect(headers).toContain("Inbox");
+  });
+
+  it("creates a new list on Enter in the input", async () => {
+    const created: string[] = [];
+    const { wrapper } = mountView({
+      list_task_lists: () => [],
+      create_task_list: (args) => {
+        const name = (args as { name: string }).name;
+        created.push(name);
+        return name;
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-newlist"]').trigger("click");
+    await wrapper.get('[data-testid="task-newlist-input"]').setValue("Reading");
+    await wrapper.get('[data-testid="task-newlist-input"]').trigger("keydown.enter");
+    await flushPromises();
+    expect(created).toEqual(["Reading"]);
+    expect(wrapper.find('[data-testid="task-newlist-input"]').exists()).toBe(false); // closed
+  });
+
+  it("ignores Enter on the new-list input while composing an IME candidate", async () => {
+    const { wrapper, calls } = mountView({ list_task_lists: () => [] });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-newlist"]').trigger("click");
+    const input = wrapper.get('[data-testid="task-newlist-input"]');
+    await input.setValue("候選");
+    await input.trigger("keydown", { key: "Enter", isComposing: true });
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "create_task_list")).toBeUndefined();
+    expect(wrapper.find('[data-testid="task-newlist-input"]').exists()).toBe(true); // still open
+  });
+
+  it("the cancel button closes the new-list input without creating", async () => {
+    const { wrapper, calls } = mountView({ list_task_lists: () => [] });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-newlist"]').trigger("click");
+    await wrapper.get('[data-testid="task-newlist-input"]').setValue("Discard me");
+    await wrapper.get('[data-testid="task-newlist-cancel"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "create_task_list")).toBeUndefined();
+    expect(wrapper.find('[data-testid="task-newlist-input"]').exists()).toBe(false);
+  });
+
+  it("Escape cancels the new-list input without creating — it must not reach the panel-close handler", async () => {
+    // Mirrors the inline editor's Escape-doesn't-bubble tests above: the
+    // handler calls stopPropagation so PanelRoot's window-level Escape
+    // listener never sees it and closes the whole panel. Attached mount: a
+    // detached tree never bubbles to window, so the assertion would pass
+    // vacuously otherwise.
+    setActivePinia(createPinia());
+    mockIPC((cmd) => (cmd === "list_tasks" ? sample.map((t) => ({ ...t })) : cmd === "list_task_lists" ? [] : null));
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" }, attachTo: document.body });
+    const reachedWindow = vi.fn();
+    window.addEventListener("keydown", reachedWindow);
+    try {
+      await flushPromises();
+      await wrapper.get('[data-testid="task-newlist"]').trigger("click");
+      const input = wrapper.get('[data-testid="task-newlist-input"]');
+      await input.trigger("keydown", { key: "Escape", isComposing: false });
+      await flushPromises();
+      expect(wrapper.find('[data-testid="task-newlist-input"]').exists()).toBe(false); // closed
+      expect(reachedWindow).not.toHaveBeenCalled(); // panel-close never sees it
+    } finally {
+      window.removeEventListener("keydown", reachedWindow);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
   it("aggregate mode merges every vault's tasks in global sort order", async () => {
     const { wrapper, calls } = mountAggregate();
     await flushPromises();

@@ -34,8 +34,8 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-47). Shrink only; split when next touched."
     },
     "src/components/Tasks.vue": {
-      "loc": 505,
-      "reason": "The Tasks view (the codebase's churn hotspot per fallow) crossed the 500 cap under a run of Codex PR #53 re-review guards — the empty-list visibility fix (hasDisplayableLists + the buckets/empty-state split) and the Lists-grouping filter no-match fix (filterActive gating includeEmpty). It is already split into useTaskActions/useTaskLists/useTaskReorder composables + the taskSort/taskSections/taskOrder utils; extracting the grouping/display-state (buckets + its helpers) into a composable is the next split. Shrink only; split when next touched."
+      "loc": 515,
+      "reason": "The Tasks view (the codebase's churn hotspot per fallow) crossed the 500 cap under a run of Codex PR #53 re-review guards — the empty-list visibility fix (hasDisplayableLists + the buckets/empty-state split) and the Lists-grouping filter no-match fix (filterActive gating includeEmpty). It is already split into useTaskActions/useTaskLists/useTaskReorder composables + the taskSort/taskSections/taskOrder utils; extracting the grouping/display-state (buckets + its helpers) into a composable is the next split. 505->515: the Lists-view \"New list\" discoverability control (Task 8) — pass-through `is-aggregate`/`creating-list` props, the `@create-list` binding, and the thin `onControlsCreateList` handler + its invariant comment on TaskViewControls' props/emit shape. Shrink only; split when next touched."
     }
   }
 }
