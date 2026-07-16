@@ -150,6 +150,14 @@ export interface RecordingSettingsValue {
   recordingDateFolders: boolean;
 }
 
+/** App-global transcription settings (machine-level; per-vault knobs live
+ * in CaptureConfig). */
+export interface TranscriptionAppConfig {
+  /** Ask whisper for GPU inference (Vulkan builds; CPU fallback is
+   * automatic). Applies from the next transcription. */
+  useGpu: boolean;
+}
+
 export interface TaskItem {
   path: string;
   title: string;

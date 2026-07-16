@@ -11,6 +11,7 @@ import DocumentImportSettings from "./DocumentImportSettings.vue";
 import McpSettings from "./McpSettings.vue";
 import SelectMenu from "./SelectMenu.vue";
 import TabGroup from "./TabGroup.vue";
+import TranscriptionAppSettings from "./TranscriptionAppSettings.vue";
 import UpdateSettings from "./UpdateSettings.vue";
 
 const settings = useSettingsStore();
@@ -248,6 +249,7 @@ async function toggleAutostart(event: Event) {
       <div class="flex flex-col gap-3">
         <McpSettings />
         <DocumentImportSettings />
+        <TranscriptionAppSettings />
       </div>
     </template>
   </TabGroup>
