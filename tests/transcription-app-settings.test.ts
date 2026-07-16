@@ -12,11 +12,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function mountWith(useGpu = true, failSave = false) {
+function mountWith(useGpu = true, failSave = false, failLoad = false) {
   const calls: { cmd: string; payload?: unknown }[] = [];
   mockIPC((cmd, payload) => {
     calls.push({ cmd, payload });
-    if (cmd === "get_transcription_config") return { useGpu };
+    if (cmd === "get_transcription_config") {
+      if (failLoad) throw new Error("boom");
+      return { useGpu };
+    }
     if (cmd === "set_transcription_config") {
       if (failSave) throw new Error("disk full");
       return null;
@@ -54,5 +57,14 @@ describe("TranscriptionAppSettings", () => {
       wrapper.get<HTMLInputElement>('[data-testid="use-gpu-toggle"]').element.checked,
     ).toBe(true);
     expect(wrapper.get('[data-testid="use-gpu-error"]').text()).toContain("disk full");
+  });
+
+  it("surfaces an error and keeps the toggle disabled when the initial load fails", async () => {
+    const { wrapper } = mountWith(true, false, true);
+    await flushPromises();
+    expect(wrapper.get('[data-testid="use-gpu-error"]').text()).toContain("boom");
+    expect(
+      wrapper.get<HTMLInputElement>('[data-testid="use-gpu-toggle"]').element.disabled,
+    ).toBe(true);
   });
 });
