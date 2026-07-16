@@ -168,6 +168,42 @@ pub fn is_real_dated_dir(documents_root: &Path, dir: &Path, year: &str, month: &
     }
 }
 
+/// Extract the import basename from a staging dir name
+/// `.<basename>.<pid>-<seq>.vault-buddy.tmp.import`. The unique token
+/// `<pid>-<seq>` has no `.`, so the last `.` before it separates it from the
+/// basename even when the basename itself contains dots. `None` for a name that
+/// isn't a staging dir.
+fn orphan_media_basename(staging_name: &str) -> Option<String> {
+    let inner = staging_name
+        .strip_prefix('.')?
+        .strip_suffix(STAGING_MARKER)?;
+    let (base, _unique) = inner.rsplit_once('.')?;
+    (!base.is_empty()).then(|| base.to_string())
+}
+
+/// Remove a crash-orphaned `<dir>/<basename>/` media folder (GAP-54) — ONLY
+/// when it has no sibling `<basename>.md` note (proving it's an orphan, not a
+/// normal import), it is a REAL in-place directory (`canonicalize() == path` —
+/// rejects a symlink/junction, never followed), and it stays inside `dir`
+/// (already canonical-contained by the caller). Pushes the removed path onto
+/// `removed` for logging.
+fn remove_orphan_media(dir: &Path, basename: &str, removed: &mut Vec<PathBuf>) {
+    let media = dir.join(basename);
+    if dir.join(format!("{basename}.md")).exists() {
+        return; // a real published import (note + media) — not our orphan
+    }
+    let Ok(canon) = media.canonicalize() else {
+        return; // missing → nothing to sweep
+    };
+    if canon != media || !canon.is_dir() {
+        return; // a file or a symlink/junction — never follow it
+    }
+    match std::fs::remove_dir_all(&media) {
+        Ok(()) => removed.push(media),
+        Err(e) => log::warn!("import-recovery: failed to remove orphan media {media:?}: {e}"),
+    }
+}
+
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
 /// Documents folder — directly at its root (the flat layout `document_date_folders`
 /// produces when off) AND across its `YYYY/MM` subtree (the dated layout, the
@@ -273,6 +309,14 @@ pub fn clean_stale_staging_at(
                 })
                 .unwrap_or(false);
             if stale {
+                // Also remove a crash-orphaned media folder published without
+                // its note (GAP-54): the staging dir name gives us the basename,
+                // so a `<dir>/<basename>/` with no sibling `<basename>.md` is
+                // provably ours. Guarded (no-note + real-in-place + contained)
+                // in remove_orphan_media.
+                if let Some(base) = orphan_media_basename(&name) {
+                    remove_orphan_media(dir, &base, &mut sweep.removed);
+                }
                 match std::fs::remove_dir_all(&path) {
                     Ok(()) => sweep.removed.push(path),
                     Err(e) => {
@@ -813,5 +857,86 @@ mod tests {
         let note = publish(&plan, &target, "---\n---\n\n").unwrap();
         assert_eq!(note, target.join("2026-07-10 Note.md"));
         assert!(std::fs::read_to_string(&note).unwrap().contains("NEW"));
+    }
+
+    #[test]
+    fn janitor_removes_crash_orphan_media_folder_with_no_note() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let month = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&month).unwrap();
+        // The crash window: published media + surviving staging dir, but no note.
+        let orphan_media = month.join("2026-07-10 Report");
+        std::fs::create_dir_all(&orphan_media).unwrap();
+        std::fs::write(orphan_media.join("image1.png"), b"PNG").unwrap();
+        let staging = month.join(".2026-07-10 Report.123-4.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        clean_stale_staging_at(&tmp.path().join("Documents"), now, Duration::from_secs(60));
+        assert!(!staging.exists(), "staging dir swept");
+        assert!(!orphan_media.exists(), "orphan media swept too (GAP-54)");
+    }
+
+    #[test]
+    fn janitor_keeps_media_folder_that_has_a_sibling_note() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let month = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&month).unwrap();
+        // A normal published import (note + media) plus a stale staging dir for
+        // the SAME basename must NOT delete the real media.
+        let media = month.join("2026-07-10 Report");
+        std::fs::create_dir_all(&media).unwrap();
+        std::fs::write(media.join("image1.png"), b"PNG").unwrap();
+        std::fs::write(month.join("2026-07-10 Report.md"), "real note").unwrap();
+        let staging = month.join(".2026-07-10 Report.9-9.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        clean_stale_staging_at(&tmp.path().join("Documents"), now, Duration::from_secs(60));
+        assert!(
+            media.join("image1.png").exists(),
+            "real media kept (has a note)"
+        );
+        assert!(month.join("2026-07-10 Report.md").exists());
+    }
+
+    #[test]
+    fn orphan_media_basename_extracts_dotted_stems() {
+        // The unique token pid-seq has no '.', so the last '.' before it
+        // separates it from a basename that itself contains dots.
+        assert_eq!(
+            orphan_media_basename(".2026-07-10 Report v1.2.123-4.vault-buddy.tmp.import"),
+            Some("2026-07-10 Report v1.2".to_string())
+        );
+        assert_eq!(
+            orphan_media_basename(".x.1-1.vault-buddy.tmp.import"),
+            Some("x".to_string())
+        );
+        assert_eq!(orphan_media_basename("not-a-staging-dir"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn janitor_skips_symlinked_media_named_like_an_orphan() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let month = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&month).unwrap();
+        let real = month.join("real-data");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("keep.md"), "precious").unwrap();
+        std::os::unix::fs::symlink(&real, month.join("2026-07-10 Report")).unwrap();
+        let staging = month.join(".2026-07-10 Report.1-1.vault-buddy.tmp.import");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let now = SystemTime::now() + Duration::from_secs(3600);
+        clean_stale_staging_at(&tmp.path().join("Documents"), now, Duration::from_secs(60));
+        assert!(real.join("keep.md").exists(), "symlink target untouched");
+        assert!(
+            month.join("2026-07-10 Report").exists(),
+            "the link itself left alone"
+        );
     }
 }
