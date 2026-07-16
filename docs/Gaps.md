@@ -638,20 +638,18 @@ predicate.
   ("whoever holds it can ship updates to every user" — DEVELOPMENT.md) and
   no CHANGELOG (release bodies are boilerplate install instructions).
 
-### GAP-62 · Low · `services.rs` outgrew its LOC-baseline ceiling without a baseline update
-`scripts/loc-baseline.json` grandfathers `src-tauri/core/src/services.rs` at
+### GAP-62 · ~~Low~~ FIXED 2026-07-16 · `services.rs` outgrew its LOC-baseline ceiling without a baseline update
+`scripts/loc-baseline.json` grandfathered `src-tauri/core/src/services.rs` at
 927 nonblank lines (shrink-only, per `scripts/check-loc.mjs`'s policy); the
-file is 984 lines as of 2026-07-15, so `npm run check:loc` — part of the
-documented frontend gate chain (AGENTS.md § Commands) — fails on every PR
-regardless of what it touches. Confirmed pre-existing and unrelated to any
-one change via `git stash`: the failure reproduces on a clean checkout of
-`main` with no working-tree edits. Found while landing the tasks Lists-view
-"New list" control (a frontend-only task not positioned to judge whether the
-extra ~57 Rust lines are a justified crossing or a sign the file should
-split — its own baseline entry already flags "splitting it into per-domain
-modules is a separate refactor"). Fix: whoever grew the file writes a
-justified reason string and bumps the baseline entry (mirroring its existing
-changelog-style reason text), or splits the file per that note.
+file reached 984 lines when the task-id increment's `add_task` id generation
+(+ its two service tests) landed, so `npm run check:loc` — part of the
+documented frontend gate chain (AGENTS.md § Commands) — failed on every PR
+regardless of what it touched. **Fixed** by ratcheting the baseline entry
+927→984 with a justified reason string (the sanctioned first branch of this
+entry's own fix criterion) in the same commit that documents the task-id
+feature; `check:loc` passes again. The file's standing "splitting it into
+per-domain modules is a separate refactor" note remains open as future work,
+but no longer red-lines CI.
 
 ## 7. Untested paths
 
