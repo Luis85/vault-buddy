@@ -370,6 +370,45 @@ describe("RecordMode", () => {
       });
     });
 
+    it("does not eat a trailing space typed into the textarea between keystrokes (Fix 2)", async () => {
+      // Regression: the transcription computed's SETTER used to store
+      // v.transcriptionVocabulary.trim() into config.value, which feeds
+      // straight back into the textarea's v-model — Vue then resets the
+      // DOM to the trimmed value on the next render, deleting a trailing
+      // space the user just typed (e.g. "Anna " -> "Anna" mid-keystroke,
+      // so continuing to type "Kowalska" produced "AnnaKowalska"). The RAW
+      // (untrimmed) string must survive in the bundle/textarea state
+      // between keystrokes; only the persisted payload trims, at save time.
+      const calls: Array<{ cmd: string; args: unknown }> = [];
+      mockIPC((cmd, args) => {
+        calls.push({ cmd, args });
+        if (cmd === "get_capture_config") return vocabCfg;
+        if (cmd === "list_recordings") return [];
+      });
+      const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+      await flushPromises();
+
+      const textarea = wrapper.get<HTMLTextAreaElement>(
+        '[data-testid="transcription-vocabulary-input"]',
+      );
+      await textarea.setValue("Anna");
+      await textarea.setValue("Anna ");
+
+      // The trailing space must survive in the DOM: Vue must not have
+      // reset the textarea back to the trimmed "Anna" mid-edit.
+      expect(textarea.element.value).toBe("Anna ");
+
+      vi.advanceTimersByTime(600);
+      await flushPromises();
+
+      const saveCalls = calls.filter((c) => c.cmd === "set_capture_config");
+      expect(saveCalls).toHaveLength(1);
+      expect(saveCalls[0].args).toEqual({
+        id: "v1",
+        cfg: { ...vocabCfg, transcriptionVocabulary: "Anna" },
+      });
+    });
+
     it("saves null vocabulary (not an empty string) when the final edit is blank", async () => {
       const seeded = { ...vocabCfg, transcriptionVocabulary: "Old notes" };
       const calls: Array<{ cmd: string; args: unknown }> = [];

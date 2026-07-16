@@ -132,7 +132,18 @@ function transcriptionBundle(): TranscriptionBundle {
 
 async function persist() {
   try {
-    await invoke("set_capture_config", { id: props.vaultId, cfg: config.value });
+    await invoke("set_capture_config", {
+      id: props.vaultId,
+      cfg: {
+        ...config.value,
+        // Trimmed HERE, at the save boundary — not in the transcription
+        // computed's setter. config.value.transcriptionVocabulary carries
+        // the RAW (untrimmed) string so it can feed straight back into the
+        // textarea's v-model without Vue resetting the DOM mid-edit (see
+        // that setter's comment for the failure this avoids).
+        transcriptionVocabulary: (config.value.transcriptionVocabulary ?? "").trim() || null,
+      },
+    });
   } catch (e) {
     // RecordMode has no settings-save UI of its own (unlike CaptureSettings'
     // Save button + error banner) — the vault's full Capture Settings view is
@@ -173,7 +184,15 @@ const transcription = computed({
       transcriptionModel: v.transcriptionModel,
       transcriptionLanguage: v.transcriptionLanguage.trim() || null,
       transcriptTimestamps: v.transcriptTimestamps,
-      transcriptionVocabulary: v.transcriptionVocabulary.trim() || null,
+      // RAW, untrimmed (mirrors RecordingConfigTab.vue's rec.value = next):
+      // this flows back into transcriptionBundle()'s getter and from there
+      // into TranscriptionSettings' v-model on the textarea. Trimming here
+      // used to feed the DOM back a shorter string than what was just
+      // typed — Vue then resets the textarea's value on the next render,
+      // silently eating a trailing space/newline (e.g. "Anna " -> "Anna"
+      // mid-keystroke, so typing "Kowalska" next produced "AnnaKowalska").
+      // persist() trims at the actual save boundary instead.
+      transcriptionVocabulary: v.transcriptionVocabulary,
       transcriptionVad: v.transcriptionVad,
     };
     if (changed.length === 0) return;
