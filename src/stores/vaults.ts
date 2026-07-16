@@ -246,8 +246,16 @@ export const useVaultsStore = defineStore("vaults", {
     // mid-conversion append can't remove the wrong entry.
     dequeueImport(path: string) {
       const idx = this.pendingImports.indexOf(path);
-      if (idx !== -1) this.pendingImports.splice(idx, 1);
-      if (this.pendingImports.length === 0) this.showList();
+      // Stale completion: the user pressed Back / navigated away mid-conversion,
+      // so showList() already cleared the queue and this path is gone. Do
+      // nothing — a late-resolving pick() must not touch navigation (Codex P2).
+      if (idx === -1) return;
+      this.pendingImports.splice(idx, 1);
+      // Advance to the list only when the queue is drained AND we're still on
+      // the picker, so a mid-conversion navigation is never yanked back.
+      if (this.pendingImports.length === 0 && this.view === "importPicker") {
+        this.showList();
+      }
     },
     /** Back to the current view's fixed parent (no history stack). */
     back() {

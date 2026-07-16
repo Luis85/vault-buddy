@@ -415,6 +415,36 @@ describe("vaults store", () => {
     expect(store.pendingImports).toEqual([]);
   });
 
+  it("dequeueImport drops the head and advances to the list when the queue drains", () => {
+    const store = useVaultsStore();
+    store.enqueueImports(["C:/x/Report.docx"]);
+    store.dequeueImport("C:/x/Report.docx");
+    expect(store.pendingImports).toEqual([]);
+    expect(store.view).toBe("list");
+  });
+
+  it("dequeueImport keeps the picker up while more imports are queued", () => {
+    const store = useVaultsStore();
+    store.enqueueImports(["C:/x/A.docx", "C:/x/B.docx"]);
+    store.dequeueImport("C:/x/A.docx");
+    expect(store.pendingImports).toEqual(["C:/x/B.docx"]);
+    expect(store.view).toBe("importPicker");
+  });
+
+  it("a stale dequeueImport after navigating away leaves the view alone (Codex P2)", () => {
+    // The user presses Back / opens another view while convert_document is
+    // still running; showList() already drained the queue. The late-resolving
+    // pick() must not yank navigation back to the list.
+    const store = useVaultsStore();
+    store.enqueueImports(["C:/x/Report.docx"]);
+    store.openTasks("v1"); // navigate away mid-conversion (clears no queue on its own)
+    store.showList(); // …simulate a Back that drained the queue
+    store.openTasks("v1"); // then the user lands on some other view
+    store.dequeueImport("C:/x/Report.docx"); // stale completion fires
+    expect(store.view).toBe("tasks");
+    expect(store.pendingImports).toEqual([]);
+  });
+
   it("refresh routes to the import picker when Rust has a pending import", async () => {
     mockIPC((cmd) => {
       if (cmd === "take_pending_import") return ["C:/x/Report.docx"];
