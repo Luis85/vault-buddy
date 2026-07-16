@@ -811,6 +811,21 @@ build defaults to "on" already; the explicit set still matters for BOTH
 directions, but especially OFF, since without it the toggle's off position
 would be a silent no-op on a shipped build. The toggle is an escape hatch for
 users with flaky graphics drivers (crash remedy: turn it off, fall back to CPU).
+**Registration guard (whisper.cpp#3750):** on MSVC static builds the ggml
+backend registry's one-shot constructor can silently come up CPU-only (a
+caught `vk::SystemError` in `ggml_vk_instance_init` → `ggml_backend_vk_reg`
+returns null → `register_backend(null)` is a silent no-op, its debug log
+compiled out) — the shipped GPU build would be inert while the toggle claims
+GPU. `ensure_vulkan_backend_registered` (engine.rs, `whisper-vulkan`-gated,
+once per process, called only when `use_gpu` is on so the toggle stays a true
+escape hatch) scans the registry by name and explicitly registers a re-attempted
+`ggml_backend_vk_reg()` when absent, then logs the device list (the GAP-62
+"which GPU" diagnostic). Never probe Vulkan via
+`whisper_rs::vulkan::list_devices()` FIRST: its device-count path runs the
+instance init uncaught, so a missing/pre-1.2 loader would throw across the C
+ABI into Rust instead of falling back to CPU. The windows-app CI job runs the
+transcribe tests with `--features whisper-vulkan` — the only place the
+guard's no-crash/no-duplicate contract executes on the shipped toolchain.
 The `whisper-vulkan` feature and the shell's `gpu` feature compile only where the
 Vulkan SDK exists (Windows CI/release builds enable it; local builds stay
 CPU-only so contributors never need the SDK). Deliberately NO per-transcript

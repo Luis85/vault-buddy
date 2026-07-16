@@ -20,7 +20,10 @@ whisper = ["dep:whisper-rs"]
 # toggle pins BOTH directions instead of its OFF position silently doing
 # nothing on a build where GPU is already the default; falls back to CPU
 # when no device is found.
-whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
+# `raw-api` (an empty, re-export-only feature) exposes whisper_rs_sys for
+# engine.rs's ggml backend-registry guard (upstream whisper.cpp#3750: the
+# registry constructor can silently skip Vulkan on MSVC static builds).
+whisper-vulkan = ["whisper", "whisper-rs/vulkan", "whisper-rs/raw-api"]
 
 [dependencies]
 vault_buddy_core = { path = "../core" }

@@ -50,7 +50,11 @@ naive fix would violate one (noted inline).
 process as the Tauri runtime. A faulty graphics driver or an incompatible GPU
 can crash whisper.cpp during model load or inference (native fault: SEH
 exception on Windows, fatal signal on Unix), taking the app with it. Symptom:
-crash.log shows a `native crash` record during transcription. **Remedy:** the
+crash.log shows a `native crash` record during transcription. Diagnostics:
+the first GPU-enabled model load logs the Vulkan device list (id, name,
+VRAM) via `ensure_vulkan_backend_registered` — the same guard that works
+around upstream whisper.cpp#3750 (a silently CPU-only backend registry on
+MSVC static builds) — so the log names the device involved before any fault. **Remedy:** the
 `Use GPU (Vulkan)` toggle (Buddy settings → Integrations → Transcription — GPU)
 is the immediate escape hatch — turn it off to fall back to CPU inference, which
 is always safe. **Permanent fix:** run GPU inference in a sidecar process (a

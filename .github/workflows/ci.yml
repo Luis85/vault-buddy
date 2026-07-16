@@ -199,6 +199,18 @@ jobs:
       - name: tests (transcribe crate, whisper feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper
         working-directory: src-tauri
+      # The ONLY place the Vulkan-feature Rust tests execute (the release
+      # workflow builds but never tests). What this pins on the shipped
+      # MSVC-static toolchain: the ggml backend-registry guard in engine.rs
+      # (upstream whisper.cpp#3750 — the registry can silently come up
+      # CPU-only) must neither crash on a headless runner (the SDK installs
+      # the loader; the runner has no GPU, so this exercises the
+      # caught-failure → CPU-fallback path) nor double-register. Costs one
+      # more dev-profile whisper.cpp build with the Vulkan backend — same
+      # accepted trade as the step above.
+      - name: tests (transcribe crate, whisper-vulkan feature, Windows)
+        run: cargo test -p vault_buddy_transcribe --features whisper-vulkan
+        working-directory: src-tauri
       - name: Upload Windows installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

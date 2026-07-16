@@ -175,6 +175,79 @@ pub struct WhisperTranscriber {
     ctx: WhisperContext,
 }
 
+/// Guard against upstream whisper.cpp#3750: on Windows MSVC static builds
+/// (exactly the shipped `gpu` configuration) the ggml backend registry's
+/// one-shot function-local-static constructor can hit a `vk::SystemError`
+/// inside `ggml_vk_instance_init()`; `ggml_backend_vk_reg()` catches every
+/// exception and returns null, `register_backend(null)` silently returns,
+/// and the only failure log (`VK_LOG_DEBUG`) is compiled out of release
+/// ggml — leaving the registry permanently CPU-only while the UI toggle
+/// claims GPU (all verified against the whisper.cpp source vendored in
+/// whisper-rs-sys 0.15). The remedy is the upstream workaround: after the
+/// registry has constructed, re-attempt `ggml_backend_vk_reg()` OURSELVES
+/// and register a non-null result explicitly — `vk_reg` is idempotent (a
+/// static reg struct + once-guarded instance init) and exception-safe (its
+/// internal try/catch is the very thing that returned null the first
+/// time).
+///
+/// Do NOT "fix" this by calling `whisper_rs::vulkan::list_devices()` as
+/// the first Vulkan touch instead (the recipe upstream's reporter used):
+/// its `ggml_backend_vk_get_device_count()` path runs
+/// `ggml_vk_instance_init()` with NO catch, so on a machine with a missing
+/// or pre-1.2 Vulkan loader the throw unwinds across the C ABI into Rust —
+/// UB/abort instead of the CPU fallback. It is only safe to enumerate
+/// devices once the instance is known-good (which is when this fn does
+/// it, as the GAP-62 "which GPU is it" diagnostic).
+#[cfg(feature = "whisper-vulkan")]
+fn ensure_vulkan_backend_registered() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        use whisper_rs::whisper_rs_sys as sys;
+        // Touch the registry FIRST so its constructor runs now: on healthy
+        // setups it registers Vulkan itself, and the by-name scan below
+        // must see that to avoid a duplicate registration (the registry
+        // does not dedupe).
+        let registered = (0..sys::ggml_backend_reg_count()).any(|i| {
+            let reg = sys::ggml_backend_reg_get(i);
+            !reg.is_null()
+                && std::ffi::CStr::from_ptr(sys::ggml_backend_reg_name(reg)).to_bytes()
+                    == b"Vulkan"
+        });
+        if !registered {
+            let vk = sys::ggml_backend_vk_reg();
+            if vk.is_null() {
+                // Instance init failed (caught inside C++) — no loader, no
+                // ICD, or pre-1.2 Vulkan. whisper falls back to CPU; say so
+                // where the silent upstream path never did.
+                log::warn!(
+                    "vulkan: backend failed to initialize (missing/old Vulkan driver?) — transcription runs on CPU"
+                );
+                return;
+            }
+            sys::ggml_backend_register(vk);
+            log::info!(
+                "vulkan: backend registered explicitly (the ggml registry constructor had silently skipped it — whisper.cpp#3750)"
+            );
+        }
+        // Diagnostics, now that the instance is known-good: name the
+        // devices whisper can pick from (GAP-62's first question after a
+        // driver fault is "which GPU").
+        let devices = whisper_rs::vulkan::list_devices();
+        if devices.is_empty() {
+            log::info!("vulkan: backend registered but no devices found — whisper falls back to CPU");
+        }
+        for d in &devices {
+            log::info!(
+                "vulkan: device {}: {} ({} MiB free / {} MiB total)",
+                d.id,
+                d.name,
+                d.vram.free / (1024 * 1024),
+                d.vram.total / (1024 * 1024)
+            );
+        }
+    });
+}
+
 impl WhisperTranscriber {
     /// `use_gpu` maps to whisper.cpp's context flag. whisper-rs's
     /// `WhisperContextParameters::default()` sets
@@ -192,6 +265,14 @@ impl WhisperTranscriber {
     /// deliberately NO per-transcript device claim (the VAD stats-row
     /// lesson: never record intent as engagement).
     pub fn load(model_path: &Path, use_gpu: bool) -> Result<Self, String> {
+        // Gated on the toggle on purpose: with GPU off we must not touch
+        // Vulkan at all — instance creation can itself crash a broken
+        // driver, and the toggle is exactly the escape hatch for that
+        // machine (GAP-62).
+        #[cfg(feature = "whisper-vulkan")]
+        if use_gpu {
+            ensure_vulkan_backend_registered();
+        }
         let mut params = WhisperContextParameters::default();
         params.use_gpu(use_gpu);
         // Pass the `&Path` straight through rather than round-tripping via
@@ -417,6 +498,37 @@ impl Transcriber for WhisperTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression for the silent-CPU GPU build (upstream whisper.cpp#3750):
+    // the guard must (a) never unwind a Vulkan exception across the FFI
+    // boundary — on a machine with a loader but no usable device/ICD (this
+    // CI runner, headless Windows runners) instance init throws inside C++
+    // and must be swallowed there, not abort the process — and (b) never
+    // register the Vulkan backend twice: on a healthy-GPU machine the ggml
+    // registry's own constructor may have already registered it, and on any
+    // machine a repeat call must be a no-op. Runs wherever the
+    // `whisper-vulkan` feature compiles (Windows CI; Linux with the SDK).
+    #[cfg(feature = "whisper-vulkan")]
+    #[test]
+    fn vulkan_registration_guard_never_aborts_and_never_duplicates() {
+        ensure_vulkan_backend_registered();
+        ensure_vulkan_backend_registered();
+        let vk_regs = unsafe {
+            use whisper_rs::whisper_rs_sys as sys;
+            (0..sys::ggml_backend_reg_count())
+                .filter(|&i| {
+                    let reg = sys::ggml_backend_reg_get(i);
+                    !reg.is_null()
+                        && std::ffi::CStr::from_ptr(sys::ggml_backend_reg_name(reg)).to_bytes()
+                            == b"Vulkan"
+                })
+                .count()
+        };
+        assert!(
+            vk_regs <= 1,
+            "Vulkan backend registered {vk_regs} times — the guard must dedupe by name"
+        );
+    }
 
     // Regression: whisper-rs 0.16's `FullParams::set_abort_callback_safe`
     // monomorphizes its C trampoline as `trampoline::<F>` (the concrete
