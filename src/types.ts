@@ -157,6 +157,9 @@ export interface TaskItem {
   list: string;
   /** Manual rank from the `order:` frontmatter number; null = unranked. */
   order: number | null;
+  /** The generated id under the vault's configured property; null when IDs
+   * are off. */
+  id: string | null;
 }
 
 /** A TaskItem enriched with its owning vault — the ONE internal shape the

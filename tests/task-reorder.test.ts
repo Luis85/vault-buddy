@@ -20,6 +20,7 @@ const task = (title: string, order: number | null): TaskItem => ({
   tags: [],
   list: "",
   order,
+  id: null,
 });
 
 function mountManual(

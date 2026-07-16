@@ -14,6 +14,7 @@ const t = (title: string, order: number | null): AggTask => ({
   tags: [],
   list: "",
   order,
+  id: null,
   vaultId: "v",
   vaultName: "",
 });

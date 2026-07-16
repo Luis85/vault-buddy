@@ -134,6 +134,9 @@ pub struct TaskDto {
     pub list: String,
     /// Manual rank from the `order:` frontmatter number; None = unranked.
     pub order: Option<f64>,
+    /// The generated id under the vault's configured property; `None` when
+    /// task IDs are off (the property is never read) or simply absent.
+    pub id: Option<String>,
 }
 
 impl TaskDto {
@@ -149,6 +152,7 @@ impl TaskDto {
             tags: t.tags,
             list: t.list,
             order: t.order,
+            id: t.id,
         }
     }
 }
@@ -192,7 +196,13 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
             return Vec::new();
         }
     }
-    tasks::list_tasks(&root)
+    let cfg = capture_config::vault_config(&app_config(paths), id);
+    // Off → None, so the id property is never read (display-only surfacing;
+    // matches the same gate add_task's generation already uses).
+    let id_property = cfg
+        .task_id_enabled
+        .then(|| cfg.task_id_property_name().to_string());
+    tasks::list_tasks(&root, id_property.as_deref())
         .into_iter()
         .map(TaskDto::from_item)
         .collect()
@@ -320,6 +330,10 @@ pub fn add_task(
         tags: tags.to_vec(),
         list: effective_list,
         order: None,
+        // Already computed above for the write itself — reflects the id that
+        // actually landed in the file (or None when IDs are off), not a
+        // fresh read.
+        id: generated_id,
     })
 }
 
@@ -463,7 +477,7 @@ pub fn count_open_tasks(paths: &ServicePaths, id: &str) -> usize {
             return 0;
         }
     }
-    tasks::list_tasks(&root)
+    tasks::list_tasks(&root, None)
         .into_iter()
         .filter(|t| t.status != "done")
         .count()
