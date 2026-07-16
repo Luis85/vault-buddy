@@ -6,8 +6,9 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import { useNotificationsStore } from "../stores/notifications";
+import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
-import type { CaptureConfig, PandocStatus, Recording } from "../types";
+import type { CaptureConfig, Recording } from "../types";
 import { basename } from "../utils/basename";
 import { withDialogSuppressed } from "../utils/nativeDialog";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
@@ -16,6 +17,7 @@ const props = defineProps<{ vaultId: string }>();
 const store = useVaultsStore();
 const capture = useCaptureStore();
 const notifications = useNotificationsStore();
+const pandocStore = usePandocStore();
 
 const OPTIONS = [
   { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting" },
@@ -67,17 +69,12 @@ const browseLabel = computed(() =>
     : `Browse past recordings (${recordingCount.value} in this vault)`,
 );
 
-// App-global Pandoc install status, null until detect_pandoc resolves (or
-// forever on a failed/absent Tauri runtime — see detectPandoc below). A null
-// status is treated the same as "not installed": the Import button stays
-// disabled rather than optimistically enabled against unknown state.
-const pandoc = ref<PandocStatus | null>(null);
-// True until the FIRST detect_pandoc resolves. Before F1 a blocked button was
-// disabled, so a click during this window was a harmless no-op; now a blocked
-// click routes to Settings, so a click before the probe finishes would wrongly
-// jump to Settings even with a valid Pandoc. Gate the button on this so the
-// pre-probe state can't take the wrong flow (Codex review).
-const checking = ref(true);
+// App-global Pandoc status is owned by the shared pandoc store: the intake
+// menu reuses a cached "installed" result instead of re-spawning
+// `pandoc --version` on every open. `pandocStore.status` null = "not installed"
+// (Import routes to the setup screen); `pandocStore.checking` gates the
+// pre-probe window so a blocked click can't route to Settings before the probe
+// settles (Codex review).
 
 // Single computed (not two) so the "not installed" check isn't duplicated
 // between a blocked-flag computed and a hint-text computed. `blocked` (Pandoc
@@ -86,10 +83,10 @@ const checking = ref(true);
 // instead (matching ImportVaultPicker). The button only truly disables while a
 // conversion is in flight.
 const importStatus = computed(() => {
-  if (!pandoc.value?.installed) {
+  if (!pandocStore.status?.installed) {
     return { blocked: true, hint: "Install Pandoc to import documents" };
   }
-  if (!pandoc.value.sandboxSupported) {
+  if (!pandocStore.status.sandboxSupported) {
     return { blocked: true, hint: "Update Pandoc (2.15+ needed)" };
   }
   return { blocked: false, hint: "Convert a Word, ODT, or RTF file into a note" };
@@ -167,27 +164,12 @@ async function loadRecordingCount() {
   }
 }
 
-async function detectPandoc() {
-  // Swallowed like every other guarded read here: an unavailable Tauri
-  // runtime or a detection failure just leaves `pandoc` null, which
-  // `importStatus` treats as "not installed" — the button degrades to
-  // disabled rather than block the rest of the view.
-  try {
-    pandoc.value = await invoke<PandocStatus>("detect_pandoc");
-  } catch (e) {
-    logWarning(`detect_pandoc failed (vault ${props.vaultId}): ${String(e)}`);
-  } finally {
-    // Probe done (either way) — the button can now trust `importStatus`.
-    checking.value = false;
-  }
-}
-
 onMounted(() => {
   // Independent reads: a hung/failed config read must not block the count
   // and vice versa, so neither awaits the other.
   void loadConfig();
   void loadRecordingCount();
-  void detectPandoc();
+  void pandocStore.ensureDetected();
 });
 
 function start(mode: "meeting" | "voice-note") {
@@ -202,7 +184,7 @@ function start(mode: "meeting" | "voice-note") {
 function onImportClick() {
   // The button is disabled while checking, but guard anyway so a probe still
   // in flight never routes away on a state that isn't settled yet.
-  if (checking.value) return;
+  if (pandocStore.checking) return;
   if (importStatus.value.blocked) {
     store.openDocumentImport();
     return;
@@ -264,12 +246,12 @@ async function importDocument() {
         data-testid="import-document"
         aria-label="Import a document into this vault"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-        :disabled="importing || checking"
+        :disabled="importing || pandocStore.checking"
         @click="onImportClick"
       >
         <span class="block text-sm font-medium text-slate-100">Import Document</span>
         <span class="block text-xs text-slate-400">{{
-          checking
+          pandocStore.checking
             ? "Checking Pandoc…"
             : importing
               ? "Converting… this can take a few seconds"

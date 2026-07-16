@@ -4,8 +4,8 @@ import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
+import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
-import type { PandocStatus } from "../types";
 import { basename } from "../utils/basename";
 
 // Reached only via a buddy drag-drop: Rust stashes the dropped path
@@ -17,40 +17,26 @@ import { basename } from "../utils/basename";
 // "Import Document" action uses.
 const store = useVaultsStore();
 const notifications = useNotificationsStore();
+const pandocStore = usePandocStore();
 
-const pandoc = ref<PandocStatus | null>(null);
 const busyVaultId = ref<string | null>(null);
-// True until the FIRST detect_pandoc resolves. Without it, a null status
-// reads as "not installed" and the picker flashes the install gate before the
-// probe finishes — a quick drop-then-click would land on Settings even with a
-// valid Pandoc (same pre-probe window RecordMode's `checking` state guards).
-const checking = ref(true);
-
-async function detectPandoc() {
-  // Same degrade pattern as RecordMode: a null status (failed read, or no
-  // Tauri runtime under test) is treated as "not installed" rather than
-  // optimistically letting a convert_document call fail later.
-  try {
-    pandoc.value = await invoke<PandocStatus>("detect_pandoc");
-  } catch (e) {
-    logWarning(`import picker: detect_pandoc failed: ${String(e)}`);
-  } finally {
-    checking.value = false;
-  }
-}
+// The shared pandoc store owns detection: the picker reuses a cached
+// "installed" result instead of re-probing on every drop, and
+// `pandocStore.checking` gates the pre-probe window so a quick drop-then-click
+// can't flash the install gate / route to Settings before the probe settles.
 
 onMounted(() => {
-  void detectPandoc();
+  void pandocStore.ensureDetected();
 });
 
 const gate = computed(() => {
-  if (!pandoc.value?.installed) {
+  if (!pandocStore.status?.installed) {
     return {
       blocked: true,
       hint: "Pandoc isn't installed — install it to import documents.",
     };
   }
-  if (!pandoc.value.sandboxSupported) {
+  if (!pandocStore.status.sandboxSupported) {
     return {
       blocked: true,
       hint: "Your Pandoc is too old for safe import (need 2.15+).",
@@ -68,7 +54,7 @@ const sourceName = computed(() => {
 // single value instead of scattered `checking` / `gate.blocked` / length
 // booleans (which pushed the render function past the complexity gate).
 const viewState = computed<"checking" | "blocked" | "empty" | "list">(() => {
-  if (checking.value) return "checking";
+  if (pandocStore.checking) return "checking";
   if (gate.value.blocked) return "blocked";
   if (store.vaults.length === 0) return "empty";
   return "list";
