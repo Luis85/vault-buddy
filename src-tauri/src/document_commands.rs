@@ -13,7 +13,7 @@ use vault_buddy_core::{capture_config, capture_paths, discovery, document_import
 use crate::capture_commands::ConfigWriteLock;
 use crate::pandoc::{
     pandoc_args, pandoc_command, resolve_working_pandoc, run_capturing, sandbox_supported, Capture,
-    CONVERT_TIMEOUT,
+    CONVERT_TIMEOUT, STRIP_IMAGES_FILTER, STRIP_IMAGES_LUA,
 };
 
 #[derive(Clone, serde::Serialize)]
@@ -192,7 +192,21 @@ fn convert_blocking(
     std::fs::create_dir_all(&plan.work_dir)
         .map_err(|e| format!("Could not prepare import: {e}"))?;
 
-    let args = pandoc_args(format.reader(), &plan.media_name, &plan.note_name);
+    // Images vs. text-only is per-vault. When off, write the app-authored strip
+    // filter into the staging dir (cleaned up with everything else) and pass it
+    // to Pandoc instead of --extract-media, so the note ends up text-only with
+    // no media folder. The filter path is relative — Pandoc's cwd is work_dir.
+    let extract_images = cfg.document_extract_images;
+    if !extract_images {
+        std::fs::write(plan.work_dir.join(STRIP_IMAGES_FILTER), STRIP_IMAGES_LUA)
+            .map_err(|e| format!("Could not prepare import: {e}"))?;
+    }
+    let args = pandoc_args(
+        format.reader(),
+        &plan.media_name,
+        &plan.note_name,
+        extract_images,
+    );
     let mut cmd = pandoc_command(&program);
     cmd.current_dir(&plan.work_dir)
         .arg(src) // absolute source
