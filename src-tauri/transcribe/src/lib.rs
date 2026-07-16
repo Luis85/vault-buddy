@@ -240,6 +240,7 @@ pub fn transcribe_recording(
         generated_at: generated_at.to_string(),
         timestamps: opts.timestamps,
         processing_secs,
+        vad: opts.vad_model.is_some(),
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);

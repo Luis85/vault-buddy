@@ -29,6 +29,9 @@ pub struct TranscriptMeta {
     pub generated_at: String,
     pub timestamps: bool,
     pub processing_secs: u64,
+    /// Whether this run skipped silence via Silero VAD (the effective state:
+    /// a degraded run in a VAD-enabled vault reports false).
+    pub vad: bool,
 }
 
 /// `[HH:MM:SS]` — meetings can exceed an hour, so always render hours.
@@ -145,6 +148,7 @@ pub fn render_stats(meta: &TranscriptMeta, segments: &[Segment]) -> String {
         None => "—".to_string(),
     };
     let language = meta.language.as_deref().unwrap_or("auto");
+    let vad = if meta.vad { "on" } else { "off" };
     format!(
         "## Statistics\n\n\
          | Metric | Value |\n\
@@ -155,6 +159,7 @@ pub fn render_stats(meta: &TranscriptMeta, segments: &[Segment]) -> String {
          | Speaking rate | {speaking_rate} |\n\
          | Model | {} |\n\
          | Language | {language} |\n\
+         | Silence skipping (VAD) | {vad} |\n\
          | Processing time | {} |\n\
          | Generated | {} |\n",
         format_duration(meta.duration_secs),
@@ -388,6 +393,7 @@ mod tests {
             generated_at: "2026-07-04T15:10:00+02:00".into(),
             timestamps: true,
             processing_secs: 47,
+            vad: true,
         }
     }
 
@@ -838,5 +844,17 @@ mod tests {
         std::fs::write(transcript_path(&mp3), content).unwrap();
         assert_eq!(transcript_status(&mp3), TranscriptStatus::Complete);
         assert!(!needs_transcription(&mp3));
+    }
+
+    #[test]
+    fn stats_report_vad_on_or_off() {
+        // The one visible trace of silence skipping: a transcript missing a
+        // quiet aside must be self-explaining ("VAD was on"), and a degraded
+        // (no-VAD) run must honestly say off even in a VAD-enabled vault.
+        let mut m = meta();
+        m.vad = true;
+        assert!(render_transcript(&m, &[]).contains("| Silence skipping (VAD) | on |"));
+        m.vad = false;
+        assert!(render_transcript(&m, &[]).contains("| Silence skipping (VAD) | off |"));
     }
 }
