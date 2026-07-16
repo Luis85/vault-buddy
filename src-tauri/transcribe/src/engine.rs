@@ -331,7 +331,11 @@ impl Transcriber for WhisperTranscriber {
         // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
         // timestamps are in centiseconds, converted to ms below (×10) and,
         // when VAD filtered the input, remapped from the filtered timeline
-        // back to the original one via `vad_map`.
+        // back to the original one via `vad_map`. t0 and t1 use different
+        // `TimestampKind`s: an exact span-boundary tie means "speech
+        // resumed" for a start but "speech stopped" for an end, and using
+        // the same rule for both would render a segment that begins right
+        // after a VAD-collapsed gap as starting a whole gap too early.
         let mut out = Vec::new();
         for segment in state.as_iter() {
             let text = segment
@@ -346,8 +350,8 @@ impl Transcriber for WhisperTranscriber {
             let t1_ms = segment.end_timestamp().max(0) as u64 * 10;
             let (start_ms, end_ms) = match &vad_map {
                 Some(map) => (
-                    crate::vad::remap_ms(t0_ms, map),
-                    crate::vad::remap_ms(t1_ms, map),
+                    crate::vad::remap_ms(t0_ms, map, crate::vad::TimestampKind::Start),
+                    crate::vad::remap_ms(t1_ms, map, crate::vad::TimestampKind::End),
                 ),
                 None => (t0_ms, t1_ms),
             };

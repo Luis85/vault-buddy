@@ -419,15 +419,6 @@ outside scrolls re-anchor the position:fixed popup to its trigger via
 `positionPopup` instead of closing; pointerdown-outside and Escape
 dismissal are unchanged. Regression tests pin all three behaviors.
 
-### GAP-60 · Low · VAD timestamp remap resolves exact span-boundary ties to the earlier span
-`transcribe/src/vad.rs::remap_ms` breaks a filtered-timestamp tie that lands
-exactly on a span boundary toward the PREVIOUS span (correct for segment ends,
-cosmetically early for a segment START that begins precisely at a span edge —
-that line's `[HH:MM:SS]` prefix reads earlier by the collapsed gap). Monotonicity
-is preserved and content is unaffected; fix would be tracking start/end timestamp
-kinds through the remap. Found by the whole-branch review of the transcription
-accuracy & speed increment.
-
 ### GAP-59 · Low · Lists/ordering increment residuals (accepted)
 - Aggregate mode fetches `get_tasks_config` lazily only for the composer's
   target vault, so the inline editor's list picker orders OTHER vaults'
