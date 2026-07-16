@@ -14,8 +14,12 @@ whisper = ["dep:whisper-rs"]
 # GPU inference via whisper.cpp's Vulkan backend. Compiles ONLY where the
 # Vulkan SDK (headers + glslc) exists — the Windows CI/release jobs enable
 # it through the shell's `gpu` feature; every other build stays CPU-only.
-# Runtime behavior additionally requires use_gpu(true) on the context
-# (whisper-rs defaults it false) and falls back to CPU when no device.
+# Runtime behavior: whisper-rs's own default already tracks this feature
+# (`use_gpu: cfg!(feature = "_gpu")` — true once `vulkan` is on), but the
+# engine still calls `.use_gpu(use_gpu)` explicitly so the app's "Use GPU"
+# toggle pins BOTH directions instead of its OFF position silently doing
+# nothing on a build where GPU is already the default; falls back to CPU
+# when no device is found.
 whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
 
 [dependencies]

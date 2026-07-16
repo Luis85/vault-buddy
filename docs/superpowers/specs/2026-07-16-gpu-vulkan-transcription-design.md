@@ -33,6 +33,9 @@ CPU-only contributor builds, Linux CI, or the whisper-rs 0.16 pin.
    on a Vulkan build. `WhisperTranscriber::load` gains a `use_gpu: bool`
    and sets it on the context builder. On a non-vulkan build the flag is
    inert (no GPU backend compiled in) — safe on every platform.
+   *(Corrected after the whole-increment review: the real default is
+   `cfg!(feature = "_gpu")`, not an unconditional `false` — see the Engine
+   section below.)*
 3. **App-global "Use GPU" setting, default on.** New app-global
    `transcription` section in `config.json` (`{"useGpu": true}`), split
    module `core/src/transcription_config.rs` (the `mcp_config` /
@@ -110,6 +113,15 @@ params.use_gpu(use_gpu);
 
 The whisper feature-gated engine is the only touchpoint; decode, VAD,
 prompt, and callback wiring are backend-agnostic and unchanged.
+
+*(Corrected after the whole-increment review: `WhisperContextParameters::default()`
+actually sets `use_gpu: cfg!(feature = "_gpu")` (whisper-rs
+`src/whisper_ctx.rs:476`) — false on a CPU-only build, but TRUE once the
+`vulkan` feature is on, which every shipped GPU build enables. The comment
+above (and the shipped `engine.rs` comment it was drafted from) had the
+default inverted for that case; the explicit `.use_gpu(use_gpu)` call is
+still correct and necessary, but chiefly because it pins the OFF direction —
+without it, a shipped build's "off" toggle would be a silent no-op.)*
 
 ### Config & IPC
 

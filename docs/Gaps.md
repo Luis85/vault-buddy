@@ -61,7 +61,14 @@ Mitigation is low-cost (a boolean toggle). Data blast radius is nil even in
 the crash case: the recording and its note are fully written before
 transcription starts, and the interrupted job's `pending` sidecar is
 re-queued by the next launch's backfill — the crash costs the session, not
-the vault.
+the vault. That same backfill requeue is also what turns a deterministic
+fault (a specific driver/file combination that always crashes) into a
+**crash-repeat loop**: every launch re-enqueues the same `pending` job, hits
+the same fault, and crashes again, with no built-in circuit breaker. If the
+crash recurs too fast to reach Buddy settings and click the toggle, the
+last resort is hand-editing `"transcription": {"useGpu": false}` directly
+into `config.json` (see docs/DEVELOPMENT.md § Transcription configuration)
+before the next launch.
 
 ### GAP-56 · Low · Search content cache: fill-to-cap tail and dead entries
 `core/src/search_cache.rs`. The cache fills to 256 MiB then stops inserting
@@ -241,6 +248,17 @@ instead of silently degrading to no-VAD forever — self-heal parity with the
 main model's load-failure → `remove_model` path. The residual accepted gap
 for VAD is narrower: a corrupt file that still LOADS and DETECTS (wrong but
 non-erroring segments) is caught by neither self-heal path.
+
+**Update (GPU increment):** the same load-failure → `remove_model` self-heal
+also fires on a GPU-side load failure that has nothing to do with disk
+corruption — e.g. VRAM exhaustion loading `medium`/`turbo` with `Use GPU`
+on. The model file is fine; `process_transcription` can't tell a corrupt
+download apart from a transient/environmental GPU failure, so it deletes a
+perfectly good 0.5–3 GB file and the next attempt (a manual retry, or the
+next launch's backfill) re-downloads it. Wasteful, not wrong — turning the
+GPU toggle off avoids the redownload entirely; named as an accepted rough
+edge in the GPU design spec's risk section
+(`docs/superpowers/specs/2026-07-16-gpu-vulkan-transcription-design.md`).
 
 ### GAP-15 · Low · `bitrateKbps` wraps via `as u32` and has no range validation
 `src-tauri/core/src/capture_config.rs:158-162`.

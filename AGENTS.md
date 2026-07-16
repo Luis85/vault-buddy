@@ -791,13 +791,17 @@ as its own tracked change (see docs/DEVELOPMENT.md).
 **GPU inference (Vulkan, v0.6.1+).** The app-global `transcription.useGpu`
 setting (Buddy settings → Integrations → *Transcription — GPU*, default on) asks
 whisper for GPU inference via a Vulkan backend when available. The
-`WhisperTranscriber::load(model_path, use_gpu)` call explicitly sets the flag
-(whisper-rs defaults it `false`); whisper.cpp's CPU fallback is automatic when
-no usable device exists (logged via `install_logging_hooks`, never a job
-failure). The toggle applies from the next transcription job — the worker
-reloads the cached model when the flag changes, keyed on `(ModelTier, use_gpu)`,
-with no app restart needed. **Gotcha: whisper-rs defaults `use_gpu: false`**, so
-the explicit set is what engages the backend. The toggle is an escape hatch for
+`WhisperTranscriber::load(model_path, use_gpu)` call explicitly sets the flag;
+whisper.cpp's CPU fallback is automatic when no usable device exists (logged
+via `install_logging_hooks`, never a job failure). The toggle applies from the
+next transcription job — the worker reloads the cached model when the flag
+changes, keyed on `(ModelTier, use_gpu)`, with no app restart needed.
+**Gotcha: whisper-rs's own default already tracks the build** —
+`WhisperContextParameters::default()` sets `use_gpu: cfg!(feature = "_gpu")`,
+false CPU-only but TRUE once the `vulkan` feature is on, so a shipped GPU
+build defaults to "on" already; the explicit set still matters for BOTH
+directions, but especially OFF, since without it the toggle's off position
+would be a silent no-op on a shipped build. The toggle is an escape hatch for
 users with flaky graphics drivers (crash remedy: turn it off, fall back to CPU).
 The `whisper-vulkan` feature and the shell's `gpu` feature compile only where the
 Vulkan SDK exists (Windows CI/release builds enable it; local builds stay
