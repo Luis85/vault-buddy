@@ -105,7 +105,12 @@ pub fn set_capture_config(
     // read-modify-writes this vault, so reading tasks_folder before the guard
     // would let us write back a stale value and clobber its update.
     let existing = capture_config::vault_config(&capture_config::load_config(), &id);
-    let value = capture_config::VaultCaptureConfig {
+    // Build ONLY the capture-owned fields; merge_capture_owned preserves every
+    // field another settings command owns (tasks_folder / documents_folder /
+    // default_list / list_order / document_date_folders / document_extract_images),
+    // so a capture save can't reset the documents/tasks/lists settings and the
+    // recording/document date-folder pair can't be transposed (GAP-60).
+    let incoming = capture_config::VaultCaptureConfig {
         mode,
         meeting_folder,
         voice_note_folder,
@@ -118,29 +123,10 @@ pub fn set_capture_config(
         transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
         transcript_timestamps: cfg.transcript_timestamps,
         follow_up_template: cfg.follow_up_template,
-        tasks_folder: existing.tasks_folder,
-        // Preserve the per-vault documents folder (its own set_documents_config
-        // command owns it) so saving capture settings can't reset it — same
-        // read-inside-the-lock discipline as tasks_folder above.
-        documents_folder: existing.documents_folder,
-        // Same rule for the lists settings object (set_task_lists_config owns
-        // it): a capture save must never reset the default list or the order.
-        default_list: existing.default_list,
-        list_order: existing.list_order,
-        // recording_date_folders is this form's own field now (Vault settings
-        // → Recording → Folders) — written from the DTO like every other
-        // capture field. document_date_folders belongs to the Documents
-        // settings surface (set_documents_config owns it), so it stays
-        // preserved from the existing config, same read-inside-the-lock
-        // discipline as tasks_folder/documents_folder above.
         recording_date_folders: cfg.recording_date_folders,
-        document_date_folders: existing.document_date_folders,
-        // Same rule as the sibling documents fields: the image/text-only
-        // toggle is owned by set_documents_config, so a capture save must
-        // preserve it (read inside the lock) — never reset a vault to
-        // images-on.
-        document_extract_images: existing.document_extract_images,
+        ..capture_config::VaultCaptureConfig::default()
     };
+    let value = capture_config::merge_capture_owned(&existing, incoming);
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {
         log::info!(

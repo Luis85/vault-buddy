@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 // for the per-mode folders + layout toggle); re-exported here so every
 // existing `capture_config::RecordingMode` / `capture_config::VaultCaptureConfig`
 // caller keeps compiling unchanged.
-pub use crate::vault_config::{RecordingMode, VaultCaptureConfig};
+pub use crate::vault_config::{
+    merge_capture_owned, merge_documents_owned, RecordingMode, VaultCaptureConfig,
+};
 
 // The MCP and Document Import sections live in their own modules (LOC
 // headroom for the tasks fields); re-exported here so every existing

@@ -342,11 +342,17 @@ pub fn set_documents_config(
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
     capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
     let _guard = lock_ignoring_poison(&lock.0);
-    let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
-    v.documents_folder = folder;
-    v.document_date_folders = document_date_folders;
-    v.document_extract_images = document_extract_images;
-    capture_config::update_vault_config(&id, v)
+    // merge_documents_owned writes only the three documents-owned fields and
+    // preserves everything else (recording settings, tasks, lists) — the
+    // preserve-vs-write split is unit-tested in core now (GAP-60).
+    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
+    let value = capture_config::merge_documents_owned(
+        &existing,
+        folder,
+        document_date_folders,
+        document_extract_images,
+    );
+    capture_config::update_vault_config(&id, value)
 }
 
 /// App-global Pandoc path override (None → PATH lookup). Serialized behind

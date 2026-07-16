@@ -289,39 +289,6 @@ transcription queue dedups by path). **Fix:** a caller-side canonical dedup
 (after `canonicalize` the nearest-existing ancestor per AGENTS.md containment
 discipline) would be the full fix; deferred as a low-frequency edge.
 
-### GAP-60 · Low · `set_capture_config`/`set_documents_config`'s preserve-vs-write field split has no direct Rust test
-`src-tauri/src/capture_config_commands.rs` (`set_capture_config`) and
-`src-tauri/src/document_commands.rs` (`set_documents_config`). Each command
-owns a subset of `VaultCaptureConfig`'s fields and must carry the rest
-forward from the existing config (read under the lock) so the OTHER
-command's settings survive. `set_capture_config` builds a whole new struct
-literal: it writes its own fields (mode, both folders, bitrate, devices,
-transcription, and now `recording_date_folders`) while copying
-`existing.tasks_folder` / `existing.documents_folder` / `existing.default_list`
-/ `existing.list_order` — and, as of this branch, `existing.document_date_folders`
-— verbatim. `set_documents_config` instead mutates a full copy of the
-existing config in place, touching only `documents_folder`/
-`document_date_folders` and leaving `recording_date_folders` (and everything
-else) preserved by omission. Neither shape is checked by a test: nothing
-asserts that a capture-settings save leaves `document_date_folders` alone,
-or that a documents-settings save leaves `recording_date_folders` alone —
-both are plain `bool`s, so a misassigned field on either side (e.g. the
-`recording_date_folders:`/`document_date_folders:` pair in
-`set_capture_config` transposed) would compile cleanly and pass every
-existing test. Failure scenario: such a mistake ships, and a user's
-Documents layout choice is silently reset by their next Recording settings
-save (or vice versa), with no failing test to catch it before release.
-**Not a new class of gap** — `set_capture_config`'s preservation of
-`tasks_folder` (owned by `set_tasks_config`), `documents_folder` (owned by
-`set_documents_config`), and `default_list`/`list_order` (owned by
-`set_task_lists_config`) already carried the same untested-merge risk;
-`recording_date_folders`/`document_date_folders` are just the newest fields
-to join it. **Fix:** extract each command's preserve-vs-write merge into a
-plain-Rust helper in `vault_config.rs` (taking the existing config plus the
-fields the command owns) and unit-test it directly there, instead of
-relying on a `#[tauri::command]`/`tauri::State` signature to keep the logic
-out of reach of the core crate's test suite.
-
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
