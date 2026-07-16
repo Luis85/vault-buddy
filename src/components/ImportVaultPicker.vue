@@ -10,7 +10,7 @@ import { basename } from "../utils/basename";
 
 // Reached only via a buddy drag-drop: Rust stashes the dropped path
 // (begin_document_import) and shows the panel; the panel's refresh()
-// consumes it (take_pending_import) into store.pendingImportPath and lands
+// consumes it (take_pending_import) into store.pendingImports and lands
 // here. The extension (.docx/.odt/.rtf) is already validated by the drop
 // handler in BuddyRoot, so this view only needs to pick the destination
 // vault and gate on Pandoc — same convert_document contract RecordMode's
@@ -46,9 +46,10 @@ const gate = computed(() => {
 });
 
 const sourceName = computed(() => {
-  const path = store.pendingImportPath;
+  const path = store.pendingImports[0];
   return path ? basename(path) : "";
 });
+const queuedMore = computed(() => Math.max(0, store.pendingImports.length - 1));
 
 // One discriminated state drives the body, so the template branches on a
 // single value instead of scattered `checking` / `gate.blocked` / length
@@ -61,10 +62,10 @@ const viewState = computed<"checking" | "blocked" | "empty" | "list">(() => {
 });
 
 async function pick(vaultId: string) {
-  // Snapshot the path we're converting: a second document dropped on the buddy
-  // mid-conversion re-points store.pendingImportPath, and we must not act on
-  // (or discard) that newer drop when THIS conversion resolves (GAP-55).
-  const source = store.pendingImportPath;
+  // Convert the head of the queue; a mid-conversion drop appends to the tail
+  // (GAP-55), so afterward we drop the head and either advance to the next
+  // queued document or return to the list.
+  const source = store.pendingImports[0];
   if (busyVaultId.value || !source) return;
   busyVaultId.value = vaultId;
   try {
@@ -80,10 +81,10 @@ async function pick(vaultId: string) {
         run: () => invoke("open_imported_document", { id: vaultId, path: notePath }),
       },
     });
-    // Only return to the list if no newer drop arrived meanwhile — otherwise
-    // leave the picker on the newly-dropped document instead of blanking it.
-    if (store.pendingImportPath === source) store.showList();
+    store.dequeueImport(source);
   } catch (e) {
+    // Stay on the picker (queue head unchanged) so the user can retry a
+    // different vault for this same document.
     logWarning(`import picker: convert_document failed: ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
   } finally {
@@ -112,6 +113,11 @@ async function pick(vaultId: string) {
         class="font-medium text-slate-200"
       >{{ sourceName }}</span>
       into which vault?
+      <span
+        v-if="queuedMore > 0"
+        data-testid="import-picker-queued"
+        class="text-slate-500"
+      >(+{{ queuedMore }} more queued)</span>
     </p>
     <p
       v-if="viewState === 'checking'"

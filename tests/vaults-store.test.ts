@@ -400,24 +400,24 @@ describe("vaults store", () => {
     );
   });
 
-  it("openImportPicker sets the pending path and view", () => {
+  it("enqueueImports appends to the queue and shows the picker", () => {
     const store = useVaultsStore();
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     expect(store.view).toBe("importPicker");
-    expect(store.pendingImportPath).toBe("C:/x/Report.docx");
+    expect(store.pendingImports).toEqual(["C:/x/Report.docx"]);
   });
 
-  it("showList clears the pending import path", () => {
+  it("showList clears the import queue", () => {
     const store = useVaultsStore();
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     store.showList();
     expect(store.view).toBe("list");
-    expect(store.pendingImportPath).toBeNull();
+    expect(store.pendingImports).toEqual([]);
   });
 
   it("refresh routes to the import picker when Rust has a pending import", async () => {
     mockIPC((cmd) => {
-      if (cmd === "take_pending_import") return "C:/x/Report.docx";
+      if (cmd === "take_pending_import") return ["C:/x/Report.docx"];
       if (cmd === "list_vaults") return [];
       if (cmd === "count_open_tasks") return 0;
       return undefined;
@@ -425,11 +425,11 @@ describe("vaults store", () => {
     const store = useVaultsStore();
     await store.refresh();
     expect(store.view).toBe("importPicker");
-    expect(store.pendingImportPath).toBe("C:/x/Report.docx");
+    expect(store.pendingImports).toEqual(["C:/x/Report.docx"]);
   });
 
   it("a winning drop clears an armed pendingView so a later refresh doesn't consume it", async () => {
-    let pending: string | null = "C:/x/Report.docx";
+    let pending: string[] = ["C:/x/Report.docx"];
     mockIPC((cmd) => {
       if (cmd === "take_pending_import") return pending;
       if (cmd === "list_vaults") return [];
@@ -441,23 +441,23 @@ describe("vaults store", () => {
     await store.refresh(); // drop wins this open
     expect(store.view).toBe("importPicker");
 
-    // The next open (drop drained, nothing armed) must land on the LIST, not
-    // consume the stale "settings" request.
-    pending = null;
+    // The drop cleared the armed "settings" request; a later empty refresh
+    // keeps the un-picked import on the picker (never consumes stale settings).
+    pending = [];
     await store.refresh();
-    expect(store.view).toBe("list");
+    expect(store.view).toBe("importPicker");
   });
 
   it("refresh falls back to the vault list when there is no pending import", async () => {
     mockIPC((cmd) => {
-      if (cmd === "take_pending_import") return null;
+      if (cmd === "take_pending_import") return [];
       if (cmd === "list_vaults") return [];
       return undefined;
     });
     const store = useVaultsStore();
     await store.refresh();
     expect(store.view).toBe("list");
-    expect(store.pendingImportPath).toBeNull();
+    expect(store.pendingImports).toEqual([]);
   });
 
   it("refresh treats a failed take_pending_import as no pending import", async () => {

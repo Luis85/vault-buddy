@@ -36,7 +36,9 @@ export const useVaultsStore = defineStore("vaults", {
     // The dropped document's path, armed by a Rust-owned buddy drop
     // (`take_pending_import`, consumed in `refresh`) and read by
     // ImportVaultPicker to drive `convert_document`.
-    pendingImportPath: null as string | null,
+    // The FIFO queue of dropped-document paths awaiting a vault pick; the head
+    // (index 0) is the document the picker is currently showing (GAP-55).
+    pendingImports: [] as string[],
     // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
@@ -76,17 +78,23 @@ export const useVaultsStore = defineStore("vaults", {
       // Consume the Rust-owned pending buddy-drop import FIRST: it always
       // wins over the pendingView/list default, because the drop is the
       // reason this exact refresh is happening (see the module comment on
-      // `pendingImportPath` and document_commands::begin_document_import).
-      const dropped = await invoke<string | null>(
-        "take_pending_import",
-      ).catch(() => null);
-      if (dropped) {
-        this.openImportPicker(dropped);
+      // `pendingImports` and document_commands::begin_document_import).
+      const dropped =
+        (await invoke<string[]>("take_pending_import").catch(
+          () => [] as string[],
+        )) ?? [];
+      if (dropped.length) {
+        this.enqueueImports(dropped);
         // A drop supersedes any armed one-shot view (e.g. the startup update
         // check's "settings"): clear it so a LATER panel-shown refresh doesn't
         // consume it stale and navigate away after the import returns to list.
         this.pendingView = null;
         this.pendingCaptureVaultId = null;
+      } else if (this.view === "importPicker" && this.pendingImports.length) {
+        // An un-picked import queue survives a spurious empty-drain refresh:
+        // near-simultaneous drops each fire panel-shown → refresh, and a later
+        // refresh can drain empty; leaving the picker as-is keeps the queue the
+        // first refresh built (and keeps an un-picked single drop, too).
       } else if (this.pendingView) {
         this.view = this.pendingView;
         this.captureSettingsVaultId = this.pendingCaptureVaultId;
@@ -186,7 +194,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
       this.tasksVaultId = null;
-      this.pendingImportPath = null;
+      this.pendingImports = [];
     },
     openSettings() {
       this.view = "settings";
@@ -226,12 +234,20 @@ export const useVaultsStore = defineStore("vaults", {
     openDocumentImport() {
       this.view = "documentImport";
     },
-    // Rust-owned buddy drop lands here (via `refresh`'s take_pending_import
-    // consume). back() needs no case: it falls through to the final else →
-    // showList, which also clears pendingImportPath.
-    openImportPicker(path: string) {
+    // Append drained buddy-drop paths to the FIFO queue and show the picker.
+    // back() needs no case: it falls through to the final else → showList,
+    // which also clears the queue.
+    enqueueImports(paths: string[]) {
       this.view = "importPicker";
-      this.pendingImportPath = path;
+      this.pendingImports.push(...paths);
+    },
+    // Remove a just-converted document (the head) from the queue; when none
+    // remain, leave the picker for the list. Matches by value so a
+    // mid-conversion append can't remove the wrong entry.
+    dequeueImport(path: string) {
+      const idx = this.pendingImports.indexOf(path);
+      if (idx !== -1) this.pendingImports.splice(idx, 1);
+      if (this.pendingImports.length === 0) this.showList();
     },
     /** Back to the current view's fixed parent (no history stack). */
     back() {

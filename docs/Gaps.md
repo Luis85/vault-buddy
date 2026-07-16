@@ -52,22 +52,6 @@ note text exceeds the cap the last-walked vaults' notes re-read on every search
 linger until process exit, bounded by the cap. A per-walk mark-and-sweep and/or
 a larger/tunable cap would address both; deferred as documented in the spec.
 
-### GAP-55 · Low (mitigated) · A document dropped during an in-flight import
-`src/components/ImportVaultPicker.vue` (`pick`) + `src/stores/vaults.ts`
-(`begin_document_import` → `refresh()` re-arms `pendingImportPath`). If a
-second document is dropped while the first conversion is still running,
-`begin_document_import` re-points `pendingImportPath` to the new path.
-Originally the first `pick()` then called `showList()` unconditionally,
-clearing `pendingImportPath` and silently discarding the second drop.
-**Mitigated** (polish pass): `pick()` snapshots the path it converts and only
-`showList()`s if `pendingImportPath` still equals that snapshot — otherwise it
-leaves the picker on the newly-dropped document, so the second drop survives
-and the user just picks a vault for it. Still single-slot, so a THIRD drop
-landing before the second is picked would overwrite the second; a full queue
-is the only complete fix, but disproportionate for a narrow, non-destructive
-window (imports are serialized by `ImportLock`; nothing is ever written for a
-dropped-then-lost path). Surfaced by the Task 9 review.
-
 ### GAP-54 · Low · Document-import media publish has a non-atomic crash window
 `src-tauri/core/src/document_import.rs` (`publish_inner`, the media
 `rename` before the note `write_note_atomic`). Publishing moves the media
