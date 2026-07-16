@@ -520,7 +520,8 @@ fn process_transcription(
         return emit_cancelled(app, &job.mp3);
     }
     if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
-        match WhisperTranscriber::load(&model) {
+        // use_gpu wired to the app-global setting in the next commit.
+        match WhisperTranscriber::load(&model, false) {
             Ok(w) => *loaded = Some((tier, w)),
             Err(e) => {
                 // A model that downloaded but won't load is corrupt on disk;

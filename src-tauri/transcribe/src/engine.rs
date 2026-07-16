@@ -176,12 +176,21 @@ pub struct WhisperTranscriber {
 }
 
 impl WhisperTranscriber {
-    pub fn load(model_path: &Path) -> Result<Self, String> {
+    /// `use_gpu` maps to whisper.cpp's context flag. whisper-rs's
+    /// `WhisperContextParameters::default()` ships use_gpu = FALSE (unlike
+    /// whisper.cpp's own C default), so this explicit set is what makes a
+    /// Vulkan build actually engage the GPU. On a CPU-only build the flag
+    /// is inert (no GPU backend is compiled in), and on a Vulkan build
+    /// with no usable device whisper.cpp falls back to CPU at context
+    /// init — its own log line (routed through install_logging_hooks) is
+    /// the audit trail; deliberately NO per-transcript device claim (the
+    /// VAD stats-row lesson: never record intent as engagement).
+    pub fn load(model_path: &Path, use_gpu: bool) -> Result<Self, String> {
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(use_gpu);
         // Pass the `&Path` straight through rather than round-tripping via
-        // `to_string_lossy()`: `WhisperContext::new_with_params` takes it by
-        // `AsRef<Path>` and converts with its own `path_to_bytes` internally,
-        // so this avoids a lossy UTF-8 conversion for no benefit.
-        let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        // `to_string_lossy()` (see the previous comment on this fn).
+        let ctx = WhisperContext::new_with_params(model_path, params)
             .map_err(|e| format!("load model {}: {e}", model_path.display()))?;
         Ok(Self { ctx })
     }
@@ -436,7 +445,9 @@ mod tests {
                 .map(|i| (i as f32 / 16_000.0 * 440.0 * std::f32::consts::TAU).sin() * 0.2)
                 .collect()
         };
-        let t = WhisperTranscriber::load(&model).expect("load model");
+        // VB_TEST_GPU=1 exercises the GPU path on a manual Windows run.
+        let t = WhisperTranscriber::load(&model, std::env::var("VB_TEST_GPU").is_ok())
+            .expect("load model");
         // Optional priming/VAD paths for a manual (Windows dev / local) run:
         // VB_TEST_VOCAB primes the prompt; VAD engages when the silero model
         // is already cached. Both default off so the test's original -6

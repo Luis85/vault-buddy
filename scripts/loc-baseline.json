@@ -6,8 +6,8 @@
   "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
   "allowlist": {
     "src-tauri/src/transcription.rs": {
-      "loc": 1179,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1086->1178: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) — initial_prompt_for (title+vocabulary prompt composition) and ensure_vad_model (Silero VAD resolve/download that degrades to no-VAD on failure rather than failing the job) orchestration helpers, wired into process_transcription, plus their unit tests. 1178->1179: final-review fix wave (Fix 1) — the stale \"Handover\" comment above set_phase(Preparing) now also names the silero model, since a VAD-enabled vault has resolved it by this point too; one extra wrapped line, no logic change."
+      "loc": 1180,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1086->1178: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) — initial_prompt_for (title+vocabulary prompt composition) and ensure_vad_model (Silero VAD resolve/download that degrades to no-VAD on failure rather than failing the job) orchestration helpers, wired into process_transcription, plus their unit tests. 1178->1179: final-review fix wave (Fix 1) — the stale \"Handover\" comment above set_phase(Preparing) now also names the silero model, since a VAD-enabled vault has resolved it by this point too; one extra wrapped line, no logic change. 1179->1180: use_gpu parameter + doc comment (GPU increment)."
     },
     "src-tauri/src/capture_commands.rs": {
       "loc": 1104,

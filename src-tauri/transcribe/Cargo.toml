@@ -11,6 +11,12 @@ default = []
 # shell always enables it; the Linux `rust-core` CI job builds AND runs the
 # whisper FFI tests (`--features whisper`) — the only place they execute.
 whisper = ["dep:whisper-rs"]
+# GPU inference via whisper.cpp's Vulkan backend. Compiles ONLY where the
+# Vulkan SDK (headers + glslc) exists — the Windows CI/release jobs enable
+# it through the shell's `gpu` feature; every other build stays CPU-only.
+# Runtime behavior additionally requires use_gpu(true) on the context
+# (whisper-rs defaults it false) and falls back to CPU when no device.
+whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
 
 [dependencies]
 vault_buddy_core = { path = "../core" }

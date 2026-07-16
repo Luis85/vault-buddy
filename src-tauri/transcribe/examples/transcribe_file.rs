@@ -36,7 +36,8 @@ fn main() {
         started.elapsed().as_secs()
     );
 
-    let t = WhisperTranscriber::load(&model).expect("load model");
+    // use_gpu wired to the app-global setting in the next commit.
+    let t = WhisperTranscriber::load(&model, false).expect("load model");
     let inf = std::time::Instant::now();
     let opts = EngineOptions {
         language: None,
