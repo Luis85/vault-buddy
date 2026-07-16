@@ -98,6 +98,26 @@ pub fn inference_failure_message(code: Option<i32>, raw: &str) -> String {
     }
 }
 
+/// Compose whisper's `initial_prompt` from the recording's title and the
+/// vault's custom vocabulary. Title FIRST, vocabulary LAST: whisper keeps
+/// only the trailing `n_text_ctx/2` tokens of an over-long prompt (it
+/// truncates from the front), so the user's explicit vocabulary is the part
+/// that must survive. `None` when there is nothing to prime with — whisper
+/// then behaves exactly as it did before this feature existed.
+pub fn compose_initial_prompt(title: &str, vocabulary: Option<&str>) -> Option<String> {
+    let parts: Vec<&str> = [Some(title), vocabulary]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(". "))
+    }
+}
+
 /// Threads to hand whisper's encoder, capped at `WHISPER_MAX_THREADS`. The
 /// encoder gains little past a handful of threads, and a very high ggml
 /// thread count (e.g. ~30 on a high-core i9 under the old `cores - 2`) is a
@@ -616,6 +636,36 @@ mod tests {
         assert!(
             calls.load(Ordering::SeqCst) > 0,
             "on_progress must actually be invoked by the transcriber, not dropped"
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_orders_title_first_vocabulary_last() {
+        // Vocabulary LAST: whisper truncates an over-long prompt from the
+        // FRONT (it keeps the trailing n_text_ctx/2 tokens), and the user's
+        // explicit vocabulary is the part that must survive truncation.
+        assert_eq!(
+            compose_initial_prompt("Budget review", Some("Kubernetes, rmcp")),
+            Some("Budget review. Kubernetes, rmcp".to_string())
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_handles_missing_parts() {
+        assert_eq!(
+            compose_initial_prompt("Meeting", None),
+            Some("Meeting".to_string())
+        );
+        assert_eq!(
+            compose_initial_prompt("", Some("ggml")),
+            Some("ggml".to_string())
+        );
+        assert_eq!(compose_initial_prompt("", None), None);
+        // Whitespace-only parts count as missing.
+        assert_eq!(compose_initial_prompt("   ", Some("  ")), None);
+        assert_eq!(
+            compose_initial_prompt("  Standup  ", Some("  cpal  ")),
+            Some("Standup. cpal".to_string())
         );
     }
 }
