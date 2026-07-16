@@ -172,6 +172,14 @@ pub(super) fn has_frontmatter_key_ci(content: &str, key: &str) -> bool {
         if t.trim_end() == "---" {
             return false; // closing fence — key not found in frontmatter
         }
+        // Only TOP-LEVEL keys count: set_fields inserts/rewrites unindented
+        // `key:` lines, so an indented (nested) `task-id:` under a mapping is
+        // NOT the top-level property and must not suppress a stamp (Codex) —
+        // else a task whose only `task-id` is nested would never get a usable
+        // top-level id.
+        if t.starts_with([' ', '\t']) {
+            continue;
+        }
         if let Some((k, _)) = t.split_once(':') {
             if k.trim().eq_ignore_ascii_case(key) {
                 return true;
@@ -314,6 +322,26 @@ mod tests {
         // falls through to false rather than treating a stray line as a
         // match past where a real document would have closed.
         assert!(!has_frontmatter_key_ci("---\ntype: Task\n", "due"));
+    }
+
+    #[test]
+    fn has_frontmatter_key_ci_ignores_nested_indented_keys() {
+        // Codex PR #59: an indented `task-id:` nested under a mapping is NOT
+        // the top-level property. set_fields only inserts/rewrites unindented
+        // keys, so treating the nested key as "present" would suppress a stamp
+        // and leave the task with no usable top-level id. The top-level scan
+        // must skip indented lines.
+        let nested = "---\ntype: Task\nmetadata:\n  task-id: old\n---\n";
+        assert!(!has_frontmatter_key_ci(nested, "task-id"));
+        assert!(!has_frontmatter_key_ci(
+            "---\ntype: Task\nmeta:\n\ttask-id: old\n---\n", // tab-indented too
+            "task-id"
+        ));
+        // A genuinely top-level key (any casing) still matches.
+        assert!(has_frontmatter_key_ci(
+            "---\ntype: Task\nTask-ID: abc\n---\n",
+            "task-id"
+        ));
     }
 
     #[test]
