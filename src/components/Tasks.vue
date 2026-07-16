@@ -63,11 +63,12 @@ const {
 const {
   listOrder,
   knownLists,
+  archivedLists,
   creatingList,
   composerVaultId,
   composerLists,
   composerDefaultList,
-  listsForVault,
+  listsForEditor,
   loadVaultLists,
   loadVaultConfig,
   onComposerVaultChange,
@@ -290,6 +291,7 @@ const buckets = computed<Bucket[]>(() => {
     // to avoid cross-vault noise.
     return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
       includeEmpty: !isAggregate.value && !filterActive.value,
+      archived: archivedLists.value,
     });
   return dateBuckets(filteredTasks.value, localToday());
 });
@@ -544,7 +546,7 @@ async function add(payload: AddPayload) {
             <TaskEditor
               :task="task"
               :busy="isBusy(task.path)"
-              :lists="listsForVault(task.vaultId)"
+              :lists="listsForEditor(task.vaultId, task.list)"
               @save="onEditorSave(task, $event)"
               @cancel="cancelEdit"
             />

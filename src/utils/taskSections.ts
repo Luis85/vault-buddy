@@ -6,7 +6,7 @@ import { dueOf } from "./taskFields";
 // function and the component stays under the LOC cap. Order WITHIN every
 // section is the caller's global sort, untouched.
 
-export type Bucket = { key: string; label: string | null; tasks: AggTask[] };
+export type Bucket = { key: string; label: string | null; tasks: AggTask[]; list?: string };
 
 /** Date buckets: Overdue / Today / Upcoming / No date / Done. Headers render
  * only once a dated open task exists — a vault that never uses due dates
@@ -80,13 +80,21 @@ export function tagSections(tasks: AggTask[]): Bucket[] {
  * aggregate view unifies "Next" across vaults. `includeEmpty` renders
  * task-less known lists as empty sections (per-vault mode, so a fresh list
  * is visible); the aggregate passes false to avoid cross-vault noise.
+ * `archived` (Task 8) hides a list's section entirely AND drops its open
+ * tasks from the grouping rather than bucketing them — the folder + tasks
+ * still exist on disk, and the SAME task still shows under Dates/Tags
+ * grouping (this only scopes the Lists view); a done task is unaffected
+ * either way since Done already ignores list assignment. Each list bucket
+ * carries its raw `list` name (used by callers — e.g. a future section
+ * menu, or a cross-list drop target — to identify which list a section is).
  * Headers always render in list mode. */
 export function listSections(
   tasks: AggTask[],
   knownLists: string[],
   listOrder: string[],
-  opts: { includeEmpty: boolean },
+  opts: { includeEmpty: boolean; archived: string[] },
 ): Bucket[] {
+  const archived = new Set(opts.archived.map((a) => a.toLowerCase()));
   const byList = new Map<string, { label: string; tasks: AggTask[] }>();
   const ensure = (label: string) => {
     const key = label.toLowerCase();
@@ -94,20 +102,26 @@ export function listSections(
     byList.set(key, entry);
     return entry;
   };
-  if (opts.includeEmpty) for (const l of knownLists) ensure(l);
+  if (opts.includeEmpty)
+    for (const l of knownLists) if (!archived.has(l.toLowerCase())) ensure(l);
   const nolist: AggTask[] = [];
   const done: AggTask[] = [];
   for (const t of tasks) {
     if (t.done) done.push(t);
     else if (t.list === "") nolist.push(t);
+    else if (archived.has(t.list.toLowerCase())) continue; // hidden with its list
     else ensure(t.list).tasks.push(t);
   }
-  const sections = orderLists(
+  // Explicitly Bucket[] (not inferred from the map below): the nolist/done
+  // pushes further down carry no `list`, which would otherwise conflict with
+  // the narrower `{ list: string }` shape TS would infer from this map's
+  // return value alone.
+  const sections: Bucket[] = orderLists(
     [...byList.values()].map((e) => e.label),
     listOrder,
   ).map((label) => {
     const key = label.toLowerCase();
-    return { key: `list:${key}`, label, tasks: byList.get(key)?.tasks ?? [] };
+    return { key: `list:${key}`, label, list: label, tasks: byList.get(key)?.tasks ?? [] };
   });
   if (nolist.length > 0) sections.push({ key: "nolist", label: "No list", tasks: nolist });
   if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });

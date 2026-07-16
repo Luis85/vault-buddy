@@ -31,7 +31,7 @@ describe("listSections", () => {
       t("Root"),
       t("Fin", { done: true, status: "done", list: "Next" }),
     ];
-    const sections = listSections(tasks, [], ["Next", "Waiting"], { includeEmpty: false });
+    const sections = listSections(tasks, [], ["Next", "Waiting"], { includeEmpty: false, archived: [] });
     expect(labels(sections)).toEqual(["Next", "Waiting", "Archive-ideas", "No list", "Done"]);
     // Headers always render in list mode (label is never null).
     expect(sections.every((s) => s.label !== null)).toBe(true);
@@ -42,23 +42,24 @@ describe("listSections", () => {
       t("A", { list: "Next", vaultId: "va", vaultName: "Alpha" }),
       t("B", { list: "next", vaultId: "vb", vaultName: "Beta" }),
     ];
-    const sections = listSections(tasks, [], [], { includeEmpty: false });
+    const sections = listSections(tasks, [], [], { includeEmpty: false, archived: [] });
     expect(sections).toHaveLength(1);
     expect(sections[0].label).toBe("Next");
     expect(sections[0].tasks).toHaveLength(2);
   });
 
   it("includeEmpty surfaces a fresh task-less list; without it the section is skipped", () => {
-    const withEmpty = listSections([t("Root")], ["Someday"], [], { includeEmpty: true });
+    const withEmpty = listSections([t("Root")], ["Someday"], [], { includeEmpty: true, archived: [] });
     expect(labels(withEmpty)).toEqual(["Someday", "No list"]);
     expect(withEmpty[0].tasks).toHaveLength(0);
-    const without = listSections([t("Root")], ["Someday"], [], { includeEmpty: false });
+    const without = listSections([t("Root")], ["Someday"], [], { includeEmpty: false, archived: [] });
     expect(labels(without)).toEqual(["No list"]);
   });
 
   it("keeps a done task out of its list section (Done owns it)", () => {
     const sections = listSections([t("Fin", { done: true, status: "done", list: "Next" })], [], [], {
       includeEmpty: false,
+      archived: [],
     });
     expect(labels(sections)).toEqual(["Done"]);
   });
@@ -66,8 +67,18 @@ describe("listSections", () => {
   it("listOrder names that match nothing are ignored", () => {
     const sections = listSections([t("N", { list: "Next" })], [], ["Ghost", "Next"], {
       includeEmpty: false,
+      archived: [],
     });
     expect(labels(sections)).toEqual(["Next"]);
+  });
+
+  it("excludes an archived list's section AND its tasks", () => {
+    const tasks = [t("Hidden", { list: "Old" }), t("Shown", { list: "Keep" })];
+    const secs = listSections(tasks, ["Old", "Keep"], [], { includeEmpty: true, archived: ["Old"] });
+    expect(secs.map((s) => s.label)).not.toContain("Old");
+    expect(secs.flatMap((s) => s.tasks.map((task) => task.title))).not.toContain("Hidden");
+    const keep = secs.find((s) => s.label === "Keep");
+    expect(keep?.list).toBe("Keep"); // bucket carries the raw list name
   });
 });
 

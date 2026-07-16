@@ -189,6 +189,11 @@ export interface TasksConfig {
    * root) and the display order for list sections/pickers. */
   defaultList: string | null;
   listOrder: string[];
+  /** `/`-joined relative names of lists hidden from the Lists grouping and
+   * pickers (the folder + tasks stay on disk). Optional/defaulted to `[]` —
+   * an older cached response (or a test fixture predating the field) may
+   * omit it. */
+  archivedLists?: string[];
   /** Whether generated task IDs are enabled for this vault. */
   taskIdEnabled: boolean;
   /** The resolved id property name (default "task-id"). */

@@ -21,6 +21,14 @@ export function useTaskLists(vaultId: string | null) {
   const listOrder = computed(() =>
     vaultId !== null ? (vaultConfigs.value.get(vaultId)?.listOrder ?? []) : [],
   );
+  // Archived lists hide from the Lists grouping and pickers (Task 8) —
+  // per-vault only, same simplification as listOrder above: the aggregate
+  // spans every vault, so there's no single archived set to apply and a
+  // cross-vault union is YAGNI (the aggregate's Lists grouping just doesn't
+  // filter for now).
+  const archivedLists = computed(() =>
+    vaultId !== null ? (vaultConfigs.value.get(vaultId)?.archivedLists ?? []) : [],
+  );
   const knownLists = computed(() => {
     const seen = new Map<string, string>();
     for (const lists of vaultLists.value.values())
@@ -36,13 +44,28 @@ export function useTaskLists(vaultId: string | null) {
   // per vault and cached in the maps above.
   const composerVaultId = ref<string | null>(vaultId);
   const creatingList = ref(false);
+  // Archived names are dropped (Task 8) — the composer offers only visible
+  // lists to pick for a NEW task, matching what the Lists grouping shows.
   function listsForVault(id: string): string[] {
     const cfg = vaultConfigs.value.get(id);
-    return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []);
+    const archived = new Set((cfg?.archivedLists ?? []).map((a) => a.toLowerCase()));
+    return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []).filter(
+      (l) => !archived.has(l.toLowerCase()),
+    );
   }
   const composerLists = computed(() =>
     composerVaultId.value === null ? [] : listsForVault(composerVaultId.value),
   );
+  // The inline editor's picker is the one exception: it must still show (and
+  // allow moving OUT of) a task's OWN current list even when that list is
+  // archived — listsForVault above already dropped it from the general
+  // options, so union it back in rather than rendering a blank selection.
+  function listsForEditor(id: string, currentList: string): string[] {
+    const base = listsForVault(id);
+    if (currentList === "" || base.some((l) => l.toLowerCase() === currentList.toLowerCase()))
+      return base;
+    return [...base, currentList];
+  }
   const composerDefaultList = computed(() => {
     const id = composerVaultId.value;
     return (id !== null && vaultConfigs.value.get(id)?.defaultList) || "";
@@ -118,11 +141,12 @@ export function useTaskLists(vaultId: string | null) {
   return {
     listOrder,
     knownLists,
+    archivedLists,
     creatingList,
     composerVaultId,
     composerLists,
     composerDefaultList,
-    listsForVault,
+    listsForEditor,
     loadVaultLists,
     loadVaultConfig,
     onComposerVaultChange,
