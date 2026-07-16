@@ -3,7 +3,7 @@
 //! is deliberately the frontend's job, not the sort's).
 
 use super::doc::is_task;
-use super::parse::{is_valid_due, note_tags, scalar_field};
+use super::parse::{is_valid_due, note_tags, scalar_field, scalar_field_ci};
 use crate::capture_note::note_field;
 use std::path::{Path, PathBuf};
 
@@ -141,7 +141,11 @@ fn collect_task_file(
     let order = scalar_field(&content, "order")
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|f| f.is_finite());
-    let id = id_property.and_then(|p| scalar_field(&content, p));
+    // Case-insensitive, top-level-only — must agree with the id-stamp path's
+    // has_frontmatter_key_ci, or a task stamped under a different casing than
+    // the configured property has a stable id on disk that never surfaces
+    // (Codex review, PR #59).
+    let id = id_property.and_then(|p| scalar_field_ci(&content, p));
     out.push(TaskItem {
         path: path.to_path_buf(),
         title,
@@ -563,5 +567,46 @@ mod tests {
             Some("abc12345")
         );
         assert_eq!(list_tasks(root, None)[0].id, None); // off → no read
+    }
+
+    #[test]
+    fn list_tasks_reads_the_id_property_case_insensitively() {
+        // Codex PR #59: the id STAMP path (has_frontmatter_key_ci) treats an
+        // existing id key as present under ANY casing, but list_tasks read it
+        // with scalar_field's exact-case lookup — so a task stamped
+        // `Task-ID:` while the vault resolves the property to `task-id` had a
+        // stable id on disk that was invisible in TaskDto.id (dead to the
+        // UI/MCP and the upcoming copy-id feature). The read must agree with
+        // the write on case.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "upper.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Upper\"\ncreated: 2026-07-08\nTask-ID: abc12345\n---\n",
+        );
+        write(
+            root,
+            "exact.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Exact\"\ncreated: 2026-07-08\ntask-id: xyz\n---\n",
+        );
+        // A NESTED indented `task-id` under a mapping is NOT the top-level
+        // property — same top-level-only discipline as has_frontmatter_key_ci
+        // — so this file carries no usable id at all.
+        write(
+            root,
+            "nested.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Nested\"\ncreated: 2026-07-08\nmetadata:\n  task-id: nope\n---\n",
+        );
+
+        let items = list_tasks(root, Some("task-id"));
+        let id_of = |title: &str| items.iter().find(|t| t.title == title).unwrap().id.clone();
+        assert_eq!(id_of("Upper"), Some("abc12345".to_string())); // case-insensitive win
+        assert_eq!(id_of("Exact"), Some("xyz".to_string())); // exact case: no regression
+        assert_eq!(id_of("Nested"), None); // nested key never counts as top-level
+
+        // Feature off (None property) never reads, regardless of on-disk casing.
+        let off = list_tasks(root, None);
+        assert_eq!(off.iter().find(|t| t.title == "Upper").unwrap().id, None);
     }
 }

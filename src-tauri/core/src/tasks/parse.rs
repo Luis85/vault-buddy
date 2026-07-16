@@ -189,6 +189,43 @@ pub(super) fn has_frontmatter_key_ci(content: &str, key: &str) -> bool {
     false
 }
 
+/// Read a STRUCTURED frontmatter scalar (see `scalar_field`), matching the
+/// key CASE-INSENSITIVELY at the TOP LEVEL only — the read-side counterpart
+/// to `has_frontmatter_key_ci`, used wherever a read must agree with a write
+/// that already treats case as insignificant (the task-id property: the
+/// stamp path detects an existing id under ANY casing via
+/// `has_frontmatter_key_ci`, so `list_tasks` reading it back must find the
+/// same key or a stable on-disk id becomes invisible in `TaskItem.id`,
+/// Codex review, PR #59). Finds the first top-level `key:` line whose name
+/// case-folds to `key`, skipping indented/nested lines exactly like
+/// `has_frontmatter_key_ci` (a nested `  task-id:` under a mapping is never
+/// the top-level property), then delegates to `scalar_field` with the
+/// ACTUAL casing found — the value parsing (comment-strip, quote-unwrap)
+/// lives in one place, not forked.
+pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return None;
+    }
+    for line in lines {
+        let t = line.trim_end();
+        if t == "---" {
+            return None; // closing fence — key not found in frontmatter
+        }
+        // Top-level keys only — mirrors has_frontmatter_key_ci.
+        if t.starts_with([' ', '\t']) {
+            continue;
+        }
+        if let Some((k, _)) = t.split_once(':') {
+            let k = k.trim();
+            if k.eq_ignore_ascii_case(key) {
+                return scalar_field(content, k);
+            }
+        }
+    }
+    None
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.
