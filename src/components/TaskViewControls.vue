@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 
+import type { Grouping } from "../utils/taskGrouping";
 import {
   directionApplies,
   SORT_OPTIONS,
@@ -14,7 +15,7 @@ import SelectMenu from "./SelectMenu.vue";
 // and persistence; extracted so the container template stays under the
 // complexity threshold.
 const props = defineProps<{
-  grouping: "dates" | "tags" | "lists";
+  grouping: Grouping;
   sortPref: TaskSortPref;
   isAggregate: boolean;
   creatingList: boolean;
@@ -24,7 +25,7 @@ const props = defineProps<{
   resetNonce?: number;
 }>();
 const emit = defineEmits<{
-  (e: "update:grouping", value: "dates" | "tags" | "lists"): void;
+  (e: "update:grouping", value: Grouping): void;
   (e: "setSortKey", key: SortKey): void;
   (e: "flipSortDir"): void;
   (e: "createList", name: string): void;

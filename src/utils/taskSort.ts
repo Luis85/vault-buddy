@@ -1,9 +1,10 @@
-import { logWarning } from "../logging";
 import type { AggTask } from "../types";
+import { createPerViewStore } from "./perViewStore";
 import { dueOf } from "./taskFields";
 
 // The task views' sort machinery: one comparator factory over the user's
-// sort preference, plus its per-view localStorage persistence. Pure and
+// sort preference, plus its per-view localStorage persistence (via the
+// shared perViewStore envelope — see perViewStore.ts). Pure and
 // component-free so the Tasks container stays under the LOC cap and the
 // ordering contract is unit-testable without mounting anything.
 
@@ -102,43 +103,39 @@ export function taskComparator(pref: TaskSortPref): (a: AggTask, b: AggTask) => 
     Number(a.done) - Number(b.done) || byKey(a, b, flip) || defaultCompare(a, b);
 }
 
-/** localStorage key; a JSON object keyed per view ("all" or a vault id). */
-const STORAGE_KEY = "vault-buddy:task-sort";
 const DEFAULT_PREF: TaskSortPref = { key: "manual", dir: "asc" };
 const SORT_KEYS = new Set(SORT_OPTIONS.map((o) => o.value));
 
-function readAll(): Record<string, unknown> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-      return parsed as Record<string, unknown>;
-  } catch (e) {
-    logWarning(`task sort: load failed: ${String(e)}`);
+/** Validates a raw stored entry against the same shape/enum checks
+ * loadSortPref always applied; anything else (missing, wrong shape, unknown
+ * key, unknown dir) falls back to DEFAULT_PREF in the store. */
+function sanitizeSortPref(raw: unknown): TaskSortPref | null {
+  if (raw && typeof raw === "object") {
+    const { key, dir } = raw as { key?: unknown; dir?: unknown };
+    if (
+      typeof key === "string" &&
+      SORT_KEYS.has(key as SortKey) &&
+      (dir === "asc" || dir === "desc")
+    ) {
+      return { key: key as SortKey, dir };
+    }
   }
-  return {};
+  return null;
 }
+
+const store = createPerViewStore<TaskSortPref>(
+  "vault-buddy:task-sort",
+  sanitizeSortPref,
+  DEFAULT_PREF,
+  "task sort",
+);
 
 /** The persisted sort for a view; a missing/corrupted entry degrades to the
  * Default pref — with a warning, never a throw into the component. */
 export function loadSortPref(viewKey: string): TaskSortPref {
-  const entry = readAll()[viewKey];
-  if (entry && typeof entry === "object") {
-    const { key, dir } = entry as { key?: unknown; dir?: unknown };
-    if (typeof key === "string" && SORT_KEYS.has(key as SortKey) && (dir === "asc" || dir === "desc")) {
-      return { key: key as SortKey, dir };
-    }
-  }
-  return { ...DEFAULT_PREF };
+  return store.load(viewKey);
 }
 
 export function saveSortPref(viewKey: string, pref: TaskSortPref): void {
-  const all = readAll();
-  all[viewKey] = pref;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-  } catch (e) {
-    logWarning(`task sort: save failed: ${String(e)}`);
-  }
+  store.save(viewKey, pref);
 }

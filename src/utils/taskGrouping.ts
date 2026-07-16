@@ -1,33 +1,29 @@
-import { logWarning } from "../logging";
+import { createPerViewStore } from "./perViewStore";
+
+// The tasks view's grouping-mode choice (Lists / Dates / Tags), persisted
+// per view (localStorage, keyed "all" or a vault id) via the shared
+// perViewStore envelope — see perViewStore.ts for the
+// load/sanitize/degrade-to-default and save/merge/persist contract this
+// rides on.
 
 export type Grouping = "dates" | "tags" | "lists";
-const STORAGE_KEY = "vault-buddy:task-grouping";
+
 const DEFAULT: Grouping = "lists";
 const VALID = new Set<Grouping>(["dates", "tags", "lists"]);
 
-function readAll(): Record<string, unknown> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch (e) {
-    logWarning(`task grouping: load failed: ${String(e)}`);
-  }
-  return {};
-}
+const store = createPerViewStore<Grouping>(
+  "vault-buddy:task-grouping",
+  (raw) => (typeof raw === "string" && VALID.has(raw as Grouping) ? (raw as Grouping) : null),
+  DEFAULT,
+  "task grouping",
+);
 
+/** The persisted grouping for a view; a missing/corrupted entry degrades to
+ * "lists" — with a warning, never a throw into the component. */
 export function loadGrouping(viewKey: string): Grouping {
-  const v = readAll()[viewKey];
-  return typeof v === "string" && VALID.has(v as Grouping) ? (v as Grouping) : DEFAULT;
+  return store.load(viewKey);
 }
 
 export function saveGrouping(viewKey: string, value: Grouping): void {
-  const all = readAll();
-  all[viewKey] = value;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-  } catch (e) {
-    logWarning(`task grouping: save failed: ${String(e)}`);
-  }
+  store.save(viewKey, value);
 }
