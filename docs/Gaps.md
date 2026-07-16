@@ -44,6 +44,21 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
+### GAP-62 · Low · In-process GPU driver fault can crash the app
+`src-tauri/transcribe/src/engine.rs` (`WhisperTranscriber::load`, the
+`use_gpu` parameter passed to whisper.cpp). GPU inference runs in the same
+process as the Tauri runtime. A faulty graphics driver or an incompatible GPU
+can crash whisper.cpp during model load or inference (native fault: SEH
+exception on Windows, fatal signal on Unix), taking the app with it. Symptom:
+crash.log shows a `native crash` record during transcription. **Remedy:** the
+`Use GPU (Vulkan)` toggle (Buddy settings → Integrations → Transcription — GPU)
+is the immediate escape hatch — turn it off to fall back to CPU inference, which
+is always safe. **Permanent fix:** run GPU inference in a sidecar process (a
+separate executable), so a GPU fault isolates and the parent app recovers. This
+is the documented architecture for the 2026 AI-platform roadmap. Mitigation is
+low-cost (a boolean toggle); blast radius is the transcription job only (no
+vault writes fail, no recordings are lost — the job fails with a notification).
+
 ### GAP-56 · Low · Search content cache: fill-to-cap tail and dead entries
 `core/src/search_cache.rs`. The cache fills to 256 MiB then stops inserting
 (no eviction — uniform per-search access makes LRU pointless), so once total

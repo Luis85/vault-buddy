@@ -109,7 +109,7 @@ vault-buddy/
 │   │                           #   tray.rs, diagnostics.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
-│   │                           #   mcp_config + document_import_config (split-out config sections),
+│   │                           #   mcp_config + document_import_config + transcription_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
@@ -133,7 +133,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | Path | What it is | Compiles on |
 | --- | --- | --- |
 | `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection, placement math, all vault-write logic. No GUI deps. | Anywhere — test and lint locally |
-| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows |
+| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. GPU inference via `whisper-vulkan` (Vulkan SDK required; Windows CI builds only). | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows; `whisper-vulkan` compiles only where the Vulkan SDK exists (Windows CI/release jobs enable it through the shell's `gpu` feature; local builds stay CPU-only) |
 | `src-tauri/capture/` | Audio engine (cpal, LAME). | Anywhere (Linux needs `libasound2-dev`); the WASAPI loopback block is Windows-only, compile-gated |
 | `src-tauri/mcp/` | Tauri-free crate: the embedded MCP server — rmcp service (seven tools over `core::services`), HTTP guards, streamable-HTTP runner. | Anywhere — unit + real-socket integration tests run on Linux; CI gates it explicitly (`-p vault_buddy_mcp`) because `tauri build` alone wouldn't run its tests. |
 | `src-tauri/` (root crate) | Tauri shell: windows, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
@@ -160,6 +160,7 @@ npm run build                       # vue-tsc typecheck + production build
 npm run dev                         # Vite dev server only
 npm run test-build                  # `tauri dev` — full app, Windows only
 npx tauri build                     # real installer build (Windows only)
+npx tauri build --features gpu      # GPU (Vulkan) inference — Windows with LunarG SDK only
 
 # Frontend quality gates — CI runs these in this order; check:quality must
 # run with NO coverage/ dir present, so test:coverage goes last (see
@@ -254,7 +255,7 @@ Keep this table in sync when adding/removing commands.
 | --- | --- |
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
-| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` |
+| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config`, `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
@@ -786,6 +787,24 @@ during it is still a cancel. State is surfaced as `capture:transcribing` /
 `whisper-rs` is pinned at 0.16 deliberately — `transcribe/src/engine.rs`
 hand-wires abort/progress callbacks around upstream bugs; treat an upgrade
 as its own tracked change (see docs/DEVELOPMENT.md).
+
+**GPU inference (Vulkan, v0.6.1+).** The app-global `transcription.useGpu`
+setting (Buddy settings → Integrations → *Transcription — GPU*, default on) asks
+whisper for GPU inference via a Vulkan backend when available. The
+`WhisperTranscriber::load(model_path, use_gpu)` call explicitly sets the flag
+(whisper-rs defaults it `false`); whisper.cpp's CPU fallback is automatic when
+no usable device exists (logged via `install_logging_hooks`, never a job
+failure). The toggle applies from the next transcription job — the worker
+reloads the cached model when the flag changes, keyed on `(ModelTier, use_gpu)`,
+with no app restart needed. **Gotcha: whisper-rs defaults `use_gpu: false`**, so
+the explicit set is what engages the backend. The toggle is an escape hatch for
+users with flaky graphics drivers (crash remedy: turn it off, fall back to CPU).
+The `whisper-vulkan` feature and the shell's `gpu` feature compile only where the
+Vulkan SDK exists (Windows CI/release builds enable it; local builds stay
+CPU-only so contributors never need the SDK). Deliberately NO per-transcript
+device row in the stats footer — the VAD stats-row lesson (never record intent
+as engagement); the honesty principle is unchanged. **Sidecar-process architecture
+is the documented future fix for in-process driver faults** (see docs/Gaps.md).
 
 The transcript is the second sanctioned vault write — a `<base>.transcript.md`
 sidecar the note embeds, under the same never-clobber discipline as the audio

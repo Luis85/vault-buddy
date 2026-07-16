@@ -36,6 +36,14 @@ where it's going, see the [PRD](PRD.md).
    — e.g. `_IO_FILE` sized at 216 bytes — fail to compile on MSVC, so bindgen
    must regenerate them from the local headers.)
 
+5. **GPU transcription (optional).** Plain `npm run test-build` compiles the app
+   CPU-only. To enable GPU inference via Vulkan (v0.6.1+), download and install
+   the **LunarG Vulkan SDK 1.4.350.0** directly from
+   [vulkan.lunarg.com](https://vulkan.lunarg.com/sdk/home) (version pinned in CI
+   workflows; select Windows x64), then build with `npx tauri build --features gpu`.
+   A plain Windows build without the SDK is unchanged — no Vulkan headers needed.
+   Agents and Linux compile gates stay CPU-only by design (no SDK needed locally).
+
 ### Check out and run
 
 ```bash
@@ -459,6 +467,27 @@ ever written into your vaults except recordings and their notes.
   preferences about them, edited in Vault settings → Task lists.
 
 The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.
+
+## Transcription configuration
+
+The local speech-to-text pipeline keeps app-global settings in the same
+`config.json` as a top-level `transcription` section beside `vaults` — written
+by Buddy settings → *Integrations — Transcription — GPU*:
+
+```json
+{
+  "transcription": {
+    "useGpu": true     // GPU inference via Vulkan (v0.6.1+); omitted when true (default)
+  },
+  "vaults": { }
+}
+```
+
+- `useGpu` (bool, default `true`) — ask whisper for GPU inference when a
+  compatible Vulkan device is found. CPU fallback is automatic (logged at
+  context init). Toggle applies from the next transcription job (the worker
+  reloads the cached model; no restart needed). Omitted when `true` (the
+  default), written only when `false` — the hand-editable file stays minimal.
 
 ## MCP server configuration
 
