@@ -52,6 +52,8 @@ const config = ref<CaptureConfig>({
   transcriptionModel: "small",
   transcriptionLanguage: null,
   transcriptTimestamps: true,
+  transcriptionVocabulary: null,
+  transcriptionVad: true,
   recordingDateFolders: true,
 });
 

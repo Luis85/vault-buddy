@@ -9,7 +9,11 @@ import RecordingSettings from "./RecordingSettings.vue";
 
 // Folders are the only free-text fields in the bundle → debounce; everything
 // else is a toggle/select → save immediately.
-const TEXT_KEYS = new Set<keyof RecordingSettingsValue>(["meetingFolder", "voiceNoteFolder"]);
+const TEXT_KEYS = new Set<keyof RecordingSettingsValue>([
+  "meetingFolder",
+  "voiceNoteFolder",
+  "transcriptionVocabulary",
+]);
 
 // The Recording tab of Vault settings. Owns the capture-config + devices load,
 // hosts the controlled RecordingSettings, and auto-saves the whole
@@ -34,6 +38,8 @@ const rec = ref<RecordingSettingsValue>({
   transcriptionModel: "small",
   transcriptionLanguage: "",
   transcriptTimestamps: true,
+  transcriptionVocabulary: "",
+  transcriptionVad: true,
   recordingDateFolders: true,
 });
 
@@ -55,6 +61,8 @@ const autosave = useAutosave(
         transcriptionModel: r.transcriptionModel,
         transcriptionLanguage: r.transcriptionLanguage.trim() || null,
         transcriptTimestamps: r.transcriptTimestamps,
+        transcriptionVocabulary: r.transcriptionVocabulary.trim() || null,
+        transcriptionVad: r.transcriptionVad,
         recordingDateFolders: r.recordingDateFolders,
       },
     });
@@ -105,6 +113,8 @@ onMounted(async () => {
       transcriptionModel: cfg.transcriptionModel,
       transcriptionLanguage: cfg.transcriptionLanguage ?? "",
       transcriptTimestamps: cfg.transcriptTimestamps,
+      transcriptionVocabulary: cfg.transcriptionVocabulary ?? "",
+      transcriptionVad: cfg.transcriptionVad,
       recordingDateFolders: cfg.recordingDateFolders,
     };
     devices.value = devs;

@@ -108,6 +108,11 @@ export interface CaptureConfig {
   transcriptionModel: string;
   transcriptionLanguage: string | null;
   transcriptTimestamps: boolean;
+  /** Free-text vocabulary (names, acronyms, jargon) primed into whisper's
+   * initial prompt. null = none. */
+  transcriptionVocabulary: string | null;
+  /** Skip silence via Silero VAD before inference (default on). */
+  transcriptionVad: boolean;
   followUpTemplate: boolean;
   /** Whether NEW recordings land in a dated `YYYY/MM` subfolder (true) or
    * flat in the recording root (false). Existing files in either layout are
@@ -140,6 +145,8 @@ export interface RecordingSettingsValue {
   transcriptionModel: string;
   transcriptionLanguage: string;
   transcriptTimestamps: boolean;
+  transcriptionVocabulary: string;
+  transcriptionVad: boolean;
   recordingDateFolders: boolean;
 }
 
