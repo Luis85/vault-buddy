@@ -12,25 +12,33 @@ const RESERVED_TASK_KEYS: &[&str] = &[
 
 /// A short random task ID: 8 base36 characters (`0-9a-z`) from the OS CSPRNG.
 pub fn new_task_id() -> String {
-    const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    const ALPHA: &[u8; 26] = b"abcdefghijklmnopqrstuvwxyz";
+    const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut bytes = [0u8; 8];
     // getrandom only fails on a broken OS RNG; a loud panic is correct here
     // (mirrors mcp::token::generate_token).
     getrandom::fill(&mut bytes).expect("OS RNG unavailable");
-    bytes
-        .iter()
-        .map(|b| ALPHABET[*b as usize % 36] as char)
-        .collect()
+    // First char is always a letter so the id is never all-digits (or
+    // scientific-notation-shaped): Obsidian/Dataview must read it as a string,
+    // not a number, for `task-id`-keyed queries to match.
+    let mut s = String::with_capacity(8);
+    s.push(ALPHA[bytes[0] as usize % 26] as char);
+    for b in &bytes[1..] {
+        s.push(BASE36[*b as usize % 36] as char);
+    }
+    s
 }
 
 /// True iff `name` is a safe frontmatter key for the ID property: non-empty,
-/// `[A-Za-z0-9_-]` only, and not a reserved structured task key.
+/// `[A-Za-z0-9_-]` only, and not a reserved structured task key (case-folded —
+/// Obsidian folds frontmatter keys, so `Status`/`DUE` collide with the real
+/// fields even though the charset alone would accept them).
 pub fn is_valid_id_property(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && !RESERVED_TASK_KEYS.contains(&name)
+        && !RESERVED_TASK_KEYS.contains(&name.to_ascii_lowercase().as_str())
 }
 
 #[cfg(test)]
@@ -44,7 +52,12 @@ mod tests {
         assert!(a
             .chars()
             .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
-        // Weak uniqueness over a 36^8 space — a collision in 1000 draws is
+        // Never number-typed: an all-digit (or \d+e\d+-shaped) id would be read
+        // as a NUMBER by Obsidian/Dataview when emitted unquoted, breaking
+        // `WHERE task-id = "…"` string-equality queries. Forcing a leading
+        // letter rules that out.
+        assert!(a.chars().next().unwrap().is_ascii_lowercase());
+        // Weak uniqueness over a 26·36^7 space — a collision in 1000 draws is
         // effectively impossible; this pins that the source is actually random.
         let mut seen = std::collections::HashSet::new();
         for _ in 0..1000 {
@@ -67,5 +80,14 @@ mod tests {
                 "{reserved} must be rejected"
             );
         }
+        // The reserved check must be case-insensitive: Obsidian folds
+        // frontmatter keys, so "Status"/"DUE" collide with the real fields
+        // even though the charset check alone would accept them (A-Z allowed).
+        assert!(
+            is_valid_id_property("Task-ID"),
+            "an uppercase NON-reserved name must still be accepted"
+        );
+        assert!(!is_valid_id_property("Status"));
+        assert!(!is_valid_id_property("DUE"));
     }
 }

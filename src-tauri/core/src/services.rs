@@ -301,13 +301,20 @@ pub fn add_task(
             Err(e) => return Err(e),
         }
     };
-    // Generate a task ID when the vault opted in — written into the initial
-    // file content by render_task. Borrows are valid for the create call:
-    // the property name borrows `cfg`, the id borrows `generated_id`.
-    let generated_id = cfg.task_id_enabled.then(tasks::new_task_id);
-    let task_id = generated_id
-        .as_deref()
-        .map(|id| (cfg.task_id_property_name(), id));
+    // Generate a task ID only when enabled AND the resolved property is a
+    // valid, non-reserved frontmatter key. config.json is hand-editable, so a
+    // reserved property (e.g. "status") would otherwise make render_task emit
+    // a SECOND structured line; the settings command rejects such names, but a
+    // hand edit bypasses it. is_valid_id_property is that same gate.
+    let id_property = cfg.task_id_property_name();
+    let generate_id = cfg.task_id_enabled && tasks::is_valid_id_property(id_property);
+    if cfg.task_id_enabled && !generate_id {
+        log::warn!(
+            "add_task: task_id_property {id_property:?} is not a valid frontmatter key; skipping id generation"
+        );
+    }
+    let generated_id = generate_id.then(tasks::new_task_id);
+    let task_id = generated_id.as_deref().map(|id| (id_property, id));
     let path = tasks::create_task(&target_root, title, today, due, priority, tags, task_id)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
@@ -660,6 +667,39 @@ mod tests {
         assert!(!std::fs::read_to_string(&created.path)
             .unwrap()
             .contains("task-id"));
+    }
+
+    #[test]
+    fn add_task_skips_id_for_a_reserved_property() {
+        // config.json is hand-editable: set_task_id_config rejects a reserved
+        // property name, but a hand edit bypasses that gate. A reserved
+        // property (here "status") must not make render_task emit a SECOND
+        // structured `status:` line — is_valid_id_property must gate
+        // generation here too, not just in the settings command.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "status" } } }"#,
+        )
+        .unwrap();
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let body = std::fs::read_to_string(&created.path).unwrap();
+        assert_eq!(
+            body.matches("status:").count(),
+            1,
+            "a reserved id property must not duplicate the status: line, got: {body}"
+        );
     }
 
     #[test]

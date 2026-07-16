@@ -45,7 +45,8 @@ pub fn task_basename(title: &str, today: &str) -> String {
 /// frontmatter. `due`/`priority` lines are written only when present — absent
 /// priority means normal, and a bare `due:` is never emitted. `tags` renders
 /// as a single canonical flow line (`tags: [a, b]`) after `due`/`priority`,
-/// only when non-empty.
+/// only when non-empty. When `task_id` is `Some((property, id))`, a
+/// `<property>: <id>` line is written immediately after `created:`.
 pub fn render_task(
     title: &str,
     created: &str,
@@ -82,7 +83,8 @@ pub fn render_task(
 /// collision-safe atomic writer shared with the capture note, so it can never
 /// overwrite an existing file — a name clash takes the ` (N)` suffix instead.
 /// `tags` (already validated by the caller) is threaded through to
-/// `render_task` verbatim.
+/// `render_task` verbatim. When `task_id` is `Some((property, id))`, a
+/// `<property>: <id>` line is written immediately after `created:`.
 pub fn create_task(
     root: &Path,
     title: &str,
