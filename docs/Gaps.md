@@ -52,25 +52,29 @@ note text exceeds the cap the last-walked vaults' notes re-read on every search
 linger until process exit, bounded by the cap. A per-walk mark-and-sweep and/or
 a larger/tunable cap would address both; deferred as documented in the spec.
 
-### GAP-54 · Low · A crash inside `write_note_atomic` can strand a hidden temp file
-`src-tauri/core/src/capture_note.rs` (`write_note_atomic`), shared by every
-domain that writes a note (capture / transcript / tasks / document-import). A
-crash between the temp-create and the `rename_noreplace` leaves a hidden
-`.<basename>.md.vault-buddy.tmp` FILE next to the target; the import janitor
-sweeps only `.vault-buddy.tmp.import` staging DIRS, not this temp. It is our
-own tiny, walk-invisible file (no user data), so the worst case is a cosmetic
-leftover. **Not import-specific** — any note write shares it, so a fix belongs
-at the `write_note_atomic` layer, not in the import janitor.
-
-The related **document-import media-first publish crash window** (a published
-`<basename>/` media folder with no note, from a crash between the media rename
-and the note write) is now **FIXED 2026-07-16**: `clean_stale_staging_at`
-removes a matching orphan media folder with no sibling `<basename>.md`, keyed
-on the surviving staging dir's basename (`orphan_media_basename` /
-`remove_orphan_media`), guarded no-note + real-in-place + contained. Tests:
-`janitor_removes_crash_orphan_media_folder_with_no_note`,
-`janitor_keeps_media_folder_that_has_a_sibling_note`,
-`janitor_skips_symlinked_media_named_like_an_orphan`.
+### GAP-54 · Low · Document-import media publish has a non-atomic crash window
+`src-tauri/core/src/document_import.rs` (`publish_inner`, the media
+`rename` before the note `write_note_atomic`). Publishing moves the media
+folder out of the staging dir first, then commits the note. If the process
+is killed / loses power in that ~two-rename window, the media folder is
+already published but no note exists, and `run_import_recovery` only sweeps
+`.vault-buddy.tmp.import` staging dirs — not the published-but-unreferenced
+media folder. Result: a stray media folder (our OWN extracted files — no
+user data loss) that a later same-name import suffixes around (` (2)`).
+**Accepted as a documented limitation** (comment at the site): a
+crash-atomic fix needs two-phase commit across two filesystem objects
+(unavailable) or a permanent per-import marker file in every media folder —
+disproportionate to a microsecond window whose worst case is a cosmetic
+leftover folder. **Fix, if ever pursued:** the staging dir name encodes the
+basename and still exists on crash, so the janitor could parse it and remove
+a matching `<basename>/` media folder that has no sibling `<basename>.md`
+note (provably our orphan, since the basename comes from our owned staging
+dir). A crash *inside* `write_note_atomic` (between temp-create and
+`rename_noreplace`) can also strand a hidden `.<basename>.md.vault-buddy.tmp`
+FILE next to the target — the import janitor sweeps only `.vault-buddy.tmp.import`
+dirs, not this temp. It is our own tiny, walk-invisible file (no user data),
+and the surface is shared by every domain that uses `write_note_atomic`
+(capture/transcript/tasks), not import-specific.
 
 ### GAP-01 · ~~High~~ FIXED 2026-07-10 · Transcription retry/force paths accept `..` escapes and skip the capture-basename gate
 `owning_vault_id` and `open_recording_note` now match on canonical paths via
