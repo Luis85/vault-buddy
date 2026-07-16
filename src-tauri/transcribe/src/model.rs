@@ -13,6 +13,7 @@ pub enum ModelTier {
     Base,
     Small,
     Medium,
+    Turbo,
 }
 
 impl ModelTier {
@@ -24,6 +25,7 @@ impl ModelTier {
         match s {
             "base" => ModelTier::Base,
             "medium" => ModelTier::Medium,
+            "turbo" => ModelTier::Turbo,
             _ => ModelTier::Small, // small is the default tier
         }
     }
@@ -32,6 +34,7 @@ impl ModelTier {
             ModelTier::Base => "base",
             ModelTier::Small => "small",
             ModelTier::Medium => "medium",
+            ModelTier::Turbo => "turbo",
         }
     }
     /// Label recorded in transcript frontmatter.
@@ -43,6 +46,7 @@ impl ModelTier {
             ModelTier::Base => "ggml-base.bin",
             ModelTier::Small => "ggml-small.bin",
             ModelTier::Medium => "ggml-medium.bin",
+            ModelTier::Turbo => "ggml-large-v3-turbo-q5_0.bin",
         }
     }
     pub fn url(&self) -> String {
@@ -59,6 +63,7 @@ impl ModelTier {
             ModelTier::Base => "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
             ModelTier::Small => "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
             ModelTier::Medium => "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+            ModelTier::Turbo => "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         }
     }
     /// A sanity floor (not a checksum): a downloaded file far below this is a
@@ -69,6 +74,7 @@ impl ModelTier {
             ModelTier::Base => 100_000_000,     // ~142 MB
             ModelTier::Small => 300_000_000,    // ~466 MB
             ModelTier::Medium => 1_000_000_000, // ~1.5 GB
+            ModelTier::Turbo => 500_000_000,    // ~574 MB (574,041,195 bytes)
         }
     }
 }
@@ -348,6 +354,7 @@ mod tests {
         assert_eq!(ModelTier::from_str("base"), ModelTier::Base);
         assert_eq!(ModelTier::from_str("medium"), ModelTier::Medium);
         assert_eq!(ModelTier::from_str("small"), ModelTier::Small);
+        assert_eq!(ModelTier::from_str("turbo"), ModelTier::Turbo);
         assert_eq!(ModelTier::from_str("garbage"), ModelTier::Small);
     }
 
@@ -360,6 +367,12 @@ mod tests {
             .starts_with("https://huggingface.co/ggerganov/whisper.cpp"));
         assert_eq!(ModelTier::Base.label(), "whisper-base");
         assert_eq!(ModelTier::Small.as_str(), "small");
+        assert_eq!(ModelTier::Turbo.file_name(), "ggml-large-v3-turbo-q5_0.bin");
+        assert!(ModelTier::Turbo
+            .url()
+            .ends_with("/ggml-large-v3-turbo-q5_0.bin"));
+        assert_eq!(ModelTier::Turbo.label(), "whisper-turbo");
+        assert_eq!(ModelTier::Turbo.as_str(), "turbo");
     }
 
     #[test]
@@ -795,7 +808,12 @@ mod tests {
 
     #[test]
     fn tier_sha256_values_are_lowercase_hex_of_expected_length() {
-        for t in [ModelTier::Base, ModelTier::Small, ModelTier::Medium] {
+        for t in [
+            ModelTier::Base,
+            ModelTier::Small,
+            ModelTier::Medium,
+            ModelTier::Turbo,
+        ] {
             let h = t.sha256();
             assert_eq!(h.len(), 64, "sha256 hex is 64 chars for {t:?}");
             assert!(h
