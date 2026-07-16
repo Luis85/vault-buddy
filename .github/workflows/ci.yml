@@ -134,6 +134,19 @@ jobs:
           # release-profile crates from scratch
           shared-key: windows-app
       - run: npm ci
+      # GPU builds: whisper.cpp's Vulkan backend needs the SDK's headers +
+      # glslc at compile time. Pinned version + SHA-256 (the same pinned-
+      # download discipline as the app's own model downloads); ~2 min
+      # install per run, accepted — revisit with a cache if it hurts.
+      - name: Install Vulkan SDK (pinned)
+        shell: bash
+        run: |
+          VK_VERSION="1.4.350.0"
+          VK_SHA256="855b27ba05d2d8119c5114c5d4ff870ca38f2c632b11e1bb9923b9b7e6ecfe7b"
+          curl -fsSL -o vulkan-sdk.exe "https://sdk.lunarg.com/sdk/download/${VK_VERSION}/windows/vulkansdk-windows-X64-${VK_VERSION}.exe"
+          echo "${VK_SHA256}  vulkan-sdk.exe" | sha256sum -c -
+          ./vulkan-sdk.exe --accept-licenses --default-answer --confirm-command install
+          echo "VULKAN_SDK=C:\\VulkanSDK\\${VK_VERSION}" >> "$GITHUB_ENV"
       - name: Build Tauri app and installers
         shell: bash
         env:
@@ -147,9 +160,9 @@ jobs:
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "no signing key available — building without updater artifacts"
-            npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            npx tauri build --features gpu --config '{"bundle":{"createUpdaterArtifacts":false}}'
           else
-            npx tauri build
+            npx tauri build --features gpu
           fi
       # The most platform-sensitive code (process detection, GetKeyState,
       # WASAPI loopback gates, MoveFileExW's non-replacing fallback, whisper
