@@ -151,6 +151,11 @@ pub fn set_capture_config(
         // discipline as tasks_folder/documents_folder above.
         recording_date_folders: cfg.recording_date_folders,
         document_date_folders: existing.document_date_folders,
+        // Same rule as the sibling documents fields: the image/text-only
+        // toggle is owned by set_documents_config, so a capture save must
+        // preserve it (read inside the lock) — never reset a vault to
+        // images-on.
+        document_extract_images: existing.document_extract_images,
     };
     let result = capture_config::update_vault_config(&id, value.clone());
     if result.is_ok() {
