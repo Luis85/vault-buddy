@@ -394,7 +394,7 @@ ever written into your vaults except recordings and their notes.
       "transcribe": false,         // opt in to local speech-to-text
       "transcriptionModel": "small", // "base" | "small" | "medium" | "turbo"
       "transcriptionLanguage": "es", // optional — omit to auto-detect per recording
-      "transcriptionVocabulary": "", // optional — names/acronyms/jargon primed into whisper's initial prompt
+      "transcriptionVocabulary": "Anna Kowalska, ggml", // optional — names/acronyms/jargon primed into whisper's initial prompt
       "transcriptionVad": true,    // skip silence via Silero VAD (default true)
       "transcriptTimestamps": true, // prefix each segment with [HH:MM:SS]
       "tasksFolder": "Tasks",      // optional — vault-relative home of task documents

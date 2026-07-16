@@ -123,11 +123,22 @@ pub fn inference_failure_message(code: Option<i32>, raw: &str) -> String {
 /// truncates from the front), so the user's explicit vocabulary is the part
 /// that must survive. `None` when there is nothing to prime with — whisper
 /// then behaves exactly as it did before this feature existed.
+///
+/// Every part is stripped of control characters (`char::is_control`, which
+/// covers `\0`) before the trim/emptiness checks. This is the one
+/// chokepoint both the title and the vocabulary flow through on their way
+/// into whisper's prompt: `engine.rs`'s `set_initial_prompt` does
+/// `CString::new(prompt).expect(...)` internally (whisper-rs, not our own
+/// code), and a NUL byte anywhere in the prompt panics and kills the named
+/// transcription worker thread. `transcriptionVocabulary` lives in a
+/// hand-editable `config.json`, so a stray control character is reachable
+/// without the app ever writing one itself.
 pub fn compose_initial_prompt(title: &str, vocabulary: Option<&str>) -> Option<String> {
-    let parts: Vec<&str> = [Some(title), vocabulary]
+    let parts: Vec<String> = [Some(title), vocabulary]
         .into_iter()
         .flatten()
-        .map(str::trim)
+        .map(|s| s.chars().filter(|c| !c.is_control()).collect::<String>())
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
     if parts.is_empty() {
@@ -693,6 +704,29 @@ mod tests {
             compose_initial_prompt("  Standup  ", Some("  cpal  ")),
             Some("Standup. cpal".to_string())
         );
+    }
+
+    #[test]
+    fn compose_initial_prompt_strips_control_characters_including_nul() {
+        // whisper-rs's set_initial_prompt does CString::new(prompt)
+        // .expect(...) internally — a NUL byte (or any other control
+        // character) surviving into the composed prompt panics and kills
+        // the named transcription worker thread. transcriptionVocabulary
+        // lives in a hand-editable config.json, so this is reachable
+        // without the app ever writing a control character itself; the
+        // title path (built from a capture's file name) gets the same
+        // treatment for free since both flow through the same map here.
+        assert_eq!(
+            compose_initial_prompt("Standup", Some("a\0b\u{7}")),
+            Some("Standup. ab".to_string())
+        );
+        assert_eq!(
+            compose_initial_prompt("Team\0Sync", None),
+            Some("TeamSync".to_string())
+        );
+        // Stripping can empty a part entirely — folds into the same
+        // "missing part" handling as an originally-blank one.
+        assert_eq!(compose_initial_prompt("\0", Some("\u{1}\u{2}")), None);
     }
 
     #[test]
