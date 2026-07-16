@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
+import { usePandocStore } from "../stores/pandoc";
 import type { PandocStatus } from "../types";
 import { withDialogSuppressed } from "../utils/nativeDialog";
 
@@ -19,6 +20,7 @@ const error = ref<string | null>(null);
 // concurrent detect/save calls could otherwise land out of order and leave
 // a stale status showing.
 const saving = ref(false);
+const pandocStore = usePandocStore();
 
 // Monotonic ticket so out-of-order detect responses can't regress the status:
 // a slow initial probe must not overwrite the fresher result of a save/browse
@@ -29,7 +31,12 @@ async function detect() {
   const ticket = ++detectTicket;
   try {
     const s = await invoke<PandocStatus>("detect_pandoc");
-    if (ticket === detectTicket) status.value = s;
+    if (ticket === detectTicket) {
+      status.value = s;
+      // Keep the shared intake-menu cache fresh after a settings-side probe
+      // (Recheck / path-override re-detect), so the record chooser sees the fix.
+      pandocStore.markDetected(s);
+    }
   } catch (e) {
     // Not running under Tauri (unit tests) or IPC failure — leave the card
     // empty, same degraded-but-continuing pattern as McpSettings/CaptureSettings.
