@@ -91,6 +91,53 @@ pub fn model_path(tier: ModelTier) -> Option<PathBuf> {
     model_dir().map(|d| d.join(tier.file_name()))
 }
 
+/// The Silero VAD model whisper.cpp uses to skip non-speech before
+/// inference. Deliberately NOT a `ModelTier` — it is not a speech model the
+/// user picks; it rides along whenever a vault's "Skip silence" is on. Same
+/// pinned-URL + SHA-256 + `.part`-then-rename discipline as the tiers.
+pub const VAD_MODEL_FILE: &str = "ggml-silero-v5.1.2.bin";
+const VAD_MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin";
+/// Canonical SHA-256 of the file above (ggml-org/whisper-vad on Hugging Face).
+const VAD_MODEL_SHA256: &str = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf";
+/// Sanity floor, not a checksum (the real file is 885,098 bytes).
+const VAD_MODEL_MIN_SIZE: u64 = 500_000;
+
+pub fn vad_model_path() -> Option<PathBuf> {
+    model_dir().map(|d| d.join(VAD_MODEL_FILE))
+}
+
+/// Download the Silero VAD model with progress — `download_model`'s exact
+/// contract at ~1 MB scale: skips if present, cancellable per chunk,
+/// `.part`-then-rename, checksum-verified.
+pub fn download_vad_model(
+    cancel: &CancelToken,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<PathBuf, String> {
+    // Already cancelled: do no work and open no connection.
+    if cancel.is_cancelled() {
+        return Err("cancelled".to_string());
+    }
+    let dir = model_dir().ok_or("cannot resolve model directory")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create model dir: {e}"))?;
+    let dest = dir.join(VAD_MODEL_FILE);
+    if dest.exists() {
+        return Ok(dest);
+    }
+    let agent = model_download_agent();
+    download_stream(
+        &agent,
+        VAD_MODEL_URL,
+        &dir,
+        VAD_MODEL_FILE,
+        VAD_MODEL_MIN_SIZE,
+        VAD_MODEL_SHA256,
+        cancel,
+        on_progress,
+        std::time::Duration::from_secs(60),
+    )
+}
+
 /// Download the tier's ggml model with progress, `.part`-then-rename. Skips
 /// if already present. `on_progress(received, total)` is called per chunk.
 /// `cancel` is polled before the request and on every chunk so a cancel
@@ -914,5 +961,37 @@ mod tests {
         );
 
         remove_cached(dir.path(), name).expect("removing an absent file must still be Ok");
+    }
+
+    #[test]
+    fn vad_model_lives_in_the_models_dir_with_a_pinned_hash() {
+        if let (Some(vad), Some(dir)) = (vad_model_path(), model_dir()) {
+            assert_eq!(vad.parent(), Some(dir.as_path()));
+            assert_eq!(
+                vad.file_name().unwrap().to_string_lossy(),
+                "ggml-silero-v5.1.2.bin"
+            );
+        }
+        // Same hex discipline as the tier hashes.
+        assert_eq!(VAD_MODEL_SHA256.len(), 64);
+        assert!(VAD_MODEL_SHA256
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(VAD_MODEL_URL.starts_with("https://huggingface.co/ggml-org/whisper-vad"));
+        assert!(VAD_MODEL_URL.ends_with("/ggml-silero-v5.1.2.bin"));
+    }
+
+    #[test]
+    fn precancelled_vad_download_bails_without_touching_the_network() {
+        // Mirrors precancelled_download_bails_without_touching_the_network:
+        // hermetic in CI precisely because the abort happens before any
+        // request is made.
+        let cancel = crate::CancelToken::new();
+        cancel.cancel();
+        let mut progress = |_received: u64, _total: Option<u64>| {};
+        assert!(
+            download_vad_model(&cancel, &mut progress).is_err(),
+            "a pre-cancelled VAD download must not proceed to the network"
+        );
     }
 }
