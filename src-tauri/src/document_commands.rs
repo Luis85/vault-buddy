@@ -283,6 +283,10 @@ pub struct DocumentsConfigDto {
     /// Whether NEW imports land in a dated `YYYY/MM` subfolder — the
     /// Documents settings surface for `VaultCaptureConfig::document_date_folders`.
     pub document_date_folders: bool,
+    /// Whether a document import extracts images into a media folder (true) or
+    /// produces a text-only note with images dropped (false) — the Documents
+    /// settings surface for `VaultCaptureConfig::document_extract_images`.
+    pub document_extract_images: bool,
 }
 
 /// Per-vault documents folder (or None → the frontend shows the "Documents"
@@ -293,6 +297,7 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
     DocumentsConfigDto {
         documents_folder: vault.documents_folder,
         document_date_folders: vault.document_date_folders,
+        document_extract_images: vault.document_extract_images,
     }
 }
 
@@ -308,6 +313,7 @@ pub fn set_documents_config(
     id: String,
     documents_folder: Option<String>,
     document_date_folders: bool,
+    document_extract_images: bool,
 ) -> Result<(), String> {
     let vault = discovery::discover_vaults()
         .into_iter()
@@ -325,6 +331,7 @@ pub fn set_documents_config(
     let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
     v.documents_folder = folder;
     v.document_date_folders = document_date_folders;
+    v.document_extract_images = document_extract_images;
     capture_config::update_vault_config(&id, v)
 }
 
