@@ -101,7 +101,7 @@ const importStatus = computed(() => {
 // button disables and shows a "Converting…" hint rather than looking inert.
 const importing = ref(false);
 
-// Bundles the four transcription fields for TranscriptionSettings' v-model.
+// Bundles the six transcription fields for TranscriptionSettings' v-model.
 // The setter merges the change back into the FULL loaded config (preserving
 // mode/folder/bitrate/devices/etc. untouched) and persists it — same
 // command + arg shape as CaptureSettings.vue's save().
@@ -111,12 +111,16 @@ const transcription = computed({
     transcriptionModel: config.value.transcriptionModel,
     transcriptionLanguage: config.value.transcriptionLanguage ?? "",
     transcriptTimestamps: config.value.transcriptTimestamps,
+    transcriptionVocabulary: config.value.transcriptionVocabulary ?? "",
+    transcriptionVad: config.value.transcriptionVad,
   }),
   set: (v: {
     transcribe: boolean;
     transcriptionModel: string;
     transcriptionLanguage: string;
     transcriptTimestamps: boolean;
+    transcriptionVocabulary: string;
+    transcriptionVad: boolean;
   }) => {
     config.value = {
       ...config.value,
@@ -124,6 +128,8 @@ const transcription = computed({
       transcriptionModel: v.transcriptionModel,
       transcriptionLanguage: v.transcriptionLanguage.trim() || null,
       transcriptTimestamps: v.transcriptTimestamps,
+      transcriptionVocabulary: v.transcriptionVocabulary.trim() || null,
+      transcriptionVad: v.transcriptionVad,
     };
     // Never persist against the default-seeded config — see `loaded` above.
     if (loaded.value) void persist();

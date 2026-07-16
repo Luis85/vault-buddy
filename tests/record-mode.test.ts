@@ -157,6 +157,8 @@ describe("RecordMode", () => {
       transcriptionModel: "small",
       transcriptionLanguage: null,
       transcriptTimestamps: true,
+      transcriptionVocabulary: null,
+      transcriptionVad: true,
     };
     const calls: Array<{ cmd: string; args: unknown }> = [];
     mockIPC((cmd, args) => {
@@ -194,6 +196,8 @@ describe("RecordMode", () => {
       transcriptionModel: "small",
       transcriptionLanguage: null,
       transcriptTimestamps: true,
+      transcriptionVocabulary: null,
+      transcriptionVad: true,
     };
     mockIPC((cmd) => {
       if (cmd === "get_capture_config") return cfg;
@@ -244,6 +248,8 @@ describe("RecordMode", () => {
       transcriptionModel: "small",
       transcriptionLanguage: null,
       transcriptTimestamps: true,
+      transcriptionVocabulary: null,
+      transcriptionVad: true,
     };
     let resolveConfig!: (v: unknown) => void;
     const calls: Array<{ cmd: string; args: unknown }> = [];

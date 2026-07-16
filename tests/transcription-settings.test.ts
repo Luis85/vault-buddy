@@ -8,6 +8,8 @@ const baseValue = {
   transcriptionModel: "small",
   transcriptionLanguage: "",
   transcriptTimestamps: true,
+  transcriptionVocabulary: "",
+  transcriptionVad: true,
 };
 
 // TranscriptionSettings is a controlled component (no persistence of its
@@ -61,6 +63,8 @@ describe("TranscriptionSettings", () => {
     expect(wrapper.find('[data-testid="transcription-model-select"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="transcription-language-select"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="transcript-timestamps-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcription-vocabulary-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="transcription-vad-toggle"]').exists()).toBe(false);
   });
 
   it("shows the model/language/timestamps controls, reflecting modelValue, once transcribe is on", () => {
@@ -69,6 +73,8 @@ describe("TranscriptionSettings", () => {
       transcriptionModel: "medium",
       transcriptionLanguage: "es",
       transcriptTimestamps: false,
+      transcriptionVocabulary: "",
+      transcriptionVad: true,
     });
     expect(wrapper.get('[data-testid="transcription-model-select"]').text()).toContain("Medium");
     expect(wrapper.get('[data-testid="transcription-language-select"]').text()).toContain(
@@ -175,5 +181,64 @@ describe("TranscriptionSettings", () => {
     expect(wrapper.emitted("update:modelValue")).toEqual([
       [{ ...frozen, transcriptTimestamps: false }],
     ]);
+  });
+
+  it("renders vocabulary and VAD from modelValue once transcribe is on", () => {
+    const wrapper = mountWith({
+      ...baseValue,
+      transcribe: true,
+      transcriptionVocabulary: "Kubernetes, rmcp",
+      transcriptionVad: false,
+    });
+    expect(
+      wrapper.get<HTMLTextAreaElement>('[data-testid="transcription-vocabulary-input"]').element
+        .value,
+    ).toBe("Kubernetes, rmcp");
+    expect(
+      wrapper.get<HTMLInputElement>('[data-testid="transcription-vad-toggle"]').element.checked,
+    ).toBe(false);
+  });
+
+  it("editing the vocabulary emits update:modelValue with only that field changed", async () => {
+    const modelValue = { ...baseValue, transcribe: true };
+    const wrapper = mountWith(modelValue);
+    await wrapper
+      .get('[data-testid="transcription-vocabulary-input"]')
+      .setValue("Anna Kowalska, ggml");
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...modelValue, transcriptionVocabulary: "Anna Kowalska, ggml" }],
+    ]);
+  });
+
+  it("toggling Skip silence emits update:modelValue with only transcriptionVad changed", async () => {
+    const modelValue = { ...baseValue, transcribe: true, transcriptionVad: true };
+    const wrapper = mountWith(modelValue);
+    await wrapper.get('[data-testid="transcription-vad-toggle"]').setValue(false);
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...modelValue, transcriptionVad: false }],
+    ]);
+  });
+
+  it("offers Turbo in the model dropdown and emits it when picked", async () => {
+    const modelValue = { ...baseValue, transcribe: true };
+    const wrapper = mountWith(modelValue);
+    await pickOption(wrapper, "transcription-model-select", "turbo");
+    expect(wrapper.emitted("update:modelValue")).toEqual([
+      [{ ...modelValue, transcriptionModel: "turbo" }],
+    ]);
+  });
+
+  it("scopes the vocabulary/VAD id-for pairs with idPrefix too", () => {
+    active = mount(TranscriptionSettings, {
+      props: { modelValue: { ...baseValue, transcribe: true }, idPrefix: "record-" },
+      attachTo: document.body,
+    });
+    const wrapper = active;
+    const vocab = wrapper.get('[data-testid="transcription-vocabulary-input"]');
+    expect(vocab.attributes("id")).toBe("record-capture-transcription-vocabulary");
+    const vad = wrapper.get('[data-testid="transcription-vad-toggle"]');
+    expect(vad.attributes("id")).toBe("record-capture-transcription-vad-toggle");
+    wrapper.get(`label[for="${vocab.attributes("id")}"]`);
+    wrapper.get(`label[for="${vad.attributes("id")}"]`);
   });
 });
