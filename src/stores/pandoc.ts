@@ -15,12 +15,13 @@ export const usePandocStore = defineStore("pandoc", {
     // True only while a probe runs with no cached status yet — drives the
     // intake surfaces' "Checking Pandoc…" gate.
     checking: false,
-    // Monotonic id of the latest probe. A probe applies its result and clears
-    // the `checking` gate only while it still holds this id, so a slow probe
-    // that resolves after the user navigated away — or after a settings-side
-    // markDetected wrote through — can't clobber a newer result or drop the
-    // gate early (Codex P2). markDetected bumps it so it wins over an in-flight
-    // probe.
+    // Monotonic id of the latest probe — whether run internally by
+    // ensureDetected or by a caller that claimed one via beginProbe (the
+    // settings card, which probes directly). A probe applies its result and
+    // clears the `checking` gate only while it still holds this id, so a slow
+    // probe that resolves after a newer one — an intake ensureDetected, a
+    // settings-side re-detect — can't clobber the fresher result or drop the
+    // gate early (Codex P2).
     probeSeq: 0,
   }),
   actions: {
@@ -53,13 +54,22 @@ export const usePandocStore = defineStore("pandoc", {
         if (seq === this.probeSeq) this.checking = false;
       }
     },
-    // Write-through from the settings card's own probe, so a settings-side
-    // Recheck / path-override fix refreshes the cache the intake menu reads.
-    markDetected(status: PandocStatus) {
-      // Authoritative: bump the seq so any in-flight ensureDetected probe
-      // becomes stale and can't overwrite this, and clear the gate since we now
-      // have a definitive status.
-      this.probeSeq++;
+    // Claim the latest-probe token for a probe the CALLER runs itself (the
+    // settings card, which invokes detect_pandoc directly rather than through
+    // ensureDetected). Claimed at probe START, paired with markDetected(status,
+    // token) at the end — so a settings probe that resolves after a newer probe
+    // holds a stale token and is dropped.
+    beginProbe(): number {
+      return ++this.probeSeq;
+    },
+    // Write-through from a caller-run probe (the settings card's own probe, so
+    // a settings-side Recheck / path-override fix refreshes the cache the
+    // intake menu reads). Applies — and clears the gate — only while `token` is
+    // still the latest probe: a slow settings probe that resolved after a newer
+    // intake ensureDetected must NOT become authoritative and flip the active
+    // import UI back to the setup/too-old gate (Codex P2).
+    markDetected(status: PandocStatus, token: number) {
+      if (token !== this.probeSeq) return;
       this.status = status;
       this.checking = false;
     },

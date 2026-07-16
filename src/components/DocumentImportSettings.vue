@@ -29,13 +29,20 @@ let detectTicket = 0;
 
 async function detect() {
   const ticket = ++detectTicket;
+  // Claim the store's probe token at the START (not at resolution): if the user
+  // leaves settings and an intake ensureDetected runs a newer probe, this one's
+  // token goes stale and markDetected below drops the write-through instead of
+  // clobbering the fresher intake result (Codex P2). The local detectTicket
+  // still orders this card's own out-of-order responses.
+  const token = pandocStore.beginProbe();
   try {
     const s = await invoke<PandocStatus>("detect_pandoc");
     if (ticket === detectTicket) {
       status.value = s;
       // Keep the shared intake-menu cache fresh after a settings-side probe
-      // (Recheck / path-override re-detect), so the record chooser sees the fix.
-      pandocStore.markDetected(s);
+      // (Recheck / path-override re-detect), so the record chooser sees the fix
+      // — but only while this probe is still the newest across the store.
+      pandocStore.markDetected(s, token);
     }
   } catch (e) {
     // Not running under Tauri (unit tests) or IPC failure — leave the card

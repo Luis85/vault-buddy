@@ -85,10 +85,10 @@ describe("usePandocStore", () => {
     expect(calls).toBe(2); // too old is not a usable cache hit → re-probe
   });
 
-  it("a late probe result does not overwrite a newer markDetected (Codex P2)", async () => {
-    // ImportVaultPicker starts a probe, the user opens settings which writes an
-    // authoritative status, then the original slow probe resolves stale. The
-    // write-through must win — the stale probe cannot clobber it.
+  it("a newer settings write-through wins over an older in-flight probe (Codex P2)", async () => {
+    // An intake ensureDetected is in flight when the settings card resolves its
+    // own (newer) probe. The write-through holds the latest token, so it wins —
+    // and the older intake probe resolving stale afterward can't clobber it.
     let resolveProbe: (v: unknown) => void = () => {};
     mockIPC((cmd) => {
       if (cmd === "detect_pandoc") {
@@ -98,13 +98,30 @@ describe("usePandocStore", () => {
       }
     });
     const store = usePandocStore();
-    const pending = store.ensureDetected(); // probe starts (status null)
-    store.markDetected(installed()); // settings writes through while it's in flight
+    const pending = store.ensureDetected(); // intake probe (older), pending
+    const token = store.beginProbe(); // settings claims a newer token
+    store.markDetected(installed(), token); // settings resolves first, writes through
     expect(store.status?.installed).toBe(true);
-    resolveProbe(NOT_INSTALLED); // the original probe resolves late + stale
+    resolveProbe(NOT_INSTALLED); // the older intake probe resolves late + stale
     await pending;
     expect(store.status?.installed).toBe(true);
     expect(store.checking).toBe(false);
+  });
+
+  it("a stale settings probe never clobbers a newer intake result (Codex P2)", async () => {
+    // The settings card starts a slow probe, the user opens an intake view whose
+    // ensureDetected resolves good, then the old settings probe resolves last.
+    // Its write-through holds a stale token and must be dropped — not flip the
+    // shared cache back to "not installed" until the settings view remounts.
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+    });
+    const store = usePandocStore();
+    const settingsToken = store.beginProbe(); // settings probe starts (older)
+    await store.ensureDetected(); // intake probe runs + resolves good (newer)
+    expect(store.status?.installed).toBe(true);
+    store.markDetected(NOT_INSTALLED, settingsToken); // settings resolves last, stale
+    expect(store.status?.installed).toBe(true);
   });
 
   it("only the latest probe clears the checking gate (Codex P2)", async () => {
@@ -139,7 +156,8 @@ describe("usePandocStore", () => {
       }
     });
     const store = usePandocStore();
-    store.markDetected(installed());
+    const token = store.beginProbe();
+    store.markDetected(installed(), token);
     expect(store.status?.installed).toBe(true);
     // The written-through status counts as "found", so ensureDetected skips.
     await store.ensureDetected();
