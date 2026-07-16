@@ -948,6 +948,26 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-newlist-input"]').exists()).toBe(false); // closed
   });
 
+  it("keeps the new-list draft open when the create fails (Codex PR #59)", async () => {
+    // A rejected create (invalid name, root validation) must NOT clear the
+    // inline form: the parent only bumps resetNonce on success, so the draft
+    // survives for a correct-and-retry instead of being lost on every failure.
+    const { wrapper } = mountView({
+      list_task_lists: () => [],
+      create_task_list: () => {
+        throw new Error("List names cannot contain /");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-newlist"]').trigger("click");
+    await wrapper.get('[data-testid="task-newlist-input"]').setValue("Foo/Bar");
+    await wrapper.get('[data-testid="task-newlist-confirm"]').trigger("click");
+    await flushPromises();
+    const input = wrapper.find('[data-testid="task-newlist-input"]');
+    expect(input.exists()).toBe(true); // still open
+    expect((input.element as HTMLInputElement).value).toBe("Foo/Bar"); // draft kept
+  });
+
   it("ignores Enter on the new-list input while composing an IME candidate", async () => {
     const { wrapper, calls } = mountView({ list_task_lists: () => [] });
     await flushPromises();

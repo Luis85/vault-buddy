@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
 import {
   directionApplies,
@@ -18,6 +18,10 @@ const props = defineProps<{
   sortPref: TaskSortPref;
   isAggregate: boolean;
   creatingList: boolean;
+  /** Bumped by the parent after a SUCCESSFUL create to close + clear the
+   * inline form. A failed create doesn't bump, so the draft survives for a
+   * retry (the TaskListPicker resetNonce precedent; Codex PR #59). */
+  resetNonce?: number;
 }>();
 const emit = defineEmits<{
   (e: "update:grouping", value: "dates" | "tags" | "lists"): void;
@@ -44,10 +48,20 @@ function openNew() {
 function confirmNew() {
   const name = newName.value.trim();
   if (!name || props.creatingList) return;
+  // Emit only — do NOT close/clear here. The parent bumps resetNonce on a
+  // SUCCESSFUL create (the watcher below closes the form then); a failed
+  // create leaves the inline form open with the draft so the user can
+  // correct and retry, matching TaskListPicker (Codex PR #59).
   emit("createList", name);
-  newMode.value = false;
-  newName.value = "";
 }
+// Close + clear only when the parent signals success via resetNonce.
+watch(
+  () => props.resetNonce,
+  () => {
+    newMode.value = false;
+    newName.value = "";
+  },
+);
 function onNewEnter(e: KeyboardEvent) {
   if (e.isComposing) return;
   e.preventDefault();

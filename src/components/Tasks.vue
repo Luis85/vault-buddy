@@ -85,9 +85,13 @@ async function onCreateList(name: string) {
 // The Lists-view "New list" control: create + cache in this vault's lists so
 // the empty section appears immediately (createList is composerVaultId ??
 // vaultId scoped — in per-vault mode that is this vault). Failures are toasted
-// by the composable.
+// by the composable. On SUCCESS bump the nonce so the control closes + clears
+// its inline form; a failed create leaves the draft open for a retry (Codex
+// PR #59).
+const controlsListResetNonce = ref(0);
 async function onControlsCreateList(name: string) {
-  await createList(name);
+  const created = await createList(name);
+  if (created !== null) controlsListResetNonce.value += 1;
 }
 
 // done / total of the visible (non-archived) list; drives the progress bar.
@@ -462,6 +466,7 @@ async function add(payload: AddPayload) {
       :sort-pref="sortPref"
       :is-aggregate="isAggregate"
       :creating-list="creatingList"
+      :reset-nonce="controlsListResetNonce"
       @update:grouping="grouping = $event"
       @set-sort-key="setSortKey"
       @flip-sort-dir="flipSortDir"
