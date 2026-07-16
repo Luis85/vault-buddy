@@ -248,7 +248,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 59 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 61 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
