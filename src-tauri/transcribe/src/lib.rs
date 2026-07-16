@@ -159,7 +159,39 @@ pub fn compose_initial_prompt(title: &str, vocabulary: Option<&str>) -> Option<S
     if parts.is_empty() {
         None
     } else {
-        Some(parts.join(". "))
+        Some(cap_prompt_len(parts.join(". ")))
+    }
+}
+
+/// Hard cap on the composed initial prompt, in chars. whisper.cpp itself
+/// only keeps roughly the trailing `n_text_ctx/2` tokens (~224 tokens for
+/// the shipped models' 448-token context) of an over-long prompt, so 2048
+/// chars is already generous slack above that — this cap's real job isn't
+/// prompt quality, it's bounding the documented per-job `CString` leak in
+/// whisper-rs's `set_initial_prompt` (see the NOTE at its call site in
+/// `engine.rs`). Without a cap, a user pasting a huge vocabulary (or
+/// hand-editing `config.json`) leaks the WHOLE prompt on every
+/// transcription job — megabytes accumulating across a session instead of
+/// the "a few hundred bytes" that leak was sized for.
+pub const PROMPT_MAX_CHARS: usize = 2048;
+
+/// Truncate `prompt` to at most `PROMPT_MAX_CHARS` characters, keeping the
+/// TAIL — the same direction whisper itself truncates an over-long prompt,
+/// so the caller's vocabulary (composed last, deliberately — see this fn's
+/// caller) survives our cap exactly as it survives whisper's.
+/// Char-boundary-safe: `char_indices().rev().nth(...)` only ever yields
+/// byte offsets that fall on a char boundary, so this never slices a
+/// multibyte codepoint in half (which would panic).
+fn cap_prompt_len(prompt: String) -> String {
+    if prompt.chars().count() <= PROMPT_MAX_CHARS {
+        return prompt;
+    }
+    // The byte offset of the start of the PROMPT_MAX_CHARS-th character
+    // counting from the end — everything from there to the end of the
+    // string is exactly PROMPT_MAX_CHARS characters.
+    match prompt.char_indices().rev().nth(PROMPT_MAX_CHARS - 1) {
+        Some((idx, _)) => prompt[idx..].to_string(),
+        None => prompt, // unreachable given the length check above; safe fallback
     }
 }
 
@@ -861,6 +893,65 @@ mod tests {
         assert_eq!(
             compose_initial_prompt("Recording", Some("Anna\nKubernetes")),
             Some("Recording. Anna Kubernetes".to_string())
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_under_the_cap_is_unchanged() {
+        // A normal-sized prompt must be untouched by the cap — only
+        // pathological over-cap input (a huge pasted vocabulary, or a
+        // hand-edited config.json) should ever trigger truncation.
+        let title = "Budget review";
+        let vocabulary = "Kubernetes, rmcp, containerd, etcd";
+        let naive_join = format!("{title}. {vocabulary}");
+        assert!(naive_join.chars().count() < PROMPT_MAX_CHARS);
+        assert_eq!(
+            compose_initial_prompt(title, Some(vocabulary)),
+            Some(naive_join)
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_over_the_cap_truncates_the_front_keeping_the_tail() {
+        // whisper itself truncates an over-long prompt from the FRONT
+        // (keeping only the trailing ~n_text_ctx/2 tokens); our cap must
+        // truncate the same direction so the user's vocabulary — placed
+        // last, deliberately — survives our cut exactly as it survives
+        // whisper's. The title carries a unique head marker that must NOT
+        // survive; the vocabulary carries a unique tail marker that MUST
+        // survive verbatim at the very end.
+        let title = format!("HEAD_MARKER{}", "x".repeat(PROMPT_MAX_CHARS));
+        let vocabulary = "TAIL_MARKER";
+        let composed = compose_initial_prompt(&title, Some(vocabulary)).unwrap();
+        assert_eq!(
+            composed.chars().count(),
+            PROMPT_MAX_CHARS,
+            "must be truncated to exactly the cap"
+        );
+        assert!(
+            !composed.contains("HEAD_MARKER"),
+            "the title head must be what got dropped: {composed}"
+        );
+        assert!(
+            composed.ends_with("TAIL_MARKER"),
+            "the vocabulary tail must survive the cap: {composed}"
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_truncates_multibyte_input_without_panicking() {
+        // "é" is 2 bytes in UTF-8 but 1 char — a byte-slice truncation at
+        // PROMPT_MAX_CHARS bytes would land mid-codepoint and panic. Build
+        // an over-cap prompt entirely out of "é" repeats plus a multibyte
+        // tail so this also confirms truncation still lands exactly where
+        // expected, not just that it avoids panicking.
+        let title = "é".repeat(PROMPT_MAX_CHARS + 100);
+        let vocabulary = "café";
+        let composed = compose_initial_prompt(&title, Some(vocabulary)).unwrap();
+        assert_eq!(composed.chars().count(), PROMPT_MAX_CHARS);
+        assert!(
+            composed.ends_with("café"),
+            "multibyte vocabulary tail must survive: {composed}"
         );
     }
 

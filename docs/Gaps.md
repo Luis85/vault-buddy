@@ -214,7 +214,14 @@ Also covers the Silero VAD artifact (`ggml-silero-v5.1.2.bin`,
 `transcribe/src/model.rs::download_vad_model`) since the accuracy & speed
 increment: verified at download, trusted from disk thereafter — same class,
 same accepted posture. A corrupt cached VAD file surfaces as an inference
-failure (`failed` sidecar), not a silent wrong transcript.
+failure (`failed` sidecar), not a silent wrong transcript. **Update:** the
+engine's `Err` arm of `detect_speech_centiseconds` (`transcribe/src/engine.rs`)
+now best-effort removes the cached VAD file whenever Silero fails to
+load/detect on it, so the next VAD-enabled job redownloads (SHA-verified)
+instead of silently degrading to no-VAD forever — self-heal parity with the
+main model's load-failure → `remove_model` path. The residual accepted gap
+for VAD is narrower: a corrupt file that still LOADS and DETECTS (wrong but
+non-erroring segments) is caught by neither self-heal path.
 
 ### GAP-15 · Low · `bitrateKbps` wraps via `as u32` and has no range validation
 `src-tauri/core/src/capture_config.rs:158-162`.

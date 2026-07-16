@@ -189,7 +189,9 @@ impl WhisperTranscriber {
         let mut params = WhisperContextParameters::default();
         params.use_gpu(use_gpu);
         // Pass the `&Path` straight through rather than round-tripping via
-        // `to_string_lossy()` (see the previous comment on this fn).
+        // `to_string_lossy()`: `WhisperContext::new_with_params` takes it by
+        // `AsRef<Path>` and converts with its own `path_to_bytes` internally,
+        // so this avoids a lossy UTF-8 conversion for no benefit.
         let ctx = WhisperContext::new_with_params(model_path, params)
             .map_err(|e| format!("load model {}: {e}", model_path.display()))?;
         Ok(Self { ctx })
@@ -226,6 +228,21 @@ impl Transcriber for WhisperTranscriber {
                         "vad: speech detection failed ({e}) for {}; transcribing unfiltered audio",
                         vad_model.display()
                     );
+                    // Self-heal, mirroring the corrupt-main-model posture: a
+                    // cached silero that fails detection is likely
+                    // corrupt/incompatible, and ensure_vad_model returns any
+                    // existing file unchecked — leaving it means every
+                    // future job silently degrades until the user
+                    // hand-deletes it. Removal is best-effort (a locked file
+                    // just retries next time); the ~1 MB redownload is
+                    // cheap and SHA-verified. A transient (non-file) detect
+                    // failure costs one spurious redownload — accepted.
+                    if let Err(rm) = std::fs::remove_file(vad_model) {
+                        log::warn!(
+                            "vad: could not remove failing model {}: {rm}",
+                            vad_model.display()
+                        );
+                    }
                 }
                 Ok(segs) => {
                     let spans = crate::vad::spans_from_centiseconds(&segs, samples.len());
