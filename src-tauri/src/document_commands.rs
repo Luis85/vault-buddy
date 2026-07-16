@@ -342,11 +342,17 @@ pub fn set_documents_config(
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
     capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
     let _guard = lock_ignoring_poison(&lock.0);
-    let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
-    v.documents_folder = folder;
-    v.document_date_folders = document_date_folders;
-    v.document_extract_images = document_extract_images;
-    capture_config::update_vault_config(&id, v)
+    // merge_documents_owned writes only the three documents-owned fields and
+    // preserves everything else (recording settings, tasks, lists) — the
+    // preserve-vs-write split is unit-tested in core now (GAP-60).
+    let existing = capture_config::vault_config(&capture_config::load_config(), &id);
+    let value = capture_config::merge_documents_owned(
+        &existing,
+        folder,
+        document_date_folders,
+        document_extract_images,
+    );
+    capture_config::update_vault_config(&id, value)
 }
 
 /// App-global Pandoc path override (None → PATH lookup). Serialized behind
@@ -367,14 +373,16 @@ pub fn set_pandoc_path(
     })
 }
 
-/// One-shot pending buddy-drop import path, consumed by the panel's refresh.
-/// Rust-owned (not an emit-then-toggle) because the buddy and panel windows
-/// have SEPARATE Pinia stores — the buddy can't set the panel store
+/// Pending buddy-drop import paths (a FIFO queue), consumed by the panel's
+/// refresh. Rust-owned (not an emit-then-toggle) because the buddy and panel
+/// windows have SEPARATE Pinia stores — the buddy can't set the panel store
 /// directly, and `toggle_panel` would HIDE an already-open panel instead of
-/// routing it to the picker. Registered as app state in lib.rs beside
-/// ImportLock: `.manage(DocumentImportPending::default())`.
+/// routing it to the picker. A queue (not a single slot) so two documents
+/// dropped in quick succession both survive to be imported (GAP-55).
+/// Registered as app state in lib.rs beside ImportLock:
+/// `.manage(DocumentImportPending::default())`.
 #[derive(Default)]
-pub struct DocumentImportPending(pub std::sync::Mutex<Option<String>>);
+pub struct DocumentImportPending(pub std::sync::Mutex<std::collections::VecDeque<String>>);
 
 /// A buddy drop: stash the path, then SHOW the panel (idempotent — never
 /// toggles it hidden) so the panel's `refresh()` lands and consumes the
@@ -387,20 +395,23 @@ pub struct DocumentImportPending(pub std::sync::Mutex<Option<String>>);
 pub fn begin_document_import(app: tauri::AppHandle, path: String) {
     {
         let state = app.state::<DocumentImportPending>();
-        *lock_ignoring_poison(&state.0) = Some(path);
+        // Queue the drop (FIFO) instead of overwriting: two documents dropped in
+        // quick succession must both survive to be imported (GAP-55).
+        lock_ignoring_poison(&state.0).push_back(path);
     }
     crate::commands::show_panel(&app);
 }
 
-/// Take (and clear) the pending buddy-drop import path. The panel's
-/// `refresh()` calls this on every open and routes to the import picker
-/// when it returns `Some` — a one-shot consume, same idiom as the
-/// `pendingView` request the failed-update-install reopen uses.
+/// Drain (and clear) the WHOLE pending buddy-drop import queue. The panel's
+/// `refresh()` calls this on every open and appends the returned paths to the
+/// picker queue; an empty Vec means no pending import. Returning the full queue
+/// (not one path) so a burst of drops that all landed before this drain aren't
+/// lost (GAP-55).
 #[tauri::command]
-pub fn take_pending_import(app: tauri::AppHandle) -> Option<String> {
+pub fn take_pending_import(app: tauri::AppHandle) -> Vec<String> {
     let state = app.state::<DocumentImportPending>();
     let mut guard = lock_ignoring_poison(&state.0);
-    guard.take()
+    guard.drain(..).collect()
 }
 
 /// Open a freshly-imported note in Obsidian — the success toast's "Open in

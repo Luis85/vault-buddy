@@ -750,7 +750,15 @@ because a review found the failure it prevents:
   view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
   **before** the list default so a drag-dropped path survives `panel-shown`.
   `tauri-plugin-dialog` (Cargo + `dialog:allow-open` capability) backs both
-  file pickers.
+  file pickers. The app-global Pandoc status is cached in a small
+  `usePandocStore` (`src/stores/pandoc.ts`, panel webview): the intake surfaces
+  (`RecordMode`, `ImportVaultPicker`) probe through `ensureDetected()` and
+  reuse a found (installed) result instead of re-spawning `pandoc --version`
+  on every open — a not-installed status still re-probes so a fresh install is
+  picked up — while `DocumentImportSettings` keeps its own on-mount probe /
+  Recheck / path-override re-detect and writes each result through
+  (`markDetected`) so a settings-side fix stays reflected in the intake menu's
+  cached status.
 
 ## The transcription & recordings domains (`src-tauri/transcribe/` + `core/src/{transcript,recordings}.rs` + `transcription.rs`)
 
