@@ -22,12 +22,15 @@ use crate::document_import_config::document_import_entry;
 pub use crate::document_import_config::DocumentImportConfig;
 use crate::mcp_config::mcp_entry;
 pub use crate::mcp_config::{McpConfig, DEFAULT_MCP_PORT};
+pub use crate::transcription_config::TranscriptionConfig;
+use crate::transcription_config::{parse_transcription_section, serialize_transcription_section};
 
 #[derive(Debug, Clone, Default)]
 pub struct AppConfig {
     pub vaults: HashMap<String, VaultCaptureConfig>,
     pub mcp: McpConfig,
     pub document_import: DocumentImportConfig,
+    pub transcription: TranscriptionConfig,
 }
 
 /// Per-field parsing through serde_json::Value: the file is hand-edited,
@@ -49,10 +52,12 @@ pub fn parse_config(json: &str) -> AppConfig {
         .get("documentImport")
         .map(document_import_entry)
         .unwrap_or_default();
+    let transcription = parse_transcription_section(value.get("transcription"));
     AppConfig {
         vaults,
         mcp,
         document_import,
+        transcription,
     }
 }
 
@@ -110,8 +115,9 @@ pub fn load_config() -> AppConfig {
 
 /// Serialize to the same schema `parse_config` reads. Vault ids are
 /// sorted and optional fields omitted so the hand-editable file stays
-/// stable and minimal across saves. The mcp section is included only
-/// when non-default, so users who never enable MCP never see it.
+/// stable and minimal across saves. The mcp/document-import/transcription
+/// sections are each included only when non-default, so a user who never
+/// touches them never sees the section.
 pub fn serialize_config(cfg: &AppConfig) -> String {
     use serde_json::{json, Map, Value};
     let mut root = Map::new();
@@ -129,6 +135,9 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
             di.insert("pandocPath".to_string(), json!(p));
         }
         root.insert("documentImport".to_string(), Value::Object(di));
+    }
+    if let Some(transcription) = serialize_transcription_section(&cfg.transcription) {
+        root.insert("transcription".to_string(), transcription);
     }
     let mut vaults = Map::new();
     let mut ids: Vec<&String> = cfg.vaults.keys().collect();
@@ -352,6 +361,24 @@ mod tests {
         let cfg = load_config_from(&path);
         assert!(cfg.mcp.enabled);
         assert_eq!(cfg.mcp.token, "tok");
+        assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    // Same regression class as above, for the app-global transcription
+    // section: a vault-config save must never delete a non-default
+    // transcription section either.
+    #[test]
+    fn saving_a_vault_config_preserves_the_transcription_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{ "transcription": { "useGpu": false }, "vaults": {} }"#,
+        )
+        .unwrap();
+        update_vault_config_at(&path, "vault1", VaultCaptureConfig::default()).unwrap();
+        let cfg = load_config_from(&path);
+        assert!(!cfg.transcription.use_gpu);
         assert!(cfg.vaults.contains_key("vault1"));
     }
 
