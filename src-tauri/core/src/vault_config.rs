@@ -77,7 +77,7 @@ pub struct VaultCaptureConfig {
     /// append alphabetically, names without folders are ignored.
     pub list_order: Vec<String>,
     /// `/`-joined relative names of lists hidden from the Lists grouping and
-    /// the pickers (the folder + tasks stay on disk). Read-lenient, write-strict.
+    /// the pickers (the folder + tasks stay on disk). Read-lenient, write-best-effort: normalize + drop invalid, the list_order precedent.
     pub archived_lists: Vec<String>,
     /// Whether NEW/edited tasks get a generated ID written under
     /// `task_id_property` (opt-in, default false).

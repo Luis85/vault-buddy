@@ -79,6 +79,17 @@ pub fn set_tasks_config(
 /// so a lists-config failure can't block the folder save and vice versa (the
 /// CaptureSettings pattern of independent field-level saves).
 ///
+/// `archived_lists` is OPTIONAL (Codex, PR #59 regression): Task 3 first
+/// added it as a REQUIRED `Vec<String>`, but the existing caller
+/// (`TaskListSettings.vue`, wired before the archive UI existed) invokes
+/// this command with only `id`/`defaultList`/`listOrder` — Tauri v2 rejects
+/// an invoke missing a required argument before the command body ever runs,
+/// so every default-list/list-order save started erroring and persisting
+/// nothing. A missing `Option<T>` argument deserializes to `None`, so
+/// today's caller keeps working (preserves the stored set, see
+/// `resolve_archived_lists`) and the future archive/unarchive UI (Tasks
+/// 9/10) passes `Some(_)` to replace it.
+///
 /// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
 #[tauri::command]
 pub async fn set_task_lists_config(
@@ -86,7 +97,7 @@ pub async fn set_task_lists_config(
     id: String,
     default_list: Option<String>,
     list_order: Vec<String>,
-    archived_lists: Vec<String>,
+    archived_lists: Option<Vec<String>>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
     // Write-strict on the default list (the settings UI offers existing
@@ -101,12 +112,29 @@ pub async fn set_task_lists_config(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    // Same normalizer as the default list, but best-effort like list_order
-    // rather than command-failing: a stale name left over from a since
-    // renamed/deleted list must not block saving the rest of the picker's
-    // selections. The tasks-root sentinel ("") is dropped too — it is not a
-    // real list and archiving it is meaningless.
-    let archived_lists: Vec<String> = archived_lists
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
+    value.default_list = default_list;
+    value.list_order = list_order;
+    value.archived_lists = resolve_archived_lists(value.archived_lists.clone(), archived_lists);
+    capture_config::update_vault_config(&id, value)
+}
+
+/// Resolve the `archived_lists` field for a `set_task_lists_config` save.
+/// `Some(incoming)` normalizes and REPLACES it — same best-effort posture as
+/// `list_order` rather than command-failing: a stale name left over from a
+/// since renamed/deleted list must not block saving the rest of the
+/// picker's selections, so an unsafe or empty entry (the tasks-root
+/// sentinel, `""`, is not a real list) is dropped rather than erroring.
+/// `None` (an omitting caller — today's `TaskListSettings.vue`, which
+/// predates the archive UI) returns `existing` untouched, which is what
+/// lets that caller keep saving the default list / list order without
+/// silently wiping a previously-stored archived set.
+fn resolve_archived_lists(existing: Vec<String>, incoming: Option<Vec<String>>) -> Vec<String> {
+    let Some(incoming) = incoming else {
+        return existing;
+    };
+    incoming
         .into_iter()
         .filter_map(|s| match tasks::normalize_list_rel(s.trim()) {
             Ok(n) if !n.is_empty() => Some(n),
@@ -116,13 +144,7 @@ pub async fn set_task_lists_config(
                 None
             }
         })
-        .collect();
-    let _guard = lock_ignoring_poison(&lock.0);
-    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
-    value.default_list = default_list;
-    value.list_order = list_order;
-    value.archived_lists = archived_lists;
-    capture_config::update_vault_config(&id, value)
+        .collect()
 }
 
 /// Persist the vault's Task ID settings (enable + frontmatter property),
@@ -552,5 +574,48 @@ mod tests {
         is_future2(delete_task_list);
         is_future3(move_task_to_list);
         is_future3(rename_task_list);
+    }
+
+    // Codex, PR #59 (P2): Task 3 first added `archived_lists` to
+    // set_task_lists_config as a REQUIRED `Vec<String>`. TaskListSettings.vue
+    // predates the archive UI and invokes the command without an
+    // `archivedLists` argument at all, so Tauri v2 rejected the whole invoke
+    // (missing required argument) before the command body ever ran — every
+    // default-list/list-order save started erroring and persisting nothing.
+    // These two tests pin resolve_archived_lists, the pure helper the command
+    // body now delegates to for the field: it is the one place that can be
+    // exercised without a real vault/config.json (set_task_lists_config
+    // itself takes tauri::State and calls ServicePaths::real(), so it can
+    // only run against a developer's real app config — not unit-testable
+    // here, same as every other State-taking command in this file).
+
+    #[test]
+    fn resolve_archived_lists_none_preserves_existing() {
+        // None is what an omitting caller (today's TaskListSettings.vue)
+        // deserializes to — it must leave the stored archived set untouched,
+        // not wipe it.
+        let existing = vec!["Inbox".to_string(), "Archive/Old".to_string()];
+        assert_eq!(resolve_archived_lists(existing.clone(), None), existing);
+    }
+
+    #[test]
+    fn resolve_archived_lists_some_normalizes_and_replaces() {
+        // Some(_) is the future archive/unarchive UI (Tasks 9/10): it
+        // REPLACES the stored set (existing "Stale" must not survive) after
+        // normalizing exactly like list_order — trimmed, the tasks-root
+        // sentinel ("") and unsafe entries (dot-prefixed, escaping) dropped
+        // best-effort rather than failing the whole save.
+        let existing = vec!["Stale".to_string()];
+        let incoming = vec![
+            "Inbox".to_string(),
+            "  Work/Q3  ".to_string(),
+            "".to_string(),
+            ".hidden".to_string(),
+            "../escape".to_string(),
+        ];
+        assert_eq!(
+            resolve_archived_lists(existing, Some(incoming)),
+            vec!["Inbox".to_string(), "Work/Q3".to_string()]
+        );
     }
 }
