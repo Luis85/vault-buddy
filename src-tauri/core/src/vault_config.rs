@@ -62,6 +62,13 @@ pub struct VaultCaptureConfig {
     pub transcription_model: String,
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
+    /// Free-text vocabulary (names, acronyms, project terms) composed into
+    /// whisper's initial prompt. None → no priming. Stored trimmed and
+    /// non-empty only — a whitespace value reads back as None.
+    pub transcription_vocabulary: Option<String>,
+    /// Skip non-speech via Silero VAD before inference. Default on: meetings
+    /// transcribe faster and whisper stops hallucinating into silence.
+    pub transcription_vad: bool,
     pub follow_up_template: bool,
     /// Vault-relative folder holding this vault's task documents.
     /// None → the default "Tasks".
@@ -99,6 +106,8 @@ impl Default for VaultCaptureConfig {
             transcription_model: "small".to_string(),
             transcription_language: None,
             transcript_timestamps: true,
+            transcription_vocabulary: None,
+            transcription_vad: true,
             follow_up_template: true,
             tasks_folder: None,
             documents_folder: None,
@@ -223,6 +232,16 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("transcriptTimestamps")
             .and_then(|v| v.as_bool())
             .unwrap_or(defaults.transcript_timestamps),
+        transcription_vocabulary: entry
+            .get("transcriptionVocabulary")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        transcription_vad: entry
+            .get("transcriptionVad")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.transcription_vad),
         follow_up_template: entry
             .get("followUpTemplate")
             .and_then(|v| v.as_bool())
@@ -298,6 +317,12 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
         "transcriptTimestamps".to_string(),
         json!(v.transcript_timestamps),
     );
+    if let Some(vocabulary) = &v.transcription_vocabulary {
+        entry.insert("transcriptionVocabulary".to_string(), json!(vocabulary));
+    }
+    if !v.transcription_vad {
+        entry.insert("transcriptionVad".to_string(), json!(false));
+    }
     entry.insert("followUpTemplate".to_string(), json!(v.follow_up_template));
     if let Some(folder) = &v.tasks_folder {
         entry.insert("tasksFolder".to_string(), json!(folder));
@@ -548,6 +573,8 @@ mod tests {
                 transcription_model: "medium".to_string(),
                 transcription_language: Some("es".to_string()),
                 transcript_timestamps: false,
+                transcription_vocabulary: Some("Vault Buddy".to_string()),
+                transcription_vad: false,
                 follow_up_template: true,
                 tasks_folder: Some("Inbox/Tasks".to_string()),
                 documents_folder: Some("Inbox/Documents".to_string()),
@@ -747,5 +774,66 @@ mod tests {
             ..VaultCaptureConfig::default()
         };
         assert_eq!(e.recording_roots(), vec!["A", "B"]);
+    }
+
+    #[test]
+    fn transcription_vocabulary_and_vad_parse_and_default() {
+        // Defaults: no vocabulary, VAD on.
+        let d = VaultCaptureConfig::default();
+        assert_eq!(d.transcription_vocabulary, None);
+        assert!(d.transcription_vad, "VAD defaults on");
+        // Parse both; vocabulary is trimmed, whitespace-only reads as None.
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": {
+                "transcriptionVocabulary": "  Kubernetes, Anna Kowalska  ",
+                "transcriptionVad": false
+            }, "b": { "transcriptionVocabulary": "   " } } }"#,
+        );
+        let a = vault_config(&cfg, "a");
+        assert_eq!(
+            a.transcription_vocabulary.as_deref(),
+            Some("Kubernetes, Anna Kowalska")
+        );
+        assert!(!a.transcription_vad);
+        assert_eq!(vault_config(&cfg, "b").transcription_vocabulary, None);
+        // Malformed values default only themselves (the file is hand-edited).
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": {
+                "transcriptionVocabulary": 7,
+                "transcriptionVad": "no",
+                "mode": "voice-note"
+            } } }"#,
+        );
+        let v = vault_config(&cfg, "a");
+        assert_eq!(v.transcription_vocabulary, None);
+        assert!(v.transcription_vad, "malformed bool falls back to on");
+        assert_eq!(v.mode, RecordingMode::VoiceNote);
+    }
+
+    #[test]
+    fn transcription_vocabulary_and_vad_round_trip_and_stay_minimal() {
+        let mut cfg = AppConfig::default();
+        cfg.vaults.insert(
+            "a".to_string(),
+            VaultCaptureConfig {
+                transcription_vocabulary: Some("ggml, rmcp".to_string()),
+                transcription_vad: false,
+                ..VaultCaptureConfig::default()
+            },
+        );
+        let json = serialize_config(&cfg);
+        let parsed = parse_config(&json);
+        assert_eq!(
+            parsed.vaults["a"].transcription_vocabulary.as_deref(),
+            Some("ggml, rmcp")
+        );
+        assert!(!parsed.vaults["a"].transcription_vad);
+        // Defaults are omitted — the hand-editable file stays minimal.
+        let mut cfg2 = AppConfig::default();
+        cfg2.vaults
+            .insert("b".to_string(), VaultCaptureConfig::default());
+        let json2 = serialize_config(&cfg2);
+        assert!(!json2.contains("transcriptionVocabulary"), "got: {json2}");
+        assert!(!json2.contains("transcriptionVad"), "got: {json2}");
     }
 }
