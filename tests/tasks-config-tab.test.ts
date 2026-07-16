@@ -203,6 +203,18 @@ describe("TasksConfigTab", () => {
     expect(saved).toContainEqual({ id: "v1", enabled: true, property: "uid" });
   });
 
+  it("trims a padded property value on save", async () => {
+    const saved: unknown[] = [];
+    const { wrapper } = mountTab({ onSetId: (a) => (saved.push(a), null) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(true);
+    await flushPromises();
+    await wrapper.get('[data-testid="task-id-property"]').setValue("  uid  ");
+    await wrapper.get('[data-testid="task-id-property"]').trigger("blur");
+    await flushPromises();
+    expect(saved).toContainEqual({ id: "v1", enabled: true, property: "uid" });
+  });
+
   it("hides the property field until task ids are enabled", async () => {
     const { wrapper } = mountTab();
     await flushPromises();

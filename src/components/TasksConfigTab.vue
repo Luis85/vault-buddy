@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { TasksConfig } from "../types";
+import TaskIdSettings from "./TaskIdSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
@@ -41,6 +42,11 @@ const autosave = useAutosave(
   { label: "tasks folder" },
 );
 
+// The default task-id property name the backend falls back to when none is
+// configured — single-sourced here so the load ternary below and the
+// placeholder passed to TaskIdSettings can never drift apart.
+const DEFAULT_TASK_ID_PROPERTY = "task-id";
+
 const taskIdEnabled = ref(false);
 // Empty means "use the default"; the default name is shown as a placeholder.
 const taskIdProperty = ref("");
@@ -63,7 +69,8 @@ onMounted(() =>
     taskIdEnabled.value = cfg.taskIdEnabled ?? false;
     // Show the resolved name only when the user set a non-default one, so the
     // placeholder communicates the default without pre-filling it.
-    taskIdProperty.value = cfg.taskIdProperty && cfg.taskIdProperty !== "task-id" ? cfg.taskIdProperty : "";
+    taskIdProperty.value =
+      cfg.taskIdProperty && cfg.taskIdProperty !== DEFAULT_TASK_ID_PROPERTY ? cfg.taskIdProperty : "";
   }),
 );
 
@@ -139,59 +146,18 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
       >
         List settings reload once the tasks folder is saved…
       </p>
-      <section v-if="!loadError">
-        <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Task IDs
-        </h2>
-        <div class="rounded-xl border border-white/10 bg-white/5 p-2">
-          <div class="flex items-center justify-between gap-2">
-            <label
-              for="task-id-enabled"
-              class="text-sm text-slate-200"
-            >
-              Generate an ID for each task
-              <span class="block text-xs text-slate-500">Written to new tasks and stamped on the next edit</span>
-            </label>
-            <input
-              id="task-id-enabled"
-              data-testid="task-id-enabled"
-              type="checkbox"
-              class="h-4 w-4 accent-violet-500"
-              :checked="taskIdEnabled"
-              @change="onIdEnabledChange(($event.target as HTMLInputElement).checked)"
-            >
-          </div>
-          <div
-            v-if="taskIdEnabled"
-            class="mt-2"
-          >
-            <label
-              for="task-id-property"
-              class="mb-1 block text-sm text-slate-200"
-            >
-              Property name
-              <span class="block text-xs text-slate-500">Frontmatter key the ID is saved under</span>
-            </label>
-            <input
-              id="task-id-property"
-              data-testid="task-id-property"
-              type="text"
-              placeholder="task-id"
-              class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-              :value="taskIdProperty"
-              @input="onIdPropertyInput(($event.target as HTMLInputElement).value)"
-              @blur="idAutosave.flush()"
-            >
-            <p
-              v-if="idAutosave.error.value"
-              data-testid="task-id-error"
-              class="mt-1 text-xs text-red-300"
-            >
-              {{ idAutosave.error.value }}
-            </p>
-          </div>
-        </div>
-      </section>
+      <!-- Presentational (Task 9 review extraction) — state/autosave/load
+           stay up here; the card only renders and emits raw input back. -->
+      <TaskIdSettings
+        v-if="!loadError"
+        :enabled="taskIdEnabled"
+        :property="taskIdProperty"
+        :error="idAutosave.error.value"
+        :placeholder="DEFAULT_TASK_ID_PROPERTY"
+        @update:enabled="onIdEnabledChange"
+        @update:property="onIdPropertyInput"
+        @blur="idAutosave.flush()"
+      />
     </template>
   </div>
 </template>
