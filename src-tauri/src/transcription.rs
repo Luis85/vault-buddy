@@ -16,7 +16,9 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::throttle::EmitThrottle;
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
-use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
+use vault_buddy_transcribe::model::{
+    download_model, download_vad_model, model_path, vad_model_path, ModelTier,
+};
 use vault_buddy_transcribe::{
     transcribe_recording, CancelToken, TranscribeError, TranscribeOptions, TranscribeOutcome,
 };
@@ -358,6 +360,52 @@ fn set_phase(app: &AppHandle, phase: Phase) {
     }
 }
 
+/// The composed `initial_prompt` for a job: the recording's current title
+/// (its stem minus the `YYYY-MM-DD HHmm ` capture prefix) plus the vault's
+/// custom vocabulary. Pure so it's unit-testable on Linux;
+/// `process_transcription` feeds it the live config.
+fn initial_prompt_for(mp3: &Path, vocabulary: Option<&str>) -> Option<String> {
+    let stem = mp3
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let title = vault_buddy_core::capture_paths::capture_title(&stem);
+    vault_buddy_transcribe::compose_initial_prompt(title, vocabulary)
+}
+
+/// Ensure the Silero VAD model is on disk, downloading (progress rides the
+/// existing `capture:modelDownload` event with model:"vad") if missing.
+/// Failure is NOT a job failure — the caller degrades to a no-VAD run: the
+/// user's intent is "transcribe my meeting", and a ~1 MB optional accelerant
+/// must never block that. A cancel mid-download is still a real cancel (the
+/// caller consults the token, exactly like the main-model path).
+fn ensure_vad_model(app: &AppHandle, mp3: &Path, cancel: &CancelToken) -> Result<PathBuf, String> {
+    if let Some(p) = vad_model_path() {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    log::info!("transcribe: downloading the silero VAD model");
+    let app = app.clone();
+    let mp3 = mp3.to_path_buf();
+    // ~885 KB file: a 200 KB emit step yields a handful of updates.
+    let mut throttle = EmitThrottle::new(200_000);
+    download_vad_model(cancel, &mut |received, total| {
+        if throttle.should_emit(received, Some(received) == total) {
+            set_phase(&app, Phase::Downloading { received, total });
+            let _ = app.emit(
+                "capture:modelDownload",
+                serde_json::json!({
+                    "mp3": mp3.to_string_lossy(),
+                    "model": "vad",
+                    "received": received,
+                    "total": total,
+                }),
+            );
+        }
+    })
+}
+
 fn process_transcription(
     app: &AppHandle,
     job: &TranscriptionJob,
@@ -435,6 +483,27 @@ fn process_transcription(
             return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}"));
         }
     };
+    // Resolve the Silero model only for VAD-enabled vaults. A download
+    // failure DEGRADES — the job still transcribes, just without silence
+    // skipping (the warning below and the stats row's "off" are the traces) —
+    // unless the error was actually our own cancel.
+    let vad_model = if cfg.transcription_vad {
+        match ensure_vad_model(app, &job.mp3, &cancel) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                if cancel.is_cancelled() {
+                    return emit_cancelled(app, &job.mp3);
+                }
+                log::warn!(
+                    "transcribe: VAD model unavailable, transcribing {} without silence skipping: {e}",
+                    job.mp3.display()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     // Handover: the model is on disk now (just downloaded, or already
     // present) — replace the download row with "preparing" BEFORE the
     // model-load gap below, so a download UI can never stick at 100%.
@@ -475,6 +544,8 @@ fn process_transcription(
         language: cfg.transcription_language.clone(),
         timestamps: cfg.transcript_timestamps,
         model_label: tier.label(),
+        initial_prompt: initial_prompt_for(&job.mp3, cfg.transcription_vocabulary.as_deref()),
+        vad_model,
     };
     let generated_at = chrono::Local::now().to_rfc3339();
 
@@ -1118,6 +1189,31 @@ mod tests {
         };
         assert!(!q.retarget_pending(Path::new("X"), PathBuf::from("X2")));
         assert_eq!(q.active.as_ref().unwrap().mp3, PathBuf::from("X"));
+    }
+
+    #[test]
+    fn initial_prompt_for_composes_title_and_vocabulary() {
+        let mp3 = Path::new("/v/Meetings/2026/07/2026-07-16 0930 Budget review.mp3");
+        assert_eq!(
+            initial_prompt_for(mp3, Some("Kubernetes, rmcp")),
+            Some("Budget review. Kubernetes, rmcp".to_string())
+        );
+        assert_eq!(
+            initial_prompt_for(mp3, None),
+            Some("Budget review".to_string())
+        );
+    }
+
+    #[test]
+    fn initial_prompt_for_is_none_when_there_is_nothing_to_prime_with() {
+        // A non-capture stem passes through capture_title unchanged and still
+        // primes (harmless), but an empty stem + no vocabulary must be None so
+        // whisper runs exactly as before this feature.
+        assert_eq!(initial_prompt_for(Path::new(""), None), None);
+        assert_eq!(
+            initial_prompt_for(Path::new("/x/download.mp3"), None),
+            Some("download".to_string())
+        );
     }
 
     #[test]

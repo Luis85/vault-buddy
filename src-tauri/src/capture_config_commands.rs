@@ -12,7 +12,7 @@ use vault_buddy_core::{capture_config, capture_paths};
 use crate::capture_commands::ConfigWriteLock;
 
 pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
-pub const TRANSCRIPTION_MODELS: [&str; 3] = ["base", "small", "medium"];
+pub const TRANSCRIPTION_MODELS: [&str; 4] = ["base", "small", "medium", "turbo"];
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,11 @@ pub struct CaptureConfigDto {
     pub transcription_model: String,
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
+    /// Free-text vocabulary primed into whisper's initial prompt; None/blank
+    /// = no priming.
+    pub transcription_vocabulary: Option<String>,
+    /// Skip silence via Silero VAD before inference (default on).
+    pub transcription_vad: bool,
     pub follow_up_template: bool,
     /// Whether NEW recordings land in a dated `YYYY/MM` subfolder — the
     /// Recording settings surface for `VaultCaptureConfig::recording_date_folders`.
@@ -48,6 +53,8 @@ impl CaptureConfigDto {
             transcription_model: v.transcription_model.clone(),
             transcription_language: v.transcription_language.clone(),
             transcript_timestamps: v.transcript_timestamps,
+            transcription_vocabulary: v.transcription_vocabulary.clone(),
+            transcription_vad: v.transcription_vad,
             follow_up_template: v.follow_up_template,
             recording_date_folders: v.recording_date_folders,
         }
@@ -117,6 +124,15 @@ pub fn set_capture_config(
         transcription_model: cfg.transcription_model.clone(),
         transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
         transcript_timestamps: cfg.transcript_timestamps,
+        // Blank/whitespace vocabulary collapses to None (no priming), the
+        // same treatment transcription_language gets one line up.
+        transcription_vocabulary: cfg
+            .transcription_vocabulary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        transcription_vad: cfg.transcription_vad,
         follow_up_template: cfg.follow_up_template,
         tasks_folder: existing.tasks_folder,
         // Preserve the per-vault documents folder (its own set_documents_config
@@ -156,6 +172,19 @@ pub fn set_capture_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_models_gate_includes_every_tier_the_ui_offers() {
+        // The settings dropdown (TranscriptionSettings.vue MODELS) and this
+        // validation gate must agree — a tier the UI offers that this array
+        // misses would fail every save with "Unknown transcription model".
+        for m in ["base", "small", "medium", "turbo"] {
+            assert!(
+                TRANSCRIPTION_MODELS.contains(&m),
+                "{m} missing from the gate"
+            );
+        }
+    }
 
     #[test]
     fn clean_folder_blanks_to_none_and_trims_both_folders_the_same_way() {
