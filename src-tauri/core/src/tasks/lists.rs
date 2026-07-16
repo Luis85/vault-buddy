@@ -233,6 +233,93 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
     unreachable!("suffix search always terminates")
 }
 
+/// Outcome of deleting a list: how many of its own tasks were moved to the
+/// tasks root, and whether the (now-empty) folder was removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeleteListOutcome {
+    pub moved: usize,
+    pub folder_removed: bool,
+}
+
+/// Rename a list folder's leaf to `to` (a single valid segment) at the same
+/// parent, moving every contained task with it. Refuses a collision (never
+/// clobber). Returns the new `/`-joined relative name.
+pub fn rename_task_list(root: &Path, from: &str, to: &str) -> Result<String, String> {
+    if !is_valid_list_name(to) {
+        return Err(
+            "List names need at least one character and cannot contain / or \\ or start with a dot."
+                .to_string(),
+        );
+    }
+    let from_rel = normalize_list_rel(from)?;
+    if from_rel.is_empty() {
+        return Err("The tasks root is not a list and cannot be renamed.".to_string());
+    }
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let from_dir = canon_root.join(&from_rel);
+    if !from_dir.is_dir() {
+        return Err("That list no longer exists — reopen the list to refresh.".to_string());
+    }
+    // New rel = the from's parent joined with the `to` leaf.
+    let parent = Path::new(&from_rel).parent();
+    let new_rel = match parent
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+    {
+        Some(p) => format!("{p}/{}", to.trim()),
+        None => to.trim().to_string(),
+    };
+    let to_dir = canon_root.join(&new_rel);
+    crate::capture_paths::assert_path_inside_vault(&canon_root, &to_dir)?;
+    if to_dir.exists() {
+        return Err(format!("A list named \"{}\" already exists.", to.trim()));
+    }
+    std::fs::rename(&from_dir, &to_dir).map_err(|e| format!("Could not rename the list: {e}"))?;
+    crate::capture_paths::assert_root_inside_vault(&canon_root, &to_dir)?;
+    Ok(new_rel)
+}
+
+/// Delete a list: move its OWN direct `type: Task` files to the tasks root
+/// (No list), then remove the folder if it is now empty. A folder still
+/// holding nested sub-lists or foreign (non-task) files is kept — those are
+/// never moved or deleted.
+pub fn delete_task_list(root: &Path, list: &str) -> Result<DeleteListOutcome, String> {
+    let rel = normalize_list_rel(list)?;
+    if rel.is_empty() {
+        return Err("The tasks root is not a list and cannot be deleted.".to_string());
+    }
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let list_dir = canon_root.join(&rel);
+    crate::capture_paths::assert_path_inside_vault(&canon_root, &list_dir)?;
+    if !list_dir.is_dir() {
+        return Err("That list no longer exists — reopen the list to refresh.".to_string());
+    }
+    // Collect the direct task files first (don't mutate while iterating).
+    let mut task_files: Vec<PathBuf> = Vec::new();
+    for (path, ft, name) in crate::transcript::dir_entries(&list_dir) {
+        if ft.is_file() && name.ends_with(".md") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if super::doc::is_task(&content) {
+                    task_files.push(path);
+                }
+            }
+        }
+    }
+    let mut moved = 0;
+    for f in &task_files {
+        move_task_to_list(&canon_root, f, "")?; // to No list; rails already never-clobber
+        moved += 1;
+    }
+    // Remove only if empty; a folder with sub-lists / foreign files stays.
+    let folder_removed = std::fs::remove_dir(&list_dir).is_ok();
+    Ok(DeleteListOutcome {
+        moved,
+        folder_removed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +615,52 @@ mod tests {
             !root.join("Done").join("t.md").exists(),
             "the linked copy must be rolled back — no duplicate task"
         );
+    }
+
+    #[test]
+    fn rename_task_list_moves_folder_and_refuses_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "t.md", TASK);
+        assert_eq!(rename_task_list(&root, "Inbox", "Later").unwrap(), "Later");
+        assert!(root.join("Later").join("t.md").exists());
+        assert!(!root.join("Inbox").exists());
+        // Same-parent nesting: renames the leaf only.
+        write(&root.join("work/q3"), "x.md", TASK);
+        assert_eq!(rename_task_list(&root, "work/q3", "q4").unwrap(), "work/q4");
+        assert!(root.join("work/q4").join("x.md").exists());
+        // Refuse an invalid name and a collision (never clobber).
+        assert!(rename_task_list(&root, "Later", "a/b").is_err());
+        std::fs::create_dir_all(root.join("Taken")).unwrap();
+        assert!(rename_task_list(&root, "Later", "Taken").is_err());
+    }
+
+    #[test]
+    fn delete_task_list_moves_tasks_to_root_then_removes_empty_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "a.md", TASK);
+        write(&root.join("Inbox"), "b.md", TASK);
+        let out = delete_task_list(&root, "Inbox").unwrap();
+        assert_eq!(out.moved, 2);
+        assert!(out.folder_removed);
+        assert!(!root.join("Inbox").exists());
+        assert!(root.join("a.md").exists() && root.join("b.md").exists());
+    }
+
+    #[test]
+    fn delete_task_list_keeps_a_folder_with_sublists_or_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Proj"), "t.md", TASK);
+        write(&root.join("Proj/Sub"), "s.md", TASK); // nested sub-list
+        std::fs::write(root.join("Proj").join("notes.txt"), "keep me").unwrap(); // foreign
+        let out = delete_task_list(&root, "Proj").unwrap();
+        assert_eq!(out.moved, 1); // only Proj's own direct task
+        assert!(!out.folder_removed);
+        assert!(root.join("Proj").exists()); // kept — not empty
+        assert!(root.join("Proj").join("notes.txt").exists()); // foreign untouched
+        assert!(root.join("Proj/Sub").join("s.md").exists()); // sub-list untouched
+        assert!(root.join("t.md").exists()); // the moved task landed at the root
     }
 }
