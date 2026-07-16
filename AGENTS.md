@@ -247,7 +247,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 59 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 60 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -256,7 +256,7 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; also stamps a generated task ID when the vault opts in and the task doesn't have one yet)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -509,7 +509,8 @@ directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md`,
 `docs/superpowers/specs/2026-07-09-task-tags-design.md`,
 `docs/superpowers/specs/2026-07-10-task-aggregation-design.md`,
-`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`.
+`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`,
+`docs/superpowers/specs/2026-07-15-tasks-lists-first-drag-default-and-task-ids-design.md`.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
 `list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
@@ -973,9 +974,10 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   client-side into an array); the editor sends `tags` in the patch only when
   the parsed array differs from the task's current tags, and an emptied input
   sends `tags: []` (clear) — same changed-fields/optimistic-revert discipline
-  as the other fields. A `Dates | Tags` segmented toggle (component-local
-  state, resets to `dates` on remount) switches the SAME filtered,
-  globally-sorted list from date buckets to tag sections: one alphabetical
+  as the other fields. A `Lists | Dates | Tags` segmented toggle
+  (component-local state, resets to `lists` — the panel's default grouping —
+  on remount; see below) switches the SAME filtered, globally-sorted list
+  from date buckets to tag sections when Tags is picked: one alphabetical
   section per distinct tag with the task repeated under EACH of its tags,
   then "No tags" (open, untagged), then "Done" (all done tasks) — headers
   always render in tag mode. Because a task can render more than once, the
@@ -1003,20 +1005,36 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   round-tripped by `serialize_config`; `set_task_lists_config` is its own
   write command (the independent field-save pattern, edited in the Vault
   settings view's self-contained `TaskListSettings.vue`). Frontend: the
-  grouping toggle is `Dates | Tags | Lists` (sections in `listOrder`-then-
-  alphabetical order, No list, Done; the aggregate merges same-named lists
-  case-insensitively — first-seen casing in sort order labels the section,
-  the tags precedent — and skips empty lists, while per-vault mode shows
-  them); the composer's options row and the inline editor share
-  `TaskListPicker.vue` (No list + lists + a composer-only "New list…"
-  inline-create flow); an editor save orders field-patch-then-move so the
-  fields write hits the OLD path, adopting the landed (possibly suffixed)
-  path afterward — a failed move keeps the saved fields and says so.
+  grouping toggle is `Lists | Dates | Tags` — **Lists is first and is the
+  default grouping** every panel visit opens on (sections in
+  `listOrder`-then-alphabetical order, No list, Done; the aggregate merges
+  same-named lists case-insensitively — first-seen casing in sort order
+  labels the section, the tags precedent — and skips empty lists, while
+  per-vault mode shows them); the composer's options row and the inline
+  editor share `TaskListPicker.vue` (No list + lists + a composer-only "New
+  list…" inline-create flow); an editor save orders field-patch-then-move so
+  the fields write hits the OLD path, adopting the landed (possibly
+  suffixed) path afterward — a failed move keeps the saved fields and says
+  so. The Lists grouping's own toolbar (`TaskViewControls.vue`) carries a
+  second, independent entry point to the same create call: a "＋ List"
+  button that expands into a name input + confirm/cancel (IME-guarded
+  Enter, Escape that stops propagation so it doesn't bubble into the panel's
+  own Escape handler) and calls `createList` directly — shown only for
+  `grouping === 'lists' && !isAggregate`, since the aggregate view spans
+  every vault and has no single target to create a list in (the composer's
+  picker keeps its own per-target-vault "New list…" once a vault is chosen,
+  so aggregate users aren't blocked, just routed through the composer
+  instead of the toolbar).
 - **Sorting & manual ordering.** A sort selector (Default / Due date /
   Priority / Created / Title / Manual + an asc/desc toggle, disabled where
   direction is meaningless) orders rows WITHIN sections; Default is
   byte-identical to the historical chain and the preference persists per
   view (`vault-buddy:task-sort` in localStorage, keyed vault id / `"all"`).
+  **Manual is the fallback default** when nothing is persisted yet
+  (`DEFAULT_PREF = { key: "manual", dir: "asc" }` in `utils/taskSort.ts`,
+  also what a missing/corrupted localStorage entry degrades to) — a fresh
+  install or a first-ever visit to a vault's tasks view opens already in
+  drag-and-drop order, matching the Lists-first grouping default above.
   Manual rank = an optional `order:` frontmatter number (lenient read;
   absent = unranked, sorted after ranked by the Default chain; never
   written on create), written through the same surgical field writer via
@@ -1030,6 +1048,48 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `Tasks.vue` splits its state into `useTaskActions`/`useTaskLists`/
   `useTaskReorder` composables plus the pure `taskSort`/`taskSections`/
   `taskOrder` utils (LOC cap + unit-testability).
+- **Task IDs (opt-in per vault): a generated, stable identifier that never
+  overwrites.** Two per-vault config fields beside `tasks_folder` —
+  `task_id_enabled: bool` (default `false`) and `task_id_property:
+  Option<String>` (default `None` → the resolved name `"task-id"`, via
+  `VaultCaptureConfig::task_id_property_name()`) — round-trip as
+  `taskIdEnabled`/`taskIdProperty` in `config.json`, parsed per-field
+  defensively like every other vault entry. `tasks::new_task_id()`
+  generates 8 base36 characters (`0-9a-z`) from the OS CSPRNG
+  (`getrandom`); `tasks::is_valid_id_property(name)` gates the property
+  name to `[A-Za-z0-9_-]`, non-empty, and — critically — **disjoint from
+  the reserved structured task keys** (`type`/`status`/`title`/`created`/
+  `due`/`priority`/`tags`/`tag`/`order`), which is what lets the writer
+  treat the ID as a plain "ensure present" key without ever colliding with
+  a real patch key. Two write sites, same never-clobber discipline as
+  every other vault write: **create** — `services::add_task` computes
+  `cfg.task_id_enabled.then(tasks::new_task_id)` and threads
+  `(property, id)` into `tasks::create_task`/`render_task`, which emits it
+  as a plain unquoted scalar line right after `created`, before
+  `due`/`priority`/`tags`; **edit** — `update_task_fields(root, path,
+  updates, ensure_absent)` gained the `ensure_absent: &[(&str, &str)]`
+  parameter: each entry is added to the write **only when
+  `parse::scalar_field` finds the key absent** from the current content, so
+  an existing (including hand-authored) ID is never overwritten and IDs
+  stay stable across renames/edits. The shell's `update_task` command
+  builds that ensure list on every call when the vault opts in — a plain
+  field edit AND an order-only reorder patch both stamp a missing ID,
+  because both go through the same non-empty `updates` path. A **status
+  toggle/archive does NOT stamp**: `services::set_task_status` (what the
+  `set_task_status` command calls) delegates to the core
+  `tasks::set_task_status`, itself a thin one-entry wrapper over
+  `update_task_fields` that passes an empty `ensure_absent` slice — the one
+  write path deliberately excluded, since a checkbox click isn't "editing"
+  the task. `set_task_id_config` is the
+  independent field-save command (the `set_task_lists_config` pattern):
+  async, `ConfigWriteLock`-serialized read-modify-write; an empty property
+  normalizes to `None` (the default), and an invalid/reserved name is an
+  inline error naming the offending token rather than silently falling
+  back. **Frontend**: `TaskIdSettings.vue` is a presentational card
+  (toggle + property-name input + inline error, no invoke of its own) in
+  the Vault settings Tasks tab; `TasksConfigTab.vue` owns the load,
+  autosave scheduling, and the `set_task_id_config` call, mirroring how it
+  already drives the sibling `VaultFolderSetting.vue` card.
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 

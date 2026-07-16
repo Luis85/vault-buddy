@@ -6,8 +6,9 @@
 // emits the raw user input back up. Extracted (Task 9 review) so the
 // parent's template drops back under fallow's complexity threshold without
 // loosening the quality-ratchet baseline — mirrors this tab's own
-// TaskListSettings.vue/VaultFolderSetting.vue precedent of presentational
-// child cards.
+// VaultFolderSetting.vue precedent of a presentational child card (unlike
+// TaskListSettings.vue, which owns its own invoke/autosave/load and is not
+// presentational).
 defineProps<{
   enabled: boolean;
   property: string;

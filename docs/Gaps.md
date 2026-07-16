@@ -434,6 +434,37 @@ dismissal are unchanged. Regression tests pin all three behaviors.
   per-path busy checks (the busy row's grip is inert), so only this
   revert-reshuffle window remains.
 
+### GAP-63 · Low · Task-ID / lists-first / drag-default increment residuals (accepted)
+- Renaming a vault's `task_id_property` (or turning IDs on again after
+  turning them off) leaves every already-stamped Task's ID under the OLD
+  property name in place. `update_task_fields`'s `ensure_absent` only
+  checks/writes the CURRENTLY configured property — it never migrates,
+  renames, or removes a stale one — so a vault that changes its property
+  name ends up with two differently-named ID properties split across
+  old vs. newly-edited Tasks. By design (an edit-time stamp must never mass-
+  rewrite the vault to chase a config change); a manual find-and-replace
+  across the vault's Tasks folder is the user's escape hatch if this ever
+  matters to them.
+- Aggregate mode (`vaultId: null`) has no "＋ List" toolbar control —
+  `TaskViewControls.vue` gates it on `grouping === 'lists' && !isAggregate`,
+  because creating a list needs one target vault and the aggregate view
+  spans all of them. Not a regression: the composer's own
+  `TaskListPicker.vue` still offers a per-target-vault "New list…" once a
+  vault is picked, so aggregate users aren't blocked — only the toolbar
+  shortcut is per-vault-only. Wiring a vault-picker into the toolbar's
+  control too was judged not worth the complexity this slice.
+- A drag-drop reorder that materializes ranks across a whole section
+  (`utils/taskOrder.ts`) writes one `update_task` call per affected Task.
+  When Task IDs are enabled, `update_task`'s stamp-if-absent check runs on
+  EVERY one of those calls, so a single reorder can generate and stamp
+  several new IDs at once — one per previously-un-ID'd neighbor the drop
+  happens to re-rank. Not a bug (each stamp still only fires when that
+  Task's ID line is absent, and the reorder would have touched that Task's
+  frontmatter anyway), just a side effect worth knowing before enabling IDs
+  on a vault with a lot of pre-existing, never-edited Tasks — the first
+  reorder that sweeps through them will stamp the whole batch in one go
+  rather than one at a time as each is later hand-edited.
+
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
 `closeMenu()`, matching Search's handler; a regression test opens the popup,
