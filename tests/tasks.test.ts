@@ -1140,4 +1140,14 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-vault"]').exists()).toBe(false);
   });
 
+  it("shows no drag grips in the aggregate view", async () => {
+    // Manual is the default sort (taskSort.ts DEFAULT_PREF), so a fresh
+    // aggregate mount would otherwise render grips — but `order` ranks are
+    // per-vault numbers with no cross-vault rank space, so aggregate must
+    // never permit a drag-to-reorder write (GAP-63).
+    const { wrapper } = mountAggregate();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-drag"]').exists()).toBe(false);
+  });
+
 });

@@ -430,14 +430,20 @@ dismissal are unchanged. Regression tests pin all three behaviors.
   on a vault with a lot of pre-existing, never-edited Tasks — the first
   reorder that sweeps through them will stamp the whole batch in one go
   rather than one at a time as each is later hand-edited.
-- With Manual now the default sort, the aggregate "All tasks" view
+- ~~With Manual now the default sort, the aggregate "All tasks" view
   (`vaultId: null`) opens with drag grips and permits reordering rows within
-  a merged, cross-vault list section. `order` ranks are per-vault numbers
-  (there is no cross-vault rank space), so the global-by-rank order within a
-  mixed section can look arbitrary — a rank of `500` from one vault and `500`
-  from another have no relationship to each other. This is an accepted
-  consequence of "drag-and-drop is the standard sort" (the user's explicit
-  request); cross-vault list ordering remains a non-goal.
+  a merged, cross-vault list section.~~ — fixed 2026-07-16 (Codex P2, PR #59,
+  `taskSort.ts:106`/`Tasks.vue reorderView`): `reorderView` now also requires
+  `!isAggregate.value`, so the aggregate view never renders a grip and a
+  cross-vault drag can no longer write a meaningless rank. Still true:
+  `order` ranks are per-vault numbers (there is no cross-vault rank space),
+  so a Manual-sorted aggregate view still DISPLAYS mixed-vault rows ordered
+  by each task's own per-vault rank — a rank of `500` from one vault and
+  `500` from another have no relationship to each other. That display-order
+  quirk remains an accepted consequence of "drag-and-drop is the standard
+  sort" (the user's explicit request); cross-vault list ordering remains a
+  non-goal — only the reorder-writes-a-meaningless-rank half of this bullet
+  is fixed.
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before

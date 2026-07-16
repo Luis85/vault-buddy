@@ -166,6 +166,7 @@ const rootRef = ref<HTMLElement | null>(null);
 const reordering = ref(false);
 const reorderView = computed(
   () =>
+    !isAggregate.value &&
     sortPref.value.key === "manual" &&
     filter.value.trim() === "" &&
     tagFilter.value === null,
