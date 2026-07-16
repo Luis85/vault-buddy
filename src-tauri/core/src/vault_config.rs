@@ -76,6 +76,9 @@ pub struct VaultCaptureConfig {
     /// Display order for list sections and pickers; folders not named here
     /// append alphabetically, names without folders are ignored.
     pub list_order: Vec<String>,
+    /// `/`-joined relative names of lists hidden from the Lists grouping and
+    /// the pickers (the folder + tasks stay on disk). Read-lenient, write-strict.
+    pub archived_lists: Vec<String>,
     /// Whether NEW/edited tasks get a generated ID written under
     /// `task_id_property` (opt-in, default false).
     pub task_id_enabled: bool,
@@ -115,6 +118,7 @@ impl Default for VaultCaptureConfig {
             documents_folder: None,
             default_list: None,
             list_order: Vec::new(),
+            archived_lists: Vec::new(),
             task_id_enabled: false,
             task_id_property: None,
             recording_date_folders: true,
@@ -279,6 +283,18 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
                     .collect()
             })
             .unwrap_or_default(),
+        archived_lists: entry
+            .get("archivedLists")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
         task_id_enabled: entry
             .get("taskIdEnabled")
             .and_then(|v| v.as_bool())
@@ -348,6 +364,9 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     }
     if !v.list_order.is_empty() {
         entry.insert("listOrder".to_string(), json!(v.list_order));
+    }
+    if !v.archived_lists.is_empty() {
+        entry.insert("archivedLists".to_string(), json!(v.archived_lists));
     }
     if v.task_id_enabled {
         entry.insert("taskIdEnabled".to_string(), json!(true));
@@ -600,6 +619,7 @@ mod tests {
                 documents_folder: Some("Inbox/Documents".to_string()),
                 default_list: Some("Inbox".to_string()),
                 list_order: vec!["Inbox".to_string(), "Next".to_string()],
+                archived_lists: vec!["Inbox".to_string()],
                 task_id_enabled: true,
                 task_id_property: Some("uid".to_string()),
                 recording_date_folders: false,
@@ -844,6 +864,29 @@ mod tests {
             ..VaultCaptureConfig::default()
         };
         assert_eq!(custom.task_id_property_name(), "uid");
+    }
+
+    #[test]
+    fn archived_lists_round_trip_and_defensive_parse() {
+        let cfg = parse_config(
+            r#"{ "vaults": { "a": { "archivedLists": ["Old", 5, "  ", "Done/Q1"] } } }"#,
+        );
+        assert_eq!(
+            vault_config(&cfg, "a").archived_lists,
+            vec!["Old", "Done/Q1"]
+        );
+        let mut c = AppConfig::default();
+        c.vaults.insert(
+            "a".into(),
+            VaultCaptureConfig {
+                archived_lists: vec!["Old".into()],
+                ..VaultCaptureConfig::default()
+            },
+        );
+        assert_eq!(parse_config(&serialize_config(&c)).vaults, c.vaults);
+        let mut d = AppConfig::default();
+        d.vaults.insert("b".into(), VaultCaptureConfig::default());
+        assert!(!serialize_config(&d).contains("archivedLists")); // omitted when empty
     }
 
     #[test]

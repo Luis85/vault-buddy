@@ -127,6 +127,7 @@ pub fn set_capture_config(
         // it): a capture save must never reset the default list or the order.
         default_list: existing.default_list,
         list_order: existing.list_order,
+        archived_lists: existing.archived_lists,
         // The Task ID settings own their command (set_task_id_config); a
         // capture save must never reset them (same read-inside-the-lock
         // preserve as default_list/list_order above).
