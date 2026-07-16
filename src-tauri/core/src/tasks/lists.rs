@@ -261,6 +261,16 @@ pub fn rename_task_list(root: &Path, from: &str, to: &str) -> Result<String, Str
     if !from_dir.is_dir() {
         return Err("That list no longer exists — reopen the list to refresh.".to_string());
     }
+    // The leaf exists (just confirmed above), so this canonicalizes from_dir
+    // itself and rejects a symlink/junction escaping the vault — the same
+    // source containment move_task_to_list requires. Without it, is_dir()
+    // alone (which follows symlinks) let a symlinked list leaf reach
+    // std::fs::rename below; POSIX rename() never dereferences the source's
+    // final component, so that call would rename the symlink ENTRY in place
+    // (still pointing outside) before the destination-side
+    // assert_root_inside_vault happened to also reject it — an
+    // undocumented accident, and only after the mutation already happened.
+    crate::capture_paths::assert_path_inside_vault(&canon_root, &from_dir)?;
     // New rel = the from's parent joined with the `to` leaf.
     let parent = Path::new(&from_rel).parent();
     let new_rel = match parent
@@ -308,6 +318,14 @@ pub fn delete_task_list(root: &Path, list: &str) -> Result<DeleteListOutcome, St
         }
     }
     let mut moved = 0;
+    // Partial-failure semantics (GAP-64): if the Nth move fails, files
+    // 1..N-1 already relocated to the tasks root — `moved` is discarded and
+    // the caller gets an opaque Err with no signal the vault was partially
+    // mutated. No data loss (every moved file rode move_task_to_list's
+    // never-clobber rails), but "Err ⇒ nothing happened" is FALSE here;
+    // callers must refresh the task list after a delete regardless of
+    // Ok/Err. Verbatim from the design plan — do not change without
+    // updating GAP-64.
     for f in &task_files {
         move_task_to_list(&canon_root, f, "")?; // to No list; rails already never-clobber
         moved += 1;
@@ -633,6 +651,45 @@ mod tests {
         assert!(rename_task_list(&root, "Later", "a/b").is_err());
         std::fs::create_dir_all(root.join("Taken")).unwrap();
         assert!(rename_task_list(&root, "Later", "Taken").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_task_list_rejects_symlinked_source_escaping_root() {
+        // Before the source-side containment fix, `from_dir.is_dir()` alone
+        // gated the rename — and is_dir() follows symlinks, so a list-named
+        // entry that is a symlink out of the tasks root passed it straight
+        // through to std::fs::rename. POSIX rename() does not dereference
+        // the SOURCE's final component, so that call renamed the symlink
+        // ENTRY itself (from "Linked" to "Renamed", still inside root, still
+        // pointing outside) — a real mutation. The function still ended up
+        // returning Err, but only because the pre-existing DESTINATION
+        // assert (assert_root_inside_vault) canonicalizes the *newly
+        // renamed* entry, follows the symlink, and rejects it — an
+        // undocumented accident, and only AFTER the rename() had already
+        // executed. A resolved containment check on the SOURCE (mirroring
+        // move_task_rejects_symlinked_source_escaping_root) must reject
+        // before any rename() runs, so neither name is ever touched.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("Linked")).unwrap();
+        assert!(rename_task_list(&root, "Linked", "Renamed").is_err());
+        // The outside target directory itself is untouched — not
+        // renamed/moved (rename() never dereferences the source leaf).
+        assert!(outside.is_dir());
+        // And no rename() must have executed at all: the source entry must
+        // still be exactly where it was, under its original name, and no
+        // destination entry may have been created. This is the assertion
+        // that actually fails pre-fix — the accidental post-check above
+        // only proves the FUNCTION reports Err, not that nothing moved.
+        assert!(
+            root.join("Linked").symlink_metadata().is_ok(),
+            "the source symlink must not be renamed away on a rejected rename"
+        );
+        assert!(!root.join("Renamed").exists());
     }
 
     #[test]

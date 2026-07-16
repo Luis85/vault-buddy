@@ -262,6 +262,32 @@ transcription queue dedups by path). **Fix:** a caller-side canonical dedup
 (after `canonicalize` the nearest-existing ancestor per AGENTS.md containment
 discipline) would be the full fix; deferred as a low-frequency edge.
 
+### GAP-64 · Low · `delete_task_list` gives no partial-failure signal when a mid-loop move fails
+`src-tauri/core/src/tasks/lists.rs` (`delete_task_list`, the `for f in
+&task_files` loop). Each of a list's direct task files is relocated to the
+tasks root one at a time via `move_task_to_list(...)?`; if the Nth move
+fails (a doc that stopped being `type: Task` between the initial scan and
+the move, a mid-loop permission error, or a `rename_noreplace`
+source-could-not-be-removed rollback per
+`move_task_fails_and_rolls_back_when_source_cannot_be_removed`), files
+`1..N-1` are already relocated, the `moved` count accumulated so far is
+discarded by the `?` early return, and the caller gets an opaque `Err` with
+no signal the vault was partially mutated — **"Err ⇒ nothing happened" does
+not hold for this function.** **No data loss**: every moved file rode
+`move_task_to_list`'s own never-clobber rails (exclusive
+`rename_noreplace` + ` (N)` suffix retry), so nothing is overwritten or
+lost — only some tasks silently changed list membership before the error
+surfaced. **Accepted as a documented limitation, code unchanged** (a
+comment pinning this GAP id sits at the loop): the loop is verbatim from
+the list-lifecycle design plan. **What a fix must respect:** the later
+services/IPC/UI layers that call `delete_task_list` MUST refresh the task
+list after a delete regardless of `Ok`/`Err` — they cannot treat `Err` as
+"nothing changed" and skip the refresh. **Fix, if ever pursued:** report
+`moved` alongside the error (e.g. an error variant carrying the partial
+count) or continue best-effort and aggregate per-file failures, without
+breaking the existing `Result<DeleteListOutcome, String>` contract today's
+callers depend on.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
