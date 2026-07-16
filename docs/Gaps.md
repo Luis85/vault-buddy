@@ -210,6 +210,12 @@ the load-failure → `remove_model` path fires.
 **Fix:** treat `sync_all` failure as download failure (delete the `.part`);
 optionally verify the cached file's SHA-256 once per app version.
 
+Also covers the Silero VAD artifact (`ggml-silero-v5.1.2.bin`,
+`transcribe/src/model.rs::download_vad_model`) since the accuracy & speed
+increment: verified at download, trusted from disk thereafter — same class,
+same accepted posture. A corrupt cached VAD file surfaces as an inference
+failure (`failed` sidecar), not a silent wrong transcript.
+
 ### GAP-15 · Low · `bitrateKbps` wraps via `as u32` and has no range validation
 `src-tauri/core/src/capture_config.rs:158-162`.
 A hand-edited `4294967424` truncates to `128`; `0` or `999999999` pass

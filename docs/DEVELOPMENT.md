@@ -392,8 +392,10 @@ ever written into your vaults except recordings and their notes.
       "inputDevice": "USB Mic",    // optional — cpal device name; omit for system default
       "outputDevice": "Speakers",  // optional — loopback source (Meeting mode); omit for system default
       "transcribe": false,         // opt in to local speech-to-text
-      "transcriptionModel": "small", // "base" | "small" | "medium"
+      "transcriptionModel": "small", // "base" | "small" | "medium" | "turbo"
       "transcriptionLanguage": "es", // optional — omit to auto-detect per recording
+      "transcriptionVocabulary": "", // optional — names/acronyms/jargon primed into whisper's initial prompt
+      "transcriptionVad": true,    // skip silence via Silero VAD (default true)
       "transcriptTimestamps": true, // prefix each segment with [HH:MM:SS]
       "tasksFolder": "Tasks",      // optional — vault-relative home of task documents
       "documentsFolder": "Documents", // optional — vault-relative home of imported documents
@@ -427,11 +429,17 @@ ever written into your vaults except recordings and their notes.
   Enabling it downloads a Whisper model on the next recording (or backfills
   existing recordings) and writes a `<name>.transcript.md` sidecar the note
   embeds.
-- `transcriptionModel` (`"base"` | `"small"` | `"medium"`, default
+- `transcriptionModel` (`"base"` | `"small"` | `"medium"` | `"turbo"`, default
   `"small"`) — accuracy/speed/size trade-off. Models download to
   `%APPDATA%\vault-buddy\models`.
 - `transcriptionLanguage` (string or omit, default auto-detect) — e.g.
   `"es"`; omit to auto-detect per recording.
+- `transcriptionVocabulary` (string, optional) — free-text names/acronyms/jargon
+  primed into whisper's initial prompt together with the recording's title;
+  absent = no priming.
+- `transcriptionVad` (bool, default `true`) — skip silence via Silero VAD
+  (`models\ggml-silero-v5.1.2.bin`, downloaded on first use). If the model
+  can't be fetched the job still transcribes without VAD.
 - `transcriptTimestamps` (bool, default `true`) — prefix each segment with
   `[HH:MM:SS]`.
 - `tasksFolder` (string, default `"Tasks"`) — vault-relative folder holding

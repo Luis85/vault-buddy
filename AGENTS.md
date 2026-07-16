@@ -317,7 +317,7 @@ actually subscribe.
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
 | Per-vault capture/tasks/`documents_folder` settings + app-global `mcp` and `document_import` (user-set `pandoc_path` override) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
-| Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` (pinned Hugging Face URLs + SHA-256) |
+| Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
 | Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
@@ -755,7 +755,20 @@ force/rerun and cancellation (`cancel_transcription`), and is observable via
 The model downloads on demand (`ensure_model` → `download_model`, pinned
 Hugging Face URL + pinned SHA-256 + size floor, progress via
 `capture:modelDownload`, cancellable, `.part`-then-rename); tier + language
-come from the vault config. State is surfaced as `capture:transcribing` /
+come from the vault config. Three per-vault knobs joined in the accuracy & speed increment
+(spec: `docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md`):
+`transcriptionVocabulary` + the recording's title compose whisper's
+`initial_prompt` (title first, vocabulary LAST — whisper truncates over-long
+prompts from the front and the user's explicit vocabulary must survive; the
+prompt is never written into the transcript); the `turbo` model tier
+(`ggml-large-v3-turbo-q5_0`, ~574 MB, pinned SHA like the others); and
+`transcriptionVad` (default ON) — Silero VAD silence skipping via a separate
+pinned ~1 MB `ggml-silero-v5.1.2.bin` in the same models dir. The VAD model
+downloads on first VAD-enabled job (progress on `capture:modelDownload`,
+`model:"vad"`); a FAILED download degrades that job to a no-VAD run with a
+warning (never a job failure — the stats footer's
+`Silence skipping (VAD)` row reports the EFFECTIVE state), while a cancel
+during it is still a cancel. State is surfaced as `capture:transcribing` /
 `transcribeProgress` / `transcribed` / `transcribeSkipped` /
 `transcribeFailed` / `transcribeCancelled` (each carries the `mp3`).
 `whisper-rs` is pinned at 0.16 deliberately — `transcribe/src/engine.rs`
