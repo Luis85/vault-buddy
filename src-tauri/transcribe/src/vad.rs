@@ -345,7 +345,10 @@ mod tests {
         let end = remap_ms(2000, &map, TimestampKind::End);
         assert_eq!(start, 2000, "start ties forward onto span2's own start");
         assert_eq!(end, 3000, "end ties backward onto span2's own end");
-        assert!(start <= end, "remapped segment must not invert: {start}..{end}");
+        assert!(
+            start <= end,
+            "remapped segment must not invert: {start}..{end}"
+        );
     }
 
     #[test]
