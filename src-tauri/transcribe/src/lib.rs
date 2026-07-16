@@ -37,16 +37,31 @@ pub enum TranscribeError {
     Failed(String),
 }
 
+/// Per-job knobs threaded into the engine — a borrowed view over
+/// `TranscribeOptions`. A struct rather than positional parameters so the
+/// next knob doesn't ripple through every `Transcriber` implementor again.
+pub struct EngineOptions<'a> {
+    /// ISO language code (e.g. "es"), or None to auto-detect.
+    pub language: Option<&'a str>,
+    /// Vocabulary/context priming; None = no prompt (whisper's default).
+    pub initial_prompt: Option<&'a str>,
+    /// Some(path to the Silero ggml) enables VAD with that model; None = off
+    /// (either the setting is off, or the model wasn't available and the job
+    /// degraded — see the shell's ensure_vad_model).
+    pub vad_model: Option<&'a Path>,
+}
+
 /// A speech-to-text backend. `samples` are 16 kHz mono f32 in [-1, 1];
-/// `language` is an ISO code (e.g. "es") or None to auto-detect. `cancel` is
-/// polled by the engine's abort callback (an aborted run returns `Err`, which
-/// `transcribe_recording` disambiguates via the token); `on_progress` is the
-/// engine's 0-100 percent callback, forwarded as-is.
+/// `opts` carries the language plus the prompt/VAD knobs (see
+/// `EngineOptions`). `cancel` is polled by the engine's abort callback (an
+/// aborted run returns `Err`, which `transcribe_recording` disambiguates via
+/// the token); `on_progress` is the engine's 0-100 percent callback,
+/// forwarded as-is.
 pub trait Transcriber {
     fn transcribe(
         &self,
         samples: &[f32],
-        language: Option<&str>,
+        opts: &EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
     ) -> Result<Vec<Segment>, String>;
@@ -56,6 +71,10 @@ pub struct TranscribeOptions {
     pub language: Option<String>,
     pub timestamps: bool,
     pub model_label: String,
+    /// Composed title+vocabulary priming (see `compose_initial_prompt`).
+    pub initial_prompt: Option<String>,
+    /// Resolved Silero model path when this job runs with VAD.
+    pub vad_model: Option<PathBuf>,
 }
 
 use std::path::{Path, PathBuf};
@@ -175,18 +194,22 @@ pub fn transcribe_recording(
         "transcribe: inference start {} ({duration_secs}s audio)",
         mp3.display()
     );
-    let segments =
-        match transcriber.transcribe(&samples, opts.language.as_deref(), cancel, on_progress) {
-            Ok(s) => s,
-            // An aborted full() returns Err; the token says whether it was us.
-            Err(e) => {
-                return Err(if cancel.is_cancelled() {
-                    TranscribeError::Cancelled
-                } else {
-                    TranscribeError::Failed(e)
-                })
-            }
-        };
+    let engine_opts = EngineOptions {
+        language: opts.language.as_deref(),
+        initial_prompt: opts.initial_prompt.as_deref(),
+        vad_model: opts.vad_model.as_deref(),
+    };
+    let segments = match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
+        Ok(s) => s,
+        // An aborted full() returns Err; the token says whether it was us.
+        Err(e) => {
+            return Err(if cancel.is_cancelled() {
+                TranscribeError::Cancelled
+            } else {
+                TranscribeError::Failed(e)
+            })
+        }
+    };
     let inference_secs = inference_start.elapsed().as_secs_f32();
     let n_segments = segments
         .iter()
@@ -306,7 +329,7 @@ mod tests {
         fn transcribe(
             &self,
             _s: &[f32],
-            _l: Option<&str>,
+            _o: &EngineOptions,
             _c: &CancelToken,
             mut on_progress: Box<dyn FnMut(i32) + Send>,
         ) -> Result<Vec<Segment>, String> {
@@ -323,7 +346,7 @@ mod tests {
         fn transcribe(
             &self,
             _s: &[f32],
-            _l: Option<&str>,
+            _o: &EngineOptions,
             _c: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
         ) -> Result<Vec<Segment>, String> {
@@ -359,7 +382,7 @@ mod tests {
         fn transcribe(
             &self,
             _s: &[f32],
-            _l: Option<&str>,
+            _o: &EngineOptions,
             cancel: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
         ) -> Result<Vec<Segment>, String> {
@@ -416,6 +439,8 @@ mod tests {
             language: Some("en".into()),
             timestamps: true,
             model_label: "whisper-small".into(),
+            initial_prompt: None,
+            vad_model: None,
         }
     }
 
@@ -666,6 +691,58 @@ mod tests {
         assert_eq!(
             compose_initial_prompt("  Standup  ", Some("  cpal  ")),
             Some("Standup. cpal".to_string())
+        );
+    }
+
+    #[test]
+    fn engine_options_reach_the_transcriber() {
+        // The prompt/VAD knobs must actually arrive at the engine — a
+        // TranscribeOptions field nobody forwards would silently do nothing.
+        use std::sync::Mutex;
+        // Locally-scoped test fixture — a `type` alias would be more ceremony
+        // than the one-off tuple it names.
+        #[allow(clippy::type_complexity)]
+        struct FakeSeen(Arc<Mutex<Option<(Option<String>, Option<PathBuf>)>>>);
+        impl Transcriber for FakeSeen {
+            fn transcribe(
+                &self,
+                _s: &[f32],
+                opts: &EngineOptions,
+                _c: &CancelToken,
+                _p: Box<dyn FnMut(i32) + Send>,
+            ) -> Result<Vec<Segment>, String> {
+                *self.0.lock().unwrap() = Some((
+                    opts.initial_prompt.map(str::to_string),
+                    opts.vad_model.map(Path::to_path_buf),
+                ));
+                Ok(vec![])
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let seen = Arc::new(Mutex::new(None));
+        let fake = FakeSeen(Arc::clone(&seen));
+        let opts = TranscribeOptions {
+            initial_prompt: Some("Standup. cpal".to_string()),
+            vad_model: Some(PathBuf::from("/models/silero.bin")),
+            ..opts()
+        };
+        transcribe_recording(
+            &mp3,
+            &fake,
+            &opts,
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            Some((
+                Some("Standup. cpal".to_string()),
+                Some(PathBuf::from("/models/silero.bin"))
+            ))
         );
     }
 }

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use vault_buddy_transcribe::decode::decode_to_16k_mono;
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{model_path, ModelTier};
-use vault_buddy_transcribe::{CancelToken, Transcriber};
+use vault_buddy_transcribe::{CancelToken, EngineOptions, Transcriber};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -38,10 +38,15 @@ fn main() {
 
     let t = WhisperTranscriber::load(&model).expect("load model");
     let inf = std::time::Instant::now();
+    let opts = EngineOptions {
+        language: None,
+        initial_prompt: None,
+        vad_model: None,
+    };
     let segments = t
         .transcribe(
             &samples,
-            None,
+            &opts,
             &cancel,
             Box::new(|p| eprintln!("progress {p}%")),
         )

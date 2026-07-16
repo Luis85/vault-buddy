@@ -191,7 +191,7 @@ impl Transcriber for WhisperTranscriber {
     fn transcribe(
         &self,
         samples: &[f32],
-        language: Option<&str>,
+        opts: &crate::EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
     ) -> Result<Vec<Segment>, String> {
@@ -219,7 +219,7 @@ impl Transcriber for WhisperTranscriber {
         // the reliable fix, and a pinned language (settings dropdown) removes
         // the drift entirely.
         params.set_translate(false);
-        if let Some(lang) = language {
+        if let Some(lang) = opts.language {
             // NOTE: `set_language` leaks a small `CString` per job — whisper-rs
             // `CString::into_raw()`s the language and `FullParams` has no `Drop`
             // that reclaims `fp.language`. Unlike the progress closure (an
@@ -231,6 +231,30 @@ impl Transcriber for WhisperTranscriber {
             // Left as-is deliberately; revisit if whisper-rs adds a non-leaking
             // language API.
             params.set_language(Some(lang));
+        }
+        if let Some(prompt) = opts.initial_prompt {
+            // NOTE: same bounded upstream leak class as `set_language` above —
+            // whisper-rs `CString::into_raw()`s the prompt and `FullParams`
+            // has no `Drop` reclaiming it. A prompt is a title plus a short
+            // vocabulary line, a few hundred bytes per job at most; accepted
+            // for the same pub(crate) reason documented on set_language.
+            params.set_initial_prompt(prompt);
+        }
+        if let Some(vad_model) = opts.vad_model {
+            // Skip non-speech before inference. whisper.cpp maps segment
+            // timestamps back to the ORIGINAL audio timeline after VAD
+            // filtering, so sidecar timestamps are unaffected. Params are
+            // whisper.cpp's own defaults (threshold 0.5, min speech 250 ms,
+            // min silence 100 ms, pad 30 ms) — deliberately no user knobs.
+            // Same bounded CString-leak class as set_language/
+            // set_initial_prompt above (a filesystem path, once per job).
+            //
+            // ORDER MATTERS: `enable_vad(true)` panics if `vad_model_path`
+            // is still unset — whisper-rs checks the underlying C struct's
+            // null default — so the model path must be set first.
+            params.set_vad_model_path(Some(vad_model.to_string_lossy().as_ref()));
+            params.set_vad_params(whisper_rs::WhisperVadParams::default());
+            params.enable_vad(true);
         }
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -373,17 +397,38 @@ mod tests {
                 .collect()
         };
         let t = WhisperTranscriber::load(&model).expect("load model");
-        let out = t.transcribe(&samples, None, &cancel, Box::new(|_| {}));
+        // Optional priming/VAD paths for a manual (Windows dev / local) run:
+        // VB_TEST_VOCAB primes the prompt; VAD engages when the silero model
+        // is already cached. Both default off so the test's original -6
+        // regression coverage is unchanged.
+        let vocab = std::env::var("VB_TEST_VOCAB").ok();
+        let vad = crate::model::vad_model_path().filter(|p| p.exists());
+        let opts = crate::EngineOptions {
+            language: None,
+            initial_prompt: vocab.as_deref(),
+            vad_model: vad.as_deref(),
+        };
+        let out = t.transcribe(&samples, &opts, &cancel, Box::new(|_| {}));
         assert!(
             out.is_ok(),
             "fixed engine must not abort at the first encode window (the -6 bug): {}",
             out.err().unwrap_or_default()
         );
         if std::env::var("VB_TEST_AUDIO").is_ok() {
+            let segments = out.unwrap();
             assert!(
-                !out.unwrap().is_empty(),
+                !segments.is_empty(),
                 "a real speech clip must yield at least one segment"
             );
+            // With or without VAD, timestamps must stay on the original
+            // timeline: monotonically non-decreasing starts, end >= start.
+            for w in segments.windows(2) {
+                assert!(
+                    w[0].start_ms <= w[1].start_ms,
+                    "segment starts out of order"
+                );
+            }
+            assert!(segments.iter().all(|s| s.end_ms >= s.start_ms));
         }
     }
 
