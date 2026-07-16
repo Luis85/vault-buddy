@@ -43,7 +43,7 @@ describe("ImportVaultPicker", () => {
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.text()).toContain("Report.docx");
@@ -66,7 +66,7 @@ describe("ImportVaultPicker", () => {
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
@@ -88,7 +88,7 @@ describe("ImportVaultPicker", () => {
       path: "Documents/2026/07/2026-07-10 Report.md",
     });
     expect(store.view).toBe("list");
-    expect(store.pendingImportPath).toBeNull();
+    expect(store.pendingImports).toEqual([]);
   });
 
   it("shows an install hint and no vault list when Pandoc is not installed", async () => {
@@ -97,7 +97,7 @@ describe("ImportVaultPicker", () => {
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.find('[data-testid="import-picker-gate-hint"]').text()).toContain(
@@ -120,7 +120,7 @@ describe("ImportVaultPicker", () => {
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.find('[data-testid="import-picker-checking"]').exists()).toBe(true);
@@ -138,7 +138,7 @@ describe("ImportVaultPicker", () => {
       if (cmd === "detect_pandoc") return NOT_INSTALLED;
     });
     const store = useVaultsStore();
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     await wrapper.get('[data-testid="import-picker-settings"]').trigger("click");
@@ -151,7 +151,7 @@ describe("ImportVaultPicker", () => {
         return installed({ version: "pandoc 2.14", sandboxSupported: false });
     });
     const store = useVaultsStore();
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.find('[data-testid="import-picker-gate-hint"]').text()).toContain(
@@ -165,7 +165,7 @@ describe("ImportVaultPicker", () => {
     });
     const store = useVaultsStore();
     store.vaults = [];
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.text()).toContain("No vaults found.");
@@ -178,7 +178,7 @@ describe("ImportVaultPicker", () => {
     });
     const store = useVaultsStore();
     store.vaults = sampleVaults;
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
@@ -197,9 +197,41 @@ describe("ImportVaultPicker", () => {
       if (cmd === "detect_pandoc") throw "io error";
     });
     const store = useVaultsStore();
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.find('[data-testid="import-picker-gate-hint"]').exists()).toBe(true);
+  });
+
+  it("processes a queue of dropped documents one at a time (GAP-55)", async () => {
+    const convertSources: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document") {
+        convertSources.push((args as { sourcePath: string }).sourcePath);
+        return "Documents/2026/07/note.md";
+      }
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.enqueueImports(["/a.docx", "/b.docx", "/c.docx"]);
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    // Head shown with a "+2 more queued" indicator.
+    expect(wrapper.text()).toContain("a.docx");
+    expect(wrapper.get('[data-testid="import-picker-queued"]').text()).toContain("2");
+    // Pick a vault for each queued doc in turn.
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("b.docx");
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("c.docx");
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+    // All three converted, in order; queue drained → back to the list.
+    expect(convertSources).toEqual(["/a.docx", "/b.docx", "/c.docx"]);
+    expect(store.view).toBe("list");
+    expect(store.pendingImports).toEqual([]);
   });
 });

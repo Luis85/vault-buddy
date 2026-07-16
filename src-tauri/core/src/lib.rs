@@ -4,6 +4,7 @@ pub mod capture_note;
 pub mod capture_paths;
 pub mod checkpoint;
 pub mod companion_placement;
+pub mod config_merge;
 pub mod crash;
 pub mod daily_notes;
 pub mod discovery;

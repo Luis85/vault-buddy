@@ -78,22 +78,6 @@ note text exceeds the cap the last-walked vaults' notes re-read on every search
 linger until process exit, bounded by the cap. A per-walk mark-and-sweep and/or
 a larger/tunable cap would address both; deferred as documented in the spec.
 
-### GAP-55 · Low (mitigated) · A document dropped during an in-flight import
-`src/components/ImportVaultPicker.vue` (`pick`) + `src/stores/vaults.ts`
-(`begin_document_import` → `refresh()` re-arms `pendingImportPath`). If a
-second document is dropped while the first conversion is still running,
-`begin_document_import` re-points `pendingImportPath` to the new path.
-Originally the first `pick()` then called `showList()` unconditionally,
-clearing `pendingImportPath` and silently discarding the second drop.
-**Mitigated** (polish pass): `pick()` snapshots the path it converts and only
-`showList()`s if `pendingImportPath` still equals that snapshot — otherwise it
-leaves the picker on the newly-dropped document, so the second drop survives
-and the user just picks a vault for it. Still single-slot, so a THIRD drop
-landing before the second is picked would overwrite the second; a full queue
-is the only complete fix, but disproportionate for a narrow, non-destructive
-window (imports are serialized by `ImportLock`; nothing is ever written for a
-dropped-then-lost path). Surfaced by the Task 9 review.
-
 ### GAP-54 · Low · Document-import media publish has a non-atomic crash window
 `src-tauri/core/src/document_import.rs` (`publish_inner`, the media
 `rename` before the note `write_note_atomic`). Publishing moves the media
@@ -179,17 +163,6 @@ the start-timeout branch); shutdown paths (`request_stop_and_wait(None)`,
 AND `part.is_none()` — nothing on disk. The janitor records a late worker's
 `.part`, closing the bypass; recordings that reached disk keep the
 wait-forever posture.
-
-### GAP-09 · Low · Daily-note formats with literal words silently create misnamed notes
-`src-tauri/core/src/daily_notes.rs:64-87` + `core/src/lib.rs:33-34`.
-A format containing a literal word or moment `[...]` escapes (e.g.
-`YYYY-MM-DD [Daily]`, common in Obsidian) hits the unsupported-letter-run
-rule and falls back to the default format entirely; `daily_note_uri` then
-finds no file at the default path and emits `obsidian://new`, so Obsidian
-*creates* a note diverging from the user's scheme — the same class of harm
-the fallback exists to avoid, just cleaner-looking.
-**Fix:** support `[...]` literals (treat bracketed runs as verbatim),
-and/or fall back to `obsidian://open` without a `file` parameter.
 
 ### GAP-10 · Low · Meeting-mode start is all-or-nothing while mid-recording loss is survivable
 `src-tauri/capture/src/devices.rs:213-227` vs `session.rs:267`.
@@ -338,39 +311,6 @@ count). Blast radius: Recordings browser only (recovery is idempotent, the
 transcription queue dedups by path). **Fix:** a caller-side canonical dedup
 (after `canonicalize` the nearest-existing ancestor per AGENTS.md containment
 discipline) would be the full fix; deferred as a low-frequency edge.
-
-### GAP-60 · Low · `set_capture_config`/`set_documents_config`'s preserve-vs-write field split has no direct Rust test
-`src-tauri/src/capture_config_commands.rs` (`set_capture_config`) and
-`src-tauri/src/document_commands.rs` (`set_documents_config`). Each command
-owns a subset of `VaultCaptureConfig`'s fields and must carry the rest
-forward from the existing config (read under the lock) so the OTHER
-command's settings survive. `set_capture_config` builds a whole new struct
-literal: it writes its own fields (mode, both folders, bitrate, devices,
-transcription, and now `recording_date_folders`) while copying
-`existing.tasks_folder` / `existing.documents_folder` / `existing.default_list`
-/ `existing.list_order` — and, as of this branch, `existing.document_date_folders`
-— verbatim. `set_documents_config` instead mutates a full copy of the
-existing config in place, touching only `documents_folder`/
-`document_date_folders` and leaving `recording_date_folders` (and everything
-else) preserved by omission. Neither shape is checked by a test: nothing
-asserts that a capture-settings save leaves `document_date_folders` alone,
-or that a documents-settings save leaves `recording_date_folders` alone —
-both are plain `bool`s, so a misassigned field on either side (e.g. the
-`recording_date_folders:`/`document_date_folders:` pair in
-`set_capture_config` transposed) would compile cleanly and pass every
-existing test. Failure scenario: such a mistake ships, and a user's
-Documents layout choice is silently reset by their next Recording settings
-save (or vice versa), with no failing test to catch it before release.
-**Not a new class of gap** — `set_capture_config`'s preservation of
-`tasks_folder` (owned by `set_tasks_config`), `documents_folder` (owned by
-`set_documents_config`), and `default_list`/`list_order` (owned by
-`set_task_lists_config`) already carried the same untested-merge risk;
-`recording_date_folders`/`document_date_folders` are just the newest fields
-to join it. **Fix:** extract each command's preserve-vs-write merge into a
-plain-Rust helper in `vault_config.rs` (taking the existing config plus the
-fields the command owns) and unit-test it directly there, instead of
-relying on a `#[tauri::command]`/`tauri::State` signature to keep the logic
-out of reach of the core crate's test suite.
 
 ## 2. Main-thread responsiveness (shell)
 

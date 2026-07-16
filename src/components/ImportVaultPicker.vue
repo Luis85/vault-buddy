@@ -4,53 +4,39 @@ import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
+import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
-import type { PandocStatus } from "../types";
 import { basename } from "../utils/basename";
 
 // Reached only via a buddy drag-drop: Rust stashes the dropped path
 // (begin_document_import) and shows the panel; the panel's refresh()
-// consumes it (take_pending_import) into store.pendingImportPath and lands
+// consumes it (take_pending_import) into store.pendingImports and lands
 // here. The extension (.docx/.odt/.rtf) is already validated by the drop
 // handler in BuddyRoot, so this view only needs to pick the destination
 // vault and gate on Pandoc — same convert_document contract RecordMode's
 // "Import Document" action uses.
 const store = useVaultsStore();
 const notifications = useNotificationsStore();
+const pandocStore = usePandocStore();
 
-const pandoc = ref<PandocStatus | null>(null);
 const busyVaultId = ref<string | null>(null);
-// True until the FIRST detect_pandoc resolves. Without it, a null status
-// reads as "not installed" and the picker flashes the install gate before the
-// probe finishes — a quick drop-then-click would land on Settings even with a
-// valid Pandoc (same pre-probe window RecordMode's `checking` state guards).
-const checking = ref(true);
-
-async function detectPandoc() {
-  // Same degrade pattern as RecordMode: a null status (failed read, or no
-  // Tauri runtime under test) is treated as "not installed" rather than
-  // optimistically letting a convert_document call fail later.
-  try {
-    pandoc.value = await invoke<PandocStatus>("detect_pandoc");
-  } catch (e) {
-    logWarning(`import picker: detect_pandoc failed: ${String(e)}`);
-  } finally {
-    checking.value = false;
-  }
-}
+// The shared pandoc store owns detection: the picker reuses a cached
+// "installed" result instead of re-probing on every drop, and
+// `pandocStore.checking` gates the pre-probe window so a quick drop-then-click
+// can't flash the install gate / route to Settings before the probe settles.
 
 onMounted(() => {
-  void detectPandoc();
+  void pandocStore.ensureDetected();
 });
 
 const gate = computed(() => {
-  if (!pandoc.value?.installed) {
+  if (!pandocStore.status?.installed) {
     return {
       blocked: true,
       hint: "Pandoc isn't installed — install it to import documents.",
     };
   }
-  if (!pandoc.value.sandboxSupported) {
+  if (!pandocStore.status.sandboxSupported) {
     return {
       blocked: true,
       hint: "Your Pandoc is too old for safe import (need 2.15+).",
@@ -60,26 +46,31 @@ const gate = computed(() => {
 });
 
 const sourceName = computed(() => {
-  const path = store.pendingImportPath;
+  const path = store.pendingImports[0];
   return path ? basename(path) : "";
 });
+const queuedMore = computed(() => Math.max(0, store.pendingImports.length - 1));
 
 // One discriminated state drives the body, so the template branches on a
 // single value instead of scattered `checking` / `gate.blocked` / length
 // booleans (which pushed the render function past the complexity gate).
 const viewState = computed<"checking" | "blocked" | "empty" | "list">(() => {
-  if (checking.value) return "checking";
+  if (pandocStore.checking) return "checking";
   if (gate.value.blocked) return "blocked";
   if (store.vaults.length === 0) return "empty";
   return "list";
 });
 
 async function pick(vaultId: string) {
-  // Snapshot the path we're converting: a second document dropped on the buddy
-  // mid-conversion re-points store.pendingImportPath, and we must not act on
-  // (or discard) that newer drop when THIS conversion resolves (GAP-55).
-  const source = store.pendingImportPath;
+  // Convert the head of the queue; a mid-conversion drop appends to the tail
+  // (GAP-55), so afterward we drop the head and either advance to the next
+  // queued document or return to the list.
+  const source = store.pendingImports[0];
   if (busyVaultId.value || !source) return;
+  // Capture the queue epoch before the (slow) conversion: if the user backs out
+  // — and maybe re-drops the same path — before it resolves, the epoch moves on
+  // and dequeueImport must not consume the wrong entry or navigate (Codex P2).
+  const epoch = store.importEpoch;
   busyVaultId.value = vaultId;
   try {
     const notePath = await invoke<string>("convert_document", {
@@ -94,10 +85,10 @@ async function pick(vaultId: string) {
         run: () => invoke("open_imported_document", { id: vaultId, path: notePath }),
       },
     });
-    // Only return to the list if no newer drop arrived meanwhile — otherwise
-    // leave the picker on the newly-dropped document instead of blanking it.
-    if (store.pendingImportPath === source) store.showList();
+    store.dequeueImport(epoch);
   } catch (e) {
+    // Stay on the picker (queue head unchanged) so the user can retry a
+    // different vault for this same document.
     logWarning(`import picker: convert_document failed: ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
   } finally {
@@ -126,6 +117,11 @@ async function pick(vaultId: string) {
         class="font-medium text-slate-200"
       >{{ sourceName }}</span>
       into which vault?
+      <span
+        v-if="queuedMore > 0"
+        data-testid="import-picker-queued"
+        class="text-slate-500"
+      >(+{{ queuedMore }} more queued)</span>
     </p>
     <p
       v-if="viewState === 'checking'"

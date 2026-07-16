@@ -61,6 +61,7 @@ function routeInvoke(opts: {
 
 describe("DocumentImportSettings", () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     mocks.invoke.mockReset();
     mocks.open.mockReset();
     vi.mocked(logWarning).mockClear();

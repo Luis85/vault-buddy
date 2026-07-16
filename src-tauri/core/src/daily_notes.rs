@@ -52,9 +52,11 @@ pub fn load_settings(vault_path: &Path) -> DailyNoteSettings {
 }
 
 /// Renders `format` for `date`, substituting the supported moment tokens
-/// `YYYY`, `MM`, `DD`. Every run of consecutive letters must be exactly one
-/// supported token; any other run (`dddd`, `MMMM`, `YYYYMMDD`, …) means the
-/// format uses moment features we don't support — fall back to the default
+/// `YYYY`, `MM`, `DD` and emitting `[literal]` escapes verbatim (brackets
+/// stripped, e.g. `YYYY-MM-DD [Daily]` → `2026-07-03 Daily`). Every run of
+/// consecutive letters OUTSIDE brackets must be exactly one supported token;
+/// any other run (`dddd`, `MMMM`, `YYYYMMDD`, …), or an unterminated `[`, means
+/// the format uses moment features we don't support — fall back to the default
 /// format rather than risk telling Obsidian to create a misnamed note.
 /// (Naive `str::replace` would consume `MMMM` as two `MM`s: "2026-0707-03".)
 pub fn render_format(format: &str, date: NaiveDate) -> String {
@@ -63,14 +65,29 @@ pub fn render_format(format: &str, date: NaiveDate) -> String {
     })
 }
 
-/// `None` when the format contains a letter run that is not exactly one
-/// supported token.
+/// `None` when the format contains a letter run (outside `[...]`) that is not
+/// exactly one supported token, or an unterminated `[` escape.
 fn substitute_tokens(format: &str, date: NaiveDate) -> Option<String> {
     let chars: Vec<char> = format.chars().collect();
     let mut out = String::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i].is_ascii_alphabetic() {
+        if chars[i] == '[' {
+            // moment `[literal]` escape: emit the bracketed text verbatim
+            // (brackets stripped), skipping the token rule inside. An
+            // unterminated `[` is unparseable — fall back to the default format
+            // rather than risk a misnamed note.
+            let start = i + 1;
+            let mut j = start;
+            while j < chars.len() && chars[j] != ']' {
+                j += 1;
+            }
+            if j >= chars.len() {
+                return None; // no closing ']'
+            }
+            out.extend(&chars[start..j]);
+            i = j + 1; // past the ']'
+        } else if chars[i].is_ascii_alphabetic() {
             let start = i;
             while i < chars.len() && chars[i].is_ascii_alphabetic() {
                 i += 1;
@@ -137,6 +154,29 @@ mod tests {
         // fallback check. Letter runs must match a supported token exactly.
         assert_eq!(render_format("YYYY-MMMM-DD", date()), "2026-07-03");
         assert_eq!(render_format("YYYYMMDD", date()), "2026-07-03");
+    }
+
+    #[test]
+    fn bracket_literals_render_verbatim() {
+        // moment's [literal] escape: bracketed text is emitted as-is (brackets
+        // stripped), so a common Obsidian format like "YYYY-MM-DD [Daily]" no
+        // longer falls back to the default and misnames the note.
+        assert_eq!(
+            render_format("YYYY-MM-DD [Daily]", date()),
+            "2026-07-03 Daily"
+        );
+        assert_eq!(
+            render_format("[Week of] YYYY-MM-DD", date()),
+            "Week of 2026-07-03"
+        );
+        // a literal containing characters that would otherwise be tokens
+        assert_eq!(render_format("YYYY [at] MM", date()), "2026 at 07");
+    }
+
+    #[test]
+    fn unterminated_bracket_falls_back_to_default() {
+        // No closing ']': unparseable → default format, never a half-built path.
+        assert_eq!(render_format("YYYY-MM-DD [Daily", date()), "2026-07-03");
     }
 
     #[test]

@@ -313,6 +313,34 @@ describe("RecordMode", () => {
     expect(calls).not.toContain("set_capture_config");
   });
 
+  it("does not re-probe Pandoc once it has been found (cached across opens)", async () => {
+    let detectCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "get_capture_config") return { mode: "meeting" };
+      if (cmd === "list_recordings") return [];
+      if (cmd === "detect_pandoc") {
+        detectCalls += 1;
+        return {
+          installed: true,
+          version: "pandoc 3.1.9",
+          path: "pandoc",
+          sandboxSupported: true,
+          configuredPath: null,
+        };
+      }
+    });
+    // First open probes.
+    const first = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    expect(detectCalls).toBe(1);
+    first.unmount();
+    // Second open reuses the cached "installed" result — no new probe.
+    const second = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    expect(detectCalls).toBe(1);
+    second.unmount();
+  });
+
   describe("vocabulary autosave debounce", () => {
     // Regression: the transcription computed's setter used to call persist()
     // synchronously on EVERY update:modelValue. The vocabulary textarea emits
