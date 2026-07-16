@@ -124,10 +124,15 @@ jobs:
       # ExternalProject whose MSBuild FileTracker .tlog paths overflow
       # Windows' 260-char MAX_PATH under the default deep cargo target dir
       # (FileTracker error FTK1011 in the compiler probe). A short
-      # top-level target dir keeps every nested path under the limit;
-      # rust-cache and tauri both resolve the target dir through cargo, so
-      # caching and bundling follow it automatically.
-      CARGO_TARGET_DIR: D:\vbt
+      # top-level target dir keeps every nested path under the limit. C:\
+      # rather than D:\ — the runner's D: drive is only ~14 GB, and a
+      # restored rust-cache archive alongside a release-profile Vulkan
+      # build needs more headroom than that reliably leaves; C:\ (the OS
+      # drive) has room to spare. tauri-action resolves the target dir
+      # through cargo automatically, but rust-cache does NOT — left alone
+      # it only caches its default `<workspace>/target`, so the
+      # `cache-directories` input below points it at this same override.
+      CARGO_TARGET_DIR: C:\vbt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -142,6 +147,13 @@ jobs:
           # cache produced by pushes to main instead of compiling ~450
           # release-profile crates from scratch
           shared-key: windows-app
+          # rust-cache's own target-dir detection does not follow the
+          # CARGO_TARGET_DIR override above — without this it caches (and
+          # later finds nothing in) the default `src-tauri/target`, so
+          # Windows artifact caching was silently a no-op while the real
+          # build output sat in C:\vbt. Documented rust-cache input for
+          # extra cache paths.
+          cache-directories: C:\vbt
       - run: npm ci
       # GPU builds: whisper.cpp's Vulkan backend needs the SDK's headers +
       # glslc at compile time. Pinned version + SHA-256 (the same pinned-
@@ -195,8 +207,8 @@ jobs:
           # bundles land under it, not src-tauri/target. if-no-files-found:
           # error is the tripwire if these two ever drift apart again.
           path: |
-            D:/vbt/release/bundle/msi/*.msi
-            D:/vbt/release/bundle/nsis/*.exe
+            C:/vbt/release/bundle/msi/*.msi
+            C:/vbt/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 14
 

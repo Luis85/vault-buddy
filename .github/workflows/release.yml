@@ -80,10 +80,13 @@ jobs:
     needs: validate
     runs-on: windows-latest
     env:
-      # Same MAX_PATH guard as ci.yml's windows-app job: the Vulkan
-      # backend's nested vulkan-shaders-gen build overflows FileTracker's
-      # .tlog paths (FTK1011) under the default deep cargo target dir.
-      CARGO_TARGET_DIR: D:\vbt
+      # Same MAX_PATH + disk-headroom guard as ci.yml's windows-app job
+      # (see its comment for the full rationale): the Vulkan backend's
+      # nested vulkan-shaders-gen build overflows FileTracker's .tlog paths
+      # (FTK1011) under the default deep cargo target dir, and C:\ has more
+      # free space than the runner's ~14 GB D: drive for a restored
+      # rust-cache archive alongside a release-profile build.
+      CARGO_TARGET_DIR: C:\vbt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -95,8 +98,13 @@ jobs:
         with:
           workspaces: src-tauri
           # restore the CI Windows job's cache (built on pushes to main) so
-          # tagged release builds start warm
+          # tagged release builds start warm — cache-directories below is
+          # what actually makes that true: without it rust-cache caches
+          # only the default `src-tauri/target`, not the CARGO_TARGET_DIR
+          # override above, so the shared key alone was silently restoring
+          # nothing and every release build compiled from scratch.
           shared-key: windows-app
+          cache-directories: C:\vbt
       - run: npm ci
       # GPU builds: whisper.cpp's Vulkan backend needs the SDK's headers +
       # glslc at compile time. Pinned version + SHA-256 (the same pinned-
