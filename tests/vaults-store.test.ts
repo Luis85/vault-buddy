@@ -418,7 +418,8 @@ describe("vaults store", () => {
   it("dequeueImport drops the head and advances to the list when the queue drains", () => {
     const store = useVaultsStore();
     store.enqueueImports(["C:/x/Report.docx"]);
-    store.dequeueImport("C:/x/Report.docx");
+    const epoch = store.importEpoch; // captured when the pick started
+    store.dequeueImport(epoch);
     expect(store.pendingImports).toEqual([]);
     expect(store.view).toBe("list");
   });
@@ -426,23 +427,38 @@ describe("vaults store", () => {
   it("dequeueImport keeps the picker up while more imports are queued", () => {
     const store = useVaultsStore();
     store.enqueueImports(["C:/x/A.docx", "C:/x/B.docx"]);
-    store.dequeueImport("C:/x/A.docx");
+    const epoch = store.importEpoch;
+    store.dequeueImport(epoch); // drops the head A, leaves B
     expect(store.pendingImports).toEqual(["C:/x/B.docx"]);
     expect(store.view).toBe("importPicker");
   });
 
   it("a stale dequeueImport after navigating away leaves the view alone (Codex P2)", () => {
     // The user presses Back / opens another view while convert_document is
-    // still running; showList() already drained the queue. The late-resolving
-    // pick() must not yank navigation back to the list.
+    // still running; showList() bumped the epoch. The late-resolving pick()
+    // must not yank navigation back to the list.
     const store = useVaultsStore();
     store.enqueueImports(["C:/x/Report.docx"]);
-    store.openTasks("v1"); // navigate away mid-conversion (clears no queue on its own)
-    store.showList(); // …simulate a Back that drained the queue
+    const epoch = store.importEpoch; // captured when the pick started
+    store.showList(); // …a Back that drained the queue (epoch++)
     store.openTasks("v1"); // then the user lands on some other view
-    store.dequeueImport("C:/x/Report.docx"); // stale completion fires
+    store.dequeueImport(epoch); // stale completion fires
     expect(store.view).toBe("tasks");
     expect(store.pendingImports).toEqual([]);
+  });
+
+  it("a stale completion never consumes a re-dropped same-path import (Codex P2)", () => {
+    // Back out mid-conversion, then re-drop the SAME path: by-value matching
+    // would remove the fresh retry and bounce to the list. The epoch guard sees
+    // the completion no longer owns the queue and leaves the re-drop intact.
+    const store = useVaultsStore();
+    store.enqueueImports(["C:/x/Report.docx"]);
+    const epoch = store.importEpoch; // the first drop's pick starts
+    store.showList(); // back out (epoch++)
+    store.enqueueImports(["C:/x/Report.docx"]); // re-drop the identical path
+    store.dequeueImport(epoch); // the first conversion resolves late
+    expect(store.pendingImports).toEqual(["C:/x/Report.docx"]);
+    expect(store.view).toBe("importPicker");
   });
 
   it("refresh routes to the import picker when Rust has a pending import", async () => {

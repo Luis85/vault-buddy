@@ -39,6 +39,13 @@ export const useVaultsStore = defineStore("vaults", {
     // The FIFO queue of dropped-document paths awaiting a vault pick; the head
     // (index 0) is the document the picker is currently showing (GAP-55).
     pendingImports: [] as string[],
+    // Monotonic token for the current import-queue "session", bumped whenever
+    // the queue is cleared (showList). A conversion captures it when its pick
+    // starts and passes it back on completion; a mismatch means the user backed
+    // out — possibly re-dropping the SAME path, which by-value matching would
+    // wrongly consume — so the stale completion must touch neither the queue nor
+    // navigation (Codex P2).
+    importEpoch: 0,
     // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
@@ -195,6 +202,8 @@ export const useVaultsStore = defineStore("vaults", {
       this.recordModeVaultId = null;
       this.tasksVaultId = null;
       this.pendingImports = [];
+      // Invalidate any in-flight conversion's claim on the queue (see importEpoch).
+      this.importEpoch++;
     },
     openSettings() {
       this.view = "settings";
@@ -241,18 +250,17 @@ export const useVaultsStore = defineStore("vaults", {
       this.view = "importPicker";
       this.pendingImports.push(...paths);
     },
-    // Remove a just-converted document (the head) from the queue; when none
-    // remain, leave the picker for the list. Matches by value so a
-    // mid-conversion append can't remove the wrong entry.
-    dequeueImport(path: string) {
-      const idx = this.pendingImports.indexOf(path);
-      // Stale completion: the user pressed Back / navigated away mid-conversion,
-      // so showList() already cleared the queue and this path is gone. Do
-      // nothing — a late-resolving pick() must not touch navigation (Codex P2).
-      if (idx === -1) return;
-      this.pendingImports.splice(idx, 1);
-      // Advance to the list only when the queue is drained AND we're still on
-      // the picker, so a mid-conversion navigation is never yanked back.
+    // Called by the picker when a conversion completes. `epoch` is the token
+    // captured when the pick STARTED. Drop the just-converted head (the picker
+    // always converts pendingImports[0], and a mid-conversion drop appends to
+    // the tail) and, once drained, leave the picker for the list — but only
+    // while the epoch still matches. A stale completion after a back-out
+    // (even one that re-dropped the same path) no longer owns the queue, so it
+    // must neither consume an entry nor yank navigation (Codex P2). Removing by
+    // head rather than by value is what makes the same-path re-drop safe.
+    dequeueImport(epoch: number) {
+      if (epoch !== this.importEpoch) return;
+      this.pendingImports.shift();
       if (this.pendingImports.length === 0 && this.view === "importPicker") {
         this.showList();
       }

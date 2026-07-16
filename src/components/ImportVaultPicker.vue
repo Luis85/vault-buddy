@@ -67,6 +67,10 @@ async function pick(vaultId: string) {
   // queued document or return to the list.
   const source = store.pendingImports[0];
   if (busyVaultId.value || !source) return;
+  // Capture the queue epoch before the (slow) conversion: if the user backs out
+  // — and maybe re-drops the same path — before it resolves, the epoch moves on
+  // and dequeueImport must not consume the wrong entry or navigate (Codex P2).
+  const epoch = store.importEpoch;
   busyVaultId.value = vaultId;
   try {
     const notePath = await invoke<string>("convert_document", {
@@ -81,7 +85,7 @@ async function pick(vaultId: string) {
         run: () => invoke("open_imported_document", { id: vaultId, path: notePath }),
       },
     });
-    store.dequeueImport(source);
+    store.dequeueImport(epoch);
   } catch (e) {
     // Stay on the picker (queue head unchanged) so the user can retry a
     // different vault for this same document.

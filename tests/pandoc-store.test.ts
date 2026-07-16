@@ -85,6 +85,51 @@ describe("usePandocStore", () => {
     expect(calls).toBe(2); // too old is not a usable cache hit → re-probe
   });
 
+  it("a late probe result does not overwrite a newer markDetected (Codex P2)", async () => {
+    // ImportVaultPicker starts a probe, the user opens settings which writes an
+    // authoritative status, then the original slow probe resolves stale. The
+    // write-through must win — the stale probe cannot clobber it.
+    let resolveProbe: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") {
+        return new Promise((r) => {
+          resolveProbe = r;
+        });
+      }
+    });
+    const store = usePandocStore();
+    const pending = store.ensureDetected(); // probe starts (status null)
+    store.markDetected(installed()); // settings writes through while it's in flight
+    expect(store.status?.installed).toBe(true);
+    resolveProbe(NOT_INSTALLED); // the original probe resolves late + stale
+    await pending;
+    expect(store.status?.installed).toBe(true);
+    expect(store.checking).toBe(false);
+  });
+
+  it("only the latest probe clears the checking gate (Codex P2)", async () => {
+    // Two overlapping probes: the older one resolving first must not drop the
+    // gate while the newer probe is still pending, or the intake UI flashes a
+    // result before the authoritative one lands.
+    const resolvers: Array<(v: unknown) => void> = [];
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") {
+        return new Promise((r) => resolvers.push(r));
+      }
+    });
+    const store = usePandocStore();
+    const p1 = store.ensureDetected();
+    const p2 = store.ensureDetected(); // status still null → probes again
+    expect(store.checking).toBe(true);
+    resolvers[0](NOT_INSTALLED); // older probe resolves first
+    await p1;
+    expect(store.checking).toBe(true); // newer probe still pending → gate stays
+    resolvers[1](installed());
+    await p2;
+    expect(store.checking).toBe(false);
+    expect(store.status?.installed).toBe(true);
+  });
+
   it("markDetected caches a status without probing", async () => {
     let calls = 0;
     mockIPC((cmd) => {
