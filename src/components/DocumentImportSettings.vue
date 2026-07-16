@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
+import { usePandocStore } from "../stores/pandoc";
 import type { PandocStatus } from "../types";
 import { withDialogSuppressed } from "../utils/nativeDialog";
 
@@ -19,6 +20,7 @@ const error = ref<string | null>(null);
 // concurrent detect/save calls could otherwise land out of order and leave
 // a stale status showing.
 const saving = ref(false);
+const pandocStore = usePandocStore();
 
 // Monotonic ticket so out-of-order detect responses can't regress the status:
 // a slow initial probe must not overwrite the fresher result of a save/browse
@@ -27,9 +29,21 @@ let detectTicket = 0;
 
 async function detect() {
   const ticket = ++detectTicket;
+  // Claim the store's probe token at the START (not at resolution): if the user
+  // leaves settings and an intake ensureDetected runs a newer probe, this one's
+  // token goes stale and markDetected below drops the write-through instead of
+  // clobbering the fresher intake result (Codex P2). The local detectTicket
+  // still orders this card's own out-of-order responses.
+  const token = pandocStore.beginProbe();
   try {
     const s = await invoke<PandocStatus>("detect_pandoc");
-    if (ticket === detectTicket) status.value = s;
+    if (ticket === detectTicket) {
+      status.value = s;
+      // Keep the shared intake-menu cache fresh after a settings-side probe
+      // (Recheck / path-override re-detect), so the record chooser sees the fix
+      // — but only while this probe is still the newest across the store.
+      pandocStore.markDetected(s, token);
+    }
   } catch (e) {
     // Not running under Tauri (unit tests) or IPC failure — leave the card
     // empty, same degraded-but-continuing pattern as McpSettings/CaptureSettings.

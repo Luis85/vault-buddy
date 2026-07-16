@@ -592,7 +592,7 @@ describe("ActionPanel", () => {
 
   it("routes the importPicker view to ImportVaultPicker with a back button", async () => {
     const store = useVaultsStore();
-    store.openImportPicker("C:/x/Report.docx");
+    store.enqueueImports(["C:/x/Report.docx"]);
     const wrapper = mount(ActionPanel, {
       global: { stubs: { ImportVaultPicker: true } },
     });
@@ -602,7 +602,7 @@ describe("ActionPanel", () => {
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
     await wrapper.get('[data-testid="back-button"]').trigger("click");
     expect(store.view).toBe("list");
-    expect(store.pendingImportPath).toBeNull();
+    expect(store.pendingImports).toEqual([]);
   });
 });
 

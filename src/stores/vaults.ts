@@ -36,7 +36,16 @@ export const useVaultsStore = defineStore("vaults", {
     // The dropped document's path, armed by a Rust-owned buddy drop
     // (`take_pending_import`, consumed in `refresh`) and read by
     // ImportVaultPicker to drive `convert_document`.
-    pendingImportPath: null as string | null,
+    // The FIFO queue of dropped-document paths awaiting a vault pick; the head
+    // (index 0) is the document the picker is currently showing (GAP-55).
+    pendingImports: [] as string[],
+    // Monotonic token for the current import-queue "session", bumped whenever
+    // the queue is cleared (showList). A conversion captures it when its pick
+    // starts and passes it back on completion; a mismatch means the user backed
+    // out — possibly re-dropping the SAME path, which by-value matching would
+    // wrongly consume — so the stale completion must touch neither the queue nor
+    // navigation (Codex P2).
+    importEpoch: 0,
     // A view to open ON THE NEXT panel-shown refresh, consumed once. The panel
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
@@ -76,17 +85,23 @@ export const useVaultsStore = defineStore("vaults", {
       // Consume the Rust-owned pending buddy-drop import FIRST: it always
       // wins over the pendingView/list default, because the drop is the
       // reason this exact refresh is happening (see the module comment on
-      // `pendingImportPath` and document_commands::begin_document_import).
-      const dropped = await invoke<string | null>(
-        "take_pending_import",
-      ).catch(() => null);
-      if (dropped) {
-        this.openImportPicker(dropped);
+      // `pendingImports` and document_commands::begin_document_import).
+      const dropped =
+        (await invoke<string[]>("take_pending_import").catch(
+          () => [] as string[],
+        )) ?? [];
+      if (dropped.length) {
+        this.enqueueImports(dropped);
         // A drop supersedes any armed one-shot view (e.g. the startup update
         // check's "settings"): clear it so a LATER panel-shown refresh doesn't
         // consume it stale and navigate away after the import returns to list.
         this.pendingView = null;
         this.pendingCaptureVaultId = null;
+      } else if (this.view === "importPicker" && this.pendingImports.length) {
+        // An un-picked import queue survives a spurious empty-drain refresh:
+        // near-simultaneous drops each fire panel-shown → refresh, and a later
+        // refresh can drain empty; leaving the picker as-is keeps the queue the
+        // first refresh built (and keeps an un-picked single drop, too).
       } else if (this.pendingView) {
         this.view = this.pendingView;
         this.captureSettingsVaultId = this.pendingCaptureVaultId;
@@ -186,7 +201,9 @@ export const useVaultsStore = defineStore("vaults", {
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
       this.tasksVaultId = null;
-      this.pendingImportPath = null;
+      this.pendingImports = [];
+      // Invalidate any in-flight conversion's claim on the queue (see importEpoch).
+      this.importEpoch++;
     },
     openSettings() {
       this.view = "settings";
@@ -226,12 +243,27 @@ export const useVaultsStore = defineStore("vaults", {
     openDocumentImport() {
       this.view = "documentImport";
     },
-    // Rust-owned buddy drop lands here (via `refresh`'s take_pending_import
-    // consume). back() needs no case: it falls through to the final else →
-    // showList, which also clears pendingImportPath.
-    openImportPicker(path: string) {
+    // Append drained buddy-drop paths to the FIFO queue and show the picker.
+    // back() needs no case: it falls through to the final else → showList,
+    // which also clears the queue.
+    enqueueImports(paths: string[]) {
       this.view = "importPicker";
-      this.pendingImportPath = path;
+      this.pendingImports.push(...paths);
+    },
+    // Called by the picker when a conversion completes. `epoch` is the token
+    // captured when the pick STARTED. Drop the just-converted head (the picker
+    // always converts pendingImports[0], and a mid-conversion drop appends to
+    // the tail) and, once drained, leave the picker for the list — but only
+    // while the epoch still matches. A stale completion after a back-out
+    // (even one that re-dropped the same path) no longer owns the queue, so it
+    // must neither consume an entry nor yank navigation (Codex P2). Removing by
+    // head rather than by value is what makes the same-path re-drop safe.
+    dequeueImport(epoch: number) {
+      if (epoch !== this.importEpoch) return;
+      this.pendingImports.shift();
+      if (this.pendingImports.length === 0 && this.view === "importPicker") {
+        this.showList();
+      }
     },
     /** Back to the current view's fixed parent (no history stack). */
     back() {
