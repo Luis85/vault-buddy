@@ -292,7 +292,7 @@ impl Transcriber for WhisperTranscriber {
         opts: &crate::EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
-    ) -> Result<(Vec<Segment>, bool), String> {
+    ) -> Result<crate::EngineOutput, String> {
         // VAD (optional): filter non-speech out of `samples` before paying
         // for inference. Reimplemented in Rust via crate::vad rather than
         // FullParams' enable_vad/set_vad_model_path/set_vad_params, which
@@ -338,7 +338,11 @@ impl Transcriber for WhisperTranscriber {
                         // existing zero-segment path already renders "No
                         // speech detected" — return before paying for a
                         // state/full() call at all.
-                        return Ok((Vec::new(), true));
+                        return Ok(crate::EngineOutput {
+                            segments: Vec::new(),
+                            vad_engaged: true,
+                            detected_language: None,
+                        });
                     }
                     if crate::vad::spans_cover_all(&spans, samples.len()) {
                         // Full-buffer speech (Codex P2): VAD ran and found
@@ -491,7 +495,11 @@ impl Transcriber for WhisperTranscriber {
                 text,
             });
         }
-        Ok((out, vad_engaged))
+        Ok(crate::EngineOutput {
+            segments: out,
+            vad_engaged,
+            detected_language: None,
+        })
     }
 }
 
@@ -627,7 +635,11 @@ mod tests {
             out.err().unwrap_or_default()
         );
         if std::env::var("VB_TEST_AUDIO").is_ok() {
-            let (segments, vad_engaged) = out.unwrap();
+            let crate::EngineOutput {
+                segments,
+                vad_engaged,
+                detected_language: _,
+            } = out.unwrap();
             eprintln!("vad_engaged={vad_engaged}");
             assert!(
                 !segments.is_empty(),

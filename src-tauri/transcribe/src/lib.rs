@@ -52,6 +52,20 @@ pub struct EngineOptions<'a> {
     pub vad_model: Option<&'a Path>,
 }
 
+/// What one engine run produced. A struct (not a tuple) so the next field
+/// stops rippling through every `Transcriber` implementor — this is the
+/// third widening of this signature on one branch.
+pub struct EngineOutput {
+    pub segments: Vec<Segment>,
+    /// Whether this run actually filtered non-speech via VAD (the
+    /// EFFECTIVE state — unchanged semantics from the tuple's bool).
+    pub vad_engaged: bool,
+    /// Whisper's detected language code (e.g. "de"): Some only when the
+    /// job ran on auto AND inference actually ran. Captured in H2; every
+    /// H1 construction site sets `None`.
+    pub detected_language: Option<String>,
+}
+
 /// A speech-to-text backend. `samples` are 16 kHz mono f32 in [-1, 1];
 /// `opts` carries the language plus the prompt/VAD knobs (see
 /// `EngineOptions`). `cancel` is polled by the engine's abort callback (an
@@ -73,7 +87,7 @@ pub trait Transcriber {
         opts: &EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
-    ) -> Result<(Vec<Segment>, bool), String>;
+    ) -> Result<EngineOutput, String>;
 }
 
 pub struct TranscribeOptions {
@@ -257,18 +271,21 @@ pub fn transcribe_recording(
         initial_prompt: opts.initial_prompt.as_deref(),
         vad_model: opts.vad_model.as_deref(),
     };
-    let (segments, vad_engaged) =
-        match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
-            Ok(t) => t,
-            // An aborted full() returns Err; the token says whether it was us.
-            Err(e) => {
-                return Err(if cancel.is_cancelled() {
-                    TranscribeError::Cancelled
-                } else {
-                    TranscribeError::Failed(e)
-                })
-            }
-        };
+    let EngineOutput {
+        segments,
+        vad_engaged,
+        detected_language: _,
+    } = match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
+        Ok(t) => t,
+        // An aborted full() returns Err; the token says whether it was us.
+        Err(e) => {
+            return Err(if cancel.is_cancelled() {
+                TranscribeError::Cancelled
+            } else {
+                TranscribeError::Failed(e)
+            })
+        }
+    };
     // A cancel that landed DURING the engine call must win even over a
     // successful return: the VAD detect stage has no abort callback, so an
     // all-silence recording can short-circuit to Ok after the user already
@@ -405,16 +422,17 @@ mod tests {
             _o: &EngineOptions,
             _c: &CancelToken,
             mut on_progress: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<(Vec<Segment>, bool), String> {
+        ) -> Result<EngineOutput, String> {
             on_progress(100); // exercises the forwarder
-            Ok((
-                vec![Segment {
+            Ok(EngineOutput {
+                segments: vec![Segment {
                     start_ms: 0,
                     end_ms: 1000,
                     text: "hello world".into(),
                 }],
-                false,
-            ))
+                vad_engaged: false,
+                detected_language: None,
+            })
         }
     }
     // Sibling of FakeOk with vad_engaged=true — the "on" half of the
@@ -429,15 +447,16 @@ mod tests {
             _o: &EngineOptions,
             _c: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<(Vec<Segment>, bool), String> {
-            Ok((
-                vec![Segment {
+        ) -> Result<EngineOutput, String> {
+            Ok(EngineOutput {
+                segments: vec![Segment {
                     start_ms: 0,
                     end_ms: 1000,
                     text: "hello world".into(),
                 }],
-                true,
-            ))
+                vad_engaged: true,
+                detected_language: None,
+            })
         }
     }
     struct FakeEmpty;
@@ -448,8 +467,12 @@ mod tests {
             _o: &EngineOptions,
             _c: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<(Vec<Segment>, bool), String> {
-            Ok((vec![], false))
+        ) -> Result<EngineOutput, String> {
+            Ok(EngineOutput {
+                segments: vec![],
+                vad_engaged: false,
+                detected_language: None,
+            })
         }
     }
 
@@ -484,7 +507,7 @@ mod tests {
             _o: &EngineOptions,
             cancel: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<(Vec<Segment>, bool), String> {
+        ) -> Result<EngineOutput, String> {
             // Mirrors whisper: an aborted full() returns Err; the token disambiguates.
             if cancel.is_cancelled() {
                 return Err("aborted".into());
@@ -760,11 +783,15 @@ mod tests {
             _o: &EngineOptions,
             cancel: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<(Vec<Segment>, bool), String> {
+        ) -> Result<EngineOutput, String> {
             // The cancel arrives mid-call (e.g. during the VAD detect,
             // which has no abort callback) — and the call still succeeds.
             cancel.cancel();
-            Ok((Vec::new(), true))
+            Ok(EngineOutput {
+                segments: Vec::new(),
+                vad_engaged: true,
+                detected_language: None,
+            })
         }
     }
 
@@ -972,13 +999,17 @@ mod tests {
                 opts: &EngineOptions,
                 _c: &CancelToken,
                 _p: Box<dyn FnMut(i32) + Send>,
-            ) -> Result<(Vec<Segment>, bool), String> {
+            ) -> Result<EngineOutput, String> {
                 *self.0.lock().unwrap() = Some((
                     opts.language.map(str::to_string),
                     opts.initial_prompt.map(str::to_string),
                     opts.vad_model.map(Path::to_path_buf),
                 ));
-                Ok((vec![], false))
+                Ok(EngineOutput {
+                    segments: vec![],
+                    vad_engaged: false,
+                    detected_language: None,
+                })
             }
         }
         let dir = tempfile::tempdir().unwrap();

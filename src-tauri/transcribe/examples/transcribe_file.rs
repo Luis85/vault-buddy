@@ -44,7 +44,11 @@ fn main() {
         initial_prompt: None,
         vad_model: None,
     };
-    let (segments, vad_engaged) = t
+    let vault_buddy_transcribe::EngineOutput {
+        segments,
+        vad_engaged,
+        detected_language: _,
+    } = t
         .transcribe(
             &samples,
             &opts,
