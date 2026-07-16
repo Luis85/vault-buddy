@@ -197,12 +197,14 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
         }
     }
     let cfg = capture_config::vault_config(&app_config(paths), id);
-    // Off → None, so the id property is never read (display-only surfacing;
-    // matches the same gate add_task's generation already uses).
-    let id_property = cfg
-        .task_id_enabled
-        .then(|| cfg.task_id_property_name().to_string());
-    tasks::list_tasks(&root, id_property.as_deref())
+    // Same chokepoint add_task's generation uses (tasks::id_property_for_
+    // generation): off, or a reserved/invalid configured property, both
+    // yield None so the property is never read — a hand-edited config
+    // pointing the id at a reserved key (e.g. "status") must not surface
+    // that structured field's own value as the id (Codex, PR #59).
+    let id_property =
+        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+    tasks::list_tasks(&root, id_property)
         .into_iter()
         .map(TaskDto::from_item)
         .collect()
@@ -733,6 +735,76 @@ mod tests {
             body.matches("status:").count(),
             1,
             "a reserved id property must not duplicate the status: line, got: {body}"
+        );
+    }
+
+    #[test]
+    fn list_tasks_reads_the_generated_id_when_the_property_is_valid() {
+        // Positive-case companion to the reserved-property regression below:
+        // a valid, non-reserved configured property must round-trip through
+        // list_tasks as TaskDto.id, same as what add_task stamped.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "uid" } } }"#,
+        )
+        .unwrap();
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let id = created
+            .id
+            .expect("add_task must stamp an id for a valid property");
+        let listed = list_tasks(&paths, "deadbeef01234567");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id.as_deref(), Some(id.as_str()));
+    }
+
+    // Codex P2 (PR #59, services.rs:204): list_tasks computed the id property
+    // to read without validating it, so a config hand-edited to a RESERVED
+    // property (e.g. "status") made the scanner read that structured field's
+    // OWN value as the id — surfacing status "new" as TaskDto.id — even
+    // though add_task gates generation through tasks::id_property_for_
+    // generation and would never stamp an id under that property. The read
+    // must apply the exact same gate as the write.
+    #[test]
+    fn list_tasks_ignores_a_reserved_id_property_configured_by_hand() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "status" } } }"#,
+        )
+        .unwrap();
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            created.id, None,
+            "a reserved property must not be stamped (pre-existing add_task gate)"
+        );
+        let listed = list_tasks(&paths, "deadbeef01234567");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].id, None,
+            "list_tasks must not surface the task's own status: value (\"new\") as its id"
         );
     }
 
