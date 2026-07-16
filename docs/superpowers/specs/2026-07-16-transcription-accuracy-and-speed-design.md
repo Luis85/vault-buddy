@@ -141,16 +141,37 @@ pub struct EngineOptions<'a> {
 }
 ```
 
-`WhisperTranscriber::transcribe` sets `set_initial_prompt` when present;
-for VAD it calls `enable_vad(true)`, `set_vad_model_path(Some(..))`, and
-`set_vad_params(WhisperVadParams::default())` — whisper.cpp's own defaults,
-no user knobs. whisper.cpp remaps segment timestamps back to the original
-audio timeline when VAD filters the input, so sidecar timestamps stay
-correct (pinned by the env-gated real-model test below). Both setters are
-plain whisper-rs API — none of the hand-wired trampoline unsafe the
-abort/progress callbacks required. If `set_initial_prompt` /
-`set_vad_model_path` share `set_language`'s bounded few-bytes-per-job
-CString leak, they get the same documented-and-accepted comment.
+`WhisperTranscriber::transcribe` sets `set_initial_prompt` when present.
+If `set_initial_prompt` shares `set_language`'s bounded few-bytes-per-job
+CString leak, it gets the same documented-and-accepted comment.
+
+**VAD mechanism (AMENDED after the whole-branch review).** The first cut
+used `FullParams`' `enable_vad`/`set_vad_model_path`/`set_vad_params` —
+which turned out to be dead on our call path: whisper-rs routes inference
+through `whisper_full_with_state`, and the bundled whisper.cpp implements
+VAD filtering only in `whisper_full`/`whisper_full_parallel` (unreachable
+from whisper-rs's no-state contexts). The corrected design uses
+whisper-rs's standalone VAD API, with the filtering and remapping done in
+Rust where it is unit-testable:
+
+- FFI (feature-gated): `WhisperVadContext::new(model, params)` +
+  `segments_from_samples(WhisperVadParams::default(), samples)` yields
+  speech segments in **centiseconds** (the C side applies threshold /
+  min-speech / min-silence / pad / overlap internally).
+- Pure logic (`transcribe/src/vad.rs`, Linux-tested): convert centiseconds
+  → sample spans (16 kHz: 1 cs = 160 samples) with clamp/merge; build a
+  concatenated speech-only buffer plus a span map; remap whisper's
+  segment timestamps from filtered time back to the original timeline via
+  that map (positions falling in a collapsed gap clamp to the owning
+  span's edge).
+- The engine runs whisper on the FILTERED buffer, then remaps. All-silence
+  short-circuits to zero segments without running whisper (the existing
+  "No speech detected" rendering). A VAD context/detect failure degrades
+  to an unfiltered run with a warning — never a job failure.
+- `Transcriber::transcribe` returns the segments plus a `vad_engaged`
+  flag, and `TranscriptMeta.vad` records that flag — the stats row
+  reports what actually happened, not the setting (an engine-level
+  degrade in a VAD-enabled vault honestly reads `off`).
 
 `TranscribeOptions` (the crate-level options) gains `initial_prompt:
 Option<String>` and `vad_model: Option<PathBuf>`; `transcribe_recording`
