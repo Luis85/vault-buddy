@@ -255,4 +255,49 @@ describe("TasksConfigTab", () => {
     expect(wrapper.get('[data-testid="task-id-error"]').text()).toContain("Invalid ID property name");
     expect(wrapper.find('[data-testid="tasks-folder-error"]').exists()).toBe(false);
   });
+
+  it("disabling task ids succeeds despite a stuck invalid draft property (Codex review)", async () => {
+    // Regression: the settings UI hides the property field once disabled, so
+    // an invalid draft typed while enabled (its autosave failed) lingers in
+    // taskIdProperty. Unchecking the toggle still sends that draft — the
+    // FIX lives in set_task_id_config, which must validate/apply the
+    // property only while enabling and ignore it (preserving the stored
+    // value) while disabling, or the user could never turn IDs off again.
+    // This mock mirrors that exact backend contract: reject an invalid
+    // property only when enabled === true, accept any payload when
+    // enabled === false.
+    const status = useSettingsStatusStore();
+    const calls: Array<{ id: string; enabled: boolean; property: string | null }> = [];
+    const { wrapper } = mountTab({
+      onSetId: (a) => {
+        const args = a as { id: string; enabled: boolean; property: string | null };
+        calls.push(args);
+        if (args.enabled && args.property && !/^[A-Za-z0-9_-]+$/.test(args.property)) {
+          throw "Invalid ID property name (letters, digits, - and _ only; not a reserved task field)";
+        }
+        return null;
+      },
+    });
+    await flushPromises();
+
+    // Enable, type an invalid property, blur — the save fails and the
+    // invalid draft ("bad prop") stays in taskIdProperty.
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(true);
+    await flushPromises();
+    await wrapper.get('[data-testid="task-id-property"]').setValue("bad prop");
+    await wrapper.get('[data-testid="task-id-property"]').trigger("blur");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-id-error"]').text()).toContain("Invalid ID property name");
+    expect(status.state).toBe("error");
+
+    // Uncheck the toggle. The frontend still sends the stuck invalid draft
+    // (unchanged behavior — the fix is not a frontend guard), but disabling
+    // must succeed against the fixed backend contract regardless.
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(false);
+    await flushPromises();
+
+    const disableCall = calls[calls.length - 1];
+    expect(disableCall).toEqual({ id: "v1", enabled: false, property: "bad prop" });
+    expect(status.state).not.toBe("error"); // disabling persisted, not rejected
+  });
 });

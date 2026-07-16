@@ -118,19 +118,31 @@ pub async fn set_task_id_config(
     property: Option<String>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
-    let property = match property.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(p) if tasks::is_valid_id_property(p) => Some(p.to_string()),
-        Some(p) => {
-            return Err(format!(
-                "Invalid ID property name (letters, digits, - and _ only; not a reserved task field): {p}"
-            ))
-        }
+    // Validate + apply the property ONLY when enabling. When disabling, the
+    // property is moot (no id is written), so an invalid draft must not block
+    // turning IDs off — and the property field is hidden when off, so the user
+    // couldn't fix it. Some(_) = set the property; None = preserve the stored
+    // one. Validation stays before the lock (fail-fast; never hold it across a
+    // doomed write), matching set_tasks_config/set_task_lists_config.
+    let property_to_set: Option<Option<String>> = if enabled {
+        Some(match property.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(p) if tasks::is_valid_id_property(p) => Some(p.to_string()),
+            Some(p) => {
+                return Err(format!(
+                    "Invalid ID property name (letters, digits, - and _ only; not a reserved task field): {p}"
+                ))
+            }
+        })
+    } else {
+        None
     };
     let _guard = lock_ignoring_poison(&lock.0);
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.task_id_enabled = enabled;
-    value.task_id_property = property;
+    if let Some(prop) = property_to_set {
+        value.task_id_property = prop;
+    }
     capture_config::update_vault_config(&id, value)
 }
 

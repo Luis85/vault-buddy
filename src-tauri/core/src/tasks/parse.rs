@@ -157,6 +157,30 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
+/// True iff the frontmatter declares `key` under ANY casing. The id-stamp
+/// uses this (not the exact `scalar_field`) to decide "already has an id":
+/// Obsidian folds frontmatter key case and `is_valid_id_property` accepts
+/// case variants, so a task stamped `Task-ID:` must count as present when the
+/// config later uses `task-id`, or a second conflicting line would be stamped.
+pub(super) fn has_frontmatter_key_ci(content: &str, key: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    for line in lines {
+        let t = line.trim_end();
+        if t.trim_end() == "---" {
+            return false; // closing fence — key not found in frontmatter
+        }
+        if let Some((k, _)) = t.split_once(':') {
+            if k.trim().eq_ignore_ascii_case(key) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.
@@ -251,6 +275,46 @@ pub fn note_tags(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn has_frontmatter_key_ci_matches_regardless_of_casing() {
+        // A task stamped `Task-ID:` must be seen as "already has an id" by a
+        // config using the lowercase `task-id` property name, and vice versa
+        // — Obsidian folds frontmatter key case, so a case-sensitive check
+        // would stamp a second, conflicting id line (the disk.rs regression).
+        let upper = "---\ntype: Task\nTask-ID: abc123\n---\n";
+        assert!(has_frontmatter_key_ci(upper, "task-id"));
+        assert!(has_frontmatter_key_ci(upper, "TASK-ID"));
+        let lower = "---\ntype: Task\ntask-id: abc123\n---\n";
+        assert!(has_frontmatter_key_ci(lower, "Task-ID"));
+    }
+
+    #[test]
+    fn has_frontmatter_key_ci_false_for_absent_key_and_body_only_occurrence() {
+        assert!(!has_frontmatter_key_ci("---\ntype: Task\n---\n", "task-id"));
+        // A same-named line AFTER the closing fence is body content, not
+        // frontmatter — it must never count as "present".
+        assert!(!has_frontmatter_key_ci(
+            "---\ntype: Task\n---\ntask-id: sneaky\n",
+            "task-id"
+        ));
+        assert!(!has_frontmatter_key_ci("no frontmatter", "task-id"));
+    }
+
+    #[test]
+    fn has_frontmatter_key_ci_handles_colonless_lines_and_unterminated_frontmatter() {
+        // A frontmatter line with no colon at all (malformed/hand-edited)
+        // must not match and must not panic — split_once yields None, so the
+        // scan just continues to the next line.
+        assert!(!has_frontmatter_key_ci(
+            "---\ntype: Task\nnotacolonhere\ntask-id: abc\n---\n",
+            "missing"
+        ));
+        // Unterminated frontmatter (opens but the closing fence never comes)
+        // falls through to false rather than treating a stray line as a
+        // match past where a real document would have closed.
+        assert!(!has_frontmatter_key_ci("---\ntype: Task\n", "due"));
+    }
 
     #[test]
     fn is_valid_due_accepts_only_plain_dates() {

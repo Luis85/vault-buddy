@@ -128,7 +128,7 @@ pub fn update_task_fields(
     // value is never overwritten and IDs stay stable.
     let mut effective: Vec<(&str, Option<&str>)> = updates.to_vec();
     for (key, val) in ensure_absent {
-        if super::parse::scalar_field(&content, key).is_none() {
+        if !super::parse::has_frontmatter_key_ci(&content, key) {
             effective.push((key, Some(val)));
         }
     }
@@ -374,6 +374,46 @@ mod tests {
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("task-id: abcd1234\n"));
+    }
+
+    #[test]
+    fn update_task_fields_ensure_absent_detects_an_existing_id_case_insensitively() {
+        // Regression: scalar_field's exact-case match let a config using
+        // "task-id" stamp a SECOND, conflicting id line onto a task already
+        // carrying "Task-ID:" (e.g. stamped under a since-changed config
+        // casing, or hand-authored). Obsidian folds frontmatter key case, so
+        // the task would show a duplicate id. has_frontmatter_key_ci must
+        // catch the existing key under any casing.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
+        let content = std::fs::read_to_string(&p).unwrap();
+        let seeded = content.replacen(
+            "created: 2026-07-08\n",
+            "created: 2026-07-08\nTask-ID: existing123\n",
+            1,
+        );
+        std::fs::write(&p, &seeded).unwrap();
+
+        update_task_fields(
+            &root,
+            &p,
+            &[("status", Some("done"))],
+            &[("task-id", "new456")],
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("status: done\n"));
+        assert!(body.contains("Task-ID: existing123\n"));
+        assert!(!body.contains("new456"));
+        // Exactly one id-ish line, case-insensitively — never a second,
+        // conflicting one under a different casing.
+        let id_lines = body
+            .lines()
+            .filter(|l| l.trim_start().to_ascii_lowercase().starts_with("task-id:"))
+            .count();
+        assert_eq!(id_lines, 1);
     }
 
     #[test]
