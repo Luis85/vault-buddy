@@ -79,6 +79,11 @@ jobs:
     name: Build and publish Windows installers
     needs: validate
     runs-on: windows-latest
+    env:
+      # Same MAX_PATH guard as ci.yml's windows-app job: the Vulkan
+      # backend's nested vulkan-shaders-gen build overflows FileTracker's
+      # .tlog paths (FTK1011) under the default deep cargo target dir.
+      CARGO_TARGET_DIR: D:\vbt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

@@ -119,6 +119,15 @@ jobs:
     name: Windows app (build + installer)
     runs-on: windows-latest
     needs: [frontend, rust-core]
+    env:
+      # whisper.cpp's Vulkan backend builds a nested vulkan-shaders-gen
+      # ExternalProject whose MSBuild FileTracker .tlog paths overflow
+      # Windows' 260-char MAX_PATH under the default deep cargo target dir
+      # (FileTracker error FTK1011 in the compiler probe). A short
+      # top-level target dir keeps every nested path under the limit;
+      # rust-cache and tauri both resolve the target dir through cargo, so
+      # caching and bundling follow it automatically.
+      CARGO_TARGET_DIR: D:\vbt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
