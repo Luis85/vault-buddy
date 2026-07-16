@@ -432,6 +432,8 @@ pub fn run() {
             capture_commands::open_recording,
             capture_config_commands::get_capture_config,
             capture_config_commands::set_capture_config,
+            capture_config_commands::get_transcription_config,
+            capture_config_commands::set_transcription_config,
             capture_commands::list_audio_devices,
             capture_commands::pause_capture,
             capture_commands::resume_capture,

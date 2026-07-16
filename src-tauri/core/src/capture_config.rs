@@ -223,6 +223,18 @@ pub fn update_document_import_config(di: DocumentImportConfig) -> Result<(), Str
         .map_err(|e| format!("Could not save document import settings: {e}"))
 }
 
+/// Read-modify-write for the app-global transcription section, mirroring
+/// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
+/// behind ConfigWriteLock).
+pub fn update_transcription_config_at(
+    path: &Path,
+    transcription: TranscriptionConfig,
+) -> std::io::Result<()> {
+    let mut cfg = load_config_for_update(path)?;
+    cfg.transcription = transcription;
+    write_config(path, &cfg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +408,21 @@ mod tests {
         update_mcp_config_at(&path, mcp.clone()).unwrap();
         let cfg = load_config_from(&path);
         assert_eq!(cfg.mcp, mcp);
+        assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    // Same sibling-preservation coverage as update_mcp_config_at, for the
+    // write side of the (GPU increment) transcription section — the read
+    // side is covered by transcription_config.rs's own round-trip test.
+    #[test]
+    fn update_transcription_config_at_preserves_vaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        update_vault_config_at(&path, "vault1", VaultCaptureConfig::default()).unwrap();
+        let transcription = TranscriptionConfig { use_gpu: false };
+        update_transcription_config_at(&path, transcription.clone()).unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(cfg.transcription, transcription);
         assert!(cfg.vaults.contains_key("vault1"));
     }
 

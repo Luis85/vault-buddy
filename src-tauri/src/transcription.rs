@@ -406,12 +406,23 @@ fn ensure_vad_model(app: &AppHandle, mp3: &Path, cancel: &CancelToken) -> Result
     })
 }
 
+/// Reuse the cached transcriber only when BOTH cache-key elements match.
+/// Pure so the (tier, use_gpu) contract is unit-tested; the worker loop
+/// applies it below.
+fn needs_reload(cached: Option<(ModelTier, bool)>, tier: ModelTier, use_gpu: bool) -> bool {
+    cached != Some((tier, use_gpu))
+}
+
 fn process_transcription(
     app: &AppHandle,
     job: &TranscriptionJob,
-    loaded: &mut Option<(ModelTier, WhisperTranscriber)>,
+    loaded: &mut Option<(ModelTier, bool, WhisperTranscriber)>,
 ) {
     let cfg = capture_config::vault_config(&capture_config::load_config(), &job.vault_id);
+    // GPU is an app-global (not per-vault) knob — a separate read of the same
+    // config.json read above, whose freshness matters more than shaving one
+    // file read: a toggle flip must be visible on the very next job.
+    let use_gpu = capture_config::load_config().transcription.use_gpu;
     // A forced (explicit) re-transcribe ignores the vault's auto-transcribe
     // setting; the automatic path still bails when disabled.
     if !cfg.transcribe && !job.force {
@@ -519,10 +530,9 @@ fn process_transcription(
     if cancel.is_cancelled() {
         return emit_cancelled(app, &job.mp3);
     }
-    if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
-        // use_gpu wired to the app-global setting in the next commit.
-        match WhisperTranscriber::load(&model, false) {
-            Ok(w) => *loaded = Some((tier, w)),
+    if needs_reload(loaded.as_ref().map(|(t, g, _)| (*t, *g)), tier, use_gpu) {
+        match WhisperTranscriber::load(&model, use_gpu) {
+            Ok(w) => *loaded = Some((tier, use_gpu, w)),
             Err(e) => {
                 // A model that downloaded but won't load is corrupt on disk;
                 // ensure_model returns early on dest.exists(), so leaving it
@@ -541,7 +551,7 @@ fn process_transcription(
             }
         }
     }
-    let transcriber = &loaded.as_ref().unwrap().1;
+    let transcriber = &loaded.as_ref().unwrap().2;
     let opts = TranscribeOptions {
         language: cfg.transcription_language.clone(),
         timestamps: cfg.transcript_timestamps,
@@ -724,8 +734,9 @@ fn catch_job<F: FnOnce()>(f: F) -> bool {
 
 /// Startup + on-demand worker: drains the transcription queue, postponing
 /// while a recording is active. The loaded whisper model is cached across
-/// jobs of the same tier. Mirrors `run_recovery`'s shape (own thread, coarse
-/// is-recording gate).
+/// jobs of the same tier AND the same GPU flag (`needs_reload`) — a toggle
+/// flip takes effect on the very next job, no restart. Mirrors
+/// `run_recovery`'s shape (own thread, coarse is-recording gate).
 pub fn run_transcription(app: &AppHandle) {
     let app = app.clone();
     std::thread::Builder::new()
@@ -740,7 +751,7 @@ pub fn run_transcription(app: &AppHandle) {
             // (previous-session saves, crash-recovered captures, freshly enabled
             // vaults).
             scan_and_enqueue(&app);
-            let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
+            let mut loaded: Option<(ModelTier, bool, WhisperTranscriber)> = None;
             loop {
                 // Wait until a job is present, but only PEEK: the recording gate
                 // below may leave it queued, and popping before that gate would
@@ -1238,5 +1249,28 @@ mod tests {
             2,
             "no duplicate mp3 in the pending list after retarget"
         );
+    }
+
+    #[test]
+    fn model_reloads_when_tier_or_gpu_changes() {
+        // The cached transcriber must be reused ONLY when both the tier
+        // and the GPU flag match — a toggle flip takes effect on the next
+        // job without a restart (spec: cache key (tier, use_gpu)).
+        assert!(!needs_reload(
+            Some((ModelTier::Small, true)),
+            ModelTier::Small,
+            true
+        ));
+        assert!(needs_reload(
+            Some((ModelTier::Small, true)),
+            ModelTier::Small,
+            false
+        ));
+        assert!(needs_reload(
+            Some((ModelTier::Small, true)),
+            ModelTier::Turbo,
+            true
+        ));
+        assert!(needs_reload(None, ModelTier::Small, true));
     }
 }

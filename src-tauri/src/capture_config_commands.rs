@@ -4,6 +4,11 @@
 //! `vault_config`/`mcp_config`/`document_import_config` split-out precedent.
 //! No behavior change: the IPC surface is unchanged, only the defining
 //! module moves (`lib.rs`'s `generate_handler!` repoints to here).
+//!
+//! Also carries `TranscriptionConfigDto` + `get_transcription_config`/
+//! `set_transcription_config` (GPU increment) — an app-global, not
+//! per-vault, section, but a single bool is too small to earn its own file;
+//! it lives beside its per-vault sibling instead.
 
 use std::path::Path;
 use vault_buddy_core::sync_util::lock_ignoring_poison;
@@ -170,6 +175,47 @@ pub fn set_capture_config(
             value.output_device,
             value.transcribe
         );
+    }
+    result
+}
+
+/// App-global (not per-vault) GPU toggle — `capture_config::AppConfig.transcription`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionConfigDto {
+    /// Ask whisper for GPU inference (Vulkan builds only; CPU fallback is
+    /// whisper.cpp's own). Applies from the next transcription — the worker
+    /// reloads the cached model when the flag changes (transcription.rs's
+    /// `needs_reload`, cache key `(tier, use_gpu)`), no app restart needed.
+    pub use_gpu: bool,
+}
+
+#[tauri::command]
+pub fn get_transcription_config() -> TranscriptionConfigDto {
+    TranscriptionConfigDto {
+        use_gpu: capture_config::load_config().transcription.use_gpu,
+    }
+}
+
+/// Persist the GPU toggle. Read-modify-write INSIDE the lock, like every
+/// sibling app-global-section writer (mcp/document-import), so a concurrent
+/// vault- or other-section save can't clobber this one or vice versa.
+#[tauri::command]
+pub fn set_transcription_config(
+    lock: tauri::State<ConfigWriteLock>,
+    cfg: TranscriptionConfigDto,
+) -> Result<(), String> {
+    let _guard = lock_ignoring_poison(&lock.0);
+    let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
+    let result = capture_config::update_transcription_config_at(
+        &path,
+        capture_config::TranscriptionConfig {
+            use_gpu: cfg.use_gpu,
+        },
+    )
+    .map_err(|e| format!("Could not save transcription settings: {e}"));
+    if result.is_ok() {
+        log::info!("transcription config saved: useGpu={}", cfg.use_gpu);
     }
     result
 }
