@@ -154,17 +154,6 @@ AND `part.is_none()` — nothing on disk. The janitor records a late worker's
 `.part`, closing the bypass; recordings that reached disk keep the
 wait-forever posture.
 
-### GAP-09 · Low · Daily-note formats with literal words silently create misnamed notes
-`src-tauri/core/src/daily_notes.rs:64-87` + `core/src/lib.rs:33-34`.
-A format containing a literal word or moment `[...]` escapes (e.g.
-`YYYY-MM-DD [Daily]`, common in Obsidian) hits the unsupported-letter-run
-rule and falls back to the default format entirely; `daily_note_uri` then
-finds no file at the default path and emits `obsidian://new`, so Obsidian
-*creates* a note diverging from the user's scheme — the same class of harm
-the fallback exists to avoid, just cleaner-looking.
-**Fix:** support `[...]` literals (treat bracketed runs as verbatim),
-and/or fall back to `obsidian://open` without a `file` parameter.
-
 ### GAP-10 · Low · Meeting-mode start is all-or-nothing while mid-recording loss is survivable
 `src-tauri/capture/src/devices.rs:213-227` vs `session.rs:267`.
 A loopback failure at start (`default_output_config()` / `build_stream`
