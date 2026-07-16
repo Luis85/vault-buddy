@@ -398,6 +398,7 @@ ever written into your vaults except recordings and their notes.
       "tasksFolder": "Tasks",      // optional — vault-relative home of task documents
       "documentsFolder": "Documents", // optional — vault-relative home of imported documents
       "documentDateFolders": true, // optional — omit → true; same dated/flat toggle as recordings, for imports
+      "documentExtractImages": true, // optional — omit → true; false = import text only (drop images, no media folder)
       "defaultList": "Inbox",      // optional — the list (folder under tasksFolder) new tasks land in when none is picked
       "listOrder": ["Inbox", "Next"] // optional — display order for list sections/pickers; unlisted folders append alphabetically
     }
@@ -420,6 +421,13 @@ ever written into your vaults except recordings and their notes.
   moves or rewrites what's already there. Omitted when `true` (the default);
   written only when `false`, so existing configs stay untouched until a user
   opts into the flat layout.
+- `documentExtractImages` (bool, default `true`) — whether a document import
+  extracts the source's images into a media folder beside the note (the
+  default) or produces a **text-only** note with images dropped. When off, the
+  conversion strips images via an app-authored Pandoc Lua filter instead of
+  `--extract-media`, so no media folder is created and no dangling image links
+  remain. Per-vault, changes only NEW imports, omitted when `true` — the same
+  discipline as `documentDateFolders`.
 - `followUpTemplate` (bool, default `true`) — append a `## Follow-up`
   scaffold (action items, decisions, notes) to each recording's companion
   note. Only applies when `createNote` is on.

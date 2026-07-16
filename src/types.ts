@@ -196,6 +196,9 @@ export interface DocumentsConfig {
    * in the documents root (false). Same toggle/semantics as
    * CaptureConfig.recordingDateFolders, for the document-import domain. */
   documentDateFolders: boolean;
+  /** Whether a document import extracts images into a media folder (true) or
+   * produces a text-only note with images dropped (false). Default true. */
+  documentExtractImages: boolean;
 }
 
 /** App-global Pandoc install status (detect_pandoc). configuredPath seeds

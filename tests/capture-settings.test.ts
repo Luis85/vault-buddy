@@ -41,7 +41,7 @@ function mountShell() {
     if (cmd === "list_audio_devices") return devices;
     if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_documents_config") return { documentsFolder: null, documentDateFolders: true };
+    if (cmd === "get_documents_config") return { documentsFolder: null, documentDateFolders: true, documentExtractImages: true };
   });
   active = mount(CaptureSettings, { props: { vaultId: "v1" }, attachTo: document.body });
   return active;

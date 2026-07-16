@@ -17,6 +17,7 @@ const props = defineProps<{ vaultId: string }>();
 const { loading, loadError, load } = useSettingsLoad();
 const documentsFolder = ref("");
 const documentDateFolders = ref(true);
+const documentExtractImages = ref(true);
 
 const autosave = useAutosave(
   async () => {
@@ -24,6 +25,7 @@ const autosave = useAutosave(
       id: props.vaultId,
       documentsFolder: documentsFolder.value.trim() || null,
       documentDateFolders: documentDateFolders.value,
+      documentExtractImages: documentExtractImages.value,
     });
   },
   { label: "documents settings" },
@@ -33,6 +35,7 @@ onMounted(() =>
   load<DocumentsConfig>("get_documents_config", props.vaultId, (cfg) => {
     documentsFolder.value = cfg.documentsFolder ?? "";
     documentDateFolders.value = cfg.documentDateFolders;
+    documentExtractImages.value = cfg.documentExtractImages;
   }),
 );
 
@@ -44,6 +47,10 @@ function onFolderInput(value: string) {
 }
 function onToggle(event: Event) {
   documentDateFolders.value = (event.target as HTMLInputElement).checked;
+  autosave.saveNow();
+}
+function onExtractImagesToggle(event: Event) {
+  documentExtractImages.value = (event.target as HTMLInputElement).checked;
   autosave.saveNow();
 }
 </script>
@@ -94,6 +101,23 @@ function onToggle(event: Event) {
           class="h-4 w-4 accent-violet-500"
           :checked="documentDateFolders"
           @change="onToggle"
+        >
+      </div>
+      <div class="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-2">
+        <label
+          for="document-extract-images"
+          class="text-sm text-slate-200"
+        >
+          Import images
+          <span class="block text-xs text-slate-500">Off = text only (no images, no media folder)</span>
+        </label>
+        <input
+          id="document-extract-images"
+          data-testid="document-extract-images-toggle"
+          type="checkbox"
+          class="h-4 w-4 accent-violet-500"
+          :checked="documentExtractImages"
+          @change="onExtractImagesToggle"
         >
       </div>
     </template>
