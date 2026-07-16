@@ -274,7 +274,7 @@ pub fn transcribe_recording(
     let EngineOutput {
         segments,
         vad_engaged,
-        detected_language: _,
+        detected_language,
     } = match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
         Ok(t) => t,
         // An aborted full() returns Err; the token says whether it was us.
@@ -330,6 +330,12 @@ pub fn transcribe_recording(
         // than what actually happened (a VAD-enabled job whose Silero
         // detection failed used to lie "on" in the stats footer).
         vad: vad_engaged,
+        // Belt-and-braces re-filter on the setting: the engine already
+        // gates detection on auto, but the pipeline must not trust an
+        // over-eager future Transcriber implementor to — a "detection"
+        // must never smuggle into a pinned-language transcript (the same
+        // honest-reporting pattern `vad_engaged` uses).
+        detected_language: detected_language.filter(|_| opts.language.is_none()),
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);
@@ -614,6 +620,68 @@ mod tests {
         .unwrap();
         let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
         assert!(text.contains("| Silence skipping (VAD) | on |"));
+    }
+
+    struct FakeDetects;
+    impl Transcriber for FakeDetects {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _o: &EngineOptions,
+            _c: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<EngineOutput, String> {
+            Ok(EngineOutput {
+                segments: vec![Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "hallo".into(),
+                }],
+                vad_engaged: false,
+                detected_language: Some("de".to_string()),
+            })
+        }
+    }
+
+    #[test]
+    fn detected_language_reaches_the_sidecar_on_auto_but_never_on_a_pinned_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        // Auto: the detection lands in frontmatter + stats.
+        let auto_opts = TranscribeOptions {
+            language: None,
+            ..opts()
+        };
+        transcribe_recording(
+            &mp3,
+            &FakeDetects,
+            &auto_opts,
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(text.contains(r#"detected-language: "de""#));
+        assert!(text.contains("| Language | auto (detected: de) |"));
+        // Pinned (opts() pins "en"): even an engine that (wrongly) reports
+        // a detection is filtered at the pipeline — the setting is what
+        // renders. force=true because the auto run above already wrote a
+        // COMPLETE sidecar this second write must replace.
+        transcribe_recording(
+            &mp3,
+            &FakeDetects,
+            &opts(),
+            "t",
+            true,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(!text.contains("detected-language"));
+        assert!(text.contains("| Language | en |"));
     }
 
     #[test]

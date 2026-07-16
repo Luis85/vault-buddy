@@ -462,6 +462,18 @@ impl Transcriber for WhisperTranscriber {
             crate::inference_failure_message(code, &raw)
         })?;
 
+        // Detection is only meaningful on auto: with a pinned language the
+        // id is just the pin echoed back, and reporting it as "detected"
+        // would be the setting masquerading as an observation. Failures
+        // degrade to None — reporting is garnish, never a job outcome
+        // (`full_lang_id_from_state` returns a bare c_int; an out-of-range
+        // id makes `get_lang_str` come back None, which is the degrade).
+        let detected_language = if opts.language.is_none() {
+            whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string)
+        } else {
+            None
+        };
+
         // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
         // timestamps are in centiseconds, converted to ms below (×10) and,
         // when VAD filtered the input, remapped from the filtered timeline
@@ -498,7 +510,7 @@ impl Transcriber for WhisperTranscriber {
         Ok(crate::EngineOutput {
             segments: out,
             vad_engaged,
-            detected_language: None,
+            detected_language,
         })
     }
 }
@@ -638,12 +650,19 @@ mod tests {
             let crate::EngineOutput {
                 segments,
                 vad_engaged,
-                detected_language: _,
+                detected_language,
             } = out.unwrap();
-            eprintln!("vad_engaged={vad_engaged}");
+            eprintln!("vad_engaged={vad_engaged} detected_language={detected_language:?}");
             assert!(
                 !segments.is_empty(),
                 "a real speech clip must yield at least one segment"
+            );
+            // Manual Windows/real-model run: opts above never pins a
+            // language, so a real speech clip must come back with whisper's
+            // detected language — the capture after full() actually fires.
+            assert!(
+                detected_language.is_some(),
+                "an auto-language run over real speech must report a detected language"
             );
             // With or without VAD, timestamps must stay on the original
             // timeline: monotonically non-decreasing starts, end >= start.
