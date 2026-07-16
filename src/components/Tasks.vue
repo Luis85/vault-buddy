@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskLists } from "../composables/useTaskLists";
@@ -10,6 +10,7 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
+import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
 import { planReorder } from "../utils/taskOrder";
 import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
 import {
@@ -274,9 +275,12 @@ async function materializeRanks(section: AggTask[], orders: Map<string, number>)
   }
 }
 
-// Component-local; every panel visit starts back on Lists (YAGNI: no
-// persistence this slice).
-const grouping = ref<"dates" | "tags" | "lists">("lists");
+// Persisted per view key ("all" for the aggregate), same
+// localStorage-envelope pattern as sortPref above — a fresh/unset view still
+// opens on Lists (the DEFAULT inside taskGrouping.ts), only a return visit
+// recalls the last choice.
+const grouping = ref<Grouping>(loadGrouping(sortViewKey));
+watch(grouping, (g) => saveGrouping(sortViewKey, g));
 
 const buckets = computed<Bucket[]>(() => {
   if (grouping.value === "tags") return tagSections(filteredTasks.value);

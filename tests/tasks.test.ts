@@ -27,7 +27,15 @@ const many = (n: number): TaskItem[] =>
 
 describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
-  afterEach(() => clearMocks());
+  afterEach(() => {
+    clearMocks();
+    // The grouping toggle now persists per view (taskGrouping.ts); several
+    // cases below switch it (dates/tags) without switching back, and later
+    // cases assume the fresh-view Lists default (e.g. "grouping defaults to
+    // lists…", the New-list controls tests) — without this, an earlier
+    // case's persisted choice for view "v1" would leak in and break them.
+    localStorage.clear();
+  });
 
   it("loads tasks, lists, and the lists config for the vault on mount", async () => {
     const { calls } = mountView();
