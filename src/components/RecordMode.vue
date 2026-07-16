@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted, ref } from "vue";
 
+import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import { useNotificationsStore } from "../stores/notifications";
@@ -101,40 +102,33 @@ const importStatus = computed(() => {
 // button disables and shows a "Converting…" hint rather than looking inert.
 const importing = ref(false);
 
-// Bundles the six transcription fields for TranscriptionSettings' v-model.
-// The setter merges the change back into the FULL loaded config (preserving
-// mode/folder/bitrate/devices/etc. untouched) and persists it — same
-// command + arg shape as CaptureSettings.vue's save().
-const transcription = computed({
-  get: () => ({
+interface TranscriptionBundle {
+  transcribe: boolean;
+  transcriptionModel: string;
+  transcriptionLanguage: string;
+  transcriptTimestamps: boolean;
+  transcriptionVocabulary: string;
+  transcriptionVad: boolean;
+}
+
+// The vocabulary textarea is the only free-text field in the bundle — it
+// emits update:modelValue on every keystroke (everything else is a
+// toggle/select, emitting only on a discrete pick). Mirrors
+// RecordingConfigTab.vue's TEXT_KEYS discipline: without it, typing a
+// vocabulary list fired a synchronous set_capture_config (a main-thread
+// Rust command) per character.
+const TEXT_KEYS = new Set<keyof TranscriptionBundle>(["transcriptionVocabulary"]);
+
+function transcriptionBundle(): TranscriptionBundle {
+  return {
     transcribe: config.value.transcribe,
     transcriptionModel: config.value.transcriptionModel,
     transcriptionLanguage: config.value.transcriptionLanguage ?? "",
     transcriptTimestamps: config.value.transcriptTimestamps,
     transcriptionVocabulary: config.value.transcriptionVocabulary ?? "",
     transcriptionVad: config.value.transcriptionVad,
-  }),
-  set: (v: {
-    transcribe: boolean;
-    transcriptionModel: string;
-    transcriptionLanguage: string;
-    transcriptTimestamps: boolean;
-    transcriptionVocabulary: string;
-    transcriptionVad: boolean;
-  }) => {
-    config.value = {
-      ...config.value,
-      transcribe: v.transcribe,
-      transcriptionModel: v.transcriptionModel,
-      transcriptionLanguage: v.transcriptionLanguage.trim() || null,
-      transcriptTimestamps: v.transcriptTimestamps,
-      transcriptionVocabulary: v.transcriptionVocabulary.trim() || null,
-      transcriptionVad: v.transcriptionVad,
-    };
-    // Never persist against the default-seeded config — see `loaded` above.
-    if (loaded.value) void persist();
-  },
-});
+  };
+}
 
 async function persist() {
   try {
@@ -147,8 +141,48 @@ async function persist() {
     // like it silently worked. logWarning stays as the file breadcrumb.
     logWarning(`transcription settings save failed (vault ${props.vaultId}): ${String(e)}`);
     notifications.error(`Couldn't save transcription settings: ${String(e)}`);
+    // useAutosave's own status/error tracking (and its in-flight
+    // coalescing) requires the save fn to reject on failure.
+    throw e;
   }
 }
+
+// schedule()/saveNow() share this one persist() — same command + arg shape
+// as CaptureSettings.vue's save() — so a failure notifies identically
+// whichever route triggered it. flush-on-unmount is built into useAutosave
+// (onBeforeUnmount), so a half-typed vocabulary scheduled just before the
+// user navigates away still lands instead of being dropped.
+const autosave = useAutosave(persist, { label: "transcription settings" });
+
+// Bundles the six transcription fields for TranscriptionSettings' v-model.
+// The setter merges the change back into the FULL loaded config (preserving
+// mode/folder/bitrate/devices/etc. untouched). Diff which keys changed: a
+// change confined to the free-text vocabulary field debounces; anything else
+// (a toggle/select, or a mix that includes one) saves now — same
+// changed-keys discipline as RecordingConfigTab.vue's onUpdate.
+const transcription = computed({
+  get: transcriptionBundle,
+  set: (v: TranscriptionBundle) => {
+    const cur = transcriptionBundle();
+    const changed = (Object.keys(v) as (keyof TranscriptionBundle)[]).filter(
+      (k) => v[k] !== cur[k],
+    );
+    config.value = {
+      ...config.value,
+      transcribe: v.transcribe,
+      transcriptionModel: v.transcriptionModel,
+      transcriptionLanguage: v.transcriptionLanguage.trim() || null,
+      transcriptTimestamps: v.transcriptTimestamps,
+      transcriptionVocabulary: v.transcriptionVocabulary.trim() || null,
+      transcriptionVad: v.transcriptionVad,
+    };
+    if (changed.length === 0) return;
+    // Never persist against the default-seeded config — see `loaded` above.
+    if (!loaded.value) return;
+    if (changed.every((k) => TEXT_KEYS.has(k))) autosave.schedule();
+    else autosave.saveNow();
+  },
+});
 
 async function loadConfig() {
   // A config read failure must never block recording — config keeps the
@@ -304,7 +338,11 @@ async function importDocument() {
         >{{ recordingCount }}</span>
       </button>
     </div>
-    <div class="flex flex-col gap-3 border-t border-white/10 pt-3">
+    <!-- focusout flushes a pending debounced vocabulary save when focus leaves. -->
+    <div
+      class="flex flex-col gap-3 border-t border-white/10 pt-3"
+      @focusout="autosave.flush()"
+    >
       <TranscriptionSettings v-model="transcription" />
     </div>
   </div>

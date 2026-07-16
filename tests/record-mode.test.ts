@@ -312,4 +312,111 @@ describe("RecordMode", () => {
     // Should not have persisted the default-seeded config.
     expect(calls).not.toContain("set_capture_config");
   });
+
+  describe("vocabulary autosave debounce", () => {
+    // Regression: the transcription computed's setter used to call persist()
+    // synchronously on EVERY update:modelValue. The vocabulary textarea emits
+    // on every keystroke, so typing a vocabulary list fired a
+    // set_capture_config (a main-thread Rust command) per character. Fake
+    // timers drive useAutosave's debounce deterministically — mirrors how
+    // recording-config-tab.test.ts exercises the same composable.
+    const vocabCfg = {
+      mode: "meeting",
+      meetingFolder: "Meetings",
+      voiceNoteFolder: "Voice Notes",
+      bitrateKbps: 160,
+      createNote: true,
+      followUpTemplate: false,
+      inputDevice: "Headset Mic",
+      outputDevice: "Speakers",
+      transcribe: true,
+      transcriptionModel: "small",
+      transcriptionLanguage: null,
+      transcriptTimestamps: true,
+      transcriptionVocabulary: null,
+      transcriptionVad: true,
+    };
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("collapses successive vocabulary edits into a single trailing save, trimmed", async () => {
+      const calls: Array<{ cmd: string; args: unknown }> = [];
+      mockIPC((cmd, args) => {
+        calls.push({ cmd, args });
+        if (cmd === "get_capture_config") return vocabCfg;
+        if (cmd === "list_recordings") return [];
+      });
+      const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+      await flushPromises();
+
+      const textarea = wrapper.get('[data-testid="transcription-vocabulary-input"]');
+      await textarea.setValue("A");
+      await textarea.setValue("Anna K");
+      await textarea.setValue("  Anna Kowalska, Kubernetes  ");
+      await flushPromises();
+
+      // Still within the debounce window — none of the three edits saved yet.
+      expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+
+      vi.advanceTimersByTime(600);
+      await flushPromises();
+
+      const saveCalls = calls.filter((c) => c.cmd === "set_capture_config");
+      expect(saveCalls).toHaveLength(1);
+      expect(saveCalls[0].args).toEqual({
+        id: "v1",
+        cfg: { ...vocabCfg, transcriptionVocabulary: "Anna Kowalska, Kubernetes" },
+      });
+    });
+
+    it("saves null vocabulary (not an empty string) when the final edit is blank", async () => {
+      const seeded = { ...vocabCfg, transcriptionVocabulary: "Old notes" };
+      const calls: Array<{ cmd: string; args: unknown }> = [];
+      mockIPC((cmd, args) => {
+        calls.push({ cmd, args });
+        if (cmd === "get_capture_config") return seeded;
+        if (cmd === "list_recordings") return [];
+      });
+      const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+      await flushPromises();
+
+      await wrapper.get('[data-testid="transcription-vocabulary-input"]').setValue("   ");
+      await flushPromises();
+      expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+
+      vi.advanceTimersByTime(600);
+      await flushPromises();
+
+      const saveCalls = calls.filter((c) => c.cmd === "set_capture_config");
+      expect(saveCalls).toHaveLength(1);
+      expect(saveCalls[0].args).toEqual({
+        id: "v1",
+        cfg: { ...seeded, transcriptionVocabulary: null },
+      });
+    });
+
+    it("still saves a toggle change (transcriptionVad) immediately, not debounced", async () => {
+      const calls: Array<{ cmd: string; args: unknown }> = [];
+      mockIPC((cmd, args) => {
+        calls.push({ cmd, args });
+        if (cmd === "get_capture_config") return vocabCfg;
+        if (cmd === "list_recordings") return [];
+      });
+      const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+      await flushPromises();
+
+      await wrapper.get('[data-testid="transcription-vad-toggle"]').setValue(false);
+      await flushPromises();
+
+      // No timer advance: a debounced save would NOT have landed yet, so this
+      // also proves the toggle bypassed the debounce entirely.
+      const saveCalls = calls.filter((c) => c.cmd === "set_capture_config");
+      expect(saveCalls).toHaveLength(1);
+      expect(saveCalls[0].args).toEqual({
+        id: "v1",
+        cfg: { ...vocabCfg, transcriptionVad: false },
+      });
+    });
+  });
 });
