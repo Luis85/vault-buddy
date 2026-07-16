@@ -423,18 +423,13 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         // the folder resolution above — reusing it here avoids a second
         // uncached read and the TOCTOU window a second read would open
         // against a concurrent config write.
-        let id_property = cfg.task_id_property_name();
-        let generate_id = cfg.task_id_enabled && tasks::is_valid_id_property(id_property);
-        if cfg.task_id_enabled && !generate_id {
-            log::warn!(
-                "update_task: task_id_property {id_property:?} is not a valid frontmatter key; skipping id stamp"
-            );
-        }
-        let generated_id = generate_id.then(tasks::new_task_id);
-        let ensure: Vec<(&str, &str)> = match &generated_id {
-            Some(idv) => vec![(id_property, idv.as_str())],
-            None => Vec::new(),
-        };
+        let id_property =
+            tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+        let generated_id = id_property.is_some().then(tasks::new_task_id);
+        let ensure: Vec<(&str, &str)> = id_property
+            .zip(generated_id.as_deref())
+            .into_iter()
+            .collect();
         tasks::update_task_fields(&root, Path::new(&path), &refs, &ensure)
     })
     .await

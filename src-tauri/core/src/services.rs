@@ -301,20 +301,12 @@ pub fn add_task(
             Err(e) => return Err(e),
         }
     };
-    // Generate a task ID only when enabled AND the resolved property is a
-    // valid, non-reserved frontmatter key. config.json is hand-editable, so a
-    // reserved property (e.g. "status") would otherwise make render_task emit
-    // a SECOND structured line; the settings command rejects such names, but a
-    // hand edit bypasses it. is_valid_id_property is that same gate.
-    let id_property = cfg.task_id_property_name();
-    let generate_id = cfg.task_id_enabled && tasks::is_valid_id_property(id_property);
-    if cfg.task_id_enabled && !generate_id {
-        log::warn!(
-            "add_task: task_id_property {id_property:?} is not a valid frontmatter key; skipping id generation"
-        );
-    }
-    let generated_id = generate_id.then(tasks::new_task_id);
-    let task_id = generated_id.as_deref().map(|id| (id_property, id));
+    // One gate for both write paths (tasks::id_property_for_generation): id
+    // generation is off, or the resolved property is a valid non-reserved key.
+    let id_property =
+        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+    let generated_id = id_property.is_some().then(tasks::new_task_id);
+    let task_id = id_property.zip(generated_id.as_deref());
     let path = tasks::create_task(&target_root, title, today, due, priority, tags, task_id)
         .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {

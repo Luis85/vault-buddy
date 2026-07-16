@@ -14,7 +14,7 @@ mod writer;
 
 pub use disk::{create_task, render_task, set_task_status, task_basename, update_task_fields};
 pub use doc::is_task;
-pub use id::{is_valid_id_property, new_task_id};
+pub use id::{id_property_for_generation, is_valid_id_property, new_task_id};
 pub use list::{list_tasks, priority_rank, TaskItem};
 pub use lists::{
     create_task_list, is_valid_list_name, move_task_to_list, normalize_list_rel, task_lists,

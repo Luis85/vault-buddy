@@ -41,6 +41,26 @@ pub fn is_valid_id_property(name: &str) -> bool {
         && !RESERVED_TASK_KEYS.contains(&name.to_ascii_lowercase().as_str())
 }
 
+/// The frontmatter property a generated id should be written under, or `None`
+/// when id generation is OFF or the configured property is not a safe,
+/// non-reserved key. One chokepoint so the create (`add_task`) and edit
+/// (`update_task`) paths can never drift on the gate. Logs and skips on an
+/// invalid property (a hand-edited config can set one the settings command
+/// would reject).
+pub fn id_property_for_generation(enabled: bool, property: &str) -> Option<&str> {
+    if !enabled {
+        return None;
+    }
+    if is_valid_id_property(property) {
+        Some(property)
+    } else {
+        log::warn!(
+            "task id generation: property {property:?} is not a valid frontmatter key; skipping"
+        );
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +83,16 @@ mod tests {
         for _ in 0..1000 {
             assert!(seen.insert(new_task_id()));
         }
+    }
+
+    #[test]
+    fn id_property_for_generation_gates_on_enabled_and_validity() {
+        assert_eq!(id_property_for_generation(false, "task-id"), None); // disabled
+        assert_eq!(id_property_for_generation(true, "task-id"), Some("task-id"));
+        assert_eq!(id_property_for_generation(true, "uid"), Some("uid"));
+        assert_eq!(id_property_for_generation(true, "status"), None); // reserved
+        assert_eq!(id_property_for_generation(true, "Status"), None); // case-folded reserved
+        assert_eq!(id_property_for_generation(true, ""), None); // empty/invalid charset
     }
 
     #[test]
