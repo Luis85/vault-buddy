@@ -6,8 +6,8 @@
   "description": "Grandfathered source files above their surface's nonblank-LOC cap (frontend: src/**.{ts,vue}; rust: src-tauri/**/src/**.rs — higher cap because unit tests live inline). Entries may shrink but not grow; new files above the cap are rejected. Regenerate with `npm run check:loc -- --update`.",
   "allowlist": {
     "src-tauri/src/transcription.rs": {
-      "loc": 1178,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1086->1178: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) — initial_prompt_for (title+vocabulary prompt composition) and ensure_vad_model (Silero VAD resolve/download that degrades to no-VAD on failure rather than failing the job) orchestration helpers, wired into process_transcription, plus their unit tests."
+      "loc": 1179,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 1086->1178: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) — initial_prompt_for (title+vocabulary prompt composition) and ensure_vad_model (Silero VAD resolve/download that degrades to no-VAD on failure rather than failing the job) orchestration helpers, wired into process_transcription, plus their unit tests. 1178->1179: final-review fix wave (Fix 1) — the stale \"Handover\" comment above set_phase(Preparing) now also names the silero model, since a VAD-enabled vault has resolved it by this point too; one extra wrapped line, no logic change."
     },
     "src-tauri/src/capture_commands.rs": {
       "loc": 1104,
@@ -28,6 +28,10 @@
     "src-tauri/core/src/capture_paths.rs": {
       "loc": 886,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 835->854: +capture_dir (flat/dated recording-layout helper, beside dated_folder) + its test; splitting this file is disproportionate for the addition. 854->886: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) — +capture_title (strips the capture-name date/time prefix for initial-prompt priming, beside is_capture_base) + its tests."
+    },
+    "src-tauri/transcribe/src/lib.rs": {
+      "loc": 815,
+      "reason": "Crossed the 800 cap in the final whole-branch review's fix wave (Fix 1): the Transcriber trait's transcribe() now returns (Vec<Segment>, bool) for vad_engaged (see src-tauri/transcribe/src/vad.rs, the reimplemented VAD filter/remap — whisper-rs 0.16's FullParams VAD setters turned out to be dead on the whisper_full_with_state call path) — the trait doc comment, TranscriptMeta.vad wiring, the FakeOkVad fixture + its sidecar test, and the engine_options_reach_the_transcriber triple assert (language/prompt/vad) account for most of the growth; a smaller slice is Fix 3's compose_initial_prompt control-character stripping + test. Splitting the crate's one orchestration/test file is a bigger change than this review-driven fix wave warrants. Shrink only; split when next touched."
     },
     "src/stores/capture.ts": {
       "loc": 642,

@@ -6,6 +6,7 @@ pub mod decode;
 #[cfg(feature = "whisper")]
 pub mod engine;
 pub mod model;
+pub mod vad;
 
 use vault_buddy_core::transcript::Segment;
 
@@ -58,13 +59,21 @@ pub struct EngineOptions<'a> {
 /// the token); `on_progress` is the engine's 0-100 percent callback,
 /// forwarded as-is.
 pub trait Transcriber {
+    /// `Ok` carries the recognized segments plus `vad_engaged`: whether
+    /// this run actually filtered non-speech via VAD (an all-silence
+    /// buffer that short-circuits before whisper runs at all still counts
+    /// as engaged). This is the EFFECTIVE state, not the request — a
+    /// VAD-enabled job whose detection failed degrades to `false` (an
+    /// unfiltered run) even though `opts.vad_model` was `Some`.
+    /// `transcribe_recording` records it as `TranscriptMeta.vad`, so the
+    /// stats footer reports what actually happened.
     fn transcribe(
         &self,
         samples: &[f32],
         opts: &EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
-    ) -> Result<Vec<Segment>, String>;
+    ) -> Result<(Vec<Segment>, bool), String>;
 }
 
 pub struct TranscribeOptions {
@@ -210,17 +219,18 @@ pub fn transcribe_recording(
         initial_prompt: opts.initial_prompt.as_deref(),
         vad_model: opts.vad_model.as_deref(),
     };
-    let segments = match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
-        Ok(s) => s,
-        // An aborted full() returns Err; the token says whether it was us.
-        Err(e) => {
-            return Err(if cancel.is_cancelled() {
-                TranscribeError::Cancelled
-            } else {
-                TranscribeError::Failed(e)
-            })
-        }
-    };
+    let (segments, vad_engaged) =
+        match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
+            Ok(t) => t,
+            // An aborted full() returns Err; the token says whether it was us.
+            Err(e) => {
+                return Err(if cancel.is_cancelled() {
+                    TranscribeError::Cancelled
+                } else {
+                    TranscribeError::Failed(e)
+                })
+            }
+        };
     let inference_secs = inference_start.elapsed().as_secs_f32();
     let n_segments = segments
         .iter()
@@ -251,7 +261,12 @@ pub fn transcribe_recording(
         generated_at: generated_at.to_string(),
         timestamps: opts.timestamps,
         processing_secs,
-        vad: opts.vad_model.is_some(),
+        // The EFFECTIVE state the transcriber reports, not the request —
+        // see Transcriber::transcribe's doc comment. Replaces the old
+        // `opts.vad_model.is_some()`, which recorded the setting rather
+        // than what actually happened (a VAD-enabled job whose Silero
+        // detection failed used to lie "on" in the stats footer).
+        vad: vad_engaged,
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);
@@ -344,13 +359,39 @@ mod tests {
             _o: &EngineOptions,
             _c: &CancelToken,
             mut on_progress: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<Vec<Segment>, String> {
+        ) -> Result<(Vec<Segment>, bool), String> {
             on_progress(100); // exercises the forwarder
-            Ok(vec![Segment {
-                start_ms: 0,
-                end_ms: 1000,
-                text: "hello world".into(),
-            }])
+            Ok((
+                vec![Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "hello world".into(),
+                }],
+                false,
+            ))
+        }
+    }
+    // Sibling of FakeOk with vad_engaged=true — the "on" half of the
+    // TranscriptMeta.vad wiring (see transcribe_records_vad_engaged_when_
+    // the_engine_reports_it below), so the meta-wiring assertion isn't
+    // pinned only against the always-false FakeOk.
+    struct FakeOkVad;
+    impl Transcriber for FakeOkVad {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _o: &EngineOptions,
+            _c: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<(Vec<Segment>, bool), String> {
+            Ok((
+                vec![Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "hello world".into(),
+                }],
+                true,
+            ))
         }
     }
     struct FakeEmpty;
@@ -361,8 +402,8 @@ mod tests {
             _o: &EngineOptions,
             _c: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<Vec<Segment>, String> {
-            Ok(vec![])
+        ) -> Result<(Vec<Segment>, bool), String> {
+            Ok((vec![], false))
         }
     }
 
@@ -397,7 +438,7 @@ mod tests {
             _o: &EngineOptions,
             cancel: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<Vec<Segment>, String> {
+        ) -> Result<(Vec<Segment>, bool), String> {
             // Mirrors whisper: an aborted full() returns Err; the token disambiguates.
             if cancel.is_cancelled() {
                 return Err("aborted".into());
@@ -477,6 +518,33 @@ mod tests {
         assert!(text.contains("[00:00:00] hello world"));
         assert!(text.contains("## Statistics"));
         assert!(text.contains("| Model | whisper-small |"));
+        // FakeOk reports vad_engaged=false — pins TranscriptMeta.vad wiring
+        // end-to-end (Transcriber::transcribe's bool -> transcribe_recording
+        // -> meta.vad -> the rendered stats row), not just core's
+        // render_transcript-level unit test.
+        assert!(text.contains("| Silence skipping (VAD) | off |"));
+    }
+
+    #[test]
+    fn transcribe_records_vad_engaged_when_the_engine_reports_it() {
+        // Sibling of transcribe_writes_the_sidecar covering the "on" half of
+        // the same wiring: a transcriber reporting vad_engaged=true must
+        // produce an "on" row, proving the flag actually travels through
+        // rather than the stats row defaulting to off regardless.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        transcribe_recording(
+            &mp3,
+            &FakeOkVad,
+            &opts(),
+            "2026-07-04T15:00:00+00:00",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(text.contains("| Silence skipping (VAD) | on |"));
     }
 
     #[test]
@@ -731,13 +799,14 @@ mod tests {
 
     #[test]
     fn engine_options_reach_the_transcriber() {
-        // The prompt/VAD knobs must actually arrive at the engine — a
-        // TranscribeOptions field nobody forwards would silently do nothing.
+        // The language/prompt/VAD knobs must actually arrive at the engine
+        // — a TranscribeOptions field nobody forwards would silently do
+        // nothing.
         use std::sync::Mutex;
         // Locally-scoped test fixture — a `type` alias would be more ceremony
         // than the one-off tuple it names.
         #[allow(clippy::type_complexity)]
-        struct FakeSeen(Arc<Mutex<Option<(Option<String>, Option<PathBuf>)>>>);
+        struct FakeSeen(Arc<Mutex<Option<(Option<String>, Option<String>, Option<PathBuf>)>>>);
         impl Transcriber for FakeSeen {
             fn transcribe(
                 &self,
@@ -745,12 +814,13 @@ mod tests {
                 opts: &EngineOptions,
                 _c: &CancelToken,
                 _p: Box<dyn FnMut(i32) + Send>,
-            ) -> Result<Vec<Segment>, String> {
+            ) -> Result<(Vec<Segment>, bool), String> {
                 *self.0.lock().unwrap() = Some((
+                    opts.language.map(str::to_string),
                     opts.initial_prompt.map(str::to_string),
                     opts.vad_model.map(Path::to_path_buf),
                 ));
-                Ok(vec![])
+                Ok((vec![], false))
             }
         }
         let dir = tempfile::tempdir().unwrap();
@@ -775,6 +845,7 @@ mod tests {
         assert_eq!(
             seen.lock().unwrap().clone(),
             Some((
+                Some("en".to_string()), // opts() below seeds language: Some("en")
                 Some("Standup. cpal".to_string()),
                 Some(PathBuf::from("/models/silero.bin"))
             ))

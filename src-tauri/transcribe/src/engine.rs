@@ -194,7 +194,48 @@ impl Transcriber for WhisperTranscriber {
         opts: &crate::EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
-    ) -> Result<Vec<Segment>, String> {
+    ) -> Result<(Vec<Segment>, bool), String> {
+        // VAD (optional): filter non-speech out of `samples` before paying
+        // for inference. Reimplemented in Rust via crate::vad rather than
+        // FullParams' enable_vad/set_vad_model_path/set_vad_params, which
+        // are DEAD on this call path — state.full() below calls
+        // whisper_full_with_state, and (verified against the vendored
+        // whisper.cpp source) that function never reads params.vad at
+        // all; only whisper_full/whisper_full_parallel (the no-state entry
+        // points, unreachable from whisper-rs) apply VAD filtering.
+        // `vad_engaged` reports what ACTUALLY happened — a detect failure
+        // degrades silently to an unfiltered run, so a VAD-enabled vault
+        // whose job degraded honestly reports "off" in the transcript's
+        // stats footer, not the setting.
+        let mut owned_filtered: Option<Vec<f32>> = None;
+        let mut vad_map: Option<Vec<crate::vad::SpanMap>> = None;
+        let mut vad_engaged = false;
+        if let Some(vad_model) = opts.vad_model {
+            match crate::vad::detect_speech_centiseconds(vad_model, samples) {
+                Err(e) => {
+                    log::warn!(
+                        "vad: speech detection failed ({e}) for {}; transcribing unfiltered audio",
+                        vad_model.display()
+                    );
+                }
+                Ok(segs) => {
+                    let spans = crate::vad::spans_from_centiseconds(&segs, samples.len());
+                    if spans.is_empty() {
+                        // All-silence: nothing for whisper to do. The
+                        // existing zero-segment path already renders "No
+                        // speech detected" — return before paying for a
+                        // state/full() call at all.
+                        return Ok((Vec::new(), true));
+                    }
+                    let (filtered, map) = crate::vad::filter_samples(samples, &spans);
+                    owned_filtered = Some(filtered);
+                    vad_map = Some(map);
+                    vad_engaged = true;
+                }
+            }
+        }
+        let run_samples: &[f32] = owned_filtered.as_deref().unwrap_or(samples);
+
         let mut state = self
             .ctx
             .create_state()
@@ -240,22 +281,6 @@ impl Transcriber for WhisperTranscriber {
             // for the same pub(crate) reason documented on set_language.
             params.set_initial_prompt(prompt);
         }
-        if let Some(vad_model) = opts.vad_model {
-            // Skip non-speech before inference. whisper.cpp maps segment
-            // timestamps back to the ORIGINAL audio timeline after VAD
-            // filtering, so sidecar timestamps are unaffected. Params are
-            // whisper.cpp's own defaults (threshold 0.5, min speech 250 ms,
-            // min silence 100 ms, pad 30 ms) — deliberately no user knobs.
-            // Same bounded CString-leak class as set_language/
-            // set_initial_prompt above (a filesystem path, once per job).
-            //
-            // ORDER MATTERS: `enable_vad(true)` panics if `vad_model_path`
-            // is still unset — whisper-rs checks the underlying C struct's
-            // null default — so the model path must be set first.
-            params.set_vad_model_path(Some(vad_model.to_string_lossy().as_ref()));
-            params.set_vad_params(whisper_rs::WhisperVadParams::default());
-            params.enable_vad(true);
-        }
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_special(false);
@@ -275,7 +300,7 @@ impl Transcriber for WhisperTranscriber {
         // when the guard drops after `full()`. Like `_abort` it must outlive the
         // `full()` call below — do NOT drop or `let _ =` it.
         let _progress = wire_progress_callback(&mut params, on_progress);
-        state.full(params, samples).map_err(|e| {
+        state.full(params, run_samples).map_err(|e| {
             // whisper.cpp's whisper_full failures arrive as GenericError(rc)
             // carrying the raw return code (e.g. -9 = "failed to decode" in the
             // sampling loop). Hand the code to the shared, unit-tested mapper so
@@ -292,17 +317,21 @@ impl Transcriber for WhisperTranscriber {
             // leading `-6` suspect on high-core machines), and the clip size —
             // so the log alone says which. whisper.cpp's own "failed to
             // encode/decode" line is already captured via install_logging_hooks.
+            // `run_samples.len()` (not `samples.len()`) so a VAD-filtered run
+            // logs what whisper ACTUALLY chewed on.
             log::error!(
                 "whisper inference failed: code={code:?} n_threads={n_threads} cancelled={} samples={} (~{}s audio)",
                 cancel.is_cancelled(),
-                samples.len(),
-                samples.len() / crate::decode::WHISPER_RATE as usize
+                run_samples.len(),
+                run_samples.len() / crate::decode::WHISPER_RATE as usize
             );
             crate::inference_failure_message(code, &raw)
         })?;
 
         // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
-        // timestamps are in centiseconds, converted to ms below (×10).
+        // timestamps are in centiseconds, converted to ms below (×10) and,
+        // when VAD filtered the input, remapped from the filtered timeline
+        // back to the original one via `vad_map`.
         let mut out = Vec::new();
         for segment in state.as_iter() {
             let text = segment
@@ -313,15 +342,22 @@ impl Transcriber for WhisperTranscriber {
             if text.is_empty() {
                 continue;
             }
-            let t0 = segment.start_timestamp().max(0) as u64;
-            let t1 = segment.end_timestamp().max(0) as u64;
+            let t0_ms = segment.start_timestamp().max(0) as u64 * 10;
+            let t1_ms = segment.end_timestamp().max(0) as u64 * 10;
+            let (start_ms, end_ms) = match &vad_map {
+                Some(map) => (
+                    crate::vad::remap_ms(t0_ms, map),
+                    crate::vad::remap_ms(t1_ms, map),
+                ),
+                None => (t0_ms, t1_ms),
+            };
             out.push(Segment {
-                start_ms: t0 * 10,
-                end_ms: t1 * 10,
+                start_ms,
+                end_ms,
                 text,
             });
         }
-        Ok(out)
+        Ok((out, vad_engaged))
     }
 }
 
@@ -400,7 +436,16 @@ mod tests {
         // Optional priming/VAD paths for a manual (Windows dev / local) run:
         // VB_TEST_VOCAB primes the prompt; VAD engages when the silero model
         // is already cached. Both default off so the test's original -6
-        // regression coverage is unchanged.
+        // regression coverage is unchanged. This automated run can't tell a
+        // VAD-on pass apart from a VAD-off one by assertion alone (both must
+        // simply not abort/error, and — VAD being all-or-nothing on
+        // whether the cached silero model exists — a single run can't
+        // observe both states anyway): a manual comparison, run once with
+        // the silero model cached and once without on the SAME
+        // VB_TEST_AUDIO clip (ideally one with an audible quiet stretch),
+        // should observe fewer-or-equal segments and a shorter wall-clock
+        // inference with VAD on than off, since the filtered buffer
+        // whisper actually chews on is shorter.
         let vocab = std::env::var("VB_TEST_VOCAB").ok();
         let vad = crate::model::vad_model_path().filter(|p| p.exists());
         let opts = crate::EngineOptions {
@@ -415,7 +460,8 @@ mod tests {
             out.err().unwrap_or_default()
         );
         if std::env::var("VB_TEST_AUDIO").is_ok() {
-            let segments = out.unwrap();
+            let (segments, vad_engaged) = out.unwrap();
+            eprintln!("vad_engaged={vad_engaged}");
             assert!(
                 !segments.is_empty(),
                 "a real speech clip must yield at least one segment"

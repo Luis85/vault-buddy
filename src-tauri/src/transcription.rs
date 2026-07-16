@@ -504,9 +504,10 @@ fn process_transcription(
     } else {
         None
     };
-    // Handover: the model is on disk now (just downloaded, or already
-    // present) — replace the download row with "preparing" BEFORE the
-    // model-load gap below, so a download UI can never stick at 100%.
+    // Handover: both the main model AND — for a VAD-enabled vault — the
+    // silero model are on disk now (just downloaded, or already present)
+    // — replace the download row with "preparing" BEFORE the model-load
+    // gap below, so a download UI can never stick at 100%.
     set_phase(app, Phase::Preparing);
     let _ = app.emit(
         "capture:modelReady",

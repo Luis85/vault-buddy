@@ -43,7 +43,7 @@ fn main() {
         initial_prompt: None,
         vad_model: None,
     };
-    let segments = t
+    let (segments, vad_engaged) = t
         .transcribe(
             &samples,
             &opts,
@@ -52,7 +52,7 @@ fn main() {
         )
         .expect("transcribe returned Err (the -6 abort would land here)");
     eprintln!(
-        "OK: {} segments in {}s",
+        "OK: {} segments in {}s (vad_engaged={vad_engaged})",
         segments.len(),
         inf.elapsed().as_secs()
     );
