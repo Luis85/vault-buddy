@@ -112,6 +112,20 @@ pub fn filter_samples(samples: &[f32], spans: &[SpeechSpan]) -> (Vec<f32>, Vec<S
     (filtered, map)
 }
 
+/// True iff `spans` covers the WHOLE buffer — exactly one span `[0,
+/// total_samples)`. Since `spans_from_centiseconds` always returns sorted,
+/// non-overlapping, pre-merged spans (see `merge_overlapping`), full
+/// coverage can only ever appear as a single span; two-or-more spans imply
+/// at least one gap between them. Callers use this to skip
+/// `filter_samples` entirely when VAD ran but found nothing to trim: for a
+/// long meeting, copying `samples` into `filtered` just to reproduce it
+/// byte-for-byte would allocate a SECOND full-length buffer (~230 MB/hour
+/// of 16 kHz mono f32) purely to double peak memory during inference for
+/// zero benefit.
+pub fn spans_cover_all(spans: &[SpeechSpan], total_samples: usize) -> bool {
+    total_samples > 0 && spans.len() == 1 && spans[0].start == 0 && spans[0].end == total_samples
+}
+
 /// Which end of a whisper segment a timestamp represents. `remap_ms` needs
 /// this because the correct resolution of an exact span-boundary tie
 /// differs by which end it is: an END that lands exactly on a boundary
@@ -236,6 +250,71 @@ mod tests {
                 "identity at {ms}ms (End)"
             );
         }
+    }
+
+    // --- spans_cover_all (Codex P2: identity-span VAD short-circuit) -----
+    //
+    // When VAD ran and found the WHOLE buffer to be speech, filter_samples
+    // would copy `samples` into an identical `filtered` buffer — a second
+    // full-length allocation that doubles peak memory during inference for
+    // no benefit (~230 MB/hour of 16 kHz mono f32 on a long meeting). The
+    // engine uses this predicate to skip that copy (and the remap) entirely
+    // when it's true.
+
+    #[test]
+    fn single_span_covering_the_whole_buffer_is_full_coverage() {
+        let spans = vec![SpeechSpan {
+            start: 0,
+            end: 16_000,
+        }];
+        assert!(spans_cover_all(&spans, 16_000));
+    }
+
+    #[test]
+    fn single_span_missing_the_last_sample_is_not_full_coverage() {
+        // One sample short of the end — still a single span, but NOT
+        // everything, so the engine must still pay for the filtered copy
+        // (dropping that one trailing sample from what whisper sees).
+        let spans = vec![SpeechSpan {
+            start: 0,
+            end: 15_999,
+        }];
+        assert!(!spans_cover_all(&spans, 16_000));
+    }
+
+    #[test]
+    fn two_spans_with_a_gap_are_not_full_coverage() {
+        // spans_from_centiseconds always pre-merges touching/overlapping
+        // spans (see merge_overlapping), so two spans in the list can only
+        // mean a real gap between them — never full coverage.
+        let spans = vec![
+            SpeechSpan {
+                start: 0,
+                end: 8_000,
+            },
+            SpeechSpan {
+                start: 8_100,
+                end: 16_000,
+            },
+        ];
+        assert!(!spans_cover_all(&spans, 16_000));
+    }
+
+    #[test]
+    fn no_spans_is_not_full_coverage() {
+        assert!(!spans_cover_all(&[], 16_000));
+    }
+
+    #[test]
+    fn total_samples_zero_is_never_full_coverage() {
+        // Defensive edge: an empty buffer has nothing to skip the copy
+        // for, so this must not report "covered" even vacuously — guards
+        // against a naive `spans.len() == 1 && start == 0 && end ==
+        // total_samples` accepting a degenerate zero-length span here too
+        // (spans_from_centiseconds never actually produces one: its
+        // `end > start` filter drops empty segments before they reach a
+        // caller).
+        assert!(!spans_cover_all(&[], 0));
     }
 
     #[test]

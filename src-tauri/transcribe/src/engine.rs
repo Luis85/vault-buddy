@@ -177,14 +177,20 @@ pub struct WhisperTranscriber {
 
 impl WhisperTranscriber {
     /// `use_gpu` maps to whisper.cpp's context flag. whisper-rs's
-    /// `WhisperContextParameters::default()` ships use_gpu = FALSE (unlike
-    /// whisper.cpp's own C default), so this explicit set is what makes a
-    /// Vulkan build actually engage the GPU. On a CPU-only build the flag
-    /// is inert (no GPU backend is compiled in), and on a Vulkan build
-    /// with no usable device whisper.cpp falls back to CPU at context
-    /// init — its own log line (routed through install_logging_hooks) is
-    /// the audit trail; deliberately NO per-transcript device claim (the
-    /// VAD stats-row lesson: never record intent as engagement).
+    /// `WhisperContextParameters::default()` sets
+    /// `use_gpu: cfg!(feature = "_gpu")` (`src/whisper_ctx.rs:476`) — FALSE
+    /// on a CPU-only build, but TRUE on a Vulkan build (the `vulkan`
+    /// feature enables `_gpu`), so a shipped GPU build already defaults to
+    /// "on". The explicit `.use_gpu(use_gpu)` set below still matters for
+    /// BOTH directions, but especially OFF: without it, the "Use GPU
+    /// (Vulkan)" toggle's off position would be a silent no-op on a
+    /// shipped build — the context would keep defaulting to GPU regardless
+    /// of what the user picked. On a CPU-only build the flag is inert (no
+    /// GPU backend is compiled in), and on a Vulkan build with no usable
+    /// device whisper.cpp falls back to CPU at context init — its own log
+    /// line (routed through install_logging_hooks) is the audit trail;
+    /// deliberately NO per-transcript device claim (the VAD stats-row
+    /// lesson: never record intent as engagement).
     pub fn load(model_path: &Path, use_gpu: bool) -> Result<Self, String> {
         let mut params = WhisperContextParameters::default();
         params.use_gpu(use_gpu);
@@ -253,10 +259,27 @@ impl Transcriber for WhisperTranscriber {
                         // state/full() call at all.
                         return Ok((Vec::new(), true));
                     }
-                    let (filtered, map) = crate::vad::filter_samples(samples, &spans);
-                    owned_filtered = Some(filtered);
-                    vad_map = Some(map);
-                    vad_engaged = true;
+                    if crate::vad::spans_cover_all(&spans, samples.len()) {
+                        // Full-buffer speech (Codex P2): VAD ran and found
+                        // nothing to trim. Skip filter_samples entirely —
+                        // copying `samples` into an identical `filtered`
+                        // buffer would allocate a SECOND full-length f32
+                        // buffer (~230 MB/hour of 16 kHz mono audio),
+                        // doubling peak memory during inference for zero
+                        // benefit on a long meeting. `owned_filtered`/
+                        // `vad_map` stay None, so `run_samples` below falls
+                        // through to `samples` directly and the timestamp
+                        // remap step is skipped — correct, since with no
+                        // filtering the whisper output is already on the
+                        // original timeline. `vad_engaged` still reports
+                        // true: VAD ran, it just removed nothing.
+                        vad_engaged = true;
+                    } else {
+                        let (filtered, map) = crate::vad::filter_samples(samples, &spans);
+                        owned_filtered = Some(filtered);
+                        vad_map = Some(map);
+                        vad_engaged = true;
+                    }
                 }
             }
         }

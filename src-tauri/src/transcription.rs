@@ -418,11 +418,14 @@ fn process_transcription(
     job: &TranscriptionJob,
     loaded: &mut Option<(ModelTier, bool, WhisperTranscriber)>,
 ) {
-    let cfg = capture_config::vault_config(&capture_config::load_config(), &job.vault_id);
-    // GPU is an app-global (not per-vault) knob — a separate read of the same
-    // config.json read above, whose freshness matters more than shaving one
-    // file read: a toggle flip must be visible on the very next job.
-    let use_gpu = capture_config::load_config().transcription.use_gpu;
+    let app_cfg = capture_config::load_config();
+    let cfg = capture_config::vault_config(&app_cfg, &job.vault_id);
+    // GPU is an app-global (not per-vault) knob, read from the SAME
+    // config.json load as the per-vault settings above — one read serves
+    // both, exactly as fresh: load_config reads the whole file in one shot,
+    // so a second call a moment later isn't a fresher torn-window read,
+    // it's just a second file read.
+    let use_gpu = app_cfg.transcription.use_gpu;
     // A forced (explicit) re-transcribe ignores the vault's auto-transcribe
     // setting; the automatic path still bails when disabled.
     if !cfg.transcribe && !job.force {
