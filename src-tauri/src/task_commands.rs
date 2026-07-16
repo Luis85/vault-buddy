@@ -13,6 +13,9 @@ pub struct TasksConfigDto {
     /// tasks root) and the display order for list sections/pickers.
     pub default_list: Option<String>,
     pub list_order: Vec<String>,
+    /// `/`-joined relative names of lists hidden from the Lists grouping and
+    /// pickers (the folder + tasks stay on disk).
+    pub archived_lists: Vec<String>,
     /// Whether generated task IDs are enabled for this vault.
     pub task_id_enabled: bool,
     /// The RESOLVED id property name (default "task-id" when unset) — the UI
@@ -33,6 +36,7 @@ pub fn get_tasks_config(id: String) -> TasksConfigDto {
         tasks_folder: cfg.tasks_folder,
         default_list: cfg.default_list,
         list_order: cfg.list_order,
+        archived_lists: cfg.archived_lists,
     }
 }
 
@@ -68,12 +72,12 @@ pub fn set_tasks_config(
     capture_config::update_vault_config(&id, value)
 }
 
-/// Persist the vault's lists settings object (default list + list order),
-/// preserving the tasks folder and every other per-vault field via the same
-/// read-modify-write under ConfigWriteLock that set_tasks_config uses. Its
-/// own command — not a widened set_tasks_config — so a lists-config failure
-/// can't block the folder save and vice versa (the CaptureSettings pattern
-/// of independent field-level saves).
+/// Persist the vault's lists settings object (default list + list order +
+/// archived lists), preserving the tasks folder and every other per-vault
+/// field via the same read-modify-write under ConfigWriteLock that
+/// set_tasks_config uses. Its own command — not a widened set_tasks_config —
+/// so a lists-config failure can't block the folder save and vice versa (the
+/// CaptureSettings pattern of independent field-level saves).
 ///
 /// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
 #[tauri::command]
@@ -82,6 +86,7 @@ pub async fn set_task_lists_config(
     id: String,
     default_list: Option<String>,
     list_order: Vec<String>,
+    archived_lists: Vec<String>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
     // Write-strict on the default list (the settings UI offers existing
@@ -96,10 +101,27 @@ pub async fn set_task_lists_config(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    // Same normalizer as the default list, but best-effort like list_order
+    // rather than command-failing: a stale name left over from a since
+    // renamed/deleted list must not block saving the rest of the picker's
+    // selections. The tasks-root sentinel ("") is dropped too — it is not a
+    // real list and archiving it is meaningless.
+    let archived_lists: Vec<String> = archived_lists
+        .into_iter()
+        .filter_map(|s| match tasks::normalize_list_rel(s.trim()) {
+            Ok(n) if !n.is_empty() => Some(n),
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!("set_task_lists_config: dropping unsafe archived list {s:?}: {e}");
+                None
+            }
+        })
+        .collect();
     let _guard = lock_ignoring_poison(&lock.0);
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.default_list = default_list;
     value.list_order = list_order;
+    value.archived_lists = archived_lists;
     capture_config::update_vault_config(&id, value)
 }
 
@@ -186,6 +208,43 @@ pub async fn move_task_to_list(id: String, path: String, list: String) -> Result
     })
     .await
     .map_err(|e| format!("move_task_to_list: task failed: {e}"))?
+}
+
+/// Rename a list folder; returns the new relative list name. Write-strict
+/// validation (name shape + never-clobber) lives in core/services.
+///
+/// ASYNC (GAP-22 class): a vault directory rename (fsync-class I/O).
+#[tauri::command]
+pub async fn rename_task_list(id: String, from: String, to: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::rename_task_list(&ServicePaths::real(), &id, &from, &to)
+    })
+    .await
+    .map_err(|e| format!("rename_task_list: task failed: {e}"))?
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteListDto {
+    pub moved: usize,
+    pub folder_removed: bool,
+}
+
+/// Delete a list folder: its own direct tasks move to the tasks root (No
+/// list), then the now-empty folder is removed (a folder still holding
+/// sub-lists or foreign files is kept — see core::tasks::delete_task_list).
+///
+/// ASYNC (GAP-22 class): a vault-wide task move + directory removal.
+#[tauri::command]
+pub async fn delete_task_list(id: String, list: String) -> Result<DeleteListDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::delete_task_list(&ServicePaths::real(), &id, &list).map(|o| DeleteListDto {
+            moved: o.moved,
+            folder_removed: o.folder_removed,
+        })
+    })
+    .await
+    .map_err(|e| format!("delete_task_list: task failed: {e}"))?
 }
 
 /// Resolve a vault id to (vault path, lexically-safe tasks root, the loaded
@@ -490,6 +549,8 @@ mod tests {
         is_future(count_open_tasks);
         is_future(list_task_lists);
         is_future2(create_task_list);
+        is_future2(delete_task_list);
         is_future3(move_task_to_list);
+        is_future3(rename_task_list);
     }
 }

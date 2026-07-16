@@ -376,6 +376,34 @@ pub fn move_task_to_list(
     Ok(landed.to_string_lossy().into_owned())
 }
 
+/// Rename a list folder (see `tasks::rename_task_list`). Adds the vault-level
+/// root assert every list write shares. Returns the new relative list name.
+pub fn rename_task_list(
+    paths: &ServicePaths,
+    id: &str,
+    from: &str,
+    to: &str,
+) -> Result<String, String> {
+    let (vault_path, root) = tasks_root_for(paths, id)?;
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    }
+    tasks::rename_task_list(&root, from, to)
+}
+
+/// Delete a list folder (see `tasks::delete_task_list`). Returns the outcome.
+pub fn delete_task_list(
+    paths: &ServicePaths,
+    id: &str,
+    list: &str,
+) -> Result<tasks::DeleteListOutcome, String> {
+    let (vault_path, root) = tasks_root_for(paths, id)?;
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+    }
+    tasks::delete_task_list(&root, list)
+}
+
 /// Set a task's status. `status` must be one of new/done/archived. The path
 /// (from list_tasks) is re-validated inside the vault's tasks root by
 /// `tasks::set_task_status`. Returns the task's display title (for the
@@ -1023,6 +1051,35 @@ mod tests {
         let listed = list_tasks(&paths, "deadbeef01234567");
         assert_eq!(listed[0].list, "Inbox");
         assert!(move_task_to_list(&paths, "unknown", &landed, "Inbox").is_err());
+    }
+
+    #[test]
+    fn rename_and_delete_lists_through_the_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        add_task(
+            &paths,
+            "deadbeef01234567",
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Inbox"),
+        )
+        .unwrap();
+        assert_eq!(
+            rename_task_list(&paths, "deadbeef01234567", "Inbox", "Later").unwrap(),
+            "Later"
+        );
+        assert!(vault.join("Tasks").join("Later").is_dir());
+        let out = delete_task_list(&paths, "deadbeef01234567", "Later").unwrap();
+        assert_eq!(out.moved, 1);
+        assert!(out.folder_removed);
+        assert!(list_tasks(&paths, "deadbeef01234567")
+            .iter()
+            .all(|t| t.list.is_empty()));
+        assert!(rename_task_list(&paths, "unknown", "a", "b").is_err());
     }
 
     #[test]
