@@ -23,7 +23,10 @@ export const usePandocStore = defineStore("pandoc", {
     // installed Pandoc is still picked up on the next open. No concurrent-probe
     // dedup: the two consumers never mount at the same time.
     async ensureDetected(): Promise<void> {
-      if (this.status?.installed) return;
+      // Cache only a USABLE result: an "installed but too old (<2.15)" Pandoc
+      // keeps re-probing so an update is picked up on the next open (like a
+      // not-installed status), rather than staying stale until a settings Recheck.
+      if (this.status?.installed && this.status.sandboxSupported) return;
       this.checking = true;
       try {
         this.status = await invoke<PandocStatus>("detect_pandoc");

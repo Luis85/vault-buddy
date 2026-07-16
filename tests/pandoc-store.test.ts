@@ -65,6 +65,26 @@ describe("usePandocStore", () => {
     expect(store.checking).toBe(false);
   });
 
+  it("re-probes while Pandoc is installed but too old for the sandbox", async () => {
+    let calls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") {
+        calls += 1;
+        return {
+          installed: true,
+          version: "pandoc 2.14",
+          path: "pandoc",
+          sandboxSupported: false,
+          configuredPath: null,
+        };
+      }
+    });
+    const store = usePandocStore();
+    await store.ensureDetected();
+    await store.ensureDetected();
+    expect(calls).toBe(2); // too old is not a usable cache hit → re-probe
+  });
+
   it("markDetected caches a status without probing", async () => {
     let calls = 0;
     mockIPC((cmd) => {
