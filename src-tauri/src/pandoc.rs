@@ -260,17 +260,56 @@ pub(crate) fn resolve_working_pandoc() -> Option<(String, u32, u32, String)> {
     too_old
 }
 
+/// Filename of the "text only" image-strip Lua filter. `convert_blocking`
+/// writes it into the per-import staging dir and passes it to Pandoc relative
+/// to Pandoc's cwd (= that staging dir). A plain (non-dot) name is fine: it
+/// lives inside the already-hidden, already-cleaned staging dir.
+pub(crate) const STRIP_IMAGES_FILTER: &str = "strip-images.lua";
+
+/// The image-strip Lua filter body. App-authored and I/O-free: it only
+/// deletes Image/Figure nodes from the parsed document, so it does NOT weaken
+/// `--sandbox`'s protection of the untrusted document read. Handles both older
+/// Pandoc (an implicit figure is a Para holding one Image — its inline Image is
+/// dropped) and Pandoc 3.x (an explicit Figure block); a handler for an element
+/// a given Pandoc version never produces simply never fires.
+pub(crate) const STRIP_IMAGES_LUA: &str = "\
+-- Vault Buddy: \"text only\" document import — drop all images so the
+-- imported note carries only text (no image links, no media folder).
+function Image() return {} end
+function Figure() return {} end
+";
+
 /// Pandoc argument vector (program excluded). Source is added by the caller as
 /// an absolute path; every OUTPUT here is relative (Pandoc runs with cwd =
 /// work dir) so rewritten image links stay valid after publish.
-pub(crate) fn pandoc_args(reader: &str, media_name: &str, note_name: &str) -> Vec<String> {
-    vec![
+///
+/// `extract_images` picks the media behavior: true extracts embedded/linked
+/// media into the reserved sibling folder (`--extract-media`, the default);
+/// false strips all images via the app-authored `--lua-filter` and creates NO
+/// media folder — the per-vault "text only" mode. `--sandbox` and the heap cap
+/// are present either way.
+pub(crate) fn pandoc_args(
+    reader: &str,
+    media_name: &str,
+    note_name: &str,
+    extract_images: bool,
+) -> Vec<String> {
+    let mut args = vec![
         "-f".into(),
         reader.into(),
         "-t".into(),
         "gfm".into(),
         "--sandbox".into(),
-        format!("--extract-media={media_name}"),
+    ];
+    if extract_images {
+        args.push(format!("--extract-media={media_name}"));
+    } else {
+        // Text only: strip images instead of extracting them. Without
+        // --extract-media no media folder is created; the filter drops the
+        // links so the note has no dangling image references.
+        args.push(format!("--lua-filter={STRIP_IMAGES_FILTER}"));
+    }
+    args.extend([
         "-o".into(),
         note_name.into(),
         // GHC RTS heap cap: a timeout bounds time, not memory; a crafted doc
@@ -278,7 +317,8 @@ pub(crate) fn pandoc_args(reader: &str, media_name: &str, note_name: &str) -> Ve
         "+RTS".into(),
         "-M512M".into(),
         "-RTS".into(),
-    ]
+    ]);
+    args
 }
 
 /// Max wall-clock for a single conversion before the child is killed.
@@ -519,7 +559,7 @@ mod tests {
 
     #[test]
     fn pandoc_args_are_sandboxed_relative_and_heap_capped() {
-        let args = pandoc_args("docx", "2026-07-10 Report", "2026-07-10 Report.md");
+        let args = pandoc_args("docx", "2026-07-10 Report", "2026-07-10 Report.md", true);
         // reader
         assert!(args.windows(2).any(|w| w == ["-f", "docx"]));
         assert!(args.windows(2).any(|w| w == ["-t", "gfm"]));
@@ -533,6 +573,25 @@ mod tests {
         // heap cap
         let joined = args.join(" ");
         assert!(joined.contains("+RTS -M512M -RTS"));
+        // images mode does NOT add the strip filter
+        assert!(!args.iter().any(|a| a.starts_with("--lua-filter")));
+    }
+
+    #[test]
+    fn text_only_args_strip_images_and_skip_extract_media() {
+        // extract_images = false: the strip filter replaces --extract-media, so
+        // Pandoc never writes a media folder and the note ends up text-only.
+        let args = pandoc_args("docx", "2026-07-10 Report", "2026-07-10 Report.md", false);
+        assert!(args
+            .iter()
+            .any(|a| a == &format!("--lua-filter={STRIP_IMAGES_FILTER}")));
+        assert!(!args.iter().any(|a| a.starts_with("--extract-media")));
+        // Still sandboxed, GFM, and heap-capped in text-only mode.
+        assert!(args.iter().any(|a| a == "--sandbox"));
+        assert!(args.windows(2).any(|w| w == ["-t", "gfm"]));
+        assert!(args.join(" ").contains("+RTS -M512M -RTS"));
+        // The filter body actually removes images.
+        assert!(STRIP_IMAGES_LUA.contains("function Image()"));
     }
 
     #[test]

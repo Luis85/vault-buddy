@@ -23,6 +23,7 @@ function mountTab(
   opts: {
     documentsFolder?: string | null;
     documentDateFolders?: boolean;
+    documentExtractImages?: boolean;
     onGet?: () => unknown;
     onSet?: (a: unknown) => unknown;
   } = {},
@@ -36,6 +37,7 @@ function mountTab(
         : {
             documentsFolder: opts.documentsFolder ?? null,
             documentDateFolders: opts.documentDateFolders ?? true,
+            documentExtractImages: opts.documentExtractImages ?? true,
           };
     if (cmd === "set_documents_config") return opts.onSet?.(args) ?? null;
   });
@@ -68,6 +70,7 @@ describe("DocumentsConfigTab", () => {
       id: "v1",
       documentsFolder: "Imported",
       documentDateFolders: false,
+      documentExtractImages: true,
     });
   });
 
@@ -80,6 +83,28 @@ describe("DocumentsConfigTab", () => {
       id: "v1",
       documentsFolder: "Docs",
       documentDateFolders: false,
+      documentExtractImages: true,
+    });
+  });
+
+  it("loads the images toggle from disk", async () => {
+    const { wrapper } = mountTab({ documentExtractImages: false });
+    await flushPromises();
+    expect(
+      wrapper.get<HTMLInputElement>('[data-testid="document-extract-images-toggle"]').element.checked,
+    ).toBe(false);
+  });
+
+  it("saves the images toggle immediately when turned off", async () => {
+    const { wrapper, calls } = mountTab({ documentsFolder: "Docs", documentExtractImages: true });
+    await flushPromises();
+    await wrapper.get('[data-testid="document-extract-images-toggle"]').setValue(false);
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_documents_config")?.args).toEqual({
+      id: "v1",
+      documentsFolder: "Docs",
+      documentDateFolders: true,
+      documentExtractImages: false,
     });
   });
 

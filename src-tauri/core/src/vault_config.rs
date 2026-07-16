@@ -89,6 +89,11 @@ pub struct VaultCaptureConfig {
     pub recording_date_folders: bool,
     /// Same toggle for the document-import domain's write path.
     pub document_date_folders: bool,
+    /// Whether a document import extracts the source's images into a media
+    /// folder beside the note (true, the default) or drops them for a
+    /// text-only note (false). Like the date-folder toggles, flipping this
+    /// only changes what NEW imports produce — existing notes are untouched.
+    pub document_extract_images: bool,
 }
 
 impl Default for VaultCaptureConfig {
@@ -114,6 +119,7 @@ impl Default for VaultCaptureConfig {
             task_id_property: None,
             recording_date_folders: true,
             document_date_folders: true,
+            document_extract_images: true,
         }
     }
 }
@@ -291,6 +297,10 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("documentDateFolders")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        document_extract_images: entry
+            .get("documentExtractImages")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
     }
 }
 
@@ -350,6 +360,9 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     }
     if !v.document_date_folders {
         entry.insert("documentDateFolders".to_string(), json!(false));
+    }
+    if !v.document_extract_images {
+        entry.insert("documentExtractImages".to_string(), json!(false));
     }
     entry
 }
@@ -591,6 +604,7 @@ mod tests {
                 task_id_property: Some("uid".to_string()),
                 recording_date_folders: false,
                 document_date_folders: false,
+                document_extract_images: false,
             },
         );
         cfg.vaults
@@ -759,6 +773,40 @@ mod tests {
         let jf = crate::capture_config::serialize_config(&has_false);
         assert!(jf.contains("\"recordingDateFolders\": false"));
         assert!(jf.contains("\"documentDateFolders\": false"));
+    }
+
+    #[test]
+    fn document_extract_images_defaults_true_and_round_trips() {
+        // Default is true (images imported) — today's behavior is preserved
+        // when the setting is absent.
+        assert!(VaultCaptureConfig::default().document_extract_images);
+        // Absent → true; an explicit false parses.
+        let cfg = crate::capture_config::parse_config(
+            r#"{ "vaults": { "a": {}, "b": { "documentExtractImages": false } } }"#,
+        );
+        assert!(crate::capture_config::vault_config(&cfg, "a").document_extract_images);
+        assert!(!crate::capture_config::vault_config(&cfg, "b").document_extract_images);
+        // Serialize omits when true (default), writes the key only when false.
+        let mut only_true = crate::capture_config::AppConfig::default();
+        only_true
+            .vaults
+            .insert("t".into(), VaultCaptureConfig::default());
+        assert!(
+            !crate::capture_config::serialize_config(&only_true).contains("documentExtractImages")
+        );
+        let mut has_false = crate::capture_config::AppConfig::default();
+        has_false.vaults.insert(
+            "f".into(),
+            VaultCaptureConfig {
+                document_extract_images: false,
+                ..VaultCaptureConfig::default()
+            },
+        );
+        let jf = crate::capture_config::serialize_config(&has_false);
+        assert!(jf.contains("\"documentExtractImages\": false"));
+        // And it survives a full serialize → parse round trip.
+        let round = crate::capture_config::parse_config(&jf);
+        assert!(!crate::capture_config::vault_config(&round, "f").document_extract_images);
     }
 
     #[test]

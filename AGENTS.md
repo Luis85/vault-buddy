@@ -259,7 +259,7 @@ Keep this table in sync when adding/removing commands.
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; also stamps a generated task ID when the vault opts in and the task doesn't have one yet)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -694,6 +694,18 @@ because a review found the failure it prevents:
   the toggle never strands an orphan staged under the other shape, and —
   like the recording folders — it only changes where NEW imports land, never
   moving or rewriting an already-published document.
+- **Images vs. text-only (`document_extract_images`).** A per-vault toggle
+  (default `true` = extract images, today's behavior). When off,
+  `pandoc_args` swaps `--extract-media` for `--lua-filter=strip-images.lua`
+  (`pandoc::STRIP_IMAGES_LUA`, written into the staging dir by
+  `convert_blocking`) — an app-authored, I/O-free filter that drops
+  `Image`/`Figure` nodes — so the note is text-only with no media folder and
+  no dangling links. `--sandbox` still guards the untrusted-document read (the
+  filter does no I/O; verified against real Pandoc that `--sandbox` +
+  `--lua-filter` runs and strips both Image and Figure). Same
+  parse/serialize/preserve discipline as the date-folder toggles; flipping it
+  changes only what NEW imports produce. `publish` is unchanged — it already
+  writes only the note when the staged media dir is empty.
 - **Never clobber; publish is media-first with rollback.** Output lands at
   `<vault>/<documents_folder default "Documents">/YYYY/MM/YYYY-MM-DD <Original
   Name>.md` with `type: Document` / `tags: [vault-buddy-import]` /

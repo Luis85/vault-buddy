@@ -13,7 +13,7 @@ use vault_buddy_core::{capture_config, capture_paths, discovery, document_import
 use crate::capture_commands::ConfigWriteLock;
 use crate::pandoc::{
     pandoc_args, pandoc_command, resolve_working_pandoc, run_capturing, sandbox_supported, Capture,
-    CONVERT_TIMEOUT,
+    CONVERT_TIMEOUT, STRIP_IMAGES_FILTER, STRIP_IMAGES_LUA,
 };
 
 #[derive(Clone, serde::Serialize)]
@@ -192,7 +192,21 @@ fn convert_blocking(
     std::fs::create_dir_all(&plan.work_dir)
         .map_err(|e| format!("Could not prepare import: {e}"))?;
 
-    let args = pandoc_args(format.reader(), &plan.media_name, &plan.note_name);
+    // Images vs. text-only is per-vault. When off, write the app-authored strip
+    // filter into the staging dir (cleaned up with everything else) and pass it
+    // to Pandoc instead of --extract-media, so the note ends up text-only with
+    // no media folder. The filter path is relative — Pandoc's cwd is work_dir.
+    let extract_images = cfg.document_extract_images;
+    if !extract_images {
+        std::fs::write(plan.work_dir.join(STRIP_IMAGES_FILTER), STRIP_IMAGES_LUA)
+            .map_err(|e| format!("Could not prepare import: {e}"))?;
+    }
+    let args = pandoc_args(
+        format.reader(),
+        &plan.media_name,
+        &plan.note_name,
+        extract_images,
+    );
     let mut cmd = pandoc_command(&program);
     cmd.current_dir(&plan.work_dir)
         .arg(src) // absolute source
@@ -283,6 +297,10 @@ pub struct DocumentsConfigDto {
     /// Whether NEW imports land in a dated `YYYY/MM` subfolder — the
     /// Documents settings surface for `VaultCaptureConfig::document_date_folders`.
     pub document_date_folders: bool,
+    /// Whether a document import extracts images into a media folder (true) or
+    /// produces a text-only note with images dropped (false) — the Documents
+    /// settings surface for `VaultCaptureConfig::document_extract_images`.
+    pub document_extract_images: bool,
 }
 
 /// Per-vault documents folder (or None → the frontend shows the "Documents"
@@ -293,6 +311,7 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
     DocumentsConfigDto {
         documents_folder: vault.documents_folder,
         document_date_folders: vault.document_date_folders,
+        document_extract_images: vault.document_extract_images,
     }
 }
 
@@ -308,6 +327,7 @@ pub fn set_documents_config(
     id: String,
     documents_folder: Option<String>,
     document_date_folders: bool,
+    document_extract_images: bool,
 ) -> Result<(), String> {
     let vault = discovery::discover_vaults()
         .into_iter()
@@ -325,6 +345,7 @@ pub fn set_documents_config(
     let mut v = capture_config::vault_config(&capture_config::load_config(), &id);
     v.documents_folder = folder;
     v.document_date_folders = document_date_folders;
+    v.document_extract_images = document_extract_images;
     capture_config::update_vault_config(&id, v)
 }
 
