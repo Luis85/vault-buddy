@@ -237,6 +237,14 @@ pub fn transcribe_recording(
                 })
             }
         };
+    // A cancel that landed DURING the engine call must win even over a
+    // successful return: the VAD detect stage has no abort callback, so an
+    // all-silence recording can short-circuit to Ok after the user already
+    // cancelled — without this check that wrote a COMPLETE "No speech
+    // detected" sidecar instead of the cancelled one (Codex PR #61).
+    if cancel.is_cancelled() {
+        return Err(TranscribeError::Cancelled);
+    }
     let inference_secs = inference_start.elapsed().as_secs_f32();
     let n_segments = segments
         .iter()
@@ -704,6 +712,51 @@ mod tests {
             noop_progress(),
         );
         assert!(matches!(r, Err(TranscribeError::Failed(_))));
+    }
+
+    // Regression (Codex PR #61): the VAD all-silence short-circuit returns
+    // Ok WITHOUT ever entering whisper's abort callback, so a cancel that
+    // lands while Silero is detecting on a silent recording used to be
+    // swallowed — transcribe_recording wrote a COMPLETE "No speech
+    // detected" sidecar instead of honoring the cancel. A cancel set
+    // during a transcriber call that still returns Ok must win.
+    struct FakeCancelsThenSucceeds;
+    impl Transcriber for FakeCancelsThenSucceeds {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _o: &EngineOptions,
+            cancel: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<(Vec<Segment>, bool), String> {
+            // The cancel arrives mid-call (e.g. during the VAD detect,
+            // which has no abort callback) — and the call still succeeds.
+            cancel.cancel();
+            Ok((Vec::new(), true))
+        }
+    }
+
+    #[test]
+    fn cancel_during_a_successful_engine_return_is_still_a_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let r = transcribe_recording(
+            &mp3,
+            &FakeCancelsThenSucceeds,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        );
+        assert!(
+            matches!(r, Err(TranscribeError::Cancelled)),
+            "an Ok engine return must not outrank a cancel that landed during it"
+        );
+        assert!(
+            !transcript_path(&mp3).exists(),
+            "no complete sidecar may be written for a cancelled job"
+        );
     }
 
     #[test]
