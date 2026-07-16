@@ -789,7 +789,11 @@ downloads on first VAD-enabled job (progress on `capture:modelDownload`,
 `model:"vad"`); a FAILED download degrades that job to a no-VAD run with a
 warning (never a job failure — the stats footer's
 `Silence skipping (VAD)` row reports the EFFECTIVE state), while a cancel
-during it is still a cancel. State is surfaced as `capture:transcribing` /
+during it is still a cancel. A failure also arms a 10-minute download
+backoff (`VAD_BACKOFF` in `transcription.rs`) so an offline setup with the
+main model cached degrades instantly instead of stalling every job through
+the network timeout; success clears it, and a cancel never arms it (the
+user aborting a job says nothing about the network). State is surfaced as `capture:transcribing` /
 `transcribeProgress` / `transcribed` / `transcribeSkipped` /
 `transcribeFailed` / `transcribeCancelled` (each carries the `mp3`).
 `whisper-rs` is pinned at 0.16 deliberately — `transcribe/src/engine.rs`

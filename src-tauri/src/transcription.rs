@@ -373,24 +373,64 @@ fn initial_prompt_for(mp3: &Path, vocabulary: Option<&str>) -> Option<String> {
     vault_buddy_transcribe::compose_initial_prompt(title, vocabulary)
 }
 
+/// How long one failed silero download suppresses re-attempts. Without a
+/// backoff, an offline/firewalled setup with the MAIN model already cached
+/// stalled EVERY job through the full network timeout before degrading to
+/// no-VAD (Codex PR #61) — a default-on optional accelerant repeatedly
+/// delaying the thing the user actually asked for. Ten minutes keeps the
+/// stall a rare event while still picking a returning network up without
+/// an app restart.
+const VAD_DOWNLOAD_BACKOFF_MS: u64 = 10 * 60 * 1000;
+
+/// Clock-free backoff decision state (unit-tested; `ensure_vad_model`
+/// feeds it `now_ms()` under the process-wide `VAD_BACKOFF` mutex).
+#[derive(Default)]
+struct VadDownloadBackoff {
+    retry_at_ms: Option<u64>,
+}
+
+impl VadDownloadBackoff {
+    fn should_attempt(&self, now_ms: u64) -> bool {
+        self.retry_at_ms.is_none_or(|t| now_ms >= t)
+    }
+    fn record_failure(&mut self, now_ms: u64) {
+        self.retry_at_ms = Some(now_ms + VAD_DOWNLOAD_BACKOFF_MS);
+    }
+    fn record_success(&mut self) {
+        self.retry_at_ms = None;
+    }
+}
+
+static VAD_BACKOFF: Mutex<VadDownloadBackoff> =
+    Mutex::new(VadDownloadBackoff { retry_at_ms: None });
+
 /// Ensure the Silero VAD model is on disk, downloading (progress rides the
 /// existing `capture:modelDownload` event with model:"vad") if missing.
 /// Failure is NOT a job failure — the caller degrades to a no-VAD run: the
 /// user's intent is "transcribe my meeting", and a ~1 MB optional accelerant
 /// must never block that. A cancel mid-download is still a real cancel (the
-/// caller consults the token, exactly like the main-model path).
+/// caller consults the token, exactly like the main-model path). A recent
+/// download FAILURE short-circuits to the same degrade without touching the
+/// network (`VAD_BACKOFF` above) — but a cancel never arms the backoff: the
+/// user aborting a job says nothing about the network.
 fn ensure_vad_model(app: &AppHandle, mp3: &Path, cancel: &CancelToken) -> Result<PathBuf, String> {
     if let Some(p) = vad_model_path() {
         if p.exists() {
             return Ok(p);
         }
     }
+    if !lock_ignoring_poison(&VAD_BACKOFF).should_attempt(now_ms()) {
+        return Err(format!(
+            "a recent download attempt failed; next retry after {} min of backoff",
+            VAD_DOWNLOAD_BACKOFF_MS / 60_000
+        ));
+    }
     log::info!("transcribe: downloading the silero VAD model");
     let app = app.clone();
     let mp3 = mp3.to_path_buf();
     // ~885 KB file: a 200 KB emit step yields a handful of updates.
     let mut throttle = EmitThrottle::new(200_000);
-    download_vad_model(cancel, &mut |received, total| {
+    let result = download_vad_model(cancel, &mut |received, total| {
         if throttle.should_emit(received, Some(received) == total) {
             set_phase(&app, Phase::Downloading { received, total });
             let _ = app.emit(
@@ -403,7 +443,15 @@ fn ensure_vad_model(app: &AppHandle, mp3: &Path, cancel: &CancelToken) -> Result
                 }),
             );
         }
-    })
+    });
+    match &result {
+        Ok(_) => lock_ignoring_poison(&VAD_BACKOFF).record_success(),
+        // A cancelled download is the user's choice, not the network's
+        // verdict — the next job should attempt normally.
+        Err(_) if cancel.is_cancelled() => {}
+        Err(_) => lock_ignoring_poison(&VAD_BACKOFF).record_failure(now_ms()),
+    }
+    result
 }
 
 /// Reuse the cached transcriber only when BOTH cache-key elements match.
@@ -990,6 +1038,33 @@ pub fn transcription_queue_status(app: AppHandle) -> TranscriptionQueueDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression (Codex PR #61): with Skip silence on and the silero file
+    // missing, EVERY job re-attempted the download — in an offline setup
+    // each transcription stalled through the full network timeout before
+    // degrading to no-VAD, because nothing recorded that the download just
+    // failed. The backoff arms on failure, expires on its own (a fixed
+    // window, so a network that comes back is picked up without a
+    // restart), and clears on success.
+    #[test]
+    fn vad_download_backoff_arms_on_failure_and_expires() {
+        let mut b = VadDownloadBackoff::default();
+        assert!(b.should_attempt(1_000), "nothing failed yet: attempt");
+        b.record_failure(1_000);
+        assert!(
+            !b.should_attempt(1_000 + VAD_DOWNLOAD_BACKOFF_MS - 1),
+            "inside the window: skip without touching the network"
+        );
+        assert!(
+            b.should_attempt(1_000 + VAD_DOWNLOAD_BACKOFF_MS),
+            "window elapsed: try again"
+        );
+        // Success clears an armed backoff outright — a transient blip must
+        // not suppress attempts once a download has actually worked.
+        b.record_failure(50_000);
+        b.record_success();
+        assert!(b.should_attempt(50_001));
+    }
 
     fn job(path: &str, force: bool) -> TranscriptionJob {
         TranscriptionJob {
