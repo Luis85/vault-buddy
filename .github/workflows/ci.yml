@@ -191,9 +191,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vault-buddy-windows-${{ github.sha }}
+          # Must track the job-level CARGO_TARGET_DIR override above — the
+          # bundles land under it, not src-tauri/target. if-no-files-found:
+          # error is the tripwire if these two ever drift apart again.
           path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            D:/vbt/release/bundle/msi/*.msi
+            D:/vbt/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 14
 
