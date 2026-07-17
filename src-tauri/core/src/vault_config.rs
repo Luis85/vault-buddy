@@ -195,6 +195,26 @@ impl VaultCaptureConfig {
 /// and one malformed value must default only itself — a derived
 /// deserializer would reject the whole file, silently flipping every
 /// vault back to meeting mode (and thus desktop-audio capture).
+/// One string-array field, defensively: missing/non-array → empty; non-string
+/// items are dropped, not an error — one hand-edited entry must not discard
+/// the rest; entries are trimmed and empties dropped. Shared by `listOrder`
+/// and `archivedLists` (and any future `Vec<String>` vault field) so the two
+/// parses can't drift.
+fn parse_string_list(entry: &serde_json::Value, key: &str) -> Vec<String> {
+    entry
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
     let defaults = VaultCaptureConfig::default();
     // Pre-split configs stored one unified `recordingFolder`. Fall back to it
@@ -269,32 +289,8 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-        list_order: entry
-            .get("listOrder")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                // Non-string items are dropped, not an error — one hand-edited
-                // entry must not discard the rest of the order.
-                a.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        archived_lists: entry
-            .get("archivedLists")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        list_order: parse_string_list(entry, "listOrder"),
+        archived_lists: parse_string_list(entry, "archivedLists"),
         task_id_enabled: entry
             .get("taskIdEnabled")
             .and_then(|v| v.as_bool())
