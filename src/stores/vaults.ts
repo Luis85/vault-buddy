@@ -279,6 +279,18 @@ export const useVaultsStore = defineStore("vaults", {
         this.showList();
       }
     },
+    // Completion for a VAULT-FIRST conversion (buddy-menu flow): the source
+    // came from the OS dialog, not the queue, so there is nothing to consume
+    // — dequeueImport's shift here would silently eat a document dropped onto
+    // the buddy while the conversion ran (Codex PR #63). Same epoch guard and
+    // return-to-list semantics; a mid-conversion drop keeps the picker open
+    // with that new head offered next.
+    settleAddImport(epoch: number) {
+      if (epoch !== this.importEpoch) return;
+      if (this.pendingImports.length === 0 && this.view === "importPicker") {
+        this.showList();
+      }
+    },
     /** Back to the current view's fixed parent (no history stack). */
     back() {
       if (this.view === "recordings" && this.recordingsVaultId) {

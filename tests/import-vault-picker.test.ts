@@ -285,6 +285,39 @@ describe("ImportVaultPicker", () => {
     expect(store.view).toBe("list");
   });
 
+  it("keeps a document dropped mid-conversion queued after a vault-first import (Codex PR #63)", async () => {
+    // The vault-first source came from the OS dialog, not the queue — a drop
+    // that lands while that conversion runs must NOT be consumed by the
+    // completion (dequeueImport's shift would silently lose it); it stays
+    // queued and is offered next.
+    let resolveConvert: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document")
+        return new Promise((r) => {
+          resolveConvert = r;
+        });
+    });
+    dialogMocks.open.mockResolvedValue("C:/picked/Notes.docx");
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.view = "importPicker"; // vault-first mode
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises(); // dialog resolved; conversion held pending
+
+    // A buddy drop lands while the conversion runs (refresh() enqueues it).
+    store.enqueueImports(["C:/dropped/Later.docx"]);
+
+    resolveConvert("Documents/2026/07/x.md");
+    await flushPromises();
+
+    expect(store.pendingImports).toEqual(["C:/dropped/Later.docx"]);
+    expect(store.view).toBe("importPicker");
+    expect(wrapper.text()).toContain("Later.docx");
+  });
+
   it("vault-first mode: a cancelled file picker stays on the picker without converting", async () => {
     const convertCalls: unknown[] = [];
     mockIPC((cmd, args) => {

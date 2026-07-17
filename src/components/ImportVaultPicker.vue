@@ -119,13 +119,17 @@ async function pick(vaultId: string) {
   if (documentImports.active) return;
   // Capture the queue epoch before the (slow) conversion: if the user backs out
   // — and maybe re-drops the same path — before it resolves, the epoch moves on
-  // and dequeueImport must not consume the wrong entry or navigate (Codex P2).
-  // The vault-first flow shares the guard: dequeueImport on an EMPTY queue is
-  // exactly its return-to-list semantics, epoch-checked the same way.
+  // and the completion must not consume a queue entry or navigate (Codex P2).
+  // The vault-first flow shares the guard via settleAddImport.
   const epoch = store.importEpoch;
   const vault = store.vaults.find((v) => v.id === vaultId);
   try {
-    const source = store.pendingImports[0] ?? (await pickSourceFile());
+    // Remember WHERE the source came from: only a queue-sourced conversion
+    // may consume the queue head on success. A dialog-sourced (vault-first)
+    // one must not — a document dropped mid-conversion lands in the queue
+    // and dequeueImport's shift would silently eat it (Codex PR #63).
+    const queuedSource = store.pendingImports[0];
+    const source = queuedSource ?? (await pickSourceFile());
     if (source === null) return; // cancelled file picker — stay on the picker
     const notePath = await documentImports.convert(
       { id: vaultId, name: vault?.name ?? "" },
@@ -139,7 +143,8 @@ async function pick(vaultId: string) {
         run: () => invoke("open_imported_document", { id: vaultId, path: notePath }),
       },
     });
-    store.dequeueImport(epoch);
+    if (queuedSource !== undefined) store.dequeueImport(epoch);
+    else store.settleAddImport(epoch);
   } catch (e) {
     // Stay on the picker (queue head unchanged) so the user can retry a
     // different vault for this same document.
