@@ -157,6 +157,14 @@ export function useTaskActions(opts: {
       applyMovedTask(task, moved);
       task.list = targetList;
       sortInPlace();
+      // A move can cross archived visibility — from Dates/Tags grouping an
+      // archived list's row still shows, and moving it to a visible list
+      // makes it countable again (count_open_tasks skips archived lists) —
+      // so refresh the cached badges like every other count-moving mutation
+      // (GAP-32 precedent). The DRAG mover deliberately doesn't: it only
+      // runs under Lists grouping, where archived rows never render, so a
+      // drag can't change the count (review, PR #59).
+      void vaultsStore.refreshTaskCount(task.vaultId);
     } catch (e) {
       const prefix = fieldsSaved ? "Saved fields, but couldn't move" : "Couldn't move";
       notifications.error(`${prefix} to "${targetList || "No list"}": ${String(e)}`);

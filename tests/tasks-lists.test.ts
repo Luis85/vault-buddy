@@ -437,6 +437,26 @@ describe("Tasks — lists & sorting", () => {
       expect(task.list).toBe("Inbox");
     });
 
+    it("a successful list move refreshes the vault's open-task badge (review)", async () => {
+      // count_open_tasks skips archived lists, so moving an open task OUT of
+      // an archived list — reachable from Dates/Tags grouping, where its row
+      // still shows and the picker offers visible targets — makes it
+      // countable again. The editor move must refresh the cached badges like
+      // every other count-moving mutation (GAP-32 precedent); the stale badge
+      // otherwise underreports until the next panel open.
+      const { wrapper, calls } = mountView({
+        list_tasks: inList,
+        list_task_lists: () => ["Inbox"],
+        move_task_to_list: () => ({ path: "C:/v/Tasks/Inbox/e.md", id: null }),
+      });
+      await flushPromises();
+      await openEditorAndPick(wrapper, "Inbox");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "move_task_to_list")).toBeDefined();
+      expect(calls.find((c) => c.cmd === "count_open_tasks")?.args).toEqual({ id: "v1" });
+    });
+
     it("keeping the same list issues no move", async () => {
       const { wrapper, calls } = mountView({ list_tasks: inList, list_task_lists: () => ["Inbox"] });
       await flushPromises();
