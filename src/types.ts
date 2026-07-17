@@ -248,6 +248,15 @@ export interface SearchResponse {
   truncated: boolean;
 }
 
+/** One transcription model artifact's cache status (models card). */
+export interface TranscriptionModelStatus {
+  id: string;
+  fileName: string;
+  present: boolean;
+  sizeBytes: number | null;
+  approxDownloadBytes: number;
+}
+
 export interface Recording {
   mp3: string;
   title: string;
