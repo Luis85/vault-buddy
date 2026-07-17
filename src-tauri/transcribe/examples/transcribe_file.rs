@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use vault_buddy_transcribe::decode::decode_to_16k_mono;
 use vault_buddy_transcribe::engine::WhisperTranscriber;
 use vault_buddy_transcribe::model::{model_path, ModelTier};
-use vault_buddy_transcribe::{CancelToken, Transcriber};
+use vault_buddy_transcribe::{CancelToken, EngineOptions, Transcriber};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -36,18 +36,28 @@ fn main() {
         started.elapsed().as_secs()
     );
 
-    let t = WhisperTranscriber::load(&model).expect("load model");
+    // use_gpu wired to the app-global setting in the next commit.
+    let t = WhisperTranscriber::load(&model, false).expect("load model");
     let inf = std::time::Instant::now();
-    let segments = t
+    let opts = EngineOptions {
+        language: None,
+        initial_prompt: None,
+        vad_model: None,
+    };
+    let vault_buddy_transcribe::EngineOutput {
+        segments,
+        vad_engaged,
+        detected_language: _,
+    } = t
         .transcribe(
             &samples,
-            None,
+            &opts,
             &cancel,
             Box::new(|p| eprintln!("progress {p}%")),
         )
         .expect("transcribe returned Err (the -6 abort would land here)");
     eprintln!(
-        "OK: {} segments in {}s",
+        "OK: {} segments in {}s (vad_engaged={vad_engaged})",
         segments.len(),
         inf.elapsed().as_secs()
     );

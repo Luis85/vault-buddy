@@ -4,6 +4,7 @@ mod commands;
 mod diagnostics;
 mod document_commands;
 mod mcp_commands;
+mod model_commands;
 mod pandoc;
 mod search_commands;
 mod task_commands;
@@ -433,6 +434,8 @@ pub fn run() {
             capture_commands::open_recording,
             capture_config_commands::get_capture_config,
             capture_config_commands::set_capture_config,
+            capture_config_commands::get_transcription_config,
+            capture_config_commands::set_transcription_config,
             capture_commands::list_audio_devices,
             capture_commands::pause_capture,
             capture_commands::resume_capture,
@@ -463,6 +466,8 @@ pub fn run() {
             document_commands::take_pending_import,
             document_commands::take_add_document_request,
             document_commands::open_imported_document,
+            model_commands::list_transcription_models,
+            model_commands::delete_transcription_model,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

@@ -6,6 +6,7 @@ pub mod decode;
 #[cfg(feature = "whisper")]
 pub mod engine;
 pub mod model;
+pub mod vad;
 
 use vault_buddy_core::transcript::Segment;
 
@@ -37,25 +38,66 @@ pub enum TranscribeError {
     Failed(String),
 }
 
+/// Per-job knobs threaded into the engine — a borrowed view over
+/// `TranscribeOptions`. A struct rather than positional parameters so the
+/// next knob doesn't ripple through every `Transcriber` implementor again.
+pub struct EngineOptions<'a> {
+    /// ISO language code (e.g. "es"), or None to auto-detect.
+    pub language: Option<&'a str>,
+    /// Vocabulary/context priming; None = no prompt (whisper's default).
+    pub initial_prompt: Option<&'a str>,
+    /// Some(path to the Silero ggml) enables VAD with that model; None = off
+    /// (either the setting is off, or the model wasn't available and the job
+    /// degraded — see the shell's ensure_vad_model).
+    pub vad_model: Option<&'a Path>,
+}
+
+/// What one engine run produced. A struct (not a tuple) so the next field
+/// stops rippling through every `Transcriber` implementor — this is the
+/// third widening of this signature on one branch.
+pub struct EngineOutput {
+    pub segments: Vec<Segment>,
+    /// Whether this run actually filtered non-speech via VAD (the
+    /// EFFECTIVE state — unchanged semantics from the tuple's bool).
+    pub vad_engaged: bool,
+    /// Whisper's detected language code (e.g. "de"): Some only when the
+    /// job ran on auto AND inference actually ran. Captured in H2; every
+    /// H1 construction site sets `None`.
+    pub detected_language: Option<String>,
+}
+
 /// A speech-to-text backend. `samples` are 16 kHz mono f32 in [-1, 1];
-/// `language` is an ISO code (e.g. "es") or None to auto-detect. `cancel` is
-/// polled by the engine's abort callback (an aborted run returns `Err`, which
-/// `transcribe_recording` disambiguates via the token); `on_progress` is the
-/// engine's 0-100 percent callback, forwarded as-is.
+/// `opts` carries the language plus the prompt/VAD knobs (see
+/// `EngineOptions`). `cancel` is polled by the engine's abort callback (an
+/// aborted run returns `Err`, which `transcribe_recording` disambiguates via
+/// the token); `on_progress` is the engine's 0-100 percent callback,
+/// forwarded as-is.
 pub trait Transcriber {
+    /// `Ok` carries the recognized segments plus `vad_engaged`: whether
+    /// this run actually filtered non-speech via VAD (an all-silence
+    /// buffer that short-circuits before whisper runs at all still counts
+    /// as engaged). This is the EFFECTIVE state, not the request — a
+    /// VAD-enabled job whose detection failed degrades to `false` (an
+    /// unfiltered run) even though `opts.vad_model` was `Some`.
+    /// `transcribe_recording` records it as `TranscriptMeta.vad`, so the
+    /// stats footer reports what actually happened.
     fn transcribe(
         &self,
         samples: &[f32],
-        language: Option<&str>,
+        opts: &EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
-    ) -> Result<Vec<Segment>, String>;
+    ) -> Result<EngineOutput, String>;
 }
 
 pub struct TranscribeOptions {
     pub language: Option<String>,
     pub timestamps: bool,
     pub model_label: String,
+    /// Composed title+vocabulary priming (see `compose_initial_prompt`).
+    pub initial_prompt: Option<String>,
+    /// Resolved Silero model path when this job runs with VAD.
+    pub vad_model: Option<PathBuf>,
 }
 
 use std::path::{Path, PathBuf};
@@ -95,6 +137,75 @@ pub fn inference_failure_message(code: Option<i32>, raw: &str) -> String {
              settings. (whisper error {c})"
         ),
         _ => format!("Transcription failed during inference. ({raw})"),
+    }
+}
+
+/// Compose whisper's `initial_prompt` from the recording's title and the
+/// vault's custom vocabulary. Title FIRST, vocabulary LAST: whisper keeps
+/// only the trailing `n_text_ctx/2` tokens of an over-long prompt (it
+/// truncates from the front), so the user's explicit vocabulary is the part
+/// that must survive. `None` when there is nothing to prime with — whisper
+/// then behaves exactly as it did before this feature existed.
+///
+/// Every part is mapped: control characters (`char::is_control`, which
+/// covers `\0`) become spaces before the trim/emptiness checks. This is the one
+/// chokepoint both the title and the vocabulary flow through on their way
+/// into whisper's prompt: `engine.rs`'s `set_initial_prompt` does
+/// `CString::new(prompt).expect(...)` internally (whisper-rs, not our own
+/// code), and a NUL byte anywhere in the prompt panics and kills the named
+/// transcription worker thread. Mapping to spaces (not removal) keeps
+/// newline-separated vocabulary terms separate — `"Anna\nKubernetes"` stays
+/// `"Anna Kubernetes"`, not glued. `transcriptionVocabulary` lives in a
+/// hand-editable `config.json`, so a stray control character is reachable
+/// without the app ever writing one itself.
+pub fn compose_initial_prompt(title: &str, vocabulary: Option<&str>) -> Option<String> {
+    let parts: Vec<String> = [Some(title), vocabulary]
+        .into_iter()
+        .flatten()
+        .map(|s| {
+            s.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect::<String>()
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(cap_prompt_len(parts.join(". ")))
+    }
+}
+
+/// Hard cap on the composed initial prompt, in chars. whisper.cpp itself
+/// only keeps roughly the trailing `n_text_ctx/2` tokens (~224 tokens for
+/// the shipped models' 448-token context) of an over-long prompt, so 2048
+/// chars is already generous slack above that — this cap's real job isn't
+/// prompt quality, it's bounding the documented per-job `CString` leak in
+/// whisper-rs's `set_initial_prompt` (see the NOTE at its call site in
+/// `engine.rs`). Without a cap, a user pasting a huge vocabulary (or
+/// hand-editing `config.json`) leaks the WHOLE prompt on every
+/// transcription job — megabytes accumulating across a session instead of
+/// the "a few hundred bytes" that leak was sized for.
+pub const PROMPT_MAX_CHARS: usize = 2048;
+
+/// Truncate `prompt` to at most `PROMPT_MAX_CHARS` characters, keeping the
+/// TAIL — the same direction whisper itself truncates an over-long prompt,
+/// so the caller's vocabulary (composed last, deliberately — see this fn's
+/// caller) survives our cap exactly as it survives whisper's.
+/// Char-boundary-safe: `char_indices().rev().nth(...)` only ever yields
+/// byte offsets that fall on a char boundary, so this never slices a
+/// multibyte codepoint in half (which would panic).
+fn cap_prompt_len(prompt: String) -> String {
+    if prompt.chars().count() <= PROMPT_MAX_CHARS {
+        return prompt;
+    }
+    // The byte offset of the start of the PROMPT_MAX_CHARS-th character
+    // counting from the end — everything from there to the end of the
+    // string is exactly PROMPT_MAX_CHARS characters.
+    match prompt.char_indices().rev().nth(PROMPT_MAX_CHARS - 1) {
+        Some((idx, _)) => prompt[idx..].to_string(),
+        None => prompt, // unreachable given the length check above; safe fallback
     }
 }
 
@@ -155,18 +266,34 @@ pub fn transcribe_recording(
         "transcribe: inference start {} ({duration_secs}s audio)",
         mp3.display()
     );
-    let segments =
-        match transcriber.transcribe(&samples, opts.language.as_deref(), cancel, on_progress) {
-            Ok(s) => s,
-            // An aborted full() returns Err; the token says whether it was us.
-            Err(e) => {
-                return Err(if cancel.is_cancelled() {
-                    TranscribeError::Cancelled
-                } else {
-                    TranscribeError::Failed(e)
-                })
-            }
-        };
+    let engine_opts = EngineOptions {
+        language: opts.language.as_deref(),
+        initial_prompt: opts.initial_prompt.as_deref(),
+        vad_model: opts.vad_model.as_deref(),
+    };
+    let EngineOutput {
+        segments,
+        vad_engaged,
+        detected_language,
+    } = match transcriber.transcribe(&samples, &engine_opts, cancel, on_progress) {
+        Ok(t) => t,
+        // An aborted full() returns Err; the token says whether it was us.
+        Err(e) => {
+            return Err(if cancel.is_cancelled() {
+                TranscribeError::Cancelled
+            } else {
+                TranscribeError::Failed(e)
+            })
+        }
+    };
+    // A cancel that landed DURING the engine call must win even over a
+    // successful return: the VAD detect stage has no abort callback, so an
+    // all-silence recording can short-circuit to Ok after the user already
+    // cancelled — without this check that wrote a COMPLETE "No speech
+    // detected" sidecar instead of the cancelled one (Codex PR #61).
+    if cancel.is_cancelled() {
+        return Err(TranscribeError::Cancelled);
+    }
     let inference_secs = inference_start.elapsed().as_secs_f32();
     let n_segments = segments
         .iter()
@@ -197,6 +324,18 @@ pub fn transcribe_recording(
         generated_at: generated_at.to_string(),
         timestamps: opts.timestamps,
         processing_secs,
+        // The EFFECTIVE state the transcriber reports, not the request —
+        // see Transcriber::transcribe's doc comment. Replaces the old
+        // `opts.vad_model.is_some()`, which recorded the setting rather
+        // than what actually happened (a VAD-enabled job whose Silero
+        // detection failed used to lie "on" in the stats footer).
+        vad: vad_engaged,
+        // Belt-and-braces re-filter on the setting: the engine already
+        // gates detection on auto, but the pipeline must not trust an
+        // over-eager future Transcriber implementor to — a "detection"
+        // must never smuggle into a pinned-language transcript (the same
+        // honest-reporting pattern `vad_engaged` uses).
+        detected_language: detected_language.filter(|_| opts.language.is_none()),
     };
     let content = transcript::render_transcript(&meta, &segments);
     let path = transcript::transcript_path(mp3);
@@ -286,16 +425,44 @@ mod tests {
         fn transcribe(
             &self,
             _s: &[f32],
-            _l: Option<&str>,
+            _o: &EngineOptions,
             _c: &CancelToken,
             mut on_progress: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<Vec<Segment>, String> {
+        ) -> Result<EngineOutput, String> {
             on_progress(100); // exercises the forwarder
-            Ok(vec![Segment {
-                start_ms: 0,
-                end_ms: 1000,
-                text: "hello world".into(),
-            }])
+            Ok(EngineOutput {
+                segments: vec![Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "hello world".into(),
+                }],
+                vad_engaged: false,
+                detected_language: None,
+            })
+        }
+    }
+    // Sibling of FakeOk with vad_engaged=true — the "on" half of the
+    // TranscriptMeta.vad wiring (see transcribe_records_vad_engaged_when_
+    // the_engine_reports_it below), so the meta-wiring assertion isn't
+    // pinned only against the always-false FakeOk.
+    struct FakeOkVad;
+    impl Transcriber for FakeOkVad {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _o: &EngineOptions,
+            _c: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<EngineOutput, String> {
+            Ok(EngineOutput {
+                segments: vec![Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "hello world".into(),
+                }],
+                vad_engaged: true,
+                detected_language: None,
+            })
         }
     }
     struct FakeEmpty;
@@ -303,11 +470,15 @@ mod tests {
         fn transcribe(
             &self,
             _s: &[f32],
-            _l: Option<&str>,
+            _o: &EngineOptions,
             _c: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<Vec<Segment>, String> {
-            Ok(vec![])
+        ) -> Result<EngineOutput, String> {
+            Ok(EngineOutput {
+                segments: vec![],
+                vad_engaged: false,
+                detected_language: None,
+            })
         }
     }
 
@@ -339,10 +510,10 @@ mod tests {
         fn transcribe(
             &self,
             _s: &[f32],
-            _l: Option<&str>,
+            _o: &EngineOptions,
             cancel: &CancelToken,
             _p: Box<dyn FnMut(i32) + Send>,
-        ) -> Result<Vec<Segment>, String> {
+        ) -> Result<EngineOutput, String> {
             // Mirrors whisper: an aborted full() returns Err; the token disambiguates.
             if cancel.is_cancelled() {
                 return Err("aborted".into());
@@ -396,6 +567,8 @@ mod tests {
             language: Some("en".into()),
             timestamps: true,
             model_label: "whisper-small".into(),
+            initial_prompt: None,
+            vad_model: None,
         }
     }
 
@@ -420,6 +593,95 @@ mod tests {
         assert!(text.contains("[00:00:00] hello world"));
         assert!(text.contains("## Statistics"));
         assert!(text.contains("| Model | whisper-small |"));
+        // FakeOk reports vad_engaged=false — pins TranscriptMeta.vad wiring
+        // end-to-end (Transcriber::transcribe's bool -> transcribe_recording
+        // -> meta.vad -> the rendered stats row), not just core's
+        // render_transcript-level unit test.
+        assert!(text.contains("| Silence skipping (VAD) | off |"));
+    }
+
+    #[test]
+    fn transcribe_records_vad_engaged_when_the_engine_reports_it() {
+        // Sibling of transcribe_writes_the_sidecar covering the "on" half of
+        // the same wiring: a transcriber reporting vad_engaged=true must
+        // produce an "on" row, proving the flag actually travels through
+        // rather than the stats row defaulting to off regardless.
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        transcribe_recording(
+            &mp3,
+            &FakeOkVad,
+            &opts(),
+            "2026-07-04T15:00:00+00:00",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(text.contains("| Silence skipping (VAD) | on |"));
+    }
+
+    struct FakeDetects;
+    impl Transcriber for FakeDetects {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _o: &EngineOptions,
+            _c: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<EngineOutput, String> {
+            Ok(EngineOutput {
+                segments: vec![Segment {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "hallo".into(),
+                }],
+                vad_engaged: false,
+                detected_language: Some("de".to_string()),
+            })
+        }
+    }
+
+    #[test]
+    fn detected_language_reaches_the_sidecar_on_auto_but_never_on_a_pinned_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        // Auto: the detection lands in frontmatter + stats.
+        let auto_opts = TranscribeOptions {
+            language: None,
+            ..opts()
+        };
+        transcribe_recording(
+            &mp3,
+            &FakeDetects,
+            &auto_opts,
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(text.contains(r#"detected-language: "de""#));
+        assert!(text.contains("| Language | auto (detected: de) |"));
+        // Pinned (opts() pins "en"): even an engine that (wrongly) reports
+        // a detection is filtered at the pipeline — the setting is what
+        // renders. force=true because the auto run above already wrote a
+        // COMPLETE sidecar this second write must replace.
+        transcribe_recording(
+            &mp3,
+            &FakeDetects,
+            &opts(),
+            "t",
+            true,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(transcript_path(&mp3)).unwrap();
+        assert!(!text.contains("detected-language"));
+        assert!(text.contains("| Language | en |"));
     }
 
     #[test]
@@ -575,6 +837,55 @@ mod tests {
         assert!(matches!(r, Err(TranscribeError::Failed(_))));
     }
 
+    // Regression (Codex PR #61): the VAD all-silence short-circuit returns
+    // Ok WITHOUT ever entering whisper's abort callback, so a cancel that
+    // lands while Silero is detecting on a silent recording used to be
+    // swallowed — transcribe_recording wrote a COMPLETE "No speech
+    // detected" sidecar instead of honoring the cancel. A cancel set
+    // during a transcriber call that still returns Ok must win.
+    struct FakeCancelsThenSucceeds;
+    impl Transcriber for FakeCancelsThenSucceeds {
+        fn transcribe(
+            &self,
+            _s: &[f32],
+            _o: &EngineOptions,
+            cancel: &CancelToken,
+            _p: Box<dyn FnMut(i32) + Send>,
+        ) -> Result<EngineOutput, String> {
+            // The cancel arrives mid-call (e.g. during the VAD detect,
+            // which has no abort callback) — and the call still succeeds.
+            cancel.cancel();
+            Ok(EngineOutput {
+                segments: Vec::new(),
+                vad_engaged: true,
+                detected_language: None,
+            })
+        }
+    }
+
+    #[test]
+    fn cancel_during_a_successful_engine_return_is_still_a_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let r = transcribe_recording(
+            &mp3,
+            &FakeCancelsThenSucceeds,
+            &opts(),
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        );
+        assert!(
+            matches!(r, Err(TranscribeError::Cancelled)),
+            "an Ok engine return must not outrank a cancel that landed during it"
+        );
+        assert!(
+            !transcript_path(&mp3).exists(),
+            "no complete sidecar may be written for a cancelled job"
+        );
+    }
+
     #[test]
     fn precancelled_bails_even_with_a_transcriber_that_would_succeed() {
         // FakeOk never looks at the cancel token and always returns Ok, so
@@ -616,6 +927,185 @@ mod tests {
         assert!(
             calls.load(Ordering::SeqCst) > 0,
             "on_progress must actually be invoked by the transcriber, not dropped"
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_orders_title_first_vocabulary_last() {
+        // Vocabulary LAST: whisper truncates an over-long prompt from the
+        // FRONT (it keeps the trailing n_text_ctx/2 tokens), and the user's
+        // explicit vocabulary is the part that must survive truncation.
+        assert_eq!(
+            compose_initial_prompt("Budget review", Some("Kubernetes, rmcp")),
+            Some("Budget review. Kubernetes, rmcp".to_string())
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_handles_missing_parts() {
+        assert_eq!(
+            compose_initial_prompt("Meeting", None),
+            Some("Meeting".to_string())
+        );
+        assert_eq!(
+            compose_initial_prompt("", Some("ggml")),
+            Some("ggml".to_string())
+        );
+        assert_eq!(compose_initial_prompt("", None), None);
+        // Whitespace-only parts count as missing.
+        assert_eq!(compose_initial_prompt("   ", Some("  ")), None);
+        assert_eq!(
+            compose_initial_prompt("  Standup  ", Some("  cpal  ")),
+            Some("Standup. cpal".to_string())
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_maps_control_characters_to_spaces() {
+        // whisper-rs's set_initial_prompt does CString::new(prompt)
+        // .expect(...) internally — a NUL byte (or any other control
+        // character) surviving into the composed prompt panics and kills
+        // the named transcription worker thread. transcriptionVocabulary
+        // lives in a hand-editable config.json, so this is reachable
+        // without the app ever writing a control character itself; the
+        // title path (built from a capture's file name) gets the same
+        // treatment for free since both flow through the same map here.
+        // Control characters are mapped to spaces (not removed) to keep
+        // newline-separated vocabulary terms separate.
+        assert_eq!(
+            compose_initial_prompt("Standup", Some("a\0b\u{7}")),
+            Some("Standup. a b".to_string())
+        );
+        assert_eq!(
+            compose_initial_prompt("Team\0Sync", None),
+            Some("Team Sync".to_string())
+        );
+        // Spaces trim to empty, folding into the same "missing part"
+        // handling as an originally-blank one.
+        assert_eq!(compose_initial_prompt("\0", Some("\u{1}\u{2}")), None);
+        // Newline-separated vocabulary must stay separate tokens,
+        // not glued into one.
+        assert_eq!(
+            compose_initial_prompt("Recording", Some("Anna\nKubernetes")),
+            Some("Recording. Anna Kubernetes".to_string())
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_under_the_cap_is_unchanged() {
+        // A normal-sized prompt must be untouched by the cap — only
+        // pathological over-cap input (a huge pasted vocabulary, or a
+        // hand-edited config.json) should ever trigger truncation.
+        let title = "Budget review";
+        let vocabulary = "Kubernetes, rmcp, containerd, etcd";
+        let naive_join = format!("{title}. {vocabulary}");
+        assert!(naive_join.chars().count() < PROMPT_MAX_CHARS);
+        assert_eq!(
+            compose_initial_prompt(title, Some(vocabulary)),
+            Some(naive_join)
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_over_the_cap_truncates_the_front_keeping_the_tail() {
+        // whisper itself truncates an over-long prompt from the FRONT
+        // (keeping only the trailing ~n_text_ctx/2 tokens); our cap must
+        // truncate the same direction so the user's vocabulary — placed
+        // last, deliberately — survives our cut exactly as it survives
+        // whisper's. The title carries a unique head marker that must NOT
+        // survive; the vocabulary carries a unique tail marker that MUST
+        // survive verbatim at the very end.
+        let title = format!("HEAD_MARKER{}", "x".repeat(PROMPT_MAX_CHARS));
+        let vocabulary = "TAIL_MARKER";
+        let composed = compose_initial_prompt(&title, Some(vocabulary)).unwrap();
+        assert_eq!(
+            composed.chars().count(),
+            PROMPT_MAX_CHARS,
+            "must be truncated to exactly the cap"
+        );
+        assert!(
+            !composed.contains("HEAD_MARKER"),
+            "the title head must be what got dropped: {composed}"
+        );
+        assert!(
+            composed.ends_with("TAIL_MARKER"),
+            "the vocabulary tail must survive the cap: {composed}"
+        );
+    }
+
+    #[test]
+    fn compose_initial_prompt_truncates_multibyte_input_without_panicking() {
+        // "é" is 2 bytes in UTF-8 but 1 char — a byte-slice truncation at
+        // PROMPT_MAX_CHARS bytes would land mid-codepoint and panic. Build
+        // an over-cap prompt entirely out of "é" repeats plus a multibyte
+        // tail so this also confirms truncation still lands exactly where
+        // expected, not just that it avoids panicking.
+        let title = "é".repeat(PROMPT_MAX_CHARS + 100);
+        let vocabulary = "café";
+        let composed = compose_initial_prompt(&title, Some(vocabulary)).unwrap();
+        assert_eq!(composed.chars().count(), PROMPT_MAX_CHARS);
+        assert!(
+            composed.ends_with("café"),
+            "multibyte vocabulary tail must survive: {composed}"
+        );
+    }
+
+    #[test]
+    fn engine_options_reach_the_transcriber() {
+        // The language/prompt/VAD knobs must actually arrive at the engine
+        // — a TranscribeOptions field nobody forwards would silently do
+        // nothing.
+        use std::sync::Mutex;
+        // Locally-scoped test fixture — a `type` alias would be more ceremony
+        // than the one-off tuple it names.
+        #[allow(clippy::type_complexity)]
+        struct FakeSeen(Arc<Mutex<Option<(Option<String>, Option<String>, Option<PathBuf>)>>>);
+        impl Transcriber for FakeSeen {
+            fn transcribe(
+                &self,
+                _s: &[f32],
+                opts: &EngineOptions,
+                _c: &CancelToken,
+                _p: Box<dyn FnMut(i32) + Send>,
+            ) -> Result<EngineOutput, String> {
+                *self.0.lock().unwrap() = Some((
+                    opts.language.map(str::to_string),
+                    opts.initial_prompt.map(str::to_string),
+                    opts.vad_model.map(Path::to_path_buf),
+                ));
+                Ok(EngineOutput {
+                    segments: vec![],
+                    vad_engaged: false,
+                    detected_language: None,
+                })
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_tiny_mp3(dir.path());
+        let seen = Arc::new(Mutex::new(None));
+        let fake = FakeSeen(Arc::clone(&seen));
+        let opts = TranscribeOptions {
+            initial_prompt: Some("Standup. cpal".to_string()),
+            vad_model: Some(PathBuf::from("/models/silero.bin")),
+            ..opts()
+        };
+        transcribe_recording(
+            &mp3,
+            &fake,
+            &opts,
+            "t",
+            false,
+            &CancelToken::new(),
+            noop_progress(),
+        )
+        .unwrap();
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            Some((
+                Some("en".to_string()), // opts() below seeds language: Some("en")
+                Some("Standup. cpal".to_string()),
+                Some(PathBuf::from("/models/silero.bin"))
+            ))
         );
     }
 }

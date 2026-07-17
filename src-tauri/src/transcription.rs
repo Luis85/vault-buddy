@@ -16,7 +16,9 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::throttle::EmitThrottle;
 use vault_buddy_core::{capture_config, capture_paths, discovery};
 use vault_buddy_transcribe::engine::WhisperTranscriber;
-use vault_buddy_transcribe::model::{download_model, model_path, ModelTier};
+use vault_buddy_transcribe::model::{
+    download_model, download_vad_model, model_path, vad_model_path, ModelTier,
+};
 use vault_buddy_transcribe::{
     transcribe_recording, CancelToken, TranscribeError, TranscribeOptions, TranscribeOutcome,
 };
@@ -76,6 +78,15 @@ struct TranscriptionQueue {
     pending: VecDeque<TranscriptionJob>,
     /// The job the worker is presently on; None between jobs and at idle.
     active: Option<ActiveJob>,
+    /// One-shot requests (artifact ids) for the worker to drop its cached
+    /// transcriber before the delete command unlinks the model file —
+    /// whisper.cpp mmaps the model, and Windows refuses to delete a mapped
+    /// file, so an idle worker's cache would otherwise block deletion
+    /// forever. A deduped LIST, not a latest-wins slot: two different-tier
+    /// deletes racing before the worker's next wake must both survive, or
+    /// the first tier's still-mapped file makes its delete fail with a
+    /// spurious "still in use" (H4 review).
+    pending_purges: Vec<String>,
 }
 
 /// Outcome of an enqueue attempt, so `enqueue_transcription` knows whether to
@@ -225,6 +236,20 @@ impl TranscriptionQueue {
             CancelOutcome::NotFound
         }
     }
+
+    fn request_purge(&mut self, id: &str) {
+        if !self.pending_purges.iter().any(|p| p == id) {
+            self.pending_purges.push(id.to_string());
+        }
+    }
+    fn take_purges(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_purges)
+    }
+    /// Whether the worker is presently on a job — the delete command's
+    /// refusal gate (see model_commands.rs).
+    fn any_active(&self) -> bool {
+        self.active.is_some()
+    }
 }
 
 /// Background transcription queue. One worker (see `run_transcription`)
@@ -288,6 +313,24 @@ pub(crate) fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
         }
         Enqueued::Duplicate => {}
     }
+}
+
+/// Post a one-shot cache-purge request and wake the worker — the delete
+/// command's first half (see model_commands.rs for the second).
+pub(crate) fn request_model_purge(app: &AppHandle, id: &str) {
+    let state = app.state::<TranscriptionState>();
+    let mut guard = lock_ignoring_poison(&state.inner);
+    guard.request_purge(id);
+    state.cv.notify_all();
+}
+
+/// Whether ANY transcription job is currently in flight — the delete
+/// command refuses while one is (its terminal write may target the model
+/// being deleted, and mid-inference the mmap is guaranteed live).
+pub(crate) fn is_any_transcription_active(app: &AppHandle) -> bool {
+    let state = app.state::<TranscriptionState>();
+    let guard = lock_ignoring_poison(&state.inner);
+    guard.any_active()
 }
 
 /// True when `mp3` is the transcription job currently running — the shell's
@@ -358,12 +401,120 @@ fn set_phase(app: &AppHandle, phase: Phase) {
     }
 }
 
+/// The composed `initial_prompt` for a job: the recording's current title
+/// (its stem minus the `YYYY-MM-DD HHmm ` capture prefix) plus the vault's
+/// custom vocabulary. Pure so it's unit-testable on Linux;
+/// `process_transcription` feeds it the live config.
+fn initial_prompt_for(mp3: &Path, vocabulary: Option<&str>) -> Option<String> {
+    let stem = mp3
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let title = vault_buddy_core::capture_paths::capture_title(&stem);
+    vault_buddy_transcribe::compose_initial_prompt(title, vocabulary)
+}
+
+/// How long one failed silero download suppresses re-attempts. Without a
+/// backoff, an offline/firewalled setup with the MAIN model already cached
+/// stalled EVERY job through the full network timeout before degrading to
+/// no-VAD (Codex PR #61) — a default-on optional accelerant repeatedly
+/// delaying the thing the user actually asked for. Ten minutes keeps the
+/// stall a rare event while still picking a returning network up without
+/// an app restart.
+const VAD_DOWNLOAD_BACKOFF_MS: u64 = 10 * 60 * 1000;
+
+/// Clock-free backoff decision state (unit-tested; `ensure_vad_model`
+/// feeds it `now_ms()` under the process-wide `VAD_BACKOFF` mutex).
+#[derive(Default)]
+struct VadDownloadBackoff {
+    retry_at_ms: Option<u64>,
+}
+
+impl VadDownloadBackoff {
+    fn should_attempt(&self, now_ms: u64) -> bool {
+        self.retry_at_ms.is_none_or(|t| now_ms >= t)
+    }
+    fn record_failure(&mut self, now_ms: u64) {
+        self.retry_at_ms = Some(now_ms + VAD_DOWNLOAD_BACKOFF_MS);
+    }
+    fn record_success(&mut self) {
+        self.retry_at_ms = None;
+    }
+}
+
+static VAD_BACKOFF: Mutex<VadDownloadBackoff> =
+    Mutex::new(VadDownloadBackoff { retry_at_ms: None });
+
+/// Ensure the Silero VAD model is on disk, downloading (progress rides the
+/// existing `capture:modelDownload` event with model:"vad") if missing.
+/// Failure is NOT a job failure — the caller degrades to a no-VAD run: the
+/// user's intent is "transcribe my meeting", and a ~1 MB optional accelerant
+/// must never block that. A cancel mid-download is still a real cancel (the
+/// caller consults the token, exactly like the main-model path). A recent
+/// download FAILURE short-circuits to the same degrade without touching the
+/// network (`VAD_BACKOFF` above) — but a cancel never arms the backoff: the
+/// user aborting a job says nothing about the network.
+fn ensure_vad_model(app: &AppHandle, mp3: &Path, cancel: &CancelToken) -> Result<PathBuf, String> {
+    if let Some(p) = vad_model_path() {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    if !lock_ignoring_poison(&VAD_BACKOFF).should_attempt(now_ms()) {
+        return Err(format!(
+            "a recent download attempt failed; next retry after {} min of backoff",
+            VAD_DOWNLOAD_BACKOFF_MS / 60_000
+        ));
+    }
+    log::info!("transcribe: downloading the silero VAD model");
+    let app = app.clone();
+    let mp3 = mp3.to_path_buf();
+    // ~885 KB file: a 200 KB emit step yields a handful of updates.
+    let mut throttle = EmitThrottle::new(200_000);
+    let result = download_vad_model(cancel, &mut |received, total| {
+        if throttle.should_emit(received, Some(received) == total) {
+            set_phase(&app, Phase::Downloading { received, total });
+            let _ = app.emit(
+                "capture:modelDownload",
+                serde_json::json!({
+                    "mp3": mp3.to_string_lossy(),
+                    "model": "vad",
+                    "received": received,
+                    "total": total,
+                }),
+            );
+        }
+    });
+    match &result {
+        Ok(_) => lock_ignoring_poison(&VAD_BACKOFF).record_success(),
+        // A cancelled download is the user's choice, not the network's
+        // verdict — the next job should attempt normally.
+        Err(_) if cancel.is_cancelled() => {}
+        Err(_) => lock_ignoring_poison(&VAD_BACKOFF).record_failure(now_ms()),
+    }
+    result
+}
+
+/// Reuse the cached transcriber only when BOTH cache-key elements match.
+/// Pure so the (tier, use_gpu) contract is unit-tested; the worker loop
+/// applies it below.
+fn needs_reload(cached: Option<(ModelTier, bool)>, tier: ModelTier, use_gpu: bool) -> bool {
+    cached != Some((tier, use_gpu))
+}
+
 fn process_transcription(
     app: &AppHandle,
     job: &TranscriptionJob,
-    loaded: &mut Option<(ModelTier, WhisperTranscriber)>,
+    loaded: &mut Option<(ModelTier, bool, WhisperTranscriber)>,
 ) {
-    let cfg = capture_config::vault_config(&capture_config::load_config(), &job.vault_id);
+    let app_cfg = capture_config::load_config();
+    let cfg = capture_config::vault_config(&app_cfg, &job.vault_id);
+    // GPU is an app-global (not per-vault) knob, read from the SAME
+    // config.json load as the per-vault settings above — one read serves
+    // both, exactly as fresh: load_config reads the whole file in one shot,
+    // so a second call a moment later isn't a fresher torn-window read,
+    // it's just a second file read.
+    let use_gpu = app_cfg.transcription.use_gpu;
     // A forced (explicit) re-transcribe ignores the vault's auto-transcribe
     // setting; the automatic path still bails when disabled.
     if !cfg.transcribe && !job.force {
@@ -435,9 +586,31 @@ fn process_transcription(
             return fail_transcription(app, &job.mp3, &format!("model unavailable: {e}"));
         }
     };
-    // Handover: the model is on disk now (just downloaded, or already
-    // present) — replace the download row with "preparing" BEFORE the
-    // model-load gap below, so a download UI can never stick at 100%.
+    // Resolve the Silero model only for VAD-enabled vaults. A download
+    // failure DEGRADES — the job still transcribes, just without silence
+    // skipping (the warning below and the stats row's "off" are the traces) —
+    // unless the error was actually our own cancel.
+    let vad_model = if cfg.transcription_vad {
+        match ensure_vad_model(app, &job.mp3, &cancel) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                if cancel.is_cancelled() {
+                    return emit_cancelled(app, &job.mp3);
+                }
+                log::warn!(
+                    "transcribe: VAD model unavailable, transcribing {} without silence skipping: {e}",
+                    job.mp3.display()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    // Handover: both the main model AND — for a VAD-enabled vault — the
+    // silero model are on disk now (just downloaded, or already present)
+    // — replace the download row with "preparing" BEFORE the model-load
+    // gap below, so a download UI can never stick at 100%.
     set_phase(app, Phase::Preparing);
     let _ = app.emit(
         "capture:modelReady",
@@ -449,9 +622,9 @@ fn process_transcription(
     if cancel.is_cancelled() {
         return emit_cancelled(app, &job.mp3);
     }
-    if loaded.as_ref().map(|(t, _)| *t) != Some(tier) {
-        match WhisperTranscriber::load(&model) {
-            Ok(w) => *loaded = Some((tier, w)),
+    if needs_reload(loaded.as_ref().map(|(t, g, _)| (*t, *g)), tier, use_gpu) {
+        match WhisperTranscriber::load(&model, use_gpu) {
+            Ok(w) => *loaded = Some((tier, use_gpu, w)),
             Err(e) => {
                 // A model that downloaded but won't load is corrupt on disk;
                 // ensure_model returns early on dest.exists(), so leaving it
@@ -470,11 +643,13 @@ fn process_transcription(
             }
         }
     }
-    let transcriber = &loaded.as_ref().unwrap().1;
+    let transcriber = &loaded.as_ref().unwrap().2;
     let opts = TranscribeOptions {
         language: cfg.transcription_language.clone(),
         timestamps: cfg.transcript_timestamps,
         model_label: tier.label(),
+        initial_prompt: initial_prompt_for(&job.mp3, cfg.transcription_vocabulary.as_deref()),
+        vad_model,
     };
     let generated_at = chrono::Local::now().to_rfc3339();
 
@@ -651,8 +826,9 @@ fn catch_job<F: FnOnce()>(f: F) -> bool {
 
 /// Startup + on-demand worker: drains the transcription queue, postponing
 /// while a recording is active. The loaded whisper model is cached across
-/// jobs of the same tier. Mirrors `run_recovery`'s shape (own thread, coarse
-/// is-recording gate).
+/// jobs of the same tier AND the same GPU flag (`needs_reload`) — a toggle
+/// flip takes effect on the very next job, no restart. Mirrors
+/// `run_recovery`'s shape (own thread, coarse is-recording gate).
 pub fn run_transcription(app: &AppHandle) {
     let app = app.clone();
     std::thread::Builder::new()
@@ -667,21 +843,43 @@ pub fn run_transcription(app: &AppHandle) {
             // (previous-session saves, crash-recovered captures, freshly enabled
             // vaults).
             scan_and_enqueue(&app);
-            let mut loaded: Option<(ModelTier, WhisperTranscriber)> = None;
+            let mut loaded: Option<(ModelTier, bool, WhisperTranscriber)> = None;
             loop {
                 // Wait until a job is present, but only PEEK: the recording gate
                 // below may leave it queued, and popping before that gate would
                 // drop the job (or a force upgrade that lands between the peek
                 // and the pop). We claim it only once we've decided to run it.
-                {
+                let purges = {
                     let state = app.state::<TranscriptionState>();
                     let mut guard = lock_ignoring_poison(&state.inner);
-                    while guard.pending.is_empty() {
+                    while guard.pending.is_empty() && guard.pending_purges.is_empty() {
                         // The Condvar guard is poisonable too — recover it the
                         // same way `lock_ignoring_poison` recovers the mutex, so
                         // a panic elsewhere can't wedge the worker permanently on
                         // a poisoned wait.
                         guard = state.cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    }
+                    guard.take_purges()
+                };
+                // Drop the cached transcriber BEFORE any delete attempt can
+                // race the mmap (the requesting command retries the unlink
+                // while we get here). "vad" is accepted as a no-op for
+                // symmetry — the worker never caches the silero model.
+                if !purges.is_empty() {
+                    let cached = loaded.as_ref().map(|(t, _, _)| t.as_str());
+                    if cached.is_some_and(|t| purges.iter().any(|p| p == t)) {
+                        log::info!(
+                            "transcribe: dropping cached {} model for deletion",
+                            cached.unwrap_or_default()
+                        );
+                        loaded = None;
+                    }
+                    // A purge with no pending work: loop back to the wait
+                    // rather than falling through to the recording gate.
+                    let state = app.state::<TranscriptionState>();
+                    let guard = lock_ignoring_poison(&state.inner);
+                    if guard.pending.is_empty() {
+                        continue;
                     }
                 }
                 // Never contend with a live recording for CPU — re-check soon.
@@ -904,6 +1102,33 @@ pub fn transcription_queue_status(app: AppHandle) -> TranscriptionQueueDto {
 mod tests {
     use super::*;
 
+    // Regression (Codex PR #61): with Skip silence on and the silero file
+    // missing, EVERY job re-attempted the download — in an offline setup
+    // each transcription stalled through the full network timeout before
+    // degrading to no-VAD, because nothing recorded that the download just
+    // failed. The backoff arms on failure, expires on its own (a fixed
+    // window, so a network that comes back is picked up without a
+    // restart), and clears on success.
+    #[test]
+    fn vad_download_backoff_arms_on_failure_and_expires() {
+        let mut b = VadDownloadBackoff::default();
+        assert!(b.should_attempt(1_000), "nothing failed yet: attempt");
+        b.record_failure(1_000);
+        assert!(
+            !b.should_attempt(1_000 + VAD_DOWNLOAD_BACKOFF_MS - 1),
+            "inside the window: skip without touching the network"
+        );
+        assert!(
+            b.should_attempt(1_000 + VAD_DOWNLOAD_BACKOFF_MS),
+            "window elapsed: try again"
+        );
+        // Success clears an armed backoff outright — a transient blip must
+        // not suppress attempts once a download has actually worked.
+        b.record_failure(50_000);
+        b.record_success();
+        assert!(b.should_attempt(50_001));
+    }
+
     fn job(path: &str, force: bool) -> TranscriptionJob {
         TranscriptionJob {
             mp3: PathBuf::from(path),
@@ -1121,6 +1346,31 @@ mod tests {
     }
 
     #[test]
+    fn initial_prompt_for_composes_title_and_vocabulary() {
+        let mp3 = Path::new("/v/Meetings/2026/07/2026-07-16 0930 Budget review.mp3");
+        assert_eq!(
+            initial_prompt_for(mp3, Some("Kubernetes, rmcp")),
+            Some("Budget review. Kubernetes, rmcp".to_string())
+        );
+        assert_eq!(
+            initial_prompt_for(mp3, None),
+            Some("Budget review".to_string())
+        );
+    }
+
+    #[test]
+    fn initial_prompt_for_is_none_when_there_is_nothing_to_prime_with() {
+        // A non-capture stem passes through capture_title unchanged and still
+        // primes (harmless), but an empty stem + no vocabulary must be None so
+        // whisper runs exactly as before this feature.
+        assert_eq!(initial_prompt_for(Path::new(""), None), None);
+        assert_eq!(
+            initial_prompt_for(Path::new("/x/download.mp3"), None),
+            Some("download".to_string())
+        );
+    }
+
+    #[test]
     fn retarget_pending_keeps_one_entry_per_path() {
         // There is at most one pending entry per path by construction
         // (`enqueue`'s dedup) — retarget must rename in place, never append,
@@ -1140,5 +1390,59 @@ mod tests {
             2,
             "no duplicate mp3 in the pending list after retarget"
         );
+    }
+
+    #[test]
+    fn model_reloads_when_tier_or_gpu_changes() {
+        // The cached transcriber must be reused ONLY when both the tier
+        // and the GPU flag match — a toggle flip takes effect on the next
+        // job without a restart (spec: cache key (tier, use_gpu)).
+        assert!(!needs_reload(
+            Some((ModelTier::Small, true)),
+            ModelTier::Small,
+            true
+        ));
+        assert!(needs_reload(
+            Some((ModelTier::Small, true)),
+            ModelTier::Small,
+            false
+        ));
+        assert!(needs_reload(
+            Some((ModelTier::Small, true)),
+            ModelTier::Turbo,
+            true
+        ));
+        assert!(needs_reload(None, ModelTier::Small, true));
+    }
+
+    #[test]
+    fn purge_request_round_trips_and_is_one_shot() {
+        let mut q = TranscriptionQueue::default();
+        assert!(q.take_purges().is_empty());
+        q.request_purge("small");
+        assert_eq!(q.take_purges(), vec!["small".to_string()]);
+        assert!(q.take_purges().is_empty(), "one-shot: taken means gone");
+        // Two different tiers requested before the worker's next wake must
+        // BOTH survive — an Option-shaped latest-wins slot dropped the
+        // first request, so its still-mmap'd model never got released and
+        // that delete failed with a spurious "still in use" (H4 review).
+        q.request_purge("base");
+        q.request_purge("turbo");
+        q.request_purge("base"); // repeat request: deduped, not doubled
+        assert_eq!(
+            q.take_purges(),
+            vec!["base".to_string(), "turbo".to_string()]
+        );
+    }
+
+    #[test]
+    fn any_active_reflects_the_active_slot() {
+        // The delete command's refusal gate, at the queue-logic level:
+        // deleting a model out from under a running job would race its
+        // guaranteed-live mmap (and possibly its terminal write's tier).
+        let mut q = TranscriptionQueue::default();
+        assert!(!q.any_active());
+        q.active = Some(active_job("X")); // existing test helper
+        assert!(q.any_active());
     }
 }

@@ -54,7 +54,7 @@ const recordingDateFolders = computed({
   set: (v: boolean) => patch({ recordingDateFolders: v }),
 });
 
-// Bundles the four transcription fields for TranscriptionSettings' v-model —
+// Bundles the six transcription fields for TranscriptionSettings' v-model —
 // same adapter idiom CaptureSettings.vue used before this extraction.
 const transcriptionBundle = computed({
   get: () => ({
@@ -62,12 +62,16 @@ const transcriptionBundle = computed({
     transcriptionModel: props.modelValue.transcriptionModel,
     transcriptionLanguage: props.modelValue.transcriptionLanguage,
     transcriptTimestamps: props.modelValue.transcriptTimestamps,
+    transcriptionVocabulary: props.modelValue.transcriptionVocabulary,
+    transcriptionVad: props.modelValue.transcriptionVad,
   }),
   set: (v: {
     transcribe: boolean;
     transcriptionModel: string;
     transcriptionLanguage: string;
     transcriptTimestamps: boolean;
+    transcriptionVocabulary: string;
+    transcriptionVad: boolean;
   }) => patch(v),
 });
 

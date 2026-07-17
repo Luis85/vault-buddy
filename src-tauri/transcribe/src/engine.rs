@@ -175,13 +175,111 @@ pub struct WhisperTranscriber {
     ctx: WhisperContext,
 }
 
+/// Guard against upstream whisper.cpp#3750: on Windows MSVC static builds
+/// (exactly the shipped `gpu` configuration) the ggml backend registry's
+/// one-shot function-local-static constructor can hit a `vk::SystemError`
+/// inside `ggml_vk_instance_init()`; `ggml_backend_vk_reg()` catches every
+/// exception and returns null, `register_backend(null)` silently returns,
+/// and the only failure log (`VK_LOG_DEBUG`) is compiled out of release
+/// ggml — leaving the registry permanently CPU-only while the UI toggle
+/// claims GPU (all verified against the whisper.cpp source vendored in
+/// whisper-rs-sys 0.15). The remedy is the upstream workaround: after the
+/// registry has constructed, re-attempt `ggml_backend_vk_reg()` OURSELVES
+/// and register a non-null result explicitly — `vk_reg` is idempotent (a
+/// static reg struct + once-guarded instance init) and exception-safe (its
+/// internal try/catch is the very thing that returned null the first
+/// time).
+///
+/// Do NOT "fix" this by calling `whisper_rs::vulkan::list_devices()` as
+/// the first Vulkan touch instead (the recipe upstream's reporter used):
+/// its `ggml_backend_vk_get_device_count()` path runs
+/// `ggml_vk_instance_init()` with NO catch, so on a machine with a missing
+/// or pre-1.2 Vulkan loader the throw unwinds across the C ABI into Rust —
+/// UB/abort instead of the CPU fallback. It is only safe to enumerate
+/// devices once the instance is known-good (which is when this fn does
+/// it, as the GAP-62 "which GPU is it" diagnostic).
+#[cfg(feature = "whisper-vulkan")]
+fn ensure_vulkan_backend_registered() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        use whisper_rs::whisper_rs_sys as sys;
+        // Touch the registry FIRST so its constructor runs now: on healthy
+        // setups it registers Vulkan itself, and the by-name scan below
+        // must see that to avoid a duplicate registration (the registry
+        // does not dedupe).
+        let registered = (0..sys::ggml_backend_reg_count()).any(|i| {
+            let reg = sys::ggml_backend_reg_get(i);
+            !reg.is_null()
+                && std::ffi::CStr::from_ptr(sys::ggml_backend_reg_name(reg)).to_bytes()
+                    == b"Vulkan"
+        });
+        if !registered {
+            let vk = sys::ggml_backend_vk_reg();
+            if vk.is_null() {
+                // Instance init failed (caught inside C++) — no loader, no
+                // ICD, or pre-1.2 Vulkan. whisper falls back to CPU; say so
+                // where the silent upstream path never did.
+                log::warn!(
+                    "vulkan: backend failed to initialize (missing/old Vulkan driver?) — transcription runs on CPU"
+                );
+                return;
+            }
+            sys::ggml_backend_register(vk);
+            log::info!(
+                "vulkan: backend registered explicitly (the ggml registry constructor had silently skipped it — whisper.cpp#3750)"
+            );
+        }
+        // Diagnostics, now that the instance is known-good: name the
+        // devices whisper can pick from (GAP-62's first question after a
+        // driver fault is "which GPU").
+        let devices = whisper_rs::vulkan::list_devices();
+        if devices.is_empty() {
+            log::info!("vulkan: backend registered but no devices found — whisper falls back to CPU");
+        }
+        for d in &devices {
+            log::info!(
+                "vulkan: device {}: {} ({} MiB free / {} MiB total)",
+                d.id,
+                d.name,
+                d.vram.free / (1024 * 1024),
+                d.vram.total / (1024 * 1024)
+            );
+        }
+    });
+}
+
 impl WhisperTranscriber {
-    pub fn load(model_path: &Path) -> Result<Self, String> {
+    /// `use_gpu` maps to whisper.cpp's context flag. whisper-rs's
+    /// `WhisperContextParameters::default()` sets
+    /// `use_gpu: cfg!(feature = "_gpu")` (`src/whisper_ctx.rs:476`) — FALSE
+    /// on a CPU-only build, but TRUE on a Vulkan build (the `vulkan`
+    /// feature enables `_gpu`), so a shipped GPU build already defaults to
+    /// "on". The explicit `.use_gpu(use_gpu)` set below still matters for
+    /// BOTH directions, but especially OFF: without it, the "Use GPU
+    /// (Vulkan)" toggle's off position would be a silent no-op on a
+    /// shipped build — the context would keep defaulting to GPU regardless
+    /// of what the user picked. On a CPU-only build the flag is inert (no
+    /// GPU backend is compiled in), and on a Vulkan build with no usable
+    /// device whisper.cpp falls back to CPU at context init — its own log
+    /// line (routed through install_logging_hooks) is the audit trail;
+    /// deliberately NO per-transcript device claim (the VAD stats-row
+    /// lesson: never record intent as engagement).
+    pub fn load(model_path: &Path, use_gpu: bool) -> Result<Self, String> {
+        // Gated on the toggle on purpose: with GPU off we must not touch
+        // Vulkan at all — instance creation can itself crash a broken
+        // driver, and the toggle is exactly the escape hatch for that
+        // machine (GAP-62).
+        #[cfg(feature = "whisper-vulkan")]
+        if use_gpu {
+            ensure_vulkan_backend_registered();
+        }
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(use_gpu);
         // Pass the `&Path` straight through rather than round-tripping via
         // `to_string_lossy()`: `WhisperContext::new_with_params` takes it by
         // `AsRef<Path>` and converts with its own `path_to_bytes` internally,
         // so this avoids a lossy UTF-8 conversion for no benefit.
-        let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        let ctx = WhisperContext::new_with_params(model_path, params)
             .map_err(|e| format!("load model {}: {e}", model_path.display()))?;
         Ok(Self { ctx })
     }
@@ -191,10 +289,87 @@ impl Transcriber for WhisperTranscriber {
     fn transcribe(
         &self,
         samples: &[f32],
-        language: Option<&str>,
+        opts: &crate::EngineOptions,
         cancel: &CancelToken,
         on_progress: Box<dyn FnMut(i32) + Send>,
-    ) -> Result<Vec<Segment>, String> {
+    ) -> Result<crate::EngineOutput, String> {
+        // VAD (optional): filter non-speech out of `samples` before paying
+        // for inference. Reimplemented in Rust via crate::vad rather than
+        // FullParams' enable_vad/set_vad_model_path/set_vad_params, which
+        // are DEAD on this call path — state.full() below calls
+        // whisper_full_with_state, and (verified against the vendored
+        // whisper.cpp source) that function never reads params.vad at
+        // all; only whisper_full/whisper_full_parallel (the no-state entry
+        // points, unreachable from whisper-rs) apply VAD filtering.
+        // `vad_engaged` reports what ACTUALLY happened — a detect failure
+        // degrades silently to an unfiltered run, so a VAD-enabled vault
+        // whose job degraded honestly reports "off" in the transcript's
+        // stats footer, not the setting.
+        let mut owned_filtered: Option<Vec<f32>> = None;
+        let mut vad_map: Option<Vec<crate::vad::SpanMap>> = None;
+        let mut vad_engaged = false;
+        if let Some(vad_model) = opts.vad_model {
+            match crate::vad::detect_speech_centiseconds(vad_model, samples) {
+                Err(e) => {
+                    log::warn!(
+                        "vad: speech detection failed ({e}) for {}; transcribing unfiltered audio",
+                        vad_model.display()
+                    );
+                    // Self-heal, mirroring the corrupt-main-model posture: a
+                    // cached silero that fails detection is likely
+                    // corrupt/incompatible, and ensure_vad_model returns any
+                    // existing file unchecked — leaving it means every
+                    // future job silently degrades until the user
+                    // hand-deletes it. Removal is best-effort (a locked file
+                    // just retries next time); the ~1 MB redownload is
+                    // cheap and SHA-verified. A transient (non-file) detect
+                    // failure costs one spurious redownload — accepted.
+                    if let Err(rm) = std::fs::remove_file(vad_model) {
+                        log::warn!(
+                            "vad: could not remove failing model {}: {rm}",
+                            vad_model.display()
+                        );
+                    }
+                }
+                Ok(segs) => {
+                    let spans = crate::vad::spans_from_centiseconds(&segs, samples.len());
+                    if spans.is_empty() {
+                        // All-silence: nothing for whisper to do. The
+                        // existing zero-segment path already renders "No
+                        // speech detected" — return before paying for a
+                        // state/full() call at all.
+                        return Ok(crate::EngineOutput {
+                            segments: Vec::new(),
+                            vad_engaged: true,
+                            detected_language: None,
+                        });
+                    }
+                    if crate::vad::spans_cover_all(&spans, samples.len()) {
+                        // Full-buffer speech (Codex P2): VAD ran and found
+                        // nothing to trim. Skip filter_samples entirely —
+                        // copying `samples` into an identical `filtered`
+                        // buffer would allocate a SECOND full-length f32
+                        // buffer (~230 MB/hour of 16 kHz mono audio),
+                        // doubling peak memory during inference for zero
+                        // benefit on a long meeting. `owned_filtered`/
+                        // `vad_map` stay None, so `run_samples` below falls
+                        // through to `samples` directly and the timestamp
+                        // remap step is skipped — correct, since with no
+                        // filtering the whisper output is already on the
+                        // original timeline. `vad_engaged` still reports
+                        // true: VAD ran, it just removed nothing.
+                        vad_engaged = true;
+                    } else {
+                        let (filtered, map) = crate::vad::filter_samples(samples, &spans);
+                        owned_filtered = Some(filtered);
+                        vad_map = Some(map);
+                        vad_engaged = true;
+                    }
+                }
+            }
+        }
+        let run_samples: &[f32] = owned_filtered.as_deref().unwrap_or(samples);
+
         let mut state = self
             .ctx
             .create_state()
@@ -219,18 +394,33 @@ impl Transcriber for WhisperTranscriber {
         // the reliable fix, and a pinned language (settings dropdown) removes
         // the drift entirely.
         params.set_translate(false);
-        if let Some(lang) = language {
-            // NOTE: `set_language` leaks a small `CString` per job — whisper-rs
-            // `CString::into_raw()`s the language and `FullParams` has no `Drop`
-            // that reclaims `fp.language`. Unlike the progress closure (an
-            // `AppHandle` + `PathBuf`, owned/freed above), this is a bounded
-            // few-bytes-per-job upstream leak (a 2-letter code + NUL), and it is
-            // UNFIXABLE from here: the only public setter is this leaking one,
-            // and `FullParams::fp` is `pub(crate)`, so we cannot point the C
-            // struct at a `CString` we own without transferring ownership to it.
-            // Left as-is deliberately; revisit if whisper-rs adds a non-leaking
-            // language API.
-            params.set_language(Some(lang));
+        // Auto (None) must be set EXPLICITLY: whisper.cpp's default FullParams
+        // language is "en", NOT auto, so skipping set_language on an auto job
+        // silently pinned every auto-language vault to an English decode and
+        // whisper's auto-detect never ran (H2 review C1 — verified against the
+        // vendored whisper_full_with_state: detection fires only on language
+        // == nullptr/""/"auto"). None maps to a null pointer, which is that
+        // trigger; `detect_language` stays false deliberately — it is the
+        // detect-ONLY early-return mode, not "please detect then transcribe".
+        //
+        // NOTE (pinned path): `set_language(Some(..))` leaks a small `CString`
+        // per job — whisper-rs `CString::into_raw()`s the language and
+        // `FullParams` has no `Drop` that reclaims `fp.language`. Unlike the
+        // progress closure (an `AppHandle` + `PathBuf`, owned/freed above),
+        // this is a bounded few-bytes-per-job upstream leak (a 2-letter code +
+        // NUL), and it is UNFIXABLE from here: the only public setter is this
+        // leaking one, and `FullParams::fp` is `pub(crate)`, so we cannot point
+        // the C struct at a `CString` we own without transferring ownership to
+        // it. Left as-is deliberately; revisit if whisper-rs adds a non-leaking
+        // language API. (The None/auto arm installs a null — nothing leaks.)
+        params.set_language(opts.language);
+        if let Some(prompt) = opts.initial_prompt {
+            // NOTE: same bounded upstream leak class as `set_language` above —
+            // whisper-rs `CString::into_raw()`s the prompt and `FullParams`
+            // has no `Drop` reclaiming it. A prompt is a title plus a short
+            // vocabulary line, a few hundred bytes per job at most; accepted
+            // for the same pub(crate) reason documented on set_language.
+            params.set_initial_prompt(prompt);
         }
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -251,7 +441,7 @@ impl Transcriber for WhisperTranscriber {
         // when the guard drops after `full()`. Like `_abort` it must outlive the
         // `full()` call below — do NOT drop or `let _ =` it.
         let _progress = wire_progress_callback(&mut params, on_progress);
-        state.full(params, samples).map_err(|e| {
+        state.full(params, run_samples).map_err(|e| {
             // whisper.cpp's whisper_full failures arrive as GenericError(rc)
             // carrying the raw return code (e.g. -9 = "failed to decode" in the
             // sampling loop). Hand the code to the shared, unit-tested mapper so
@@ -268,17 +458,37 @@ impl Transcriber for WhisperTranscriber {
             // leading `-6` suspect on high-core machines), and the clip size —
             // so the log alone says which. whisper.cpp's own "failed to
             // encode/decode" line is already captured via install_logging_hooks.
+            // `run_samples.len()` (not `samples.len()`) so a VAD-filtered run
+            // logs what whisper ACTUALLY chewed on.
             log::error!(
                 "whisper inference failed: code={code:?} n_threads={n_threads} cancelled={} samples={} (~{}s audio)",
                 cancel.is_cancelled(),
-                samples.len(),
-                samples.len() / crate::decode::WHISPER_RATE as usize
+                run_samples.len(),
+                run_samples.len() / crate::decode::WHISPER_RATE as usize
             );
             crate::inference_failure_message(code, &raw)
         })?;
 
+        // Detection is only meaningful on auto: with a pinned language the
+        // id is just the pin echoed back, and reporting it as "detected"
+        // would be the setting masquerading as an observation. Failures
+        // degrade to None — reporting is garnish, never a job outcome
+        // (`full_lang_id_from_state` returns a bare c_int; an out-of-range
+        // id makes `get_lang_str` come back None, which is the degrade).
+        let detected_language = if opts.language.is_none() {
+            whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string)
+        } else {
+            None
+        };
+
         // whisper-rs 0.16: iterate WhisperSegment objects via state.as_iter();
-        // timestamps are in centiseconds, converted to ms below (×10).
+        // timestamps are in centiseconds, converted to ms below (×10) and,
+        // when VAD filtered the input, remapped from the filtered timeline
+        // back to the original one via `vad_map`. t0 and t1 use different
+        // `TimestampKind`s: an exact span-boundary tie means "speech
+        // resumed" for a start but "speech stopped" for an end, and using
+        // the same rule for both would render a segment that begins right
+        // after a VAD-collapsed gap as starting a whole gap too early.
         let mut out = Vec::new();
         for segment in state.as_iter() {
             let text = segment
@@ -289,21 +499,63 @@ impl Transcriber for WhisperTranscriber {
             if text.is_empty() {
                 continue;
             }
-            let t0 = segment.start_timestamp().max(0) as u64;
-            let t1 = segment.end_timestamp().max(0) as u64;
+            let t0_ms = segment.start_timestamp().max(0) as u64 * 10;
+            let t1_ms = segment.end_timestamp().max(0) as u64 * 10;
+            let (start_ms, end_ms) = match &vad_map {
+                Some(map) => (
+                    crate::vad::remap_ms(t0_ms, map, crate::vad::TimestampKind::Start),
+                    crate::vad::remap_ms(t1_ms, map, crate::vad::TimestampKind::End),
+                ),
+                None => (t0_ms, t1_ms),
+            };
             out.push(Segment {
-                start_ms: t0 * 10,
-                end_ms: t1 * 10,
+                start_ms,
+                end_ms,
                 text,
             });
         }
-        Ok(out)
+        Ok(crate::EngineOutput {
+            segments: out,
+            vad_engaged,
+            detected_language,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression for the silent-CPU GPU build (upstream whisper.cpp#3750):
+    // the guard must (a) never unwind a Vulkan exception across the FFI
+    // boundary — on a machine with a loader but no usable device/ICD (this
+    // CI runner, headless Windows runners) instance init throws inside C++
+    // and must be swallowed there, not abort the process — and (b) never
+    // register the Vulkan backend twice: on a healthy-GPU machine the ggml
+    // registry's own constructor may have already registered it, and on any
+    // machine a repeat call must be a no-op. Runs wherever the
+    // `whisper-vulkan` feature compiles (Windows CI; Linux with the SDK).
+    #[cfg(feature = "whisper-vulkan")]
+    #[test]
+    fn vulkan_registration_guard_never_aborts_and_never_duplicates() {
+        ensure_vulkan_backend_registered();
+        ensure_vulkan_backend_registered();
+        let vk_regs = unsafe {
+            use whisper_rs::whisper_rs_sys as sys;
+            (0..sys::ggml_backend_reg_count())
+                .filter(|&i| {
+                    let reg = sys::ggml_backend_reg_get(i);
+                    !reg.is_null()
+                        && std::ffi::CStr::from_ptr(sys::ggml_backend_reg_name(reg)).to_bytes()
+                            == b"Vulkan"
+                })
+                .count()
+        };
+        assert!(
+            vk_regs <= 1,
+            "Vulkan backend registered {vk_regs} times — the guard must dedupe by name"
+        );
+    }
 
     // Regression: whisper-rs 0.16's `FullParams::set_abort_callback_safe`
     // monomorphizes its C trampoline as `trampoline::<F>` (the concrete
@@ -372,18 +624,74 @@ mod tests {
                 .map(|i| (i as f32 / 16_000.0 * 440.0 * std::f32::consts::TAU).sin() * 0.2)
                 .collect()
         };
-        let t = WhisperTranscriber::load(&model).expect("load model");
-        let out = t.transcribe(&samples, None, &cancel, Box::new(|_| {}));
+        // VB_TEST_GPU=1 exercises the GPU path on a manual Windows run.
+        let t = WhisperTranscriber::load(&model, std::env::var("VB_TEST_GPU").is_ok())
+            .expect("load model");
+        // Optional priming/VAD paths for a manual (Windows dev / local) run:
+        // VB_TEST_VOCAB primes the prompt; VAD engages when the silero model
+        // is already cached. Both default off so the test's original -6
+        // regression coverage is unchanged. This automated run can't tell a
+        // VAD-on pass apart from a VAD-off one by assertion alone (both must
+        // simply not abort/error, and — VAD being all-or-nothing on
+        // whether the cached silero model exists — a single run can't
+        // observe both states anyway): a manual comparison, run once with
+        // the silero model cached and once without on the SAME
+        // VB_TEST_AUDIO clip (ideally one with an audible quiet stretch),
+        // should observe fewer-or-equal segments and a shorter wall-clock
+        // inference with VAD on than off, since the filtered buffer
+        // whisper actually chews on is shorter.
+        let vocab = std::env::var("VB_TEST_VOCAB").ok();
+        let vad = crate::model::vad_model_path().filter(|p| p.exists());
+        let opts = crate::EngineOptions {
+            language: None,
+            initial_prompt: vocab.as_deref(),
+            vad_model: vad.as_deref(),
+        };
+        let out = t.transcribe(&samples, &opts, &cancel, Box::new(|_| {}));
         assert!(
             out.is_ok(),
             "fixed engine must not abort at the first encode window (the -6 bug): {}",
             out.err().unwrap_or_default()
         );
         if std::env::var("VB_TEST_AUDIO").is_ok() {
+            let crate::EngineOutput {
+                segments,
+                vad_engaged,
+                detected_language,
+            } = out.unwrap();
+            eprintln!("vad_engaged={vad_engaged} detected_language={detected_language:?}");
             assert!(
-                !out.unwrap().is_empty(),
+                !segments.is_empty(),
                 "a real speech clip must yield at least one segment"
             );
+            // Manual Windows/real-model run: opts above never pins a
+            // language, so a real speech clip must come back with whisper's
+            // detected language — the capture after full() actually fires.
+            assert!(
+                detected_language.is_some(),
+                "an auto-language run over real speech must report a detected language"
+            );
+            // is_some() alone cannot catch a regression of the forced-"en"
+            // wiring bug (H2 review C1): an English clip legitimately
+            // detects "en". To exercise auto-detect end-to-end, run with a
+            // NON-English clip and pin the expectation via
+            // VB_TEST_AUDIO_LANG=<code> (e.g. de).
+            if let Ok(expected) = std::env::var("VB_TEST_AUDIO_LANG") {
+                assert_eq!(
+                    detected_language.as_deref(),
+                    Some(expected.as_str()),
+                    "detected language must match the clip's actual language"
+                );
+            }
+            // With or without VAD, timestamps must stay on the original
+            // timeline: monotonically non-decreasing starts, end >= start.
+            for w in segments.windows(2) {
+                assert!(
+                    w[0].start_ms <= w[1].start_ms,
+                    "segment starts out of order"
+                );
+            }
+            assert!(segments.iter().all(|s| s.end_ms >= s.start_ms));
         }
     }
 
