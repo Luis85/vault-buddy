@@ -247,7 +247,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 60 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 62 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -256,7 +256,7 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; also stamps a generated task ID when the vault opts in and the task doesn't have one yet)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder, `rename_noreplace` + ` (N)` suffix; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix; also backfills a missing task ID on the landed file when the vault opts in — a move is a structural edit like a field edit)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -488,18 +488,22 @@ exist, each documented in its own domain section below:
 1. the **capture** domain — recordings and companion notes;
 2. the **transcription** domain — the `<base>.transcript.md` sidecar;
 3. the **tasks** domain — creating a task document (collision-safe, into
-   its list folder) and creating a list folder (`create_task_list`,
-   directory-only, pre/post containment asserts);
+   its list folder) and the list-folder lifecycle (`create_task_list`
+   directory-only with pre/post containment asserts; `rename_task_list` and
+   `delete_task_list` — the delete moves direct tasks to No list then removes
+   the folder only if empty, keeping one that still holds sub-lists/foreign
+   files);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
    (status toggle, rename, due/priority/tags edit, the manual `order`
-   rank — one generalized writer);
+   rank, and the ensure-absent task-ID stamp — one generalized writer);
 5. the **tasks** domain — the in-root task file move between list folders
    (`move_task_to_list`: `rename_noreplace` + ` (N)` suffix retry, never
-   clobbers, same-list no-op);
+   clobbers, same-list no-op; also backfills a missing task ID on the landed
+   file when the vault opts in);
 6. the **document-import** domain — a Pandoc-converted markdown note plus
    its extracted-media sibling folder.
 
-All five ride the same never-clobber/atomic machinery in
+They all ride the same never-clobber/atomic machinery in
 `core::capture_note` / `core::capture_paths` (exclusive-create temps,
 `rename_noreplace`, suffix retry). Any other code touching vault contents
 directly is a design change, not a patch. Design specs:
@@ -1045,6 +1049,62 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   picker keeps its own per-target-vault "New list…" once a vault is chosen,
   so aggregate users aren't blocked, just routed through the composer
   instead of the toolbar).
+- **List lifecycle, section menu, archiving & drag-to-move (the tasks-polish
+  increment).** A list now has a full lifecycle beyond create. **Two more
+  sanctioned list writes:** `rename_task_list` (core `tasks::rename_task_list`
+  — `rename_noreplace` the folder + ` (N)` suffix retry, source containment
+  asserted, returns the landed name which the subtree moves under) and
+  `delete_task_list` (core `tasks::delete_task_list` — moves the list's DIRECT
+  tasks to No list, then removes the folder ONLY if it is now empty; a folder
+  still holding sub-lists or foreign files is KEPT; returns
+  `{moved, folderRemoved}`; the partial-failure window is GAP-64). Neither
+  recurses into sub-lists. **Per-list section menu** (`TaskSectionMenu.vue`, a
+  presentational ⋯ popover on each real list section header — never on No
+  list / Done, which carry no `list`): rename (leaf-only, no-op when
+  unchanged), archive, delete-with-confirm; the container's per-list
+  `sectionBusy` guard serializes these and a `sectionMenuResetNonce` closes the
+  popover on success. Delete ALWAYS reloads the task list afterward (GAP-64: a
+  kept folder means the section must reflect reality). **Archiving**
+  (`archivedLists` in the lists settings object, round-tripped by
+  `serialize_config` and preserved by `set_capture_config` / the
+  `config_merge` capture-owned merge): an archived list hides from the Lists
+  grouping and every picker; archiving the list that IS the `defaultList`
+  clears the default (else unpicked adds would silently land in a hidden
+  list). Reversal is `TaskListSettings.vue` (extracted `TaskArchivedLists.vue`
+  unarchive rows); that card also excludes archived lists from the default
+  picker and normalizes an archived default to `null` on save.
+  **List-prefs sync** (`useTaskLists`' `remapListPrefs` + `syncListPrefs`):
+  after a rename/delete the cached + persisted `defaultList` / `listOrder` /
+  `archivedLists` are reconciled so a stale entry can't recreate the old
+  folder on the next untouched add — but the two ops differ because a List is
+  a folder: a RENAME moves the whole subtree, so descendants are
+  prefix-rewritten (`Work/Q3` → `Projects/Q3`); a DELETE never removes
+  descendants (the kept-folder rule above), so `deleteList` reconciles ONLY
+  when `folderRemoved` is reported and touches ONLY the exact entry, leaving
+  descendant prefs intact. The sync writes only when a config is already
+  cached (nothing to remap otherwise, and writing computed-empty prefs would
+  clobber unread settings). **Grouping persistence**: the `Lists | Dates |
+  Tags` choice persists per view (`vault-buddy:task-grouping` via the shared
+  `perViewStore` envelope, same keying as the sort pref). **Drag a task
+  between lists**: in Manual sort under Lists grouping (never aggregate — ranks
+  are per-vault), releasing a drag over a DIFFERENT list section calls
+  `move_task_to_list` (`useTaskReorder` tracks the over-section via a
+  `sectionAt` hit-test over the rendered `[data-section-key]` wrappers; the
+  pure `dropTargetList` in `taskSections` decides move-vs-reorder); the row
+  optimistically re-homes to the dropped section and adopts the landed path,
+  reverting + toasting on failure — same feel as the rank-write path.
+- **Task-ID stamping now spans all three structural write paths.** Create
+  (`render_task`), edit (`update_task` via `update_task_fields`' ensure-absent
+  key), AND move (`services::move_task_to_list` backfills a missing id on the
+  LANDED file — best-effort, so a stamp failure can't fail the move) all stamp
+  a generated id when the vault opts in; only a status toggle/archive is
+  deliberately excluded. `update_task_fields` RETURNS the effective id (the
+  freshly-stamped value, or the existing one read case-insensitively to match
+  the stamp predicate) and short-circuits the redundant write when nothing
+  changes; `update_task` surfaces it so the inline editor reveals its copy-ID
+  affordance immediately instead of only after a reload. (Known minor: a
+  drag-move / list-only editor save stamps on disk but keeps `move`'s path-only
+  return, so its id shows on the next reload — see docs/Gaps.md.)
 - **Sorting & manual ordering.** A sort selector (Default / Due date /
   Priority / Created / Title / Manual + an asc/desc toggle, disabled where
   direction is meaningless) orders rows WITHIN sections; Default is

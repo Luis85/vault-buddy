@@ -288,6 +288,38 @@ count) or continue best-effort and aggregate per-file failures, without
 breaking the existing `Result<DeleteListOutcome, String>` contract today's
 callers depend on.
 
+### GAP-65 · Low · Tasks-polish increment residuals (list lifecycle / copy-ID / drag-to-move, accepted)
+- **A move stamps a Task ID on disk but the row reflects it only after a
+  reload.** `update_task` returns the current/just-stamped ID so the inline
+  editor reveals its copy-ID affordance immediately (Codex, PR #59), but a
+  **list-only editor save** and a **drag-to-move** go through
+  `move_task_to_list`, which stamps the ID on the landed file yet keeps its
+  path-only `String` return. So on an ID-enabled vault, moving a legacy Task
+  that lacked an ID backfills the ID correctly on disk but the row's `id` stays
+  null (copy-ID hidden) until the next `list_tasks` reload. **No data loss**
+  (the ID is written, stable, and correct); only the in-session UI reflection
+  lags. Deliberately not fixed to avoid changing `move_task_to_list`'s IPC
+  contract (a richer `{path, id}` return) and rippling through the drag and
+  editor-move call sites + their tests; the same immediacy class as the
+  `update_task` fix, just on the move path. **Fix, if pursued:** return
+  `{path, id}` from `move_task_to_list` and have `moveToList` /
+  `Tasks.vue moveTaskToList` set `task.id` alongside the landed path.
+- **`services.rs` (1229 LOC) and `Tasks.vue` (641 LOC) are both well past
+  their allowlisted LOC ceilings**, each carrying a `split when next touched`
+  note in `scripts/loc-baseline.json`. `services.rs` wants a per-domain module
+  split (vault / tasks / recordings over the one `ServicePaths`); `Tasks.vue`
+  wants the buckets/display-state AND the reorder-commit cluster
+  (`writeSingleRank` / `materializeRanks` / `moveTaskToList` / `commitReorder`)
+  extracted into composables. Both splits are pure refactors deferred to keep
+  this increment's diff reviewable; neither changes behavior.
+- **The aggregate inline editor can show an unselected vault's archived lists
+  unfiltered.** `listsForEditor` filters archived lists per vault, but in
+  aggregate mode a row's vault config may not be loaded yet
+  (`loadVaultConfig` is lazy), so its archived set reads empty and an archived
+  list can briefly appear in that row's list picker. Fails open (worst case:
+  a hidden list is offered as a move target), single-vault mode unaffected;
+  cosmetic, deferred.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
