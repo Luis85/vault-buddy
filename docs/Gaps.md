@@ -74,6 +74,20 @@ last resort is hand-editing `"transcription": {"useGpu": false}` directly
 into `config.json` (see docs/DEVELOPMENT.md § Transcription configuration)
 before the next launch.
 
+### GAP-63 · Low · Auto-detect can fail a job that used to get a "No speech detected" transcript
+`src-tauri/transcribe/src/engine.rs` (the `state.full` call; whisper.cpp
+returns -3 when `whisper_lang_auto_detect_with_state` cannot run). Since the
+auto-language fix (auto now truly engages whisper's detection), an
+auto-language vault with VAD off transcribing audio whose spectrogram is too
+short for even one detection window fails the job with the mapped
+inference-failure message, where the old forced-"en" path would have produced
+an empty "No speech detected" transcript. Strictly more honest (the engine
+really couldn't classify anything) and vanishingly rare — capture minimums
+make sub-window recordings hard to produce — but it is a behavior delta from
+the housekeeping increment's C1 fix (final review, Minor). Remediation
+sketch if it ever bites: pre-check the decoded sample count and short-circuit
+to the no-speech transcript before invoking the engine.
+
 ### GAP-56 · Low · Search content cache: fill-to-cap tail and dead entries
 `core/src/search_cache.rs`. The cache fills to 256 MiB then stops inserting
 (no eviction — uniform per-search access makes LRU pointless), so once total

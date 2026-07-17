@@ -69,4 +69,36 @@ describe("TranscriptionModelsCard", () => {
     expect(wrapper.get('[data-testid="models-error"]').text()).toContain("still in use");
     expect(wrapper.find('[data-testid="model-row-small"]').exists()).toBe(true);
   });
+
+  it("disables every other row's delete while one delete is in flight", async () => {
+    // The busy guard serializes deletes card-wide: two concurrent deletes
+    // would race the worker's single purge wake (final review Minor 2 —
+    // the spec's busy-serialization bullet, previously untested).
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockIPC(async (cmd) => {
+      if (cmd === "list_transcription_models") return MODELS;
+      if (cmd === "delete_transcription_model") {
+        await gate;
+        return null;
+      }
+      return null;
+    });
+    active = mount(TranscriptionModelsCard, { attachTo: document.body });
+    const wrapper = active;
+    await flushPromises();
+    await wrapper.get('[data-testid="model-delete-small"]').trigger("click");
+    await wrapper.get('[data-testid="model-confirm-small"]').trigger("click");
+    // small's delete is now awaiting the gate — vad's delete must be inert.
+    expect(
+      wrapper.get('[data-testid="model-delete-vad"]').attributes("disabled"),
+    ).toBeDefined();
+    release?.();
+    await flushPromises();
+    expect(
+      wrapper.get('[data-testid="model-delete-vad"]').attributes("disabled"),
+    ).toBeUndefined();
+  });
 });
