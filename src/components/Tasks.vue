@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
+import { useTaskDisplay } from "../composables/useTaskDisplay";
 import { useTaskLists } from "../composables/useTaskLists";
 import { useTaskReorder } from "../composables/useTaskReorder";
 import { useTaskReorderCommit } from "../composables/useTaskReorderCommit";
@@ -10,17 +11,7 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, Vault } from "../types";
-import { localToday } from "../utils/taskFields";
-import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
-import { type Bucket, crossListDropTargetKey, dateBuckets, listSections, tagSections } from "../utils/taskSections";
-import {
-  loadSortPref,
-  NATURAL_DIR,
-  saveSortPref,
-  type SortKey,
-  taskComparator,
-  type TaskSortPref,
-} from "../utils/taskSort";
+import { crossListDropTargetKey } from "../utils/taskSections";
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
@@ -38,7 +29,6 @@ const loading = ref(true);
 const loadError = ref<string | null>(null);
 const tasks = ref<AggTask[]>([]);
 const allVaults = ref<Vault[]>([]);
-const filter = ref("");
 const adding = ref(false);
 // The add composer owns its own draft field state and reports a parsed payload
 // up via `submit`; the container keeps validation + the write + the reset call.
@@ -46,21 +36,9 @@ const composer = ref<InstanceType<typeof TaskComposer> | null>(null);
 const vaultOptions = computed(() =>
   allVaults.value.map((v) => ({ value: v.id, label: v.name })),
 );
-// Row writes (toggle/archive/open/editor save), the shared per-path busy
-// guard, and the lists state each live in their composable — state + IPC
-// split out for the LOC cap, rendering stays here.
-const {
-  busy,
-  isBusy,
-  toggle,
-  archive,
-  openInObsidian,
-  editingKey,
-  rowKey,
-  startEdit,
-  cancelEdit,
-  onEditorSave,
-} = useTaskActions({ tasks, sortInPlace });
+// The view's state + IPC live in composables (LOC/churn split); rendering
+// stays here. Order matters: the lists feed the display pipeline's buckets,
+// and the pipeline's sortInPlace feeds the row/reorder writes.
 const {
   listOrder,
   knownLists,
@@ -78,6 +56,34 @@ const {
   deleteList,
   archiveList,
 } = useTaskLists(props.vaultId);
+// Read side: filter / sort / group → buckets (+ the shared sortInPlace).
+const sortViewKey = props.vaultId ?? "all";
+const {
+  filter,
+  tagFilter,
+  showFilter,
+  sortPref,
+  sortInPlace,
+  setSortKey,
+  flipSortDir,
+  grouping,
+  buckets,
+  hasDisplayableLists,
+  progress,
+} = useTaskDisplay({ tasks, isAggregate, knownLists, listOrder, archivedLists, sortViewKey });
+// Write side: row actions (toggle/archive/open/editor save) + the busy guard.
+const {
+  busy,
+  isBusy,
+  toggle,
+  archive,
+  openInObsidian,
+  editingKey,
+  rowKey,
+  startEdit,
+  cancelEdit,
+  onEditorSave,
+} = useTaskActions({ tasks, sortInPlace });
 
 // New list flow: create + cache, then re-select here. `target` (the vault
 // createList used) blocks a mid-create composer vault switch from adopting the
@@ -145,86 +151,6 @@ const onSectionArchive = (list: string) => runSectionAction(list, () => archiveL
 // failure, so reload regardless — "Err ⇒ nothing happened" is false here.
 const onSectionDelete = (list: string) => runSectionAction(list, () => deleteList(list), "always");
 
-// done / total of the visible (non-archived) list; drives the progress bar.
-const progress = computed(() => {
-  const total = tasks.value.length;
-  const done = tasks.value.filter((t) => t.done).length;
-  return { total, done, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
-});
-
-// Same threshold as the vault list: a filter only earns its row above 5.
-const showFilter = computed(() => tasks.value.length > 5);
-
-// One active tag filter at a time, set by clicking a row chip. Matching is
-// case-insensitive and exact per tag (nested tags are distinct strings).
-// Independent of the >5 title-filter threshold: it can only be activated by
-// clicking an existing chip, and its dismiss chip is always visible while
-// active, so it can never strand the user.
-const tagFilter = ref<string | null>(null);
-
-const filteredTasks = computed(() => {
-  const q = filter.value.trim().toLowerCase();
-  const tag = tagFilter.value?.toLowerCase() ?? null;
-  return tasks.value.filter((t) => {
-    if (tag && !t.tags.some((x) => x.toLowerCase() === tag)) return false;
-    // Gate the title query on showFilter too: archiving below the threshold
-    // hides the INPUT, and a stale query with no visible control would
-    // strand the user on a narrowed/empty list until remount.
-    if (q && showFilter.value && !t.title.toLowerCase().includes(q)) return false;
-    return true;
-  });
-});
-// Whether a filter is actually narrowing the list (matches filteredTasks'
-// own gates) — Lists grouping consults it to drop empty lists while filtering.
-const filterActive = computed(
-  () => tagFilter.value !== null || (filter.value.trim() !== "" && showFilter.value),
-);
-
-// The user's sort choice for this view, persisted per view key ("all" for
-// the aggregate). The comparator lives in utils/taskSort (mirroring
-// core::tasks::list_tasks for Default) so an optimistic insert/edit lands
-// where a refetch would put it.
-const sortViewKey = props.vaultId ?? "all";
-const sortPref = ref<TaskSortPref>(loadSortPref(sortViewKey));
-
-function sortInPlace() {
-  tasks.value.sort(taskComparator(sortPref.value));
-}
-
-// Picking a key resets direction to that key's natural one (due: soonest
-// first, created: newest first) instead of inheriting the previous key's
-// toggle state, which reads as arbitrary.
-function setSortKey(key: SortKey) {
-  sortPref.value = { key, dir: NATURAL_DIR[key] };
-  saveSortPref(sortViewKey, sortPref.value);
-  sortInPlace();
-}
-
-function flipSortDir() {
-  sortPref.value = { ...sortPref.value, dir: sortPref.value.dir === "asc" ? "desc" : "asc" };
-  saveSortPref(sortViewKey, sortPref.value);
-  sortInPlace();
-}
-
-// Grouping choice (persisted per view) + the derived sections. Defined before
-// the reorder wiring: commitReorder resolves a drop against `buckets` and gates
-// cross-list moves on `grouping`. A fresh/unset view still opens on Lists (the
-// DEFAULT inside taskGrouping.ts); only a return visit recalls the last choice.
-const grouping = ref<Grouping>(loadGrouping(sortViewKey));
-watch(grouping, (g) => saveGrouping(sortViewKey, g));
-
-const buckets = computed<Bucket[]>(() => {
-  if (grouping.value === "tags") return tagSections(filteredTasks.value);
-  if (grouping.value === "lists")
-    // Per-vault mode surfaces empty (fresh) lists; the aggregate skips them
-    // to avoid cross-vault noise.
-    return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
-      includeEmpty: !isAggregate.value && !filterActive.value,
-      archived: archivedLists.value,
-    });
-  return dateBuckets(filteredTasks.value, localToday());
-});
-
 // Manual ordering: drag (or arrow-key) a row within its section; the landed
 // slot becomes an `order` rank — one midpoint write in the common case, a
 // section-wide materialization when ranks need seeding. Grips render in Manual
@@ -270,11 +196,6 @@ const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
   },
   commit: commitReorder,
 });
-
-// A fresh per-vault list folder has no tasks yet; keep the grouping control
-// reachable so it shows via Lists instead of hiding behind "No tasks yet" (the
-// aggregate omits empty lists) (Codex, PR #53 re-review).
-const hasDisplayableLists = computed(() => !isAggregate.value && knownLists.value.length > 0);
 
 // The section a cross-list drop would land on — drives its highlight and
 // suppresses the origin's now-misleading drop line (pure util, tested).
