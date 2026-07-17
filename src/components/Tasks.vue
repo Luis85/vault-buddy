@@ -5,14 +5,14 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskLists } from "../composables/useTaskLists";
 import { useTaskReorder } from "../composables/useTaskReorder";
+import { useTaskReorderCommit } from "../composables/useTaskReorderCommit";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
 import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
-import { planReorder } from "../utils/taskOrder";
-import { type Bucket, crossListDropTargetKey, dateBuckets, dropTargetList, listSections, tagSections } from "../utils/taskSections";
+import { type Bucket, crossListDropTargetKey, dateBuckets, listSections, tagSections } from "../utils/taskSections";
 import {
   loadSortPref,
   NATURAL_DIR,
@@ -206,14 +206,35 @@ function flipSortDir() {
   sortInPlace();
 }
 
+// Grouping choice (persisted per view) + the derived sections. Defined before
+// the reorder wiring: commitReorder resolves a drop against `buckets` and gates
+// cross-list moves on `grouping`. A fresh/unset view still opens on Lists (the
+// DEFAULT inside taskGrouping.ts); only a return visit recalls the last choice.
+const grouping = ref<Grouping>(loadGrouping(sortViewKey));
+watch(grouping, (g) => saveGrouping(sortViewKey, g));
+
+const buckets = computed<Bucket[]>(() => {
+  if (grouping.value === "tags") return tagSections(filteredTasks.value);
+  if (grouping.value === "lists")
+    // Per-vault mode surfaces empty (fresh) lists; the aggregate skips them
+    // to avoid cross-vault noise.
+    return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
+      includeEmpty: !isAggregate.value && !filterActive.value,
+      archived: archivedLists.value,
+    });
+  return dateBuckets(filteredTasks.value, localToday());
+});
+
 // Manual ordering: drag (or arrow-key) a row within its section; the landed
-// slot becomes an `order` rank via planReorder — one midpoint write in the
-// common case, a section-wide materialization when ranks need seeding. Grips
-// render in Manual sort with NO filter (a filtered subset would rank against
-// invisible neighbors) and stay MOUNTED but inert during a rank write —
-// unmounting (or `disabled`) drops keyboard focus on every Arrow step.
+// slot becomes an `order` rank — one midpoint write in the common case, a
+// section-wide materialization when ranks need seeding. Grips render in Manual
+// sort with NO filter (a filtered subset would rank against invisible
+// neighbors) and stay MOUNTED but inert during a rank write — unmounting (or
+// `disabled`) drops keyboard focus on every Arrow step. The write side (rank
+// writes + cross-list move) lives in useTaskReorderCommit; this view owns the
+// interaction machine (useTaskReorder) and the DOM hit-tests.
 const rootRef = ref<HTMLElement | null>(null);
-const reordering = ref(false);
+const { reordering, commitReorder } = useTaskReorderCommit({ busy, sortInPlace, buckets, grouping });
 const reorderView = computed(
   () =>
     !isAggregate.value &&
@@ -248,156 +269,6 @@ const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
     return null;
   },
   commit: commitReorder,
-});
-
-async function commitReorder(
-  sectionKey: string,
-  fromIndex: number,
-  toIndex: number,
-  overSectionKey: string | null,
-) {
-  const origin = buckets.value.find((b) => b.key === sectionKey);
-  const tasks = origin?.tasks ?? [];
-  const task = tasks[fromIndex];
-  // A release over a DIFFERENT list section is a cross-list move (Lists
-  // grouping only); everything else is a within-section rank reorder.
-  const targetList = dropTargetList(
-    buckets.value.find((b) => b.key === overSectionKey),
-    sectionKey,
-  );
-  if (task && targetList !== null && grouping.value === "lists") {
-    await moveTaskToList(task, targetList);
-    return;
-  }
-  const plan = planReorder(tasks, fromIndex, toIndex);
-  if (!plan) return;
-  if (plan.kind === "single") await writeSingleRank(tasks[fromIndex], plan.order);
-  else await materializeRanks(tasks, plan.orders);
-}
-
-// Cross-list move via drag: optimistic list change (the row jumps to the
-// target section), then adopt the landed path (move_task_to_list may add a
-// ` (N)` collision suffix), revert + toast on failure. Serialized view-wide
-// through `reordering` like the rank writes.
-async function moveTaskToList(task: AggTask, list: string) {
-  if (busy.value.has(task.path) || task.list === list) return;
-  const prevPath = task.path;
-  const prevList = task.list;
-  task.list = list;
-  sortInPlace();
-  busy.value.add(prevPath);
-  reordering.value = true;
-  try {
-    const landed = await invoke<string>("move_task_to_list", { id: task.vaultId, path: prevPath, list });
-    task.path = landed;
-    sortInPlace();
-  } catch (e) {
-    task.list = prevList;
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`move_task_to_list failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(prevPath);
-    reordering.value = false;
-  }
-}
-
-// One midpoint write, optimistic with revert — the common drop.
-async function writeSingleRank(task: AggTask, order: number) {
-  if (busy.value.has(task.path)) return;
-  const prev = task.order;
-  task.order = order;
-  sortInPlace();
-  busy.value.add(task.path);
-  // The view-level guard (shared with materialization) makes every grip inert
-  // until this write resolves: a second reorder would compute its rank against
-  // this optimistic, not-yet-persisted position and diverge if this write
-  // later fails and reverts. Serialize reorders view-wide instead.
-  reordering.value = true;
-  try {
-    await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order } });
-  } catch (e) {
-    task.order = prev;
-    sortInPlace();
-    notifications.error(String(e));
-    logWarning(`reorder failed: ${String(e)}`);
-  } finally {
-    busy.value.delete(task.path);
-    reordering.value = false;
-  }
-}
-
-// Materialization: seed spaced ranks across the section — optimistic for
-// the whole batch, serialized writes (each its own file, possibly across
-// vaults in the aggregate). The view-level guard keeps a second reorder from
-// interleaving.
-async function materializeRanks(section: AggTask[], orders: Map<string, number>) {
-  const affected = section.filter((t) => orders.has(t.path));
-  // Abort if ANY affected row already has an in-flight write (e.g. a slow
-  // status toggle on a neighbor in this section). Materialize must write EVERY
-  // affected row to establish the section's total order, so it can't just skip
-  // the busy one — and writing order to that file mid-save would race the
-  // in-flight write (both are read-modify-write frontmatter edits, so whichever
-  // lands last drops the other's change). Bail and let the user retry once the
-  // save lands — the same silent no-op writeSingleRank does for its one busy
-  // row (Codex, PR #53 re-review).
-  if (affected.some((t) => busy.value.has(t.path))) return;
-  reordering.value = true;
-  // No affected row is busy (asserted above), so guard them all and — because
-  // this batch owns every one of their guards — clear them all in `finally`.
-  // Its update_task(order) and a toggle/edit/archive on the same row are both
-  // read-modify-write frontmatter saves, so leaving the row controls live would
-  // let a concurrent write clobber the order (or vice versa).
-  affected.forEach((t) => busy.value.add(t.path));
-  const prevOrders = new Map(affected.map((t) => [t.path, t.order] as const));
-  for (const t of affected) t.order = orders.get(t.path) ?? t.order;
-  sortInPlace();
-  // The writes are serialized and non-atomic across files, so a mid-batch
-  // failure leaves earlier files already written. Track what landed and
-  // revert ONLY the tasks that never reached disk — reverting the whole batch
-  // would desync the UI from a partially-written section (the mismatch would
-  // surface on the next reload as a phantom partial reorder). Same "keep what
-  // succeeded, name what failed" posture as the editor's field-then-move save.
-  const written = new Set<string>();
-  try {
-    for (const t of affected) {
-      await invoke("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } });
-      written.add(t.path);
-    }
-  } catch (e) {
-    // `?? null` (not `?? t.order`): a previous order of null means the task
-    // was UNRANKED and must revert to unranked — `null ?? t.order` would
-    // wrongly keep the new optimistic rank. Every affected path is a key in
-    // prevOrders, so a genuinely missing entry can't occur here.
-    for (const t of affected) {
-      if (!written.has(t.path)) t.order = prevOrders.get(t.path) ?? null;
-    }
-    sortInPlace();
-    notifications.error(`Couldn't save the new order: ${String(e)}`);
-    logWarning(`reorder materialization failed: ${String(e)}`);
-  } finally {
-    affected.forEach((t) => busy.value.delete(t.path));
-    reordering.value = false;
-  }
-}
-
-// Persisted per view key ("all" for the aggregate), same
-// localStorage-envelope pattern as sortPref above — a fresh/unset view still
-// opens on Lists (the DEFAULT inside taskGrouping.ts), only a return visit
-// recalls the last choice.
-const grouping = ref<Grouping>(loadGrouping(sortViewKey));
-watch(grouping, (g) => saveGrouping(sortViewKey, g));
-
-const buckets = computed<Bucket[]>(() => {
-  if (grouping.value === "tags") return tagSections(filteredTasks.value);
-  if (grouping.value === "lists")
-    // Per-vault mode surfaces empty (fresh) lists; the aggregate skips them
-    // to avoid cross-vault noise.
-    return listSections(filteredTasks.value, knownLists.value, listOrder.value, {
-      includeEmpty: !isAggregate.value && !filterActive.value,
-      archived: archivedLists.value,
-    });
-  return dateBuckets(filteredTasks.value, localToday());
 });
 
 // A fresh per-vault list folder has no tasks yet; keep the grouping control
