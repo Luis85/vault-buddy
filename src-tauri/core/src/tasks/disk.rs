@@ -108,12 +108,18 @@ pub fn create_task(
 /// and writes atomically (hidden `create_new` temp + fsync + REPLACING
 /// rename). Replacing is correct here: the target is the `type: Task` file we
 /// just read and are editing in place, touching only the named lines.
+/// Returns the effective value of the FIRST `ensure_absent` key after the
+/// operation — the value now on the file for that key (the freshly-stamped one
+/// if it was absent, or the pre-existing value if already present), or `None`
+/// when `ensure_absent` is empty or the key resolves to no readable value. In
+/// practice that key is the generated task ID, and the caller uses this return
+/// to reflect a just-stamped ID without a second read (Codex, PR #59).
 pub fn update_task_fields(
     root: &Path,
     path: &Path,
     updates: &[(&str, Option<&str>)],
     ensure_absent: &[(&str, &str)],
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
     let canon_path =
@@ -132,16 +138,36 @@ pub fn update_task_fields(
             effective.push((key, Some(val)));
         }
     }
+    // The id to report back: the first ensure key's value now on the file —
+    // read the existing one when present (any casing, matching the stamp
+    // predicate above), else the value we are about to stamp.
+    let ensured = ensure_absent.first().and_then(|(key, val)| {
+        if super::parse::has_frontmatter_key_ci(&content, key) {
+            super::parse::scalar_field_ci(&content, key)
+        } else {
+            Some((*val).to_string())
+        }
+    });
+    // Nothing to write (e.g. a move that only needs to stamp, but the id is
+    // already present): skip the redundant atomic rewrite, still report the id.
+    // update_task always passes a non-empty `updates`, so this only short-
+    // circuits the ensure-only callers.
+    if effective.is_empty() {
+        return Ok(ensured);
+    }
     let updated = set_fields(&content, &effective).ok_or(
         "Task frontmatter could not be updated (not a type: Task document, or its frontmatter is malformed)",
     )?;
     crate::capture_note::write_atomic_replacing(&canon_path, &updated)
-        .map_err(|e| format!("Cannot save task: {e}"))
+        .map_err(|e| format!("Cannot save task: {e}"))?;
+    Ok(ensured)
 }
 
-/// Set a task's `status:` frontmatter on disk (see `update_task_fields`).
+/// Set a task's `status:` frontmatter on disk (see `update_task_fields`). A
+/// status toggle never stamps an ID (no ensure keys), so the id return is
+/// discarded.
 pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
-    update_task_fields(root, path, &[("status", Some(new_status))], &[])
+    update_task_fields(root, path, &[("status", Some(new_status))], &[]).map(|_| ())
 }
 
 #[cfg(test)]
@@ -358,19 +384,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
         let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
-        // Absent → stamped alongside the edit.
-        update_task_fields(
+        // Absent → stamped alongside the edit, and the stamped id is returned.
+        let stamped = update_task_fields(
             &root,
             &p,
             &[("status", Some("done"))],
             &[("task-id", "abcd1234")],
         )
         .unwrap();
+        assert_eq!(stamped.as_deref(), Some("abcd1234"));
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.contains("status: done\n"));
         assert!(body.contains("task-id: abcd1234\n"));
-        // Present → never overwritten (a second stamp with a new id is a no-op).
-        update_task_fields(&root, &p, &[], &[("task-id", "zzzz9999")]).unwrap();
+        // Present → never overwritten (a second stamp with a new id is a no-op),
+        // and the EXISTING id is reported back, not the ignored candidate.
+        let existing = update_task_fields(&root, &p, &[], &[("task-id", "zzzz9999")]).unwrap();
+        assert_eq!(existing.as_deref(), Some("abcd1234"));
         assert!(std::fs::read_to_string(&p)
             .unwrap()
             .contains("task-id: abcd1234\n"));
@@ -395,13 +424,15 @@ mod tests {
         );
         std::fs::write(&p, &seeded).unwrap();
 
-        update_task_fields(
+        let reported = update_task_fields(
             &root,
             &p,
             &[("status", Some("done"))],
             &[("task-id", "new456")],
         )
         .unwrap();
+        // The existing id (under its own casing) is reported, not the candidate.
+        assert_eq!(reported.as_deref(), Some("existing123"));
 
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.contains("status: done\n"));

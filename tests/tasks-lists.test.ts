@@ -448,6 +448,24 @@ describe("Tasks — lists & sorting", () => {
       expect(calls.find((c) => c.cmd === "move_task_to_list")).toBeUndefined();
     });
 
+    it("reflects the id update_task returns so copy-id shows without a reload (Codex)", async () => {
+      // An id-enabled edit stamps a missing id on disk; update_task returns it
+      // so the row reveals its copy-id affordance immediately.
+      const { wrapper } = mountView({
+        list_tasks: () => [
+          { path: "C:/v/Tasks/e.md", title: "Mover", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
+        ],
+        update_task: () => "stamped9",
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      await wrapper.get('[data-testid="task-edit-title"]').setValue("Renamed");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      const task = (wrapper.vm as unknown as { tasks: { id: string | null }[] }).tasks[0];
+      expect(task.id).toBe("stamped9");
+    });
+
     it("a failed move after saved fields keeps the fields and names the move in the toast", async () => {
       const notifications = useNotificationsStore();
       const { wrapper } = mountView({

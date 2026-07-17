@@ -121,7 +121,12 @@ export function useTaskActions(opts: {
     if (patch.tags !== undefined) task.tags = patch.tags;
     sortInPlace();
     try {
-      await invoke("update_task", { id: task.vaultId, path: task.path, patch });
+      // update_task returns the task's current ID (freshly stamped when the
+      // vault opts in and it lacked one, or the existing value; null when IDs
+      // are off), so the row can reveal its copy-ID affordance immediately
+      // rather than only after a view reload (Codex, PR #59).
+      const id = await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch });
+      if (id) task.id = id;
       return true;
     } catch (e) {
       Object.assign(task, before);

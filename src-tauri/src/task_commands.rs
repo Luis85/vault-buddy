@@ -453,8 +453,17 @@ pub struct TaskPatchDto {
 /// and stay inline (so a bad field errors before any thread hop), but the
 /// vault resolution, containment canonicalize, read, and atomic fsync'd write
 /// are offloaded — a save to a slow/cloud/network vault must not freeze the UI.
+///
+/// Returns the task's current ID (the freshly-stamped one when the vault opts
+/// in and the task lacked one, or the existing value) so the row can show its
+/// copy-ID affordance immediately instead of only after a view reload; `None`
+/// when IDs are off. An empty patch is `Ok(None)` (Codex, PR #59).
 #[tauri::command]
-pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), String> {
+pub async fn update_task(
+    id: String,
+    path: String,
+    patch: TaskPatchDto,
+) -> Result<Option<String>, String> {
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
     if let Some(title) = &patch.title {
         let t = title.trim();
@@ -500,7 +509,7 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         updates.push(("tag", None));
     }
     if updates.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     tauri::async_runtime::spawn_blocking(move || {
         let (vault_path, root, cfg) = tasks_root_for(&id)?;
