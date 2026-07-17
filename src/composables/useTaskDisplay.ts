@@ -23,9 +23,27 @@ export function useTaskDisplay(opts: {
 }) {
   const { tasks, isAggregate, knownLists, listOrder, archivedLists, sortViewKey } = opts;
 
+  // Grouping choice, persisted per view. A fresh/unset view opens on Lists (the
+  // DEFAULT inside taskGrouping.ts); a return visit recalls the last choice.
+  const grouping = ref<Grouping>(loadGrouping(sortViewKey));
+  watch(grouping, (g) => saveGrouping(sortViewKey, g));
+
+  // The tasks the CURRENT grouping actually shows, before the title/tag filter:
+  // Lists grouping hides OPEN tasks in archived lists (done ones still show in
+  // the Done bucket; No list always shows), mirroring listSections; Dates/Tags
+  // show everything. The progress bar and the >5 filter-row threshold count
+  // from THIS set, not the raw list, so a vault whose only open tasks sit in an
+  // archived list doesn't report phantom progress or a stray filter row (Codex,
+  // PR #59). Filter-independent, so showFilter → filteredTasks stays acyclic.
+  const visibleTasks = computed(() => {
+    if (grouping.value !== "lists") return tasks.value;
+    const archived = new Set(archivedLists.value.map((a) => a.toLowerCase()));
+    return tasks.value.filter((t) => t.done || t.list === "" || !archived.has(t.list.toLowerCase()));
+  });
+
   const filter = ref("");
   // Same threshold as the vault list: a filter only earns its row above 5.
-  const showFilter = computed(() => tasks.value.length > 5);
+  const showFilter = computed(() => visibleTasks.value.length > 5);
   // One active tag filter at a time, set by clicking a row chip. Matching is
   // case-insensitive and exact per tag (nested tags are distinct strings).
   // Independent of the >5 title-filter threshold: it can only be activated by
@@ -76,12 +94,6 @@ export function useTaskDisplay(opts: {
     sortInPlace();
   }
 
-  // Grouping choice, persisted per view. A fresh/unset view still opens on
-  // Lists (the DEFAULT inside taskGrouping.ts); only a return visit recalls the
-  // last choice.
-  const grouping = ref<Grouping>(loadGrouping(sortViewKey));
-  watch(grouping, (g) => saveGrouping(sortViewKey, g));
-
   const buckets = computed<Bucket[]>(() => {
     if (grouping.value === "tags") return tagSections(filteredTasks.value);
     if (grouping.value === "lists")
@@ -99,10 +111,11 @@ export function useTaskDisplay(opts: {
   // aggregate omits empty lists) (Codex, PR #53 re-review).
   const hasDisplayableLists = computed(() => !isAggregate.value && knownLists.value.length > 0);
 
-  // done / total of the visible (non-archived) list; drives the progress bar.
+  // done / total of the VISIBLE tasks (archived-hidden ones excluded); drives
+  // the progress bar so it matches what the Lists view actually shows.
   const progress = computed(() => {
-    const total = tasks.value.length;
-    const done = tasks.value.filter((t) => t.done).length;
+    const total = visibleTasks.value.length;
+    const done = visibleTasks.value.filter((t) => t.done).length;
     return { total, done, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
   });
 

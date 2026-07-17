@@ -649,6 +649,24 @@ describe("Tasks", () => {
     expect(wrapper.get('[data-testid="task-progress"]').text()).toContain("1 / 7");
   });
 
+  it("counts only visible tasks in the progress bar under Lists grouping (Codex)", async () => {
+    // Lists grouping hides the archived "Old" list's open tasks, so the
+    // progress bar must not count them — otherwise a vault whose open tasks are
+    // all archived shows phantom progress.
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/Old/a.md", title: "A", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Old", order: null },
+        { path: "C:/v/Tasks/Old/b.md", title: "B", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Old", order: null },
+        { path: "C:/v/Tasks/Keep/c.md", title: "C", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Keep", order: null },
+      ],
+      list_task_lists: () => ["Old", "Keep"],
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] }),
+    });
+    await flushPromises();
+    // Only "Keep"'s one open task counts → 0 / 1, not 0 / 3.
+    expect(wrapper.get('[data-testid="task-progress"]').text()).toContain("0 / 1");
+  });
+
   it("shows the no-match empty state when the filter excludes everything", async () => {
     const { wrapper } = mountView({ list_tasks: () => many(6) });
     await flushPromises();
