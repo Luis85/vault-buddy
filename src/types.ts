@@ -172,6 +172,9 @@ export interface TaskItem {
   list: string;
   /** Manual rank from the `order:` frontmatter number; null = unranked. */
   order: number | null;
+  /** The generated id under the vault's configured property; null when IDs
+   * are off. */
+  id: string | null;
 }
 
 /** A TaskItem enriched with its owning vault — the ONE internal shape the
@@ -201,6 +204,15 @@ export interface TasksConfig {
    * root) and the display order for list sections/pickers. */
   defaultList: string | null;
   listOrder: string[];
+  /** `/`-joined relative names of lists hidden from the Lists grouping and
+   * pickers (the folder + tasks stay on disk). Optional/defaulted to `[]` —
+   * an older cached response (or a test fixture predating the field) may
+   * omit it. */
+  archivedLists?: string[];
+  /** Whether generated task IDs are enabled for this vault. */
+  taskIdEnabled: boolean;
+  /** The resolved id property name (default "task-id"). */
+  taskIdProperty: string;
 }
 
 /** Per-vault imported-documents folder — get_documents_config/

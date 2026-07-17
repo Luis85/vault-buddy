@@ -233,6 +233,147 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
     unreachable!("suffix search always terminates")
 }
 
+/// Outcome of deleting a list: how many of its own tasks were moved to the
+/// tasks root, and whether the (now-empty) folder was removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeleteListOutcome {
+    pub moved: usize,
+    pub folder_removed: bool,
+}
+
+/// Rename a list folder's leaf to `to` (a single valid segment) at the same
+/// parent, moving every contained task with it. Refuses a collision (never
+/// clobber). Returns the new `/`-joined relative name.
+pub fn rename_task_list(root: &Path, from: &str, to: &str) -> Result<String, String> {
+    if !is_valid_list_name(to) {
+        return Err(
+            "List names need at least one character and cannot contain / or \\ or start with a dot."
+                .to_string(),
+        );
+    }
+    let from_rel = normalize_list_rel(from)?;
+    if from_rel.is_empty() {
+        return Err("The tasks root is not a list and cannot be renamed.".to_string());
+    }
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let from_dir = canon_root.join(&from_rel);
+    if !from_dir.is_dir() {
+        return Err("That list no longer exists — reopen the list to refresh.".to_string());
+    }
+    // The leaf exists (just confirmed above), so this canonicalizes from_dir
+    // itself and rejects a symlink/junction escaping the vault — the same
+    // source containment move_task_to_list requires. Without it, is_dir()
+    // alone (which follows symlinks) let a symlinked list leaf reach
+    // std::fs::rename below; POSIX rename() never dereferences the source's
+    // final component, so that call would rename the symlink ENTRY in place
+    // (still pointing outside) before the destination-side
+    // assert_root_inside_vault happened to also reject it — an
+    // undocumented accident, and only after the mutation already happened.
+    crate::capture_paths::assert_path_inside_vault(&canon_root, &from_dir)?;
+    // New rel = the from's parent joined with the `to` leaf.
+    let parent = Path::new(&from_rel).parent();
+    let new_rel = match parent
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+    {
+        Some(p) => format!("{p}/{}", to.trim()),
+        None => to.trim().to_string(),
+    };
+    let to_dir = canon_root.join(&new_rel);
+    crate::capture_paths::assert_path_inside_vault(&canon_root, &to_dir)?;
+    if to_dir.exists() {
+        return Err(format!("A list named \"{}\" already exists.", to.trim()));
+    }
+    std::fs::rename(&from_dir, &to_dir).map_err(|e| format!("Could not rename the list: {e}"))?;
+    crate::capture_paths::assert_root_inside_vault(&canon_root, &to_dir)?;
+    Ok(new_rel)
+}
+
+/// Delete a list: move its OWN direct `type: Task` files to the tasks root
+/// (No list), then remove the folder if it is now empty. A folder still
+/// holding nested sub-lists or foreign (non-task) files is kept — those are
+/// never moved or deleted.
+///
+/// `id_property` is the vault's configured task-id key (or `None` when IDs are
+/// off), threaded down exactly like `list_tasks`. A relocation to No list is a
+/// structural move — the same category `services::move_task_to_list` stamps —
+/// so a legacy task without an id picks one up here too; only a status
+/// toggle/archive is excluded. The stamp is best-effort (a failure warns, never
+/// fails the delete) and never overwrites an existing id. Unlike the move/edit
+/// paths it returns no per-task id: the frontend reloads the task list after a
+/// delete regardless (GAP-64), so the reload surfaces the fresh ids.
+pub fn delete_task_list(
+    root: &Path,
+    list: &str,
+    id_property: Option<&str>,
+) -> Result<DeleteListOutcome, String> {
+    let rel = normalize_list_rel(list)?;
+    if rel.is_empty() {
+        return Err("The tasks root is not a list and cannot be deleted.".to_string());
+    }
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let list_dir = canon_root.join(&rel);
+    crate::capture_paths::assert_path_inside_vault(&canon_root, &list_dir)?;
+    if !list_dir.is_dir() {
+        return Err("That list no longer exists — reopen the list to refresh.".to_string());
+    }
+    // Collect the direct task files first (don't mutate while iterating).
+    let mut task_files: Vec<PathBuf> = Vec::new();
+    for (path, ft, name) in crate::transcript::dir_entries(&list_dir) {
+        if ft.is_file() && name.ends_with(".md") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if super::doc::is_task(&content) {
+                    task_files.push(path);
+                }
+            }
+        }
+    }
+    let mut moved = 0;
+    // Partial-failure semantics (GAP-64): if the Nth move fails, files
+    // 1..N-1 already relocated to the tasks root — `moved` is discarded and
+    // the caller gets an opaque Err with no signal the vault was partially
+    // mutated. No data loss (every moved file rode move_task_to_list's
+    // never-clobber rails), but "Err ⇒ nothing happened" is FALSE here;
+    // callers must refresh the task list after a delete regardless of
+    // Ok/Err. Verbatim from the design plan — do not change without
+    // updating GAP-64.
+    for f in &task_files {
+        // to No list; rails already never-clobber. The relocation is a
+        // structural move, so the shared best-effort backfill stamps a missing
+        // id on the LANDED file (warn-only on failure — the move already
+        // mutated the vault). The id is discarded: the frontend reloads after
+        // a delete regardless (GAP-64), which surfaces fresh ids.
+        let landed = move_task_to_list(&canon_root, f, "")?;
+        super::disk::backfill_task_id(&canon_root, &landed, id_property);
+        moved += 1;
+    }
+    // Remove only if empty; a folder with sub-lists / foreign files stays.
+    // Only DirectoryNotEmpty IS that deliberate keep — collapsing every error
+    // into folderRemoved:false swallowed real failures (PermissionDenied, a
+    // Windows AV/indexer lock on the now-empty dir), leaving a phantom
+    // "deleted" empty list with no error shown. Those propagate; per GAP-64
+    // the Err still does NOT mean nothing happened (the tasks above already
+    // moved — callers reload regardless). NotFound counts as removed: the
+    // folder being gone is the outcome, whoever got there first (the
+    // delete_transcription_model "path is clear" precedent).
+    let folder_removed = match std::fs::remove_dir(&list_dir) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => false,
+        Err(e) => {
+            return Err(format!(
+                "Moved {moved} task(s) to No list, but the list folder could not be removed: {e}"
+            ))
+        }
+    };
+    Ok(DeleteListOutcome {
+        moved,
+        folder_removed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +669,162 @@ mod tests {
             !root.join("Done").join("t.md").exists(),
             "the linked copy must be rolled back — no duplicate task"
         );
+    }
+
+    #[test]
+    fn rename_task_list_moves_folder_and_refuses_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "t.md", TASK);
+        assert_eq!(rename_task_list(&root, "Inbox", "Later").unwrap(), "Later");
+        assert!(root.join("Later").join("t.md").exists());
+        assert!(!root.join("Inbox").exists());
+        // Same-parent nesting: renames the leaf only.
+        write(&root.join("work/q3"), "x.md", TASK);
+        assert_eq!(rename_task_list(&root, "work/q3", "q4").unwrap(), "work/q4");
+        assert!(root.join("work/q4").join("x.md").exists());
+        // Refuse an invalid name and a collision (never clobber).
+        assert!(rename_task_list(&root, "Later", "a/b").is_err());
+        std::fs::create_dir_all(root.join("Taken")).unwrap();
+        assert!(rename_task_list(&root, "Later", "Taken").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_task_list_rejects_symlinked_source_escaping_root() {
+        // Before the source-side containment fix, `from_dir.is_dir()` alone
+        // gated the rename — and is_dir() follows symlinks, so a list-named
+        // entry that is a symlink out of the tasks root passed it straight
+        // through to std::fs::rename. POSIX rename() does not dereference
+        // the SOURCE's final component, so that call renamed the symlink
+        // ENTRY itself (from "Linked" to "Renamed", still inside root, still
+        // pointing outside) — a real mutation. The function still ended up
+        // returning Err, but only because the pre-existing DESTINATION
+        // assert (assert_root_inside_vault) canonicalizes the *newly
+        // renamed* entry, follows the symlink, and rejects it — an
+        // undocumented accident, and only AFTER the rename() had already
+        // executed. A resolved containment check on the SOURCE (mirroring
+        // move_task_rejects_symlinked_source_escaping_root) must reject
+        // before any rename() runs, so neither name is ever touched.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("Linked")).unwrap();
+        assert!(rename_task_list(&root, "Linked", "Renamed").is_err());
+        // The outside target directory itself is untouched — not
+        // renamed/moved (rename() never dereferences the source leaf).
+        assert!(outside.is_dir());
+        // And no rename() must have executed at all: the source entry must
+        // still be exactly where it was, under its original name, and no
+        // destination entry may have been created. This is the assertion
+        // that actually fails pre-fix — the accidental post-check above
+        // only proves the FUNCTION reports Err, not that nothing moved.
+        assert!(
+            root.join("Linked").symlink_metadata().is_ok(),
+            "the source symlink must not be renamed away on a rejected rename"
+        );
+        assert!(!root.join("Renamed").exists());
+    }
+
+    #[test]
+    fn delete_task_list_moves_tasks_to_root_then_removes_empty_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "a.md", TASK);
+        write(&root.join("Inbox"), "b.md", TASK);
+        let out = delete_task_list(&root, "Inbox", None).unwrap();
+        assert_eq!(out.moved, 2);
+        assert!(out.folder_removed);
+        assert!(!root.join("Inbox").exists());
+        assert!(root.join("a.md").exists() && root.join("b.md").exists());
+    }
+
+    #[test]
+    fn delete_task_list_keeps_a_folder_with_sublists_or_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Proj"), "t.md", TASK);
+        write(&root.join("Proj/Sub"), "s.md", TASK); // nested sub-list
+        std::fs::write(root.join("Proj").join("notes.txt"), "keep me").unwrap(); // foreign
+        let out = delete_task_list(&root, "Proj", None).unwrap();
+        assert_eq!(out.moved, 1); // only Proj's own direct task
+        assert!(!out.folder_removed);
+        assert!(root.join("Proj").exists()); // kept — not empty
+        assert!(root.join("Proj").join("notes.txt").exists()); // foreign untouched
+        assert!(root.join("Proj/Sub").join("s.md").exists()); // sub-list untouched
+        assert!(root.join("t.md").exists()); // the moved task landed at the root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_task_list_propagates_an_unexpected_removal_failure() {
+        // remove_dir failing on a now-EMPTY folder (PermissionDenied, a
+        // Windows AV/indexer lock) is NOT the deliberate kept-folder outcome —
+        // returning Ok{folderRemoved:false} there swallowed the error, so the
+        // UI closed silently while a phantom "deleted" empty list lingered.
+        // Only DirectoryNotEmpty means "kept"; anything else must surface.
+        // Force EACCES by making the PARENT read-only (removing a dir needs
+        // write on its parent); the list itself is empty so no moves are
+        // attempted first. Root bypasses DAC — probe and skip under root
+        // (the move rollback test's pattern); CI's rust-core runs non-root.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(root.join("Empty")).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let bypassed = std::fs::write(root.join(".probe"), b"x").is_ok();
+        if bypassed {
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let res = delete_task_list(&root, "Empty", None);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(res.is_err(), "an unexpected removal failure must propagate");
+        assert!(root.join("Empty").is_dir(), "the folder is still there");
+    }
+
+    #[test]
+    fn delete_task_list_stamps_missing_ids_when_enabled() {
+        // A delete-list relocates the list's tasks to No list — a structural
+        // move, so a legacy task (no id) in an id-enabled vault must pick up its
+        // stable id here too, exactly like a drag/editor move (Codex, PR #59).
+        // An existing id is never overwritten.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "a.md", TASK); // legacy: no id
+        write(
+            &root.join("Inbox"),
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ncreated: 2026-07-08\ntask-id: keep1234\n---\n",
+        );
+        let out = delete_task_list(&root, "Inbox", Some("task-id")).unwrap();
+        assert_eq!(out.moved, 2);
+        assert!(out.folder_removed);
+        // The legacy task now carries a freshly-stamped 8-char id at the root.
+        let a = std::fs::read_to_string(root.join("a.md")).unwrap();
+        let id = a
+            .lines()
+            .find_map(|l| l.strip_prefix("task-id: "))
+            .expect("legacy task stamped on delete-move");
+        assert_eq!(id.len(), 8);
+        // The pre-existing id is untouched (never overwritten).
+        assert!(std::fs::read_to_string(root.join("b.md"))
+            .unwrap()
+            .contains("task-id: keep1234\n"));
+    }
+
+    #[test]
+    fn delete_task_list_stamps_nothing_when_id_property_is_none() {
+        // IDs off (None) → a delete-move never introduces one, the same posture
+        // as add_task/move with generation disabled.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "a.md", TASK);
+        delete_task_list(&root, "Inbox", None).unwrap();
+        assert!(!std::fs::read_to_string(root.join("a.md"))
+            .unwrap()
+            .contains("task-id"));
     }
 }

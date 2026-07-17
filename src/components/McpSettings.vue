@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import { logWarning } from "../logging";
+import { copyToClipboard } from "../utils/clipboard";
 
 type McpStatus = { state: string; port: number | null; message: string | null };
 type McpConfig = {
@@ -82,11 +83,7 @@ async function regenerate() {
 }
 
 function copy(text: string) {
-  // A failed copy has no UI feedback, so the log line is the only trace a
-  // silently-dead Copy button leaves.
-  void navigator.clipboard
-    ?.writeText(text)
-    .catch((e) => logWarning(`mcp settings: clipboard copy failed: ${String(e)}`));
+  copyToClipboard(text, "mcp settings");
 }
 
 const statusLabel = computed(() => {

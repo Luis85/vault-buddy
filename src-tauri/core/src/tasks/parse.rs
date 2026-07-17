@@ -157,6 +157,92 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
+/// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
+/// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
+/// case and `is_valid_id_property` accepts case variants, so reads and writes
+/// must agree despite casing. The id-stamp uses BOTH halves: the value
+/// (via `scalar_field_ci`) to decide "already has a usable id" — a bare
+/// `task-id:` reads as `Some("")`, so `.filter(non-empty)` still stamps it
+/// (Codex, PR #59) — and the on-disk NAME to rewrite a present-but-blank line
+/// under its own casing, so `set_fields` (case-sensitive) matches it instead of
+/// inserting a case-mismatched DUPLICATE the CI read would then shadow.
+/// `list_tasks` reads the id back through `scalar_field_ci`, so a stable
+/// on-disk id stays visible in `TaskItem.id`. Skips indented/nested lines (a
+/// nested `  task-id:` under a mapping is never the top-level property
+/// `set_fields` would rewrite), then delegates value parsing (comment-strip,
+/// quote-unwrap) to `scalar_field` with the ACTUAL casing found.
+pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String, String)> {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return None;
+    }
+    for line in lines {
+        let t = line.trim_end();
+        if t == "---" {
+            return None; // closing fence — key not found in frontmatter
+        }
+        // Top-level keys only: a nested `  task-id:` under a mapping is never
+        // the property set_fields would rewrite, so the id-stamp must skip it.
+        if t.starts_with([' ', '\t']) {
+            continue;
+        }
+        if let Some((k, _)) = t.split_once(':') {
+            let k = k.trim();
+            if k.eq_ignore_ascii_case(key) {
+                return scalar_field(content, k).map(|v| (k.to_string(), v));
+            }
+        }
+    }
+    None
+}
+
+/// The scalar value of `frontmatter_scalar_ci` (the on-disk key name dropped) —
+/// what `list_tasks` and the id-stamp's "has a usable value" check read.
+pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
+    frontmatter_scalar_ci(content, key).map(|(_, v)| v)
+}
+
+/// True when the top-level `key:` line (exact, ON-DISK casing) opens a BLOCK
+/// value — a nested mapping or block list on the following lines — rather than
+/// standing alone as a truly blank scalar. The id-stamp asks this before
+/// rewriting a present-but-empty key: `set_fields`' rewrite CONSUMES a block
+/// (indented continuations and `- ` items, comment lines deferred) along with
+/// the key line, so stamping over `uid:` + `  source: jira` would DELETE the
+/// user's nested frontmatter (review, PR #59). The walk mirrors the writer's
+/// consumption predicate exactly, biased safe: whitespace-only lines count as
+/// block (the writer would consume them), a blank line or the closing fence
+/// ends the block before it starts.
+pub(super) fn key_opens_block(content: &str, key: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    let mut past_key = false;
+    for line in lines {
+        let t = line.trim_end();
+        if t == "---" {
+            return false;
+        }
+        if !past_key {
+            // Find the key's own line: top-level, exact casing, colon-anchored
+            // (the same match set_fields will make).
+            if !line.starts_with([' ', '\t'])
+                && t.strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with(':'))
+            {
+                past_key = true;
+            }
+            continue;
+        }
+        let trimmed = t.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // deferred, like the writer's pending_comments buffer
+        }
+        return line.starts_with([' ', '\t']) || trimmed.starts_with("- ");
+    }
+    false
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.
@@ -251,6 +337,102 @@ pub fn note_tags(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_field_ci_matches_regardless_of_casing() {
+        // A task stamped `Task-ID:` must be readable by a config using the
+        // lowercase `task-id` property name, and vice versa — Obsidian folds
+        // frontmatter key case, so a case-sensitive read would miss a stable
+        // on-disk id (and the stamp would write a second, conflicting line).
+        let upper = "---\ntype: Task\nTask-ID: abc123\n---\n";
+        assert_eq!(scalar_field_ci(upper, "task-id").as_deref(), Some("abc123"));
+        assert_eq!(scalar_field_ci(upper, "TASK-ID").as_deref(), Some("abc123"));
+        let lower = "---\ntype: Task\ntask-id: abc123\n---\n";
+        assert_eq!(scalar_field_ci(lower, "Task-ID").as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn scalar_field_ci_none_for_absent_key_and_body_only_occurrence() {
+        assert_eq!(scalar_field_ci("---\ntype: Task\n---\n", "task-id"), None);
+        // A same-named line AFTER the closing fence is body content, not
+        // frontmatter — it must never be read as the property.
+        assert_eq!(
+            scalar_field_ci("---\ntype: Task\n---\ntask-id: sneaky\n", "task-id"),
+            None
+        );
+        assert_eq!(scalar_field_ci("no frontmatter", "task-id"), None);
+        // Unterminated frontmatter (opens but the closing fence never comes)
+        // falls through to None.
+        assert_eq!(scalar_field_ci("---\ntype: Task\n", "due"), None);
+    }
+
+    #[test]
+    fn scalar_field_ci_reads_blank_as_empty_and_skips_nested_keys() {
+        // A bare `task-id:` (an Obsidian property panel / template leaves the
+        // key valueless) reads as an EMPTY value, so the id-stamp's
+        // `.filter(non-empty)` treats it as MISSING and writes a usable id
+        // (Codex, PR #59) — the presence-only predecessor suppressed the stamp.
+        assert_eq!(
+            scalar_field_ci("---\ntype: Task\ntask-id:\n---\n", "task-id").as_deref(),
+            Some("")
+        );
+        // An indented `task-id:` nested under a mapping is NOT the top-level
+        // property set_fields rewrites — the top-level scan skips it (space and
+        // tab indentation alike).
+        assert_eq!(
+            scalar_field_ci(
+                "---\ntype: Task\nmetadata:\n  task-id: old\n---\n",
+                "task-id"
+            ),
+            None
+        );
+        assert_eq!(
+            scalar_field_ci("---\ntype: Task\nmeta:\n\ttask-id: old\n---\n", "task-id"),
+            None
+        );
+        // A colonless malformed line neither matches nor panics; a genuine
+        // top-level key later in the block still reads.
+        assert_eq!(
+            scalar_field_ci(
+                "---\ntype: Task\nnotacolonhere\ntask-id: abc\n---\n",
+                "task-id"
+            )
+            .as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn key_opens_block_mirrors_the_writer_consumption_rules() {
+        // The stamp's non-scalar guard (review, PR #59): true exactly when
+        // set_fields' rewrite of the empty-valued key would consume following
+        // lines — a nested mapping, a block list (indented or not), stray
+        // indented whitespace — so stamping over the user's data is refused.
+        let map = "---\ntype: Task\nuid:\n  source: jira\n---\n";
+        assert!(key_opens_block(map, "uid"));
+        let list = "---\ntype: Task\nuid:\n- a\n- b\n---\n";
+        assert!(key_opens_block(list, "uid"));
+        let indented_list = "---\ntype: Task\nuid:\n  - a\n---\n";
+        assert!(key_opens_block(indented_list, "uid"));
+        // A comment DEFERS the decision, like the writer's pending buffer.
+        let comment_then_item = "---\ntype: Task\nuid:\n# note\n- a\n---\n";
+        assert!(key_opens_block(comment_then_item, "uid"));
+        let comment_then_fence = "---\ntype: Task\nuid:\n# note\n---\n";
+        assert!(!key_opens_block(comment_then_fence, "uid"));
+        // Truly blank: next line is another key, a blank line, or the fence.
+        assert!(!key_opens_block("---\ntype: Task\nuid:\n---\n", "uid"));
+        assert!(!key_opens_block(
+            "---\ntype: Task\nuid:\nstatus: new\n---\n",
+            "uid"
+        ));
+        assert!(!key_opens_block(
+            "---\ntype: Task\nuid:\n\n- body\n---\n",
+            "uid"
+        ));
+        // Absent key / no frontmatter → false (nothing to guard).
+        assert!(!key_opens_block("---\ntype: Task\n---\n", "uid"));
+        assert!(!key_opens_block("no frontmatter", "uid"));
+    }
 
     #[test]
     fn is_valid_due_accepts_only_plain_dates() {

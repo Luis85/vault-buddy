@@ -5763,6 +5763,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
+ "getrandom 0.3.4",
  "log",
  "open",
  "percent-encoding",

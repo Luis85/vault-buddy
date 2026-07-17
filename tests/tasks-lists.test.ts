@@ -419,7 +419,7 @@ describe("Tasks — lists & sorting", () => {
       const { wrapper, calls } = mountView({
         list_tasks: inList,
         list_task_lists: () => ["Inbox"],
-        move_task_to_list: () => "C:/v/Tasks/Inbox/e (2).md", // collision suffix
+        move_task_to_list: () => ({ path: "C:/v/Tasks/Inbox/e (2).md", id: null }), // collision suffix
       });
       await flushPromises();
       await openEditorAndPick(wrapper, "Inbox");
@@ -437,6 +437,26 @@ describe("Tasks — lists & sorting", () => {
       expect(task.list).toBe("Inbox");
     });
 
+    it("a successful list move refreshes the vault's open-task badge (review)", async () => {
+      // count_open_tasks skips archived lists, so moving an open task OUT of
+      // an archived list — reachable from Dates/Tags grouping, where its row
+      // still shows and the picker offers visible targets — makes it
+      // countable again. The editor move must refresh the cached badges like
+      // every other count-moving mutation (GAP-32 precedent); the stale badge
+      // otherwise underreports until the next panel open.
+      const { wrapper, calls } = mountView({
+        list_tasks: inList,
+        list_task_lists: () => ["Inbox"],
+        move_task_to_list: () => ({ path: "C:/v/Tasks/Inbox/e.md", id: null }),
+      });
+      await flushPromises();
+      await openEditorAndPick(wrapper, "Inbox");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "move_task_to_list")).toBeDefined();
+      expect(calls.find((c) => c.cmd === "count_open_tasks")?.args).toEqual({ id: "v1" });
+    });
+
     it("keeping the same list issues no move", async () => {
       const { wrapper, calls } = mountView({ list_tasks: inList, list_task_lists: () => ["Inbox"] });
       await flushPromises();
@@ -446,6 +466,24 @@ describe("Tasks — lists & sorting", () => {
       await flushPromises();
       expect(calls.find((c) => c.cmd === "update_task")?.args).toMatchObject({ patch: { title: "Renamed" } });
       expect(calls.find((c) => c.cmd === "move_task_to_list")).toBeUndefined();
+    });
+
+    it("reflects the id update_task returns so copy-id shows without a reload (Codex)", async () => {
+      // An id-enabled edit stamps a missing id on disk; update_task returns it
+      // so the row reveals its copy-id affordance immediately.
+      const { wrapper } = mountView({
+        list_tasks: () => [
+          { path: "C:/v/Tasks/e.md", title: "Mover", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
+        ],
+        update_task: () => "stamped9",
+      });
+      await flushPromises();
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      await wrapper.get('[data-testid="task-edit-title"]').setValue("Renamed");
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      const task = (wrapper.vm as unknown as { tasks: { id: string | null }[] }).tasks[0];
+      expect(task.id).toBe("stamped9");
     });
 
     it("a failed move after saved fields keeps the fields and names the move in the toast", async () => {
@@ -471,6 +509,46 @@ describe("Tasks — lists & sorting", () => {
       // The task stays where it was.
       const task = (wrapper.vm as unknown as { tasks: { path: string; list: string }[] }).tasks[0];
       expect(task.list).toBe("");
+    });
+
+    it("keeps a task's own archived list selected in the editor and still allows moving it out (Task 8)", async () => {
+      // "Old" is archived: hidden from the Lists grouping's sections (and its
+      // task dropped from that grouping entirely) and from the picker's
+      // OPTIONS — but a task already parked there must still show "Old"
+      // selected in its own editor (not blank) and stay movable to a visible
+      // list.
+      const inOldList = () => [
+        { path: "C:/v/Tasks/Old/e.md", title: "Mover", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Old", order: null },
+      ];
+      const { wrapper, calls } = mountView({
+        list_tasks: inOldList,
+        list_task_lists: () => ["Old", "Keep"],
+        get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] }),
+        move_task_to_list: () => ({ path: "C:/v/Tasks/Keep/e.md", id: null }),
+      });
+      await flushPromises();
+      // The Lists grouping (the default view) hides both the section and the row.
+      expect(wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text())).not.toContain("Old");
+      expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(0);
+      // Dates grouping still surfaces the task — archiving only scopes the
+      // Lists view, not the task itself (a deliberate simplification; a
+      // later increment task tracks it in docs/Gaps.md).
+      await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+      await wrapper.get('[data-testid="task-edit"]').trigger("click");
+      // The picker shows the task's own current list even though "Old" is
+      // excluded from its OPTIONS otherwise.
+      expect(wrapper.get('[data-testid="task-edit-list"]').text()).toContain("Old");
+      await wrapper.get('[data-testid="task-edit-list"]').trigger("click");
+      await flushPromises();
+      (document.body.querySelector('[data-testid="task-edit-list-option-Keep"]') as HTMLElement).click();
+      await flushPromises();
+      await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+      await flushPromises();
+      expect(calls.find((c) => c.cmd === "move_task_to_list")?.args).toEqual({
+        id: "v1",
+        path: "C:/v/Tasks/Old/e.md",
+        list: "Keep",
+      });
     });
   });
 
@@ -498,7 +576,9 @@ describe("Tasks — lists & sorting", () => {
     it("re-sorts rows when a sort key is picked and persists the choice", async () => {
       const { wrapper } = mountView({ list_tasks: undated });
       await flushPromises();
-      expect(rowTitles(wrapper)).toEqual(["Carrot", "Beta", "Alpha"]); // default: newest created first
+      // Default is now Manual: ranked tasks first by order asc (Beta 1024,
+      // Carrot 2048), unranked Alpha last.
+      expect(rowTitles(wrapper)).toEqual(["Beta", "Carrot", "Alpha"]);
       await pickSort(wrapper, "title");
       expect(rowTitles(wrapper)).toEqual(["Alpha", "Beta", "Carrot"]);
       expect(localStorage.getItem("vault-buddy:task-sort")).toContain('"title"');

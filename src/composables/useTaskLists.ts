@@ -3,8 +3,9 @@ import { computed, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
+import { useVaultsStore } from "../stores/vaults";
 import type { TasksConfig } from "../types";
-import { orderLists } from "../utils/taskSections";
+import { archivedMatcher, orderLists, remapListRef } from "../utils/taskSections";
 
 // The Tasks view's lists state: a List is a folder under the vault's tasks
 // root; enumeration is fetched per vault (fan-out in aggregate mode,
@@ -12,14 +13,76 @@ import { orderLists } from "../utils/taskSections";
 // lists and the pickers can offer every list. listOrder comes from the
 // vault's lists settings object. Split out of Tasks.vue for the LOC cap —
 // this is state + IPC, no rendering.
-export function useTaskLists(vaultId: string | null) {
+// The lists-config that "toggle archive on" produces: add `list` to the
+// archived set (idempotent) and clear the default when it IS the list being
+// archived — otherwise the composer would render a blank picker and unpicked
+// adds would silently land in the now-hidden list (Task 8 review, Minor #3).
+// Pure so archiveList stays a thin invoke + cache update.
+function withListArchived(cfg: TasksConfig, list: string) {
+  const { archivedLists = [], defaultList = null, listOrder = [] } = cfg as Partial<TasksConfig>;
+  const low = list.toLowerCase();
+  return {
+    defaultList: defaultList && defaultList.toLowerCase() === low ? null : defaultList,
+    listOrder,
+    // Set-dedup rather than a branch: re-archiving isn't reachable from the UI
+    // (an archived list's section is hidden), so the idempotency is only a
+    // guard, not a tested path — keep it branchless.
+    archivedLists: [...new Set([...archivedLists, list])],
+  };
+}
+
+// Rewrite the list preferences after a rename (`to` = the landed name) or a
+// delete (`to` = null) so the default / order / archived set never point at a
+// stale name — otherwise an untouched add would reapply the old default and
+// recreate the old folder (Codex, PR #59). A List IS a folder, and the two
+// lifecycle ops treat descendants DIFFERENTLY on disk:
+//   - RENAME moves the whole subtree (Work → Projects turns Work/Q3 into
+//     Projects/Q3), so descendants are prefix-rewritten under `to`.
+//   - DELETE never removes descendants — `tasks::delete_task_list` keeps a
+//     folder that still holds sub-lists or foreign files — so descendant prefs
+//     are LEFT UNTOUCHED; dropping them would strand a still-existing child
+//     list (unarchiving it, losing its order) (Codex, PR #59 re-review).
+// Pure so syncListPrefs stays thin.
+function remapListPrefs(cfg: TasksConfig | undefined, from: string, to: string | null) {
+  const { defaultList = null, listOrder = [], archivedLists = [] } = (cfg ?? {}) as Partial<TasksConfig>;
+  // `remapListRef` (shared with the add composer's touched pick) is the exact/
+  // descendant/unchanged mapping: exact → `to` (renamed) or null (deleted); a
+  // descendant → rewritten under `to` on a rename only, else unchanged.
+  const remap = (arr: string[]) =>
+    arr.map((l) => remapListRef(l, from, to)).filter((l): l is string => l !== null);
+  return {
+    defaultList: defaultList === null ? null : remapListRef(defaultList, from, to),
+    listOrder: remap(listOrder),
+    archivedLists: remap(archivedLists),
+  };
+}
+
+// `onListRemap(from, to)` lets the container keep OTHER list references in sync
+// with a lifecycle change the way `syncListPrefs` keeps the persisted prefs in
+// sync — today the add composer's touched pick, so renaming/archiving/deleting
+// the list it points at can't make the next quick-add recreate a renamed folder
+// or land in a hidden/gone list. `to` is the landed name on a rename, or null
+// on an archive or a delete that actually removed the folder.
+export function useTaskLists(
+  vaultId: string | null,
+  onListRemap?: (from: string, to: string | null) => void,
+) {
   const notifications = useNotificationsStore();
+  const vaultsStore = useVaultsStore();
   const vaultLists = ref(new Map<string, string[]>());
   const vaultConfigs = ref(new Map<string, TasksConfig>());
   // Sections honor the vault's configured order in per-vault mode; the
   // aggregate stays alphabetical (a cross-vault order union is YAGNI).
   const listOrder = computed(() =>
     vaultId !== null ? (vaultConfigs.value.get(vaultId)?.listOrder ?? []) : [],
+  );
+  // Archived lists hide from the Lists grouping and pickers (Task 8) —
+  // per-vault only, same simplification as listOrder above: the aggregate
+  // spans every vault, so there's no single archived set to apply and a
+  // cross-vault union is YAGNI (the aggregate's Lists grouping just doesn't
+  // filter for now).
+  const archivedLists = computed(() =>
+    vaultId !== null ? (vaultConfigs.value.get(vaultId)?.archivedLists ?? []) : [],
   );
   const knownLists = computed(() => {
     const seen = new Map<string, string>();
@@ -36,13 +99,28 @@ export function useTaskLists(vaultId: string | null) {
   // per vault and cached in the maps above.
   const composerVaultId = ref<string | null>(vaultId);
   const creatingList = ref(false);
+  // Archived names are dropped (Task 8) — the composer offers only visible
+  // lists to pick for a NEW task, matching what the Lists grouping shows.
   function listsForVault(id: string): string[] {
     const cfg = vaultConfigs.value.get(id);
-    return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []);
+    const isArchived = archivedMatcher(cfg?.archivedLists ?? []);
+    return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []).filter(
+      (l) => !isArchived(l),
+    );
   }
   const composerLists = computed(() =>
     composerVaultId.value === null ? [] : listsForVault(composerVaultId.value),
   );
+  // The inline editor's picker is the one exception: it must still show (and
+  // allow moving OUT of) a task's OWN current list even when that list is
+  // archived — listsForVault above already dropped it from the general
+  // options, so union it back in rather than rendering a blank selection.
+  function listsForEditor(id: string, currentList: string): string[] {
+    const base = listsForVault(id);
+    if (currentList === "" || base.some((l) => l.toLowerCase() === currentList.toLowerCase()))
+      return base;
+    return [...base, currentList];
+  }
   const composerDefaultList = computed(() => {
     const id = composerVaultId.value;
     return (id !== null && vaultConfigs.value.get(id)?.defaultList) || "";
@@ -115,17 +193,148 @@ export function useTaskLists(vaultId: string | null) {
     }
   }
 
+  // Section-menu actions (per-vault only — the menu is hidden in aggregate, so
+  // these all key off the view's own `vaultId`). Each toasts + logs on failure
+  // and returns a success signal the container uses to close the popover and
+  // decide whether to reload tasks.
+  // Persist + cache the remapped list prefs after a rename/delete so a stale
+  // default/order/archived entry can't survive (Codex, PR #59). Only when the
+  // config is cached — with none loaded there's nothing to remap and writing
+  // computed-empty prefs would clobber the real (unread) settings.
+  async function syncListPrefs(id: string, from: string, to: string | null) {
+    const cfg = vaultConfigs.value.get(id);
+    if (!cfg) return;
+    const next = remapListPrefs(cfg, from, to);
+    // Skip the write when the remap changed nothing (the list appears in no
+    // pref) — set_task_lists_config is an fsync'd read-modify-write of
+    // config.json, too dear for a no-op on the slow/network disks this app
+    // targets. Compare against the SAME normalized shape remapListPrefs
+    // destructures from, or an absent archivedLists vs a computed [] would
+    // read as a change.
+    const { defaultList = null, listOrder = [], archivedLists = [] } = cfg as Partial<TasksConfig>;
+    const sameList = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((v, i) => v === b[i]);
+    if (
+      next.defaultList === defaultList &&
+      sameList(next.listOrder, listOrder) &&
+      sameList(next.archivedLists, archivedLists)
+    )
+      return;
+    try {
+      await invoke("set_task_lists_config", { id, ...next });
+      vaultConfigs.value.set(id, { ...cfg, ...next });
+      vaultConfigs.value = new Map(vaultConfigs.value);
+    } catch (e) {
+      logWarning(`sync list prefs after lifecycle change failed: ${String(e)}`);
+    }
+  }
+
+  async function renameList(from: string, to: string): Promise<string | null> {
+    if (vaultId === null) return null;
+    const id = vaultId;
+    try {
+      const landed = await invoke<string>("rename_task_list", { id, from, to });
+      // Paths changed: refresh this vault's list enumeration so the old name
+      // drops and the landed one (which may carry a ` (N)` collision suffix)
+      // appears.
+      await loadVaultLists(id);
+      await syncListPrefs(id, from, landed);
+      onListRemap?.(from, landed);
+      return landed;
+    } catch (e) {
+      notifications.error(String(e));
+      logWarning(`rename_task_list failed: ${String(e)}`);
+      return null;
+    }
+  }
+
+  async function deleteList(list: string): Promise<boolean> {
+    if (vaultId === null) return false;
+    const id = vaultId;
+    try {
+      const outcome = await invoke<{ moved: number; folderRemoved: boolean }>("delete_task_list", { id, list });
+      await loadVaultLists(id);
+      // Reconcile prefs ONLY when the folder was actually removed. A folder
+      // kept because it still holds sub-lists or foreign files is a list that
+      // STILL EXISTS, so clearing its default/order/archived entry would
+      // strand it — and its descendants were never removed either (Codex, PR
+      // #59 re-review). A removed folder was empty, so there are no descendant
+      // prefs to worry about; dropping the exact entry is complete.
+      if (outcome?.folderRemoved) {
+        await syncListPrefs(id, list, null);
+        // Only a REMOVED folder invalidates a pick of it; a kept folder (still
+        // holding sub-lists/foreign files) is a valid target, so the composer
+        // keeps pointing at it.
+        onListRemap?.(list, null);
+      }
+      return true;
+    } catch (e) {
+      notifications.error(String(e));
+      logWarning(`delete_task_list failed: ${String(e)}`);
+      return false;
+    }
+  }
+
+  async function archiveList(list: string): Promise<boolean> {
+    if (vaultId === null) return false;
+    const id = vaultId;
+    let cfg = vaultConfigs.value.get(id);
+    if (!cfg) {
+      // Uncached means the mount-time read FAILED — the real get_tasks_config
+      // always returns a fully-populated defaults DTO, which loadVaultConfig
+      // caches — never "no config stored". Archiving blind would persist
+      // withListArchived's computed-empty defaultList/listOrder over the
+      // vault's REAL stored settings (the Rust command writes those two
+      // fields verbatim) — the exact clobber syncListPrefs guards with its
+      // `if (!cfg) return`. Retry the read once, then refuse: an archive the
+      // user can repeat beats silent pref loss. (If the mount-time read is
+      // literally still in flight, the deduped retry returns without waiting
+      // and we refuse too — rare, and re-clicking succeeds.)
+      await loadVaultConfig(id);
+      cfg = vaultConfigs.value.get(id);
+      if (!cfg) {
+        notifications.error("Couldn't load the list settings — try archiving again.");
+        return false;
+      }
+    }
+    const next = withListArchived(cfg, list);
+    try {
+      await invoke("set_task_lists_config", { id, ...next });
+      // Update the cached config so the section hides immediately (the
+      // archivedLists computed re-filters) without a round-trip.
+      vaultConfigs.value.set(id, { ...cfg, ...next });
+      vaultConfigs.value = new Map(vaultConfigs.value);
+      // Archiving hides the list from every picker, so a composer pointing at
+      // it must fall back to the default (else the next add lands in a hidden
+      // list). Descendants aren't archived, so only the exact pick clears.
+      onListRemap?.(list, null);
+      // count_open_tasks skips archived lists, so this write MOVED the badge
+      // count — refresh the cached vault-row / All-tasks badges now, like
+      // every other count-moving mutation (GAP-32 precedent; review, PR #59).
+      void vaultsStore.refreshTaskCount(id);
+      return true;
+    } catch (e) {
+      notifications.error(String(e));
+      logWarning(`archive list failed: ${String(e)}`);
+      return false;
+    }
+  }
+
   return {
     listOrder,
     knownLists,
+    archivedLists,
     creatingList,
     composerVaultId,
     composerLists,
     composerDefaultList,
-    listsForVault,
+    listsForEditor,
     loadVaultLists,
     loadVaultConfig,
     onComposerVaultChange,
     createList,
+    renameList,
+    deleteList,
+    archiveList,
   };
 }

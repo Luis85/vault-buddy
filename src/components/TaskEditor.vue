@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 
 import type { AggTask, TaskEditorPatch, TaskItem } from "../types";
+import { copyToClipboard } from "../utils/clipboard";
 import { dueOf, parseTagsInput } from "../utils/taskFields";
 import TaskListPicker from "./TaskListPicker.vue";
 
@@ -56,6 +57,13 @@ function save() {
   // a silent no-op that keeps the old title while writing the other fields.
   if (props.busy || !titleValid.value) return;
   emit("save", buildPatch());
+}
+
+function copyId() {
+  // Display-only: no editing, no new write path — just read the generated id
+  // (Task 4) and put it on the clipboard via the shared helper.
+  if (!props.task.id) return;
+  copyToClipboard(props.task.id, "task editor");
 }
 
 function onTitleEnter(e: KeyboardEvent) {
@@ -147,6 +155,26 @@ function onEditorEsc(e: KeyboardEvent) {
         aria-label="Task list"
         data-testid="task-edit-list"
       />
+    </div>
+    <div
+      v-if="task.id"
+      class="flex items-center gap-1"
+    >
+      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">ID</span>
+      <code
+        data-testid="task-edit-id"
+        class="min-w-0 flex-1 truncate rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300"
+      >{{ task.id }}</code>
+      <button
+        type="button"
+        data-testid="task-edit-id-copy"
+        aria-label="Copy task ID"
+        title="Copy ID"
+        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        @click="copyId"
+      >
+        Copy
+      </button>
     </div>
     <div class="flex items-center justify-end gap-1">
       <button

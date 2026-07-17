@@ -61,6 +61,7 @@ describe("TaskListSettings", () => {
       id: "v1",
       defaultList: "Inbox",
       listOrder: ["Next", "Waiting", "Inbox"],
+      archivedLists: [],
     });
   });
 
@@ -108,5 +109,94 @@ describe("TaskListSettings", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("No lists yet");
     expect(wrapper.findAll('[data-testid="list-order-row"]')).toHaveLength(0);
+  });
+
+  it("lists archived lists and unarchives one, saving the shrunken set", async () => {
+    const { wrapper, calls } = mountSettings({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Next"], archivedLists: ["Old", "Stale"] }),
+    });
+    await flushPromises();
+    // Both archived lists render with an Unarchive control.
+    expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(2);
+    await wrapper.get('[data-testid="unarchive-Old"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    // The save carries the remaining archived set (Old removed) alongside the
+    // preserved default/order.
+    expect((save?.args as { archivedLists: string[] }).archivedLists).toEqual(["Stale"]);
+    // The unarchived row disappears from the list.
+    expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(1);
+    // Unarchiving makes the list's open tasks countable again
+    // (count_open_tasks skips only currently-archived lists), so the cached
+    // vault-row / All-tasks badges must refresh with the save — returning to
+    // the list view reloads nothing (review, PR #59).
+    expect(calls.find((c) => c.cmd === "count_open_tasks")?.args).toEqual({ id: "v1" });
+  });
+
+  it("a default/order save leaves the badge alone (no archived change)", async () => {
+    // Only archived-membership moves the open-task count; a reorder or
+    // default pick must not pay a per-save vault walk.
+    const { wrapper, calls } = mountSettings();
+    await flushPromises();
+    await wrapper.get('[data-testid="list-order-up-2"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeDefined();
+    expect(calls.find((c) => c.cmd === "count_open_tasks")).toBeUndefined();
+  });
+
+  it("shows no archived section when nothing is archived", async () => {
+    const { wrapper } = mountSettings(); // default config carries no archivedLists
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(0);
+  });
+
+  it("excludes archived lists from the default-list picker options (Codex re-review)", async () => {
+    const { wrapper } = mountSettings({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Next"], archivedLists: ["Waiting"] }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="default-list"]').trigger("click");
+    await flushPromises();
+    // A visible list is offered; the archived "Waiting" is not a pickable
+    // default — otherwise unpicked adds would land in a hidden list.
+    expect(document.body.querySelector('[data-testid="default-list-option-Next"]')).not.toBeNull();
+    expect(document.body.querySelector('[data-testid="default-list-option-Waiting"]')).toBeNull();
+  });
+
+  it("hides archived lists from the reorder rows but keeps their order slot", async () => {
+    // An archived list rendered as an unmarked, fully-reorderable row right
+    // above its own Unarchive row — the same list twice in one card, and
+    // interactive while hidden from every picker/grouping. The reorder rows
+    // now show only visible lists; the archived name KEEPS its slot in the
+    // persisted listOrder so unarchiving restores its position instead of
+    // dumping it at the alphabetical tail.
+    const { wrapper, calls } = mountSettings({
+      list_task_lists: () => ["Inbox", "Next", "Old", "Waiting"], // Old's folder still exists
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: ["Next", "Old", "Waiting"], archivedLists: ["Old"] }),
+    });
+    await flushPromises();
+    const rows = wrapper
+      .findAll('[data-testid="list-order-row"]')
+      .map((r) => r.text().replace(/[↑↓]/g, "").trim());
+    expect(rows).toEqual(["Next", "Waiting", "Inbox"]); // "Old" not offered for reorder
+    // Move "Waiting" (visible row 1) up: it swaps with "Next" AROUND the
+    // hidden "Old" slot — the saved order keeps Old exactly where it was.
+    await wrapper.get('[data-testid="list-order-up-1"]').trigger("click");
+    await flushPromises();
+    const save = calls.find((c) => c.cmd === "set_task_lists_config");
+    expect((save?.args as { listOrder: string[] }).listOrder).toEqual(["Waiting", "Old", "Next", "Inbox"]);
+  });
+
+  it("clears an archived default on the next save (Codex re-review)", async () => {
+    const { wrapper, calls } = mountSettings({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Old", listOrder: ["Next"], archivedLists: ["Old", "Stale"] }),
+    });
+    await flushPromises();
+    // Unarchiving a DIFFERENT list triggers a save; the still-archived default
+    // ("Old") must normalize to null so unpicked adds stop landing in it.
+    await wrapper.get('[data-testid="unarchive-Stale"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    expect(save?.args).toMatchObject({ defaultList: null, archivedLists: ["Old"] });
   });
 });

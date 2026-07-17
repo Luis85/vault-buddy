@@ -3,7 +3,7 @@
 //! is deliberately the frontend's job, not the sort's).
 
 use super::doc::is_task;
-use super::parse::{is_valid_due, note_tags, scalar_field};
+use super::parse::{is_valid_due, note_tags, scalar_field, scalar_field_ci};
 use crate::capture_note::note_field;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,10 @@ pub struct TaskItem {
     /// Manual rank from the `order:` frontmatter number; lenient read —
     /// unparseable/non-finite is unranked, never an error.
     pub order: Option<f64>,
+    /// The generated id read from the vault's configured id property, when
+    /// the vault has task IDs enabled; `None` when the feature is off (the
+    /// property is never read) or the file simply has no value there.
+    pub id: Option<String>,
 }
 
 /// Sort tier for a priority value: high first, low last, anything else
@@ -52,14 +56,18 @@ fn due_key(t: &TaskItem) -> (bool, &str) {
 /// ascending (no/unparseable due last), then priority tier, then newest
 /// `created`, then title; completed tasks after, sorted by newest `created`
 /// then title. A missing/unreadable root or file degrades silently.
-pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
+///
+/// `id_property` is the vault's configured task-id frontmatter key, or
+/// `None` when task IDs are off — the property is then never read, so a
+/// disabled vault pays no extra cost and `TaskItem.id` is always `None`.
+pub fn list_tasks(root: &Path, id_property: Option<&str>) -> Vec<TaskItem> {
     let mut out = Vec::new();
     // The walk discipline (canonical containment, cycle set, dot-dir skip)
     // lives in vault_walk, single-sourced with the search scan. A missing/
     // unresolvable root → empty list (best-effort, unchanged).
     if let Ok(canon_root) = std::fs::canonicalize(root) {
         crate::vault_walk::walk_vault(&canon_root, &mut |path, name| {
-            collect_task_file(path, name, &canon_root, &mut out);
+            collect_task_file(path, name, &canon_root, id_property, &mut out);
             crate::vault_walk::Flow::Continue
         });
     }
@@ -90,7 +98,13 @@ pub fn list_tasks(root: &Path) -> Vec<TaskItem> {
 
 /// The per-file half of the old recursive collector: read, keep `type: Task`
 /// files, map to a TaskItem. Unreadable files and non-tasks degrade silently.
-fn collect_task_file(path: &Path, name: &str, canon_root: &Path, out: &mut Vec<TaskItem>) {
+fn collect_task_file(
+    path: &Path,
+    name: &str,
+    canon_root: &Path,
+    id_property: Option<&str>,
+    out: &mut Vec<TaskItem>,
+) {
     if !name.ends_with(".md") {
         return;
     }
@@ -127,6 +141,14 @@ fn collect_task_file(path: &Path, name: &str, canon_root: &Path, out: &mut Vec<T
     let order = scalar_field(&content, "order")
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|f| f.is_finite());
+    // Case-insensitive, top-level-only via the SAME scalar_field_ci the
+    // id-stamp path uses, or a task stamped under a different casing than the
+    // configured property has a stable id on disk that never surfaces (Codex
+    // review, PR #59). Blank counts as ABSENT, agreeing with the stamp's
+    // non-empty predicate — a bare `task-id:` must not surface "" as the id.
+    let id = id_property
+        .and_then(|p| scalar_field_ci(&content, p))
+        .filter(|v| !v.is_empty());
     out.push(TaskItem {
         path: path.to_path_buf(),
         title,
@@ -138,6 +160,7 @@ fn collect_task_file(path: &Path, name: &str, canon_root: &Path, out: &mut Vec<T
         tags,
         list,
         order,
+        id,
     });
 }
 
@@ -178,7 +201,7 @@ mod tests {
         // No frontmatter — ignored.
         write(root, "plain.md", "just text\n");
 
-        let items = list_tasks(root);
+        let items = list_tasks(root, None);
         let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
         // Open tasks first, newest created first; the done task last.
         assert_eq!(titles, vec!["B open", "C open", "A done"]);
@@ -215,7 +238,7 @@ mod tests {
             "c.md",
             "---\ntype: Task\nstatus: new\ntitle: \"C\"\ndue: \"2026-07-16\" # quoted\n---\n",
         );
-        let items = list_tasks(root);
+        let items = list_tasks(root, None);
         let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, vec!["C", "A"]); // archived B gone; done A last
         assert_eq!(items[0].due.as_deref(), Some("2026-07-16"));
@@ -247,14 +270,17 @@ mod tests {
             "arch.md",
             "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\ncreated: 2026-07-06\n---\n",
         );
-        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         assert_eq!(titles, vec!["Open", "Done"]); // archived is not surfaced
     }
 
     #[test]
     fn list_tasks_missing_root_is_empty() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(list_tasks(&dir.path().join("nope")).is_empty());
+        assert!(list_tasks(&dir.path().join("nope"), None).is_empty());
     }
 
     #[test]
@@ -272,7 +298,10 @@ mod tests {
             "2026-07-08-bad.md",
             "---\ntype: Task\ntitle: \"Bad\"\n",
         );
-        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         assert_eq!(titles, vec!["Good"]);
     }
 
@@ -295,7 +324,10 @@ mod tests {
             "deep.md",
             "---\ntype: Task\nstatus: done\ntitle: \"Deep\"\ncreated: 2026-07-06\n---\n",
         );
-        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         // All three found regardless of depth; open first (newest created), done last.
         assert_eq!(titles, vec!["Top", "Mid", "Deep"]);
     }
@@ -315,7 +347,10 @@ mod tests {
             "gone.md",
             "---\ntype: Task\nstatus: new\ntitle: \"Gone\"\ncreated: 2026-07-08\n---\n",
         );
-        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         assert_eq!(titles, vec!["Real"]);
     }
 
@@ -341,7 +376,10 @@ mod tests {
             "---\ntype: Task\nstatus: new\ntitle: \"Escapee\"\ncreated: 2026-07-08\n---\n",
         );
         std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
-        let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(&root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         assert_eq!(titles, vec!["Inside"]); // Escapee is never followed
     }
 
@@ -361,7 +399,10 @@ mod tests {
         );
         // Tasks/sub/loop -> Tasks — a cycle back to an ancestor, still inside root.
         std::os::unix::fs::symlink(&root, root.join("sub").join("loop")).unwrap();
-        let titles: Vec<String> = list_tasks(&root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(&root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         assert_eq!(titles, vec!["A"]); // terminates; A counted exactly once
     }
 
@@ -382,7 +423,7 @@ mod tests {
             "---\ntype: Task\nstatus: new\ntitle: \"Apple\"\ncreated: 2026-07-08\n---\n",
         );
 
-        let items = list_tasks(root);
+        let items = list_tasks(root, None);
         let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, vec!["Apple", "Zebra"]);
     }
@@ -396,7 +437,7 @@ mod tests {
             "t.md",
             "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ndue: 2026-07-15\npriority: high\n---\n",
         );
-        let items = list_tasks(root);
+        let items = list_tasks(root, None);
         assert_eq!(items[0].due.as_deref(), Some("2026-07-15"));
         assert_eq!(items[0].priority.as_deref(), Some("high"));
     }
@@ -427,7 +468,10 @@ mod tests {
             "z.md",
             "---\ntype: Task\nstatus: done\ntitle: \"Done\"\ncreated: 2026-07-09\ndue: 2026-07-01\n---\n",
         );
-        let titles: Vec<String> = list_tasks(root).into_iter().map(|t| t.title).collect();
+        let titles: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         // dated (due asc, high before normal) → no-date (created desc) → done last
         // (done ignores its overdue due — done sorts by created).
         assert_eq!(
@@ -458,7 +502,7 @@ mod tests {
             "deep.md",
             "---\ntype: Task\nstatus: new\ntitle: \"Deep\"\ncreated: 2026-07-06\n---\n",
         );
-        let items = list_tasks(root);
+        let items = list_tasks(root, None);
         let lists: Vec<(&str, &str)> = items
             .iter()
             .map(|t| (t.title.as_str(), t.list.as_str()))
@@ -496,7 +540,7 @@ mod tests {
             "d.md",
             "---\ntype: Task\nstatus: new\ntitle: \"D\"\ncreated: 2026-07-08\n---\n",
         );
-        let items = list_tasks(root);
+        let items = list_tasks(root, None);
         let by_title = |t: &str| items.iter().find(|i| i.title == t).unwrap().order;
         assert_eq!(by_title("A"), Some(1536.0));
         assert_eq!(by_title("B"), Some(1536.5));
@@ -513,6 +557,75 @@ mod tests {
             "t.md",
             "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ntags:\n- work\n---\n",
         );
-        assert_eq!(list_tasks(root)[0].tags, vec!["work"]);
+        assert_eq!(list_tasks(root, None)[0].tags, vec!["work"]);
+    }
+
+    #[test]
+    fn list_tasks_reads_the_configured_id_property_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "t.md", "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ntask-id: abc12345\n---\n");
+        assert_eq!(
+            list_tasks(root, Some("task-id"))[0].id.as_deref(),
+            Some("abc12345")
+        );
+        assert_eq!(list_tasks(root, None)[0].id, None); // off → no read
+    }
+
+    #[test]
+    fn list_tasks_reads_the_id_property_case_insensitively() {
+        // Codex PR #59: the id STAMP path detects an existing id under ANY
+        // casing (via scalar_field_ci), but list_tasks once read it with
+        // scalar_field's exact-case lookup — so a task stamped `Task-ID:` while
+        // the vault resolves the property to `task-id` had a stable id on disk
+        // that was invisible in TaskDto.id (dead to the UI/MCP and the copy-id
+        // feature). Both now share scalar_field_ci, so read agrees with write.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "upper.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Upper\"\ncreated: 2026-07-08\nTask-ID: abc12345\n---\n",
+        );
+        write(
+            root,
+            "exact.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Exact\"\ncreated: 2026-07-08\ntask-id: xyz\n---\n",
+        );
+        // A NESTED indented `task-id` under a mapping is NOT the top-level
+        // property — scalar_field_ci is top-level-only, the same discipline the
+        // id-stamp uses — so this file carries no usable id at all.
+        write(
+            root,
+            "nested.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Nested\"\ncreated: 2026-07-08\nmetadata:\n  task-id: nope\n---\n",
+        );
+
+        let items = list_tasks(root, Some("task-id"));
+        let id_of = |title: &str| items.iter().find(|t| t.title == title).unwrap().id.clone();
+        assert_eq!(id_of("Upper"), Some("abc12345".to_string())); // case-insensitive win
+        assert_eq!(id_of("Exact"), Some("xyz".to_string())); // exact case: no regression
+        assert_eq!(id_of("Nested"), None); // nested key never counts as top-level
+
+        // Feature off (None property) never reads, regardless of on-disk casing.
+        let off = list_tasks(root, None);
+        assert_eq!(off.iter().find(|t| t.title == "Upper").unwrap().id, None);
+    }
+
+    #[test]
+    fn list_tasks_treats_a_blank_id_property_as_absent() {
+        // A bare `task-id:` (an Obsidian property panel / template leaves the
+        // key valueless) reads as Some("") through scalar_field_ci. The STAMP
+        // path treats that as missing and generates; the read must agree —
+        // surfacing "" as TaskDto.id would hand the UI/MCP an unusable id
+        // until the next edit (review, PR #59).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "blank.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Blank\"\ncreated: 2026-07-08\ntask-id:\n---\n",
+        );
+        assert_eq!(list_tasks(root, Some("task-id"))[0].id, None);
     }
 }

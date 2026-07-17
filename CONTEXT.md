@@ -52,6 +52,10 @@ _Avoid_: Category, board; "folder" alone (a List is a folder, but not every vaul
 An optional `order` number in a Task's frontmatter giving its hand-arranged position (ascending) for the Manual sort. Assigned on first reorder — never written at creation — and read leniently: a Task without one is unranked and follows the ranked ones.
 _Avoid_: Index, position (both imply a dense sequence; ranks are sparse and gap-tolerant)
 
+**Task ID**:
+A generated, stable identifier for a Task: eight random base36 characters written into its frontmatter under a configurable property (default `task-id`). Opt-in per Vault — once turned on, a new Task gets one at creation and an existing Task is stamped with one the next time it's edited, but an ID already present is never overwritten or regenerated. Distinct from both the file path (which can move or be renamed) and Order (the hand-arranged sort rank) — a Task keeps the same Task ID across either kind of change, which is the point of having one.
+_Avoid_: UID, key, index — the ID is random, not sequential, and it never doubles as the sort rank
+
 **Project**:
 Task metadata linking a Task to the larger body of notes or work it belongs to.
 _Avoid_: Epic, initiative

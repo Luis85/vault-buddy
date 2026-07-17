@@ -13,6 +13,14 @@ pub struct TasksConfigDto {
     /// tasks root) and the display order for list sections/pickers.
     pub default_list: Option<String>,
     pub list_order: Vec<String>,
+    /// `/`-joined relative names of lists hidden from the Lists grouping and
+    /// pickers (the folder + tasks stay on disk).
+    pub archived_lists: Vec<String>,
+    /// Whether generated task IDs are enabled for this vault.
+    pub task_id_enabled: bool,
+    /// The RESOLVED id property name (default "task-id" when unset) — the UI
+    /// shows it as the placeholder/current value.
+    pub task_id_property: String,
 }
 
 /// The vault's configured tasks folder (or None → the frontend shows the
@@ -21,10 +29,14 @@ pub struct TasksConfigDto {
 #[tauri::command]
 pub fn get_tasks_config(id: String) -> TasksConfigDto {
     let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
+    let task_id_property = cfg.task_id_property_name().to_string();
     TasksConfigDto {
+        task_id_enabled: cfg.task_id_enabled,
+        task_id_property,
         tasks_folder: cfg.tasks_folder,
         default_list: cfg.default_list,
         list_order: cfg.list_order,
+        archived_lists: cfg.archived_lists,
     }
 }
 
@@ -60,12 +72,23 @@ pub fn set_tasks_config(
     capture_config::update_vault_config(&id, value)
 }
 
-/// Persist the vault's lists settings object (default list + list order),
-/// preserving the tasks folder and every other per-vault field via the same
-/// read-modify-write under ConfigWriteLock that set_tasks_config uses. Its
-/// own command — not a widened set_tasks_config — so a lists-config failure
-/// can't block the folder save and vice versa (the CaptureSettings pattern
-/// of independent field-level saves).
+/// Persist the vault's lists settings object (default list + list order +
+/// archived lists), preserving the tasks folder and every other per-vault
+/// field via the same read-modify-write under ConfigWriteLock that
+/// set_tasks_config uses. Its own command — not a widened set_tasks_config —
+/// so a lists-config failure can't block the folder save and vice versa (the
+/// CaptureSettings pattern of independent field-level saves).
+///
+/// `archived_lists` is OPTIONAL (Codex, PR #59 regression): Task 3 first
+/// added it as a REQUIRED `Vec<String>`, but the existing caller
+/// (`TaskListSettings.vue`, wired before the archive UI existed) invokes
+/// this command with only `id`/`defaultList`/`listOrder` — Tauri v2 rejects
+/// an invoke missing a required argument before the command body ever runs,
+/// so every default-list/list-order save started erroring and persisting
+/// nothing. A missing `Option<T>` argument deserializes to `None`, so
+/// today's caller keeps working (preserves the stored set, see
+/// `resolve_archived_lists`) and the future archive/unarchive UI (Tasks
+/// 9/10) passes `Some(_)` to replace it.
 ///
 /// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
 #[tauri::command]
@@ -74,6 +97,7 @@ pub async fn set_task_lists_config(
     id: String,
     default_list: Option<String>,
     list_order: Vec<String>,
+    archived_lists: Option<Vec<String>>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
     // Write-strict on the default list (the settings UI offers existing
@@ -92,6 +116,77 @@ pub async fn set_task_lists_config(
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.default_list = default_list;
     value.list_order = list_order;
+    value.archived_lists = resolve_archived_lists(value.archived_lists.clone(), archived_lists);
+    capture_config::update_vault_config(&id, value)
+}
+
+/// Resolve the `archived_lists` field for a `set_task_lists_config` save.
+/// `Some(incoming)` normalizes and REPLACES it — same best-effort posture as
+/// `list_order` rather than command-failing: a stale name left over from a
+/// since renamed/deleted list must not block saving the rest of the
+/// picker's selections, so an unsafe or empty entry (the tasks-root
+/// sentinel, `""`, is not a real list) is dropped rather than erroring.
+/// `None` (an omitting caller — today's `TaskListSettings.vue`, which
+/// predates the archive UI) returns `existing` untouched, which is what
+/// lets that caller keep saving the default list / list order without
+/// silently wiping a previously-stored archived set.
+fn resolve_archived_lists(existing: Vec<String>, incoming: Option<Vec<String>>) -> Vec<String> {
+    let Some(incoming) = incoming else {
+        return existing;
+    };
+    incoming
+        .into_iter()
+        .filter_map(|s| match tasks::normalize_list_rel(s.trim()) {
+            Ok(n) if !n.is_empty() => Some(n),
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!("set_task_lists_config: dropping unsafe archived list {s:?}: {e}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Persist the vault's Task ID settings (enable + frontmatter property),
+/// preserving every other per-vault field via the same read-modify-write
+/// under ConfigWriteLock. Write-strict on the property: empty → the default
+/// (stored as None); an invalid or reserved name is an inline error. Its own
+/// command — the independent field-save pattern of set_task_lists_config.
+///
+/// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
+#[tauri::command]
+pub async fn set_task_id_config(
+    lock: tauri::State<'_, ConfigWriteLock>,
+    id: String,
+    enabled: bool,
+    property: Option<String>,
+) -> Result<(), String> {
+    crate::commands::find_vault(&id)?;
+    // Validate + apply the property ONLY when enabling. When disabling, the
+    // property is moot (no id is written), so an invalid draft must not block
+    // turning IDs off — and the property field is hidden when off, so the user
+    // couldn't fix it. Some(_) = set the property; None = preserve the stored
+    // one. Validation stays before the lock (fail-fast; never hold it across a
+    // doomed write), matching set_tasks_config/set_task_lists_config.
+    let property_to_set: Option<Option<String>> = if enabled {
+        Some(match property.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(p) if tasks::is_valid_id_property(p) => Some(p.to_string()),
+            Some(p) => {
+                return Err(format!(
+                    "Invalid ID property name (letters, digits, - and _ only; not a reserved task field): {p}"
+                ))
+            }
+        })
+    } else {
+        None
+    };
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
+    value.task_id_enabled = enabled;
+    if let Some(prop) = property_to_set {
+        value.task_id_property = prop;
+    }
     capture_config::update_vault_config(&id, value)
 }
 
@@ -125,11 +220,17 @@ pub async fn create_task_list(id: String, name: String) -> Result<String, String
 }
 
 /// Move a task file into another list's folder; returns the landed absolute
-/// path (which may carry a collision suffix the UI must adopt).
+/// path (which may carry a collision suffix the UI must adopt) and the task's
+/// current id (freshly stamped when the vault opts in and it lacked one), so
+/// the drag / editor-move callers reveal copy-ID without a reload.
 ///
 /// ASYNC (GAP-22 class): a vault file move (fsync-class I/O).
 #[tauri::command]
-pub async fn move_task_to_list(id: String, path: String, list: String) -> Result<String, String> {
+pub async fn move_task_to_list(
+    id: String,
+    path: String,
+    list: String,
+) -> Result<services::MovedTask, String> {
     tauri::async_runtime::spawn_blocking(move || {
         services::move_task_to_list(&ServicePaths::real(), &id, &path, &list)
     })
@@ -137,15 +238,56 @@ pub async fn move_task_to_list(id: String, path: String, list: String) -> Result
     .map_err(|e| format!("move_task_to_list: task failed: {e}"))?
 }
 
-/// Resolve a vault id to (vault path, lexically-safe tasks root). The shell
-/// keeps its own copy for update_task/open_task (services' equivalent is
-/// private); the canonical escape check is applied per-command since it
-/// needs the folder to exist.
-fn tasks_root_for(id: &str) -> Result<(PathBuf, PathBuf), String> {
+/// Rename a list folder; returns the new relative list name. Write-strict
+/// validation (name shape + never-clobber) lives in core/services.
+///
+/// ASYNC (GAP-22 class): a vault directory rename (fsync-class I/O).
+#[tauri::command]
+pub async fn rename_task_list(id: String, from: String, to: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::rename_task_list(&ServicePaths::real(), &id, &from, &to)
+    })
+    .await
+    .map_err(|e| format!("rename_task_list: task failed: {e}"))?
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteListDto {
+    pub moved: usize,
+    pub folder_removed: bool,
+}
+
+/// Delete a list folder: its own direct tasks move to the tasks root (No
+/// list), then the now-empty folder is removed (a folder still holding
+/// sub-lists or foreign files is kept — see core::tasks::delete_task_list).
+///
+/// ASYNC (GAP-22 class): a vault-wide task move + directory removal.
+#[tauri::command]
+pub async fn delete_task_list(id: String, list: String) -> Result<DeleteListDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        services::delete_task_list(&ServicePaths::real(), &id, &list).map(|o| DeleteListDto {
+            moved: o.moved,
+            folder_removed: o.folder_removed,
+        })
+    })
+    .await
+    .map_err(|e| format!("delete_task_list: task failed: {e}"))?
+}
+
+/// Resolve a vault id to (vault path, lexically-safe tasks root, the loaded
+/// vault config). The shell keeps its own copy for update_task/open_task
+/// (services' equivalent is private); the canonical escape check is applied
+/// per-command since it needs the folder to exist. Callers that also need
+/// per-vault config fields (e.g. update_task's task-id stamping) get it here
+/// instead of re-reading config.json a second time.
+fn tasks_root_for(
+    id: &str,
+) -> Result<(PathBuf, PathBuf, capture_config::VaultCaptureConfig), String> {
     let vault = crate::commands::find_vault(id)?;
     let cfg = capture_config::vault_config(&capture_config::load_config(), id);
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
-    Ok((PathBuf::from(&vault.path), root))
+    Ok((PathBuf::from(&vault.path), root, cfg))
 }
 
 /// Validate an optional due date for a write. Ok(None) when absent.
@@ -317,8 +459,17 @@ pub struct TaskPatchDto {
 /// and stay inline (so a bad field errors before any thread hop), but the
 /// vault resolution, containment canonicalize, read, and atomic fsync'd write
 /// are offloaded — a save to a slow/cloud/network vault must not freeze the UI.
+///
+/// Returns the task's current ID (the freshly-stamped one when the vault opts
+/// in and the task lacked one, or the existing value) so the row can show its
+/// copy-ID affordance immediately instead of only after a view reload; `None`
+/// when IDs are off. An empty patch is `Ok(None)` (Codex, PR #59).
 #[tauri::command]
-pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Result<(), String> {
+pub async fn update_task(
+    id: String,
+    path: String,
+    patch: TaskPatchDto,
+) -> Result<Option<String>, String> {
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
     if let Some(title) = &patch.title {
         let t = title.trim();
@@ -364,16 +515,25 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
         updates.push(("tag", None));
     }
     if updates.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let (vault_path, root) = tasks_root_for(&id)?;
+        let (vault_path, root, cfg) = tasks_root_for(&id)?;
         if root.exists() {
             capture_paths::assert_root_inside_vault(&vault_path, &root)?;
         }
         let refs: Vec<(&str, Option<&str>)> =
             updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-        tasks::update_task_fields(&root, Path::new(&path), &refs)
+        // Stamp a generated ID when the vault opted in and the task lacks one:
+        // update_task_fields generates + writes internally only when the
+        // property has no usable value. Any update_task write — a field edit
+        // OR an order-only reorder — stamps. cfg comes from tasks_root_for,
+        // which already loaded config.json for the folder resolution above —
+        // reusing it here avoids a second uncached read and the TOCTOU window
+        // a second read would open against a concurrent config write.
+        let id_property =
+            tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+        tasks::update_task_fields(&root, Path::new(&path), &refs, id_property)
     })
     .await
     .map_err(|e| format!("update_task: task failed: {e}"))?
@@ -386,7 +546,7 @@ pub async fn update_task(id: String, path: String, patch: TaskPatchDto) -> Resul
 /// `obsidian://open` launch, logged by `uri::launch` like every vault open.
 #[tauri::command]
 pub fn open_task(id: String, path: String) -> Result<(), String> {
-    let (vault_path, root) = tasks_root_for(&id)?;
+    let (vault_path, root, _cfg) = tasks_root_for(&id)?;
     let canon_root =
         std::fs::canonicalize(&root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
     let canon_path = std::fs::canonicalize(Path::new(&path))
@@ -421,6 +581,51 @@ mod tests {
         is_future(count_open_tasks);
         is_future(list_task_lists);
         is_future2(create_task_list);
+        is_future2(delete_task_list);
         is_future3(move_task_to_list);
+        is_future3(rename_task_list);
+    }
+
+    // Codex, PR #59 (P2): Task 3 first added `archived_lists` to
+    // set_task_lists_config as a REQUIRED `Vec<String>`. TaskListSettings.vue
+    // predates the archive UI and invokes the command without an
+    // `archivedLists` argument at all, so Tauri v2 rejected the whole invoke
+    // (missing required argument) before the command body ever ran — every
+    // default-list/list-order save started erroring and persisting nothing.
+    // These two tests pin resolve_archived_lists, the pure helper the command
+    // body now delegates to for the field: it is the one place that can be
+    // exercised without a real vault/config.json (set_task_lists_config
+    // itself takes tauri::State and calls ServicePaths::real(), so it can
+    // only run against a developer's real app config — not unit-testable
+    // here, same as every other State-taking command in this file).
+
+    #[test]
+    fn resolve_archived_lists_none_preserves_existing() {
+        // None is what an omitting caller (today's TaskListSettings.vue)
+        // deserializes to — it must leave the stored archived set untouched,
+        // not wipe it.
+        let existing = vec!["Inbox".to_string(), "Archive/Old".to_string()];
+        assert_eq!(resolve_archived_lists(existing.clone(), None), existing);
+    }
+
+    #[test]
+    fn resolve_archived_lists_some_normalizes_and_replaces() {
+        // Some(_) is the future archive/unarchive UI (Tasks 9/10): it
+        // REPLACES the stored set (existing "Stale" must not survive) after
+        // normalizing exactly like list_order — trimmed, the tasks-root
+        // sentinel ("") and unsafe entries (dot-prefixed, escaping) dropped
+        // best-effort rather than failing the whole save.
+        let existing = vec!["Stale".to_string()];
+        let incoming = vec![
+            "Inbox".to_string(),
+            "  Work/Q3  ".to_string(),
+            "".to_string(),
+            ".hidden".to_string(),
+            "../escape".to_string(),
+        ];
+        assert_eq!(
+            resolve_archived_lists(existing, Some(incoming)),
+            vec!["Inbox".to_string(), "Work/Q3".to_string()]
+        );
     }
 }

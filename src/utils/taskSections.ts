@@ -6,7 +6,7 @@ import { dueOf } from "./taskFields";
 // function and the component stays under the LOC cap. Order WITHIN every
 // section is the caller's global sort, untouched.
 
-export type Bucket = { key: string; label: string | null; tasks: AggTask[] };
+export type Bucket = { key: string; label: string | null; tasks: AggTask[]; list?: string };
 
 /** Date buckets: Overdue / Today / Upcoming / No date / Done. Headers render
  * only once a dated open task exists — a vault that never uses due dates
@@ -80,13 +80,21 @@ export function tagSections(tasks: AggTask[]): Bucket[] {
  * aggregate view unifies "Next" across vaults. `includeEmpty` renders
  * task-less known lists as empty sections (per-vault mode, so a fresh list
  * is visible); the aggregate passes false to avoid cross-vault noise.
+ * `archived` (Task 8) hides a list's section entirely AND drops its open
+ * tasks from the grouping rather than bucketing them — the folder + tasks
+ * still exist on disk, and the SAME task still shows under Dates/Tags
+ * grouping (this only scopes the Lists view); a done task is unaffected
+ * either way since Done already ignores list assignment. Each list bucket
+ * carries its raw `list` name (used by callers — e.g. a future section
+ * menu, or a cross-list drop target — to identify which list a section is).
  * Headers always render in list mode. */
 export function listSections(
   tasks: AggTask[],
   knownLists: string[],
   listOrder: string[],
-  opts: { includeEmpty: boolean },
+  opts: { includeEmpty: boolean; archived: string[] },
 ): Bucket[] {
+  const isArchived = archivedMatcher(opts.archived);
   const byList = new Map<string, { label: string; tasks: AggTask[] }>();
   const ensure = (label: string) => {
     const key = label.toLowerCase();
@@ -94,24 +102,60 @@ export function listSections(
     byList.set(key, entry);
     return entry;
   };
-  if (opts.includeEmpty) for (const l of knownLists) ensure(l);
+  if (opts.includeEmpty) for (const l of knownLists) if (!isArchived(l)) ensure(l);
   const nolist: AggTask[] = [];
   const done: AggTask[] = [];
   for (const t of tasks) {
     if (t.done) done.push(t);
     else if (t.list === "") nolist.push(t);
+    else if (isArchived(t.list)) continue; // hidden with its list
     else ensure(t.list).tasks.push(t);
   }
-  const sections = orderLists(
+  // Explicitly Bucket[] (not inferred from the map below): the nolist/done
+  // pushes further down carry no `list`, which would otherwise conflict with
+  // the narrower `{ list: string }` shape TS would infer from this map's
+  // return value alone.
+  const sections: Bucket[] = orderLists(
     [...byList.values()].map((e) => e.label),
     listOrder,
   ).map((label) => {
     const key = label.toLowerCase();
-    return { key: `list:${key}`, label, tasks: byList.get(key)?.tasks ?? [] };
+    return { key: `list:${key}`, label, list: label, tasks: byList.get(key)?.tasks ?? [] };
   });
   if (nolist.length > 0) sections.push({ key: "nolist", label: "No list", tasks: nolist });
   if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });
   return sections;
+}
+
+/** The ONE implementation of "is this list archived": a case-insensitive
+ * membership test over the vault's archived set. Every surface that hides
+ * archived lists (the Lists sections, visibleTasks' counts, the composer /
+ * editor pickers, the settings card) builds its matcher here, so the folding
+ * rule can never drift between them — missing one surface silently un-hides
+ * an archived list exactly there (review, PR #59). */
+export function archivedMatcher(archived: string[]): (list: string) => boolean {
+  const set = new Set(archived.map((a) => a.toLowerCase()));
+  return (list) => set.has(list.toLowerCase());
+}
+
+/** Rewrite ONE list reference after a lifecycle change — the single-value core
+ * shared by the config-prefs reconcile (default / order / archived) and the add
+ * composer's touched pick, so the two can never disagree on what a rename or
+ * delete does. `to` is the landed name on a RENAME, or `null` on an
+ * archive/delete. Case-insensitive, matching the rest of the list domain:
+ *   - the exact list → `to` (renamed) or `null` (archived/deleted → the caller
+ *     drops or clears it);
+ *   - a descendant (`from/…`) → prefix-rewritten under `to` on a RENAME only (a
+ *     rename moves the whole subtree; `Work` → `Projects` turns `Work/Q3` into
+ *     `Projects/Q3`), left UNCHANGED on archive/delete (neither removes
+ *     descendants, so a still-existing child must not be dropped);
+ *   - anything else → unchanged. */
+export function remapListRef(value: string, from: string, to: string | null): string | null {
+  const low = from.toLowerCase();
+  const vl = value.toLowerCase();
+  if (vl === low) return to;
+  if (to !== null && vl.startsWith(`${low}/`)) return to + value.slice(from.length);
+  return value;
 }
 
 /** Display order for list names: `listOrder` entries first (case-insensitive
@@ -139,4 +183,30 @@ export function orderLists(names: string[], listOrder: string[]): string[] {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([, label]) => label);
   return [...ordered, ...rest];
+}
+
+/** The list a cross-section drop targets under Lists grouping: the
+ * over-section's `list` name, `""` for the No-list section, or `null` when the
+ * drop is a within-section reorder (same section) or onto a section that isn't
+ * a list target (Done carries no `list`). Pure so the drag-to-move decision
+ * stays testable and out of the component's branch budget. */
+export function dropTargetList(over: Bucket | undefined, sectionKey: string): string | null {
+  if (!over || over.key === sectionKey) return null;
+  if (over.list !== undefined) return over.list;
+  return over.key === "nolist" ? "" : null;
+}
+
+/** The section key a cross-list DROP would land on during a drag — the over
+ * section's key when it's a different, valid list target under Lists grouping,
+ * else `null`. Drives the target-section highlight and suppresses the origin's
+ * now-misleading drop line. Pure wrapper over `dropTargetList` so the view
+ * binds one key comparison. */
+export function crossListDropTargetKey(
+  drag: { sectionKey: string; overSectionKey: string | null } | null,
+  grouping: string,
+  buckets: Bucket[],
+): string | null {
+  if (!drag || grouping !== "lists") return null;
+  const over = buckets.find((b) => b.key === drag.overSectionKey);
+  return dropTargetList(over, drag.sectionKey) !== null ? drag.overSectionKey : null;
 }

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 
 import { parseTagsInput } from "../utils/taskFields";
+import { remapListRef } from "../utils/taskSections";
 import SelectMenu from "./SelectMenu.vue";
 import TaskListPicker from "./TaskListPicker.vue";
 
@@ -158,6 +159,27 @@ function onTitleEnter(e: KeyboardEvent) {
   submit();
 }
 
+// A list lifecycle change (rename / archive / delete) landed in the container.
+// Keep an EXPLICIT pick consistent so the next Add can't recreate a renamed
+// folder or target a hidden/gone list — an UNTOUCHED picker already tracks the
+// vault's default reactively (displayList), so it needs nothing. `to` is the
+// landed name on a rename, or null on an archive/delete: the exact pick (and,
+// on a rename, any descendant) is rewritten via the shared `remapListRef`; a
+// null result (the pick was archived/deleted) drops the pick back to the
+// default. Bump pickGen on a real change so an in-flight "New list…" create's
+// late setList can't resurrect the stale pick.
+function remapPick(from: string, to: string | null) {
+  if (!listTouched.value) return;
+  const next = remapListRef(addList.value, from, to);
+  if (next === null) {
+    pickGen += 1;
+    listTouched.value = false;
+    addList.value = "";
+  } else if (next !== addList.value) {
+    pickGen += 1;
+    addList.value = next;
+  }
+}
 // Cleared by the container after a SUCCESSFUL add only — a failed add keeps the
 // user's input. The selected vault AND list are deliberately NOT reset, so a
 // burst of adds into one list stays there.
@@ -168,7 +190,7 @@ function reset() {
   addTags.value = "";
   showAddOptions.value = false;
 }
-defineExpose({ reset, setList });
+defineExpose({ reset, setList, remapPick });
 </script>
 
 <template>

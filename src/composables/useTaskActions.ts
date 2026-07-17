@@ -5,6 +5,7 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskEditorPatch, TaskPatch } from "../types";
+import { applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 
 // The per-row write actions of the Tasks view (toggle / archive / open /
 // inline-editor save) plus the busy guard and editing-row state they share.
@@ -121,7 +122,14 @@ export function useTaskActions(opts: {
     if (patch.tags !== undefined) task.tags = patch.tags;
     sortInPlace();
     try {
-      await invoke("update_task", { id: task.vaultId, path: task.path, patch });
+      // update_task returns the task's current ID (freshly stamped when the
+      // vault opts in and it lacked one, or the existing value; null when IDs
+      // are off), so the row can reveal its copy-ID affordance immediately
+      // rather than only after a view reload (Codex, PR #59).
+      reflectStampedId(
+        task,
+        await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch }),
+      );
       return true;
     } catch (e) {
       Object.assign(task, before);
@@ -138,14 +146,25 @@ export function useTaskActions(opts: {
   // half-reverted) — the toast names exactly what failed.
   async function moveToList(task: AggTask, targetList: string, fieldsSaved: boolean) {
     try {
-      const landed = await invoke<string>("move_task_to_list", {
+      const moved = await invoke<MovedTask>("move_task_to_list", {
         id: task.vaultId,
         path: task.path,
         list: targetList,
       });
-      task.path = landed;
+      // Shared adoption (landed path + any freshly-stamped id — a list-only
+      // editor save can be the first edit on a legacy task), same helper as
+      // the drag mover so the two can't drift (Codex, PR #59).
+      applyMovedTask(task, moved);
       task.list = targetList;
       sortInPlace();
+      // A move can cross archived visibility — from Dates/Tags grouping an
+      // archived list's row still shows, and moving it to a visible list
+      // makes it countable again (count_open_tasks skips archived lists) —
+      // so refresh the cached badges like every other count-moving mutation
+      // (GAP-32 precedent). The DRAG mover deliberately doesn't: it only
+      // runs under Lists grouping, where archived rows never render, so a
+      // drag can't change the count (review, PR #59).
+      void vaultsStore.refreshTaskCount(task.vaultId);
     } catch (e) {
       const prefix = fieldsSaved ? "Saved fields, but couldn't move" : "Couldn't move";
       notifications.error(`${prefix} to "${targetList || "No list"}": ${String(e)}`);

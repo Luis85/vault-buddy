@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { TasksConfig } from "../types";
+import TaskIdSettings from "./TaskIdSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
@@ -41,16 +42,50 @@ const autosave = useAutosave(
   { label: "tasks folder" },
 );
 
+// The default task-id property name the backend falls back to when none is
+// configured — single-sourced here so the load ternary below and the
+// placeholder passed to TaskIdSettings can never drift apart.
+const DEFAULT_TASK_ID_PROPERTY = "task-id";
+
+const taskIdEnabled = ref(false);
+// Empty means "use the default"; the default name is shown as a placeholder.
+const taskIdProperty = ref("");
+
+const idAutosave = useAutosave(
+  async () => {
+    await invoke("set_task_id_config", {
+      id: props.vaultId,
+      enabled: taskIdEnabled.value,
+      property: taskIdProperty.value.trim() || null,
+    });
+  },
+  { label: "task ids" },
+);
+
 onMounted(() =>
   load<TasksConfig>("get_tasks_config", props.vaultId, (cfg) => {
     tasksFolder.value = cfg.tasksFolder ?? "";
     savedFolder.value = cfg.tasksFolder ?? null;
+    taskIdEnabled.value = cfg.taskIdEnabled ?? false;
+    // Show the resolved name only when the user set a non-default one, so the
+    // placeholder communicates the default without pre-filling it.
+    taskIdProperty.value =
+      cfg.taskIdProperty && cfg.taskIdProperty !== DEFAULT_TASK_ID_PROPERTY ? cfg.taskIdProperty : "";
   }),
 );
 
 function onFolderInput(value: string) {
   tasksFolder.value = value;
   autosave.schedule();
+}
+
+function onIdEnabledChange(value: boolean) {
+  taskIdEnabled.value = value;
+  idAutosave.saveNow();
+}
+function onIdPropertyInput(value: string) {
+  taskIdProperty.value = value;
+  idAutosave.schedule();
 }
 
 // True while the typed folder differs from what's persisted (a folder save is
@@ -111,6 +146,18 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
       >
         List settings reload once the tasks folder is saved…
       </p>
+      <!-- Presentational (Task 9 review extraction) — state/autosave/load
+           stay up here; the card only renders and emits raw input back. -->
+      <TaskIdSettings
+        v-if="!loadError"
+        :enabled="taskIdEnabled"
+        :property="taskIdProperty"
+        :error="idAutosave.error.value"
+        :placeholder="DEFAULT_TASK_ID_PROPERTY"
+        @update:enabled="onIdEnabledChange"
+        @update:property="onIdPropertyInput"
+        @blur="idAutosave.flush()"
+      />
     </template>
   </div>
 </template>

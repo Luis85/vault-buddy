@@ -21,7 +21,7 @@ export const aggTask = (
   extra: Partial<TaskItem> = {},
 ): TaskItem => ({
   path: `C:/${vault}/Tasks/${title.replace(/\s+/g, "-")}.md`,
-  title, status: "new", created, done: false, due: null, priority: null, tags: [], list: "", order: null, ...extra,
+  title, status: "new", created, done: false, due: null, priority: null, tags: [], list: "", order: null, id: null, ...extra,
 });
 
 type Handlers = Partial<Record<string, (args: unknown) => unknown>>;
@@ -34,7 +34,7 @@ export function mountAggregate(handlers: Handlers = {}) {
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_vaults") return vaultsFixture;
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_tasks") {
       const id = (args as { id: string }).id;
       return id === "va"
@@ -54,11 +54,11 @@ export function mountAggregateAttached(handlers: Handlers = {}) {
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_vaults") return vaultsFixture;
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_tasks") return [];
     if (cmd === "add_task") {
       const a = args as { id: string; title: string };
-      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, priority: null, tags: [], list: "", order: null };
+      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null };
     }
   });
   const wrapper = mount(Tasks, { props: { vaultId: null }, attachTo: document.body });
@@ -66,11 +66,11 @@ export function mountAggregateAttached(handlers: Handlers = {}) {
 }
 
 export const sample: TaskItem[] = [
-  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null },
-  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null, tags: [], list: "", order: null },
+  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
+  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null, tags: [], list: "", order: null, id: null },
 ];
 
-export function mountView(handlers: Handlers = {}) {
+export function mountView(handlers: Handlers = {}, opts: { attach?: boolean } = {}) {
   const calls: Calls = [];
   // Per-item clone, not just a new array: toggle() mutates task.done/status in
   // place on the object it's handed, and sample's objects are shared across
@@ -80,16 +80,23 @@ export function mountView(handlers: Handlers = {}) {
     calls.push({ cmd, args });
     if (handlers[cmd]) return handlers[cmd]!(args);
     if (cmd === "list_task_lists") return [];
-    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], taskIdEnabled: false, taskIdProperty: "task-id" };
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
       const a = args as { title: string; due?: string; priority?: string; tags?: string[] };
-      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, priority: a.priority ?? null, tags: a.tags ?? [], list: "", order: null };
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, priority: a.priority ?? null, tags: a.tags ?? [], list: "", order: null, id: null };
       list = [created, ...list];
       return created;
     }
     if (cmd === "set_task_status") return null;
   });
-  const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+  // attach: true mounts into document.body — needed by tests that assert
+  // focus (document.activeElement) or real window-level event propagation;
+  // detached nodes reach neither in happy-dom. Callers own the cleanup
+  // (wrapper.unmount() + document.body.innerHTML = "").
+  const wrapper = mount(Tasks, {
+    props: { vaultId: "v1" },
+    ...(opts.attach ? { attachTo: document.body } : {}),
+  });
   return { wrapper, calls };
 }

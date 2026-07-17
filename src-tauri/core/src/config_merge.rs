@@ -14,9 +14,11 @@ use crate::vault_config::VaultCaptureConfig;
 /// preserving every field another settings command owns
 /// (`set_documents_config`: documents_folder/document_date_folders/
 /// document_extract_images; `set_tasks_config`: tasks_folder;
-/// `set_task_lists_config`: default_list/list_order). The preserved fields are
-/// listed explicitly and everything else comes from `incoming` via `..`, so a
-/// capture save can never transpose an owned field with a preserved one.
+/// `set_task_lists_config`: default_list/list_order/archived_lists;
+/// `set_task_id_config`: task_id_enabled/task_id_property). The preserved
+/// fields are listed explicitly and everything else comes from `incoming` via
+/// `..`, so a capture save can never transpose an owned field with a preserved
+/// one.
 pub fn merge_capture_owned(
     existing: &VaultCaptureConfig,
     incoming: VaultCaptureConfig,
@@ -26,8 +28,13 @@ pub fn merge_capture_owned(
         documents_folder: existing.documents_folder.clone(),
         default_list: existing.default_list.clone(),
         list_order: existing.list_order.clone(),
+        archived_lists: existing.archived_lists.clone(),
         document_date_folders: existing.document_date_folders,
         document_extract_images: existing.document_extract_images,
+        // The Task ID settings are owned by set_task_id_config; a capture save
+        // must never reset them, same as the lists/documents fields above.
+        task_id_enabled: existing.task_id_enabled,
+        task_id_property: existing.task_id_property.clone(),
         ..incoming
     }
 }
@@ -62,8 +69,11 @@ mod tests {
             documents_folder: Some("Inbox/Docs".into()),
             default_list: Some("Inbox".into()),
             list_order: vec!["Inbox".into(), "Next".into()],
+            archived_lists: vec!["Old".into()],
             document_date_folders: false,
             document_extract_images: false,
+            task_id_enabled: true,
+            task_id_property: Some("tid".into()),
             ..VaultCaptureConfig::default()
         };
         // incoming carries the capture-owned fields (non-owned left at defaults).
@@ -86,6 +96,12 @@ mod tests {
         assert_eq!(merged.list_order, vec!["Inbox", "Next"]);
         assert!(!merged.document_date_folders);
         assert!(!merged.document_extract_images);
+        // The branch's newer per-vault fields (archivedLists, task ID settings)
+        // must ALSO survive a capture save — merge_capture_owned lists them
+        // explicitly, so this fails if a refactor drops them back to ..incoming.
+        assert_eq!(merged.archived_lists, vec!["Old"]);
+        assert!(merged.task_id_enabled);
+        assert_eq!(merged.task_id_property.as_deref(), Some("tid"));
     }
 
     #[test]

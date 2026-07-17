@@ -336,6 +336,95 @@ transcription queue dedups by path). **Fix:** a caller-side canonical dedup
 (after `canonicalize` the nearest-existing ancestor per AGENTS.md containment
 discipline) would be the full fix; deferred as a low-frequency edge.
 
+### GAP-64 · Low · `delete_task_list` gives no partial-failure signal when a mid-loop move fails
+`src-tauri/core/src/tasks/lists.rs` (`delete_task_list`, the `for f in
+&task_files` loop). Each of a list's direct task files is relocated to the
+tasks root one at a time via `move_task_to_list(...)?`; if the Nth move
+fails (a doc that stopped being `type: Task` between the initial scan and
+the move, a mid-loop permission error, or a `rename_noreplace`
+source-could-not-be-removed rollback per
+`move_task_fails_and_rolls_back_when_source_cannot_be_removed`), files
+`1..N-1` are already relocated, the `moved` count accumulated so far is
+discarded by the `?` early return, and the caller gets an opaque `Err` with
+no signal the vault was partially mutated — **"Err ⇒ nothing happened" does
+not hold for this function.** **No data loss**: every moved file rode
+`move_task_to_list`'s own never-clobber rails (exclusive
+`rename_noreplace` + ` (N)` suffix retry), so nothing is overwritten or
+lost — only some tasks silently changed list membership before the error
+surfaced. **Accepted as a documented limitation, code unchanged** (a
+comment pinning this GAP id sits at the loop): the loop is verbatim from
+the list-lifecycle design plan. **What a fix must respect:** the later
+services/IPC/UI layers that call `delete_task_list` MUST refresh the task
+list after a delete regardless of `Ok`/`Err` — they cannot treat `Err` as
+"nothing changed" and skip the refresh. **Fix, if ever pursued:** report
+`moved` alongside the error (e.g. an error variant carrying the partial
+count) or continue best-effort and aggregate per-file failures, without
+breaking the existing `Result<DeleteListOutcome, String>` contract today's
+callers depend on.
+
+### GAP-65 · Low · Tasks-polish increment residuals (list lifecycle / copy-ID / drag-to-move, accepted)
+- ~~**A move stamps a Task ID on disk but the row reflects it only after a
+  reload.**~~ — FIXED in the polish pass (Codex, PR #59): `move_task_to_list`
+  now returns `{path, id}` (the effective id rides back from the same
+  `update_task_fields` stamp write), and the drag (`useTaskReorderCommit`) and
+  list-only editor-save (`useTaskActions.moveToList`) callers set `task.id`
+  alongside the landed path — so a moved legacy Task reveals copy-ID
+  immediately, matching the `update_task` edit/reorder paths. Every id-stamping
+  write path that a caller reads back now returns its effective id.
+- ~~**Deleting a list moved its tasks to No list without stamping a missing
+  Task ID.**~~ — FIXED in the polish pass (Codex, PR #59): a delete-list
+  relocates each direct task through the core `move_task_to_list`, which
+  bypassed the service wrapper's id backfill, so a legacy Task lost its one
+  chance to be stamped on that user-initiated move (inconsistent with drag /
+  editor moves, which stamp). `services::delete_task_list` now threads the
+  vault's `id_property` into the core delete loop, which stamps each relocated
+  Task best-effort (a stamp failure warns, never fails the delete; an existing
+  id is never overwritten). It returns no per-task id — the frontend already
+  reloads the task list after a delete (see the GAP-64 note), so the reload
+  surfaces the fresh ids. Stamping now spans create/edit/move/delete-list; only
+  a status toggle/archive is excluded.
+- **The two oversized-file splits flagged here are now done** (polish pass,
+  both pure refactors, behavior-preserving): `services.rs` (1229 LOC) was
+  split into a per-domain `services/` module — `vault` (registry/open/daily-
+  note), `tasks/{mod,lists}` (task-document CRUD vs list-folder lifecycle),
+  `recordings`, with `ServicePaths` + the shared `app_config` and test
+  `fixture` in `mod.rs`; every resulting file is under the 800 cap, so its
+  allowlist entry was removed. `Tasks.vue`'s reorder-commit cluster
+  (`writeSingleRank` / `materializeRanks` / `moveTaskToList` / `commitReorder`)
+  moved into the `useTaskReorderCommit` composable, dropping the view 648 →
+  555. Remaining split candidate: `Tasks.vue`'s buckets/display-state group
+  (the view is no longer over its historical mark, so low priority).
+- **The aggregate inline editor can show an unselected vault's archived lists
+  unfiltered.** `listsForEditor` filters archived lists per vault, but in
+  aggregate mode a row's vault config may not be loaded yet
+  (`loadVaultConfig` is lazy), so its archived set reads empty and an archived
+  list can briefly appear in that row's list picker. Fails open (worst case:
+  a hidden list is offered as a move target), single-vault mode unaffected;
+  cosmetic, deferred.
+- **2026-07-17 full-PR review pass — fixed:** Escape with a section ⋯ menu /
+  delete-confirm open closed the whole panel (GAP-27 class; focus-managed
+  popover + root Escape handler now step back a level); `archiveList` could
+  persist computed-empty prefs over a vault's stored `defaultList`/`listOrder`
+  when the config read had failed (now retry-then-refuse); `count_open_tasks`
+  counted archived-list open tasks the default Lists view hides (badge now
+  mirrors `visibleTasks`); the settings card rendered an archived list as an
+  unmarked reorderable row above its own unarchive row (reorder rows now
+  filter, slots preserved); stale hidden filter text blocked manual reorder
+  (`reorderView` now consumes `filterActive`); config.json was read twice per
+  core task-service call; the id-stamp machinery pre-drew discarded CSPRNG ids
+  across four duplicated sites (now generated inside `update_task_fields`,
+  shared `backfill_task_id`).
+- **2026-07-17 review pass — accepted residuals (deliberately not churned):**
+  the SelectMenu/TaskSectionMenu outside-click wiring stays two bespoke copies
+  (different needs: teleported dual-ref capture-phase vs in-tree single-ref;
+  extract only when a third popover appears); TaskViewControls duplicates
+  TaskListPicker's inline-create state machine (~15 lines; the two surfaces
+  are deliberately distinct entry points — extract on the next consumer);
+  `sectionAt`/`rowsFor` re-query rects per pointermove (layout-neutral classes,
+  single-digit section counts in a 400×420 panel — negligible);
+  `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
+  calls vs N fsync'd writes — negligible).
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
@@ -447,6 +536,51 @@ dismissal are unchanged. Regression tests pin all three behaviors.
   interleavings are already blocked by the `reordering` guard and the
   per-path busy checks (the busy row's grip is inert), so only this
   revert-reshuffle window remains.
+
+### GAP-63 · Low · Task-ID / lists-first / drag-default increment residuals (accepted)
+- Renaming a vault's `task_id_property` (or turning IDs on again after
+  turning them off) leaves every already-stamped Task's ID under the OLD
+  property name in place. `update_task_fields`'s `ensure_absent` only
+  checks/writes the CURRENTLY configured property — it never migrates,
+  renames, or removes a stale one — so a vault that changes its property
+  name ends up with two differently-named ID properties split across
+  old vs. newly-edited Tasks. By design (an edit-time stamp must never mass-
+  rewrite the vault to chase a config change); a manual find-and-replace
+  across the vault's Tasks folder is the user's escape hatch if this ever
+  matters to them.
+- Aggregate mode (`vaultId: null`) has no "＋ List" toolbar control —
+  `TaskViewControls.vue` gates it on `grouping === 'lists' && !isAggregate`,
+  because creating a list needs one target vault and the aggregate view
+  spans all of them. Not a regression: the composer's own
+  `TaskListPicker.vue` still offers a per-target-vault "New list…" once a
+  vault is picked, so aggregate users aren't blocked — only the toolbar
+  shortcut is per-vault-only. Wiring a vault-picker into the toolbar's
+  control too was judged not worth the complexity this slice.
+- A drag-drop reorder that materializes ranks across a whole section
+  (`utils/taskOrder.ts`) writes one `update_task` call per affected Task.
+  When Task IDs are enabled, `update_task`'s stamp-if-absent check runs on
+  EVERY one of those calls, so a single reorder can generate and stamp
+  several new IDs at once — one per previously-un-ID'd neighbor the drop
+  happens to re-rank. Not a bug (each stamp still only fires when that
+  Task's ID line is absent, and the reorder would have touched that Task's
+  frontmatter anyway), just a side effect worth knowing before enabling IDs
+  on a vault with a lot of pre-existing, never-edited Tasks — the first
+  reorder that sweeps through them will stamp the whole batch in one go
+  rather than one at a time as each is later hand-edited.
+- ~~With Manual now the default sort, the aggregate "All tasks" view
+  (`vaultId: null`) opens with drag grips and permits reordering rows within
+  a merged, cross-vault list section.~~ — fixed 2026-07-16 (Codex P2, PR #59,
+  `taskSort.ts:106`/`Tasks.vue reorderView`): `reorderView` now also requires
+  `!isAggregate.value`, so the aggregate view never renders a grip and a
+  cross-vault drag can no longer write a meaningless rank. Still true:
+  `order` ranks are per-vault numbers (there is no cross-vault rank space),
+  so a Manual-sorted aggregate view still DISPLAYS mixed-vault rows ordered
+  by each task's own per-vault rank — a rank of `500` from one vault and
+  `500` from another have no relationship to each other. That display-order
+  quirk remains an accepted consequence of "drag-and-drop is the standard
+  sort" (the user's explicit request); cross-vault list ordering remains a
+  non-goal — only the reorder-writes-a-meaningless-rank half of this bullet
+  is fixed.
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
@@ -620,6 +754,19 @@ predicate.
 - No SECURITY.md / key-rotation procedure for the updater keypair
   ("whoever holds it can ship updates to every user" — DEVELOPMENT.md) and
   no CHANGELOG (release bodies are boilerplate install instructions).
+
+### GAP-62 · ~~Low~~ FIXED 2026-07-16 · `services.rs` outgrew its LOC-baseline ceiling without a baseline update
+`scripts/loc-baseline.json` grandfathered `src-tauri/core/src/services.rs` at
+927 nonblank lines (shrink-only, per `scripts/check-loc.mjs`'s policy); the
+file reached 984 lines when the task-id increment's `add_task` id generation
+(+ its two service tests) landed, so `npm run check:loc` — part of the
+documented frontend gate chain (AGENTS.md § Commands) — failed on every PR
+regardless of what it touched. **Fixed** by ratcheting the baseline entry
+927→984 with a justified reason string (the sanctioned first branch of this
+entry's own fix criterion) in the same commit that documents the task-id
+feature; `check:loc` passes again. The file's standing "splitting it into
+per-domain modules is a separate refactor" note remains open as future work,
+but no longer red-lines CI.
 
 ## 7. Untested paths
 

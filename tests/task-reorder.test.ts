@@ -20,6 +20,7 @@ const task = (title: string, order: number | null): TaskItem => ({
   tags: [],
   list: "",
   order,
+  id: null,
 });
 
 function mountManual(
@@ -49,8 +50,23 @@ function stackRowRects(wrapper: ReturnType<typeof mount>) {
   });
 }
 
+// Section wrappers carry data-section-key; stack their rects so sectionAt's
+// hit-test resolves (happy-dom rects are all zero otherwise). Section i
+// occupies y = [i*60, i*60+60).
+function stackSectionRects(wrapper: ReturnType<typeof mount>) {
+  wrapper.findAll("[data-section-key]").forEach((sec, i) => {
+    (sec.element as HTMLElement).getBoundingClientRect = () =>
+      ({ top: i * 60, bottom: i * 60 + 60, height: 60, left: 0, right: 100, width: 100, x: 0, y: i * 60, toJSON: () => ({}) }) as DOMRect;
+  });
+}
+
 const rowTitles = (wrapper: ReturnType<typeof mount>) =>
   wrapper.findAll('[data-testid="task-open"]').map((r) => r.text());
+
+const inList = (title: string, list: string, order: number): TaskItem => ({
+  path: `C:/v/Tasks/${list}/${title}.md`,
+  title, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list, order, id: null,
+});
 
 describe("manual reordering", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -80,6 +96,29 @@ describe("manual reordering", () => {
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(6);
     await wrapper.get('[data-testid="task-filter"]').setValue("t1");
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0);
+  });
+
+  it("re-enables the handles when the filter input hides with stale text (review)", async () => {
+    // Archiving below the 5-task threshold hides the filter INPUT, and
+    // filteredTasks deliberately ignores the stale query then (the user has
+    // no control left to clear it) — the list is unfiltered, every neighbor
+    // visible, so reordering is safe. reorderView's hand-rolled
+    // `filter === ""` check lacked that showFilter gate and kept the grips
+    // hidden forever; it must consult the same filterActive rule the list
+    // itself uses.
+    const six = Array.from({ length: 6 }, (_, i) => task(`t${i}`, (i + 1) * 1024));
+    const { wrapper } = mountManual(six, { set_task_status: () => null });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-filter"]').setValue("t3");
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0); // narrowed → no grips
+    // Archive the one matching row → 5 tasks remain → the input hides.
+    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+    // The stale "t3" no longer narrows anything: all 5 rows render — and the
+    // grips must be back.
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(5);
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(5);
   });
 
   it("ArrowDown on the handle moves the row one slot with a midpoint write", async () => {
@@ -336,5 +375,183 @@ describe("manual reordering", () => {
     const rows = (wrapper.vm as unknown as { tasks: { path: string; order: number | null }[] }).tasks;
     expect(rows.find((t) => t.path === "C:/v/Tasks/c.md")?.order).toBeNull();
     expect(rowTitles(wrapper)).toEqual(["a", "b", "c"]); // unchanged
+  });
+
+  it("reflects an id stamped by a reorder write so copy-id shows without reload (Codex)", async () => {
+    // A reorder is an order-only update_task, which stamps + returns a missing
+    // id on an id-enabled vault (like a field edit). Capture it here too, not
+    // just in the editor save, so the row reveals copy-id immediately.
+    const { wrapper } = mountManual([task("a", 1024), task("b", 2048)], {
+      update_task: () => "id9",
+    });
+    await flushPromises();
+    // ArrowUp on b (its neighbor a is ranked) → one midpoint writeSingleRank.
+    await wrapper.findAll('[data-testid="task-drag"]')[1].trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; id: string | null }[] }).tasks;
+    expect(rows.find((t) => t.title === "b")?.id).toBe("id9");
+  });
+
+  it("drags a task onto another list's section to move it (Task 11)", async () => {
+    const { wrapper, calls } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper); // section 0 = list:a [0,60), section 1 = list:b [60,120)
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    // handles[0] is x (in list "A"); release the drag over list "B"'s section.
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over list:b
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "move_task_to_list")?.args).toEqual({
+      id: "v1",
+      path: "C:/v/Tasks/A/x.md", // x currently lives under its list-A folder
+      list: "B",
+    });
+    // x optimistically re-homes to B and adopts the landed path.
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; list: string; path: string }[] }).tasks;
+    const moved = rows.find((t) => t.title === "x");
+    expect(moved?.list).toBe("B");
+    expect(moved?.path).toBe("C:/v/Tasks/B/x.md");
+  });
+
+  it("reflects an id the cross-list move stamps so copy-id shows without reload (Codex)", async () => {
+    const { wrapper } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: "movedid9" }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper);
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 }));
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; id: string | null }[] }).tasks;
+    expect(rows.find((t) => t.title === "x")?.id).toBe("movedid9");
+  });
+
+  it("ignores a drag released over a non-target section like Done (Codex PR #59)", async () => {
+    // Dropping a list row onto Done (or any section that isn't a valid list
+    // move target) must do NOTHING: the drag gate commits on a different
+    // over-section (to allow a slot-unchanged move), but the UI showed neither
+    // a target highlight nor the origin's drop line, so persisting a rank from
+    // the origin's pointer slot would be a silent surprise.
+    const done: TaskItem = {
+      path: "C:/v/Tasks/z.md", title: "z", status: "done", created: "2026-07-06",
+      done: true, due: null, priority: null, tags: [], list: "", order: null, id: null,
+    };
+    const { wrapper, calls } = mountManual([inList("x1", "A", 1024), inList("x2", "A", 2048), done]);
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackRowRects(wrapper); // x1 [0,30), x2 [30,60), z [60,90)
+    stackSectionRects(wrapper); // section 0 = list:a [0,60), section 1 = done [60,120)
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    // Drag x1 (in list A) and release over the Done section.
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over done
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    // No reorder write and no move — the drop was a no-op.
+    expect(calls.some((c) => c.cmd === "update_task")).toBe(false);
+    expect(calls.some((c) => c.cmd === "move_task_to_list")).toBe(false);
+    // x1 is unchanged: still in list A, still ranked 1024.
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; list: string; order: number | null }[] }).tasks;
+    const x1 = rows.find((t) => t.title === "x1");
+    expect(x1?.list).toBe("A");
+    expect(x1?.order).toBe(1024);
+  });
+
+  it("highlights the target section during a cross-list drag and drops the origin's drop line", async () => {
+    const { wrapper } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper); // section 0 = list:a [0,60), section 1 = list:b [60,120)
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over list:b
+    await wrapper.vm.$nextTick();
+    // Mid-drag (before release): list:b is ringed as the drop target, list:a is not.
+    const section = (key: string) =>
+      wrapper.findAll("[data-section-key]").find((s) => s.attributes("data-section-key") === key)!;
+    expect(section("list:b").classes()).toContain("ring-2");
+    expect(section("list:a").classes()).not.toContain("ring-2");
+    // And no row shows the in-section drop-line border while pointing away —
+    // the origin's drop line is suppressed during a cross-list drag.
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    expect(rows.every((r) => !r.classes().includes("border-violet-400"))).toBe(true);
+    window.dispatchEvent(new PointerEvent("pointerup", {})); // end the drag cleanly
+    await flushPromises();
+  });
+
+  it("retains the last section target when the pointer passes over a gap", async () => {
+    // onMove keeps the last known over-section when sectionAt returns null
+    // (the pointer is momentarily between sections) so a brief gap on the way
+    // to release doesn't silently drop the move target.
+    const { wrapper, calls } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper); // sections span y ∈ [0,120); 500 is below them all
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over list:b
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 500 })); // over nothing
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    // The move still targets B — the gap retained list:b as the over-section.
+    expect(calls.find((c) => c.cmd === "move_task_to_list")?.args).toMatchObject({ list: "B" });
+  });
+
+  it("drags a task out to the No list section (list becomes empty)", async () => {
+    const { wrapper, calls } = mountManual([inList("x", "A", 1024), task("root", 2048)], {
+      move_task_to_list: () => ({ path: "C:/v/Tasks/x.md", id: null }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper); // section 0 = list:a, section 1 = nolist
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over No list
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "move_task_to_list")?.args).toEqual({
+      id: "v1",
+      path: "C:/v/Tasks/A/x.md", // x currently lives under its list-A folder
+      list: "",
+    });
+  });
+
+  it("reverts and toasts when a cross-list move fails", async () => {
+    const notifications = useNotificationsStore();
+    const { wrapper, calls } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => {
+        throw new Error("move failed");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper);
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 }));
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "move_task_to_list")).toBe(true);
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; list: string }[] }).tasks;
+    expect(rows.find((t) => t.title === "x")?.list).toBe("A"); // reverted
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
 });

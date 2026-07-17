@@ -22,6 +22,7 @@ const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   tags: [],
   list: "",
   order: null,
+  id: null,
   vaultId: "v",
   vaultName: "",
   ...extra,
@@ -112,21 +113,25 @@ describe("taskComparator", () => {
 });
 
 describe("sort preference persistence", () => {
+  it("an unconfigured view defaults to manual sort (drag-and-drop is standard)", () => {
+    expect(loadSortPref("brand-new-view")).toEqual({ key: "manual", dir: "asc" });
+  });
+
   it("round-trips per view and isolates views", () => {
     saveSortPref("all", { key: "due", dir: "desc" });
     saveSortPref("vault-1", { key: "title", dir: "asc" });
     expect(loadSortPref("all")).toEqual({ key: "due", dir: "desc" });
     expect(loadSortPref("vault-1")).toEqual({ key: "title", dir: "asc" });
-    expect(loadSortPref("vault-2")).toEqual({ key: "default", dir: "asc" });
+    expect(loadSortPref("vault-2")).toEqual({ key: "manual", dir: "asc" });
   });
 
   it("degrades corrupted storage to the default pref", () => {
     localStorage.setItem("vault-buddy:task-sort", "not json");
-    expect(loadSortPref("all")).toEqual({ key: "default", dir: "asc" });
+    expect(loadSortPref("all")).toEqual({ key: "manual", dir: "asc" });
     localStorage.setItem("vault-buddy:task-sort", JSON.stringify({ all: { key: "bogus", dir: "up" } }));
-    expect(loadSortPref("all")).toEqual({ key: "default", dir: "asc" });
+    expect(loadSortPref("all")).toEqual({ key: "manual", dir: "asc" });
     localStorage.setItem("vault-buddy:task-sort", JSON.stringify([1, 2]));
-    expect(loadSortPref("all")).toEqual({ key: "default", dir: "asc" });
+    expect(loadSortPref("all")).toEqual({ key: "manual", dir: "asc" });
   });
 
   it("declares natural directions and where the toggle applies", () => {
