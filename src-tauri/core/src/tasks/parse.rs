@@ -157,19 +157,21 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
-/// Read a STRUCTURED frontmatter scalar (see `scalar_field`), matching the
-/// key CASE-INSENSITIVELY at the TOP LEVEL only. Obsidian folds frontmatter
-/// key case and `is_valid_id_property` accepts case variants, so a read must
-/// agree with a write that treats case as insignificant: the id-stamp decides
-/// "already has a usable id" from `scalar_field_ci(..).filter(non-empty)`
-/// (a bare `task-id:` reads as `Some("")` → still stamped; Codex, PR #59), and
-/// `list_tasks` reads the id back through the same path, so a stable on-disk id
-/// stays visible in `TaskItem.id`. Finds the first TOP-LEVEL `key:` line whose
-/// name case-folds to `key`, skipping indented/nested lines (a nested
-/// `  task-id:` under a mapping is never the top-level property `set_fields`
-/// would rewrite), then delegates to `scalar_field` with the ACTUAL casing
-/// found — the value parsing (comment-strip, quote-unwrap) lives in one place.
-pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
+/// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
+/// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
+/// case and `is_valid_id_property` accepts case variants, so reads and writes
+/// must agree despite casing. The id-stamp uses BOTH halves: the value
+/// (via `scalar_field_ci`) to decide "already has a usable id" — a bare
+/// `task-id:` reads as `Some("")`, so `.filter(non-empty)` still stamps it
+/// (Codex, PR #59) — and the on-disk NAME to rewrite a present-but-blank line
+/// under its own casing, so `set_fields` (case-sensitive) matches it instead of
+/// inserting a case-mismatched DUPLICATE the CI read would then shadow.
+/// `list_tasks` reads the id back through `scalar_field_ci`, so a stable
+/// on-disk id stays visible in `TaskItem.id`. Skips indented/nested lines (a
+/// nested `  task-id:` under a mapping is never the top-level property
+/// `set_fields` would rewrite), then delegates value parsing (comment-strip,
+/// quote-unwrap) to `scalar_field` with the ACTUAL casing found.
+pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String, String)> {
     let mut lines = content.lines();
     if lines.next().map(str::trim_end) != Some("---") {
         return None;
@@ -187,11 +189,17 @@ pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
         if let Some((k, _)) = t.split_once(':') {
             let k = k.trim();
             if k.eq_ignore_ascii_case(key) {
-                return scalar_field(content, k);
+                return scalar_field(content, k).map(|v| (k.to_string(), v));
             }
         }
     }
     None
+}
+
+/// The scalar value of `frontmatter_scalar_ci` (the on-disk key name dropped) —
+/// what `list_tasks` and the id-stamp's "has a usable value" check read.
+pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
+    frontmatter_scalar_ci(content, key).map(|(_, v)| v)
 }
 
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of

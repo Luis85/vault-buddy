@@ -137,18 +137,34 @@ pub fn update_task_fields(
     // never overwritten, so IDs stay stable. `scalar_field_ci` is top-level
     // only, so a nested `metadata.task-id` never counts either.
     let mut effective: Vec<(&str, Option<&str>)> = updates.to_vec();
-    let usable_id =
-        |key: &str| super::parse::scalar_field_ci(&content, key).filter(|v| !v.is_empty());
+    // Owned on-disk key casings we stamp a BLANK line under, kept alive for
+    // set_fields' `&str` refs below.
+    let mut blank_stamp: Vec<(String, &str)> = Vec::new();
     for (key, val) in ensure_absent {
-        if usable_id(key).is_none() {
-            effective.push((key, Some(val)));
+        match super::parse::frontmatter_scalar_ci(&content, key) {
+            // Already has a usable id (any casing) → never overwritten.
+            Some((_, v)) if !v.is_empty() => {}
+            // Present but BLANK (a bare `task-id:` from an Obsidian property
+            // panel / template): stamp it, rewriting the existing line under its
+            // ON-DISK casing so set_fields (which matches case-sensitively)
+            // replaces it — stamping the configured casing would insert a
+            // case-mismatched DUPLICATE that scalar_field_ci's CI read then
+            // shadows, hiding the id forever (Codex, PR #59).
+            Some((on_disk, _)) => blank_stamp.push((on_disk, val)),
+            // Absent → a new line under the configured property name.
+            None => effective.push((key, Some(val))),
         }
     }
+    for (k, v) in &blank_stamp {
+        effective.push((k.as_str(), Some(v)));
+    }
     // The id to report back: the first ensure key's usable value, else the one
-    // we are about to stamp.
-    let ensured = ensure_absent
-        .first()
-        .map(|(key, val)| usable_id(key).unwrap_or_else(|| (*val).to_string()));
+    // we are about to stamp (fresh, for both the absent and blank cases).
+    let ensured = ensure_absent.first().map(|(key, val)| {
+        super::parse::scalar_field_ci(&content, key)
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| (*val).to_string())
+    });
     // Nothing to write (e.g. a move that only needs to stamp, but the id is
     // already present): skip the redundant atomic rewrite, still report the id.
     // update_task always passes a non-empty `updates`, so this only short-
@@ -478,6 +494,48 @@ mod tests {
         assert!(body.contains("task-id: fresh777\n"));
         // The blank line was rewritten in place, not duplicated.
         let id_lines = body.lines().filter(|l| l.starts_with("task-id:")).count();
+        assert_eq!(id_lines, 1);
+    }
+
+    #[test]
+    fn update_task_fields_stamps_a_blank_id_under_its_on_disk_casing() {
+        // Codex PR #59: the blank-id stamp must rewrite the EXISTING line, not
+        // add a second one under the configured casing. `set_fields` matches
+        // keys case-sensitively, so stamping the config's `task-id` onto a file
+        // whose blank line is `Task-ID:` (Obsidian folds key case; a property
+        // panel / template can leave either casing) would INSERT a duplicate —
+        // and `scalar_field_ci`'s case-insensitive read would then return the
+        // first (blank) line, hiding the id forever. The stamp must land on the
+        // on-disk key name.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
+        let content = std::fs::read_to_string(&p).unwrap();
+        let seeded = content.replacen(
+            "created: 2026-07-08\n",
+            "created: 2026-07-08\nTask-ID:\n",
+            1,
+        );
+        std::fs::write(&p, &seeded).unwrap();
+
+        let reported = update_task_fields(
+            &root,
+            &p,
+            &[("status", Some("done"))],
+            &[("task-id", "fresh777")],
+        )
+        .unwrap();
+        // Blank (any casing) → stamped, fresh id reported.
+        assert_eq!(reported.as_deref(), Some("fresh777"));
+        let body = std::fs::read_to_string(&p).unwrap();
+        // Rewritten in place under the ON-DISK casing — no lowercase duplicate.
+        assert!(body.contains("Task-ID: fresh777\n"));
+        assert!(!body.contains("task-id: fresh777\n"));
+        // Exactly one id-ish line, case-insensitively — no conflicting second.
+        let id_lines = body
+            .lines()
+            .filter(|l| l.trim_start().to_ascii_lowercase().starts_with("task-id:"))
+            .count();
         assert_eq!(id_lines, 1);
     }
 
