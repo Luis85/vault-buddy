@@ -48,33 +48,49 @@ impl TaskDto {
     }
 }
 
-/// Resolve a vault id to (vault path, lexically-safe tasks root). Shared by
-/// list/add/toggle so folder resolution lives in one place; the canonical
-/// escape check is applied per-command (skip-on-read, error-on-write) since
-/// it needs the folder to exist.
-fn tasks_root_for(paths: &ServicePaths, id: &str) -> Result<(PathBuf, PathBuf), String> {
+/// Resolve a vault id to (vault path, lexically-safe tasks root, the vault's
+/// config). The config rides along because it is ALREADY loaded here for
+/// `tasks_root()` — callers that need the id/archived fields would otherwise
+/// re-read and re-parse config.json a second time per call (the shell's own
+/// `tasks_root_for` returns it for the same reason). The canonical escape
+/// check is applied per-command via `assert_root_if_exists` (warn-and-degrade
+/// on reads, error on writes) since it needs the folder to exist.
+fn tasks_root_for(
+    paths: &ServicePaths,
+    id: &str,
+) -> Result<(PathBuf, PathBuf, capture_config::VaultCaptureConfig), String> {
     let vault = find_vault(paths, id)?;
     let cfg = capture_config::vault_config(&app_config(paths), id);
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), cfg.tasks_root())?;
-    Ok((PathBuf::from(&vault.path), root))
+    Ok((PathBuf::from(&vault.path), root, cfg))
+}
+
+/// The containment gate every task command applies after `tasks_root_for`:
+/// canonicalize-and-assert only when the folder exists (a merely missing root
+/// degrades quietly downstream — list_tasks returns empty, the writers create
+/// it). One implementation instead of a per-command paste; the read/write
+/// asymmetry stays at the call sites — read commands map an Err to their own
+/// warn + empty/0, write commands propagate it with `?`.
+fn assert_root_if_exists(vault_path: &Path, root: &Path) -> Result<(), String> {
+    if root.exists() {
+        capture_paths::assert_root_inside_vault(vault_path, root)?;
+    }
+    Ok(())
 }
 
 /// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
 /// folder → empty list, never an error (mirrors list_recordings). Never writes.
 pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
-    let Ok((vault_path, root)) = tasks_root_for(paths, id) else {
+    let Ok((vault_path, root, cfg)) = tasks_root_for(paths, id) else {
         return Vec::new();
     };
     // Canonicalize before scanning: a symlinked tasks folder could otherwise
     // enumerate/read frontmatter outside the vault. A merely missing folder
     // degrades quietly (list_tasks returns empty); an escape is warned.
-    if root.exists() {
-        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
-            log::warn!("list_tasks: tasks folder resolves outside the vault: {e}");
-            return Vec::new();
-        }
+    if let Err(e) = assert_root_if_exists(&vault_path, &root) {
+        log::warn!("list_tasks: tasks folder resolves outside the vault: {e}");
+        return Vec::new();
     }
-    let cfg = capture_config::vault_config(&app_config(paths), id);
     // Same chokepoint add_task's generation uses (tasks::id_property_for_
     // generation): off, or a reserved/invalid configured property, both
     // yield None so the property is never read — a hand-edited config
@@ -231,15 +247,13 @@ pub fn set_task_status(
     if !matches!(status, "new" | "done" | "archived") {
         return Err(format!("Unknown task status: {status}"));
     }
-    let (vault_path, root) = tasks_root_for(paths, id)?;
+    let (vault_path, root, _) = tasks_root_for(paths, id)?;
     // Mirror list_tasks/add_task: safe_recording_root is only lexical, so
     // canonicalize and reject a tasks folder that resolves outside the vault
     // before writing — keeps the "assert root inside vault before any write"
     // invariant uniform across all three task commands. (Core also
     // canonicalizes root + path and requires containment.)
-    if root.exists() {
-        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-    }
+    assert_root_if_exists(&vault_path, &root)?;
     tasks::set_task_status(&root, Path::new(task_path), status)?;
     // Display title for the announce hook ("Marked 'Buy milk' done…", per the
     // design spec): the frontmatter `title:` field, same extraction
@@ -267,14 +281,12 @@ pub fn set_task_status(
 /// list_tasks) in a vault, for the vault-row badge. Unknown vault / unsafe or
 /// missing folder / escape → 0, never an error (mirrors list_tasks). Read-only.
 pub fn count_open_tasks(paths: &ServicePaths, id: &str) -> usize {
-    let Ok((vault_path, root)) = tasks_root_for(paths, id) else {
+    let Ok((vault_path, root, _)) = tasks_root_for(paths, id) else {
         return 0;
     };
-    if root.exists() {
-        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
-            log::warn!("count_open_tasks: tasks folder resolves outside the vault: {e}");
-            return 0;
-        }
+    if let Err(e) = assert_root_if_exists(&vault_path, &root) {
+        log::warn!("count_open_tasks: tasks folder resolves outside the vault: {e}");
+        return 0;
     }
     tasks::list_tasks(&root, None)
         .into_iter()

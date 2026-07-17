@@ -1,21 +1,19 @@
 use std::path::Path;
 
-use super::tasks_root_for;
-use crate::services::{app_config, ServicePaths};
-use crate::{capture_config, capture_paths, tasks};
+use super::{assert_root_if_exists, tasks_root_for};
+use crate::services::ServicePaths;
+use crate::{capture_paths, tasks};
 
 /// Read-only enumeration of a vault's list folders (empty ones included, so a
 /// just-created list appears before its first task). Unknown vault / unsafe
 /// or missing folder / escape → empty, never an error (mirrors list_tasks).
 pub fn list_task_lists(paths: &ServicePaths, id: &str) -> Vec<String> {
-    let Ok((vault_path, root)) = tasks_root_for(paths, id) else {
+    let Ok((vault_path, root, _)) = tasks_root_for(paths, id) else {
         return Vec::new();
     };
-    if root.exists() {
-        if let Err(e) = capture_paths::assert_root_inside_vault(&vault_path, &root) {
-            log::warn!("list_task_lists: tasks folder resolves outside the vault: {e}");
-            return Vec::new();
-        }
+    if let Err(e) = assert_root_if_exists(&vault_path, &root) {
+        log::warn!("list_task_lists: tasks folder resolves outside the vault: {e}");
+        return Vec::new();
     }
     tasks::task_lists(&root)
 }
@@ -24,7 +22,7 @@ pub fn list_task_lists(paths: &ServicePaths, id: &str) -> Vec<String> {
 /// validated (single segment, no leading dot) and containment is asserted
 /// before AND after creation. Returns the created list's relative name.
 pub fn create_task_list(paths: &ServicePaths, id: &str, name: &str) -> Result<String, String> {
-    let (vault_path, root) = tasks_root_for(paths, id)?;
+    let (vault_path, root, _) = tasks_root_for(paths, id)?;
     if !vault_path.is_dir() {
         log::warn!(
             "create_task_list: vault folder missing: {}",
@@ -60,10 +58,8 @@ pub fn move_task_to_list(
     task_path: &str,
     list: &str,
 ) -> Result<MovedTask, String> {
-    let (vault_path, root) = tasks_root_for(paths, id)?;
-    if root.exists() {
-        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-    }
+    let (vault_path, root, cfg) = tasks_root_for(paths, id)?;
+    assert_root_if_exists(&vault_path, &root)?;
     let landed = tasks::move_task_to_list(&root, Path::new(task_path), list)?;
     // Stamp a missing ID on the landed file when the vault opts in — a move is
     // a structural edit like a field edit / reorder (only a status toggle is
@@ -73,7 +69,6 @@ pub fn move_task_to_list(
     // failure degrades to a warning rather than failing the move and reverting
     // the UI (audio-first discipline, borrowed from the capture domain). The
     // effective id (freshly stamped or already present) rides back in MovedTask.
-    let cfg = capture_config::vault_config(&app_config(paths), id);
     let mut task_id = None;
     if let Some(property) =
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())
@@ -98,10 +93,8 @@ pub fn rename_task_list(
     from: &str,
     to: &str,
 ) -> Result<String, String> {
-    let (vault_path, root) = tasks_root_for(paths, id)?;
-    if root.exists() {
-        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-    }
+    let (vault_path, root, _) = tasks_root_for(paths, id)?;
+    assert_root_if_exists(&vault_path, &root)?;
     tasks::rename_task_list(&root, from, to)
 }
 
@@ -114,11 +107,8 @@ pub fn delete_task_list(
     id: &str,
     list: &str,
 ) -> Result<tasks::DeleteListOutcome, String> {
-    let (vault_path, root) = tasks_root_for(paths, id)?;
-    if root.exists() {
-        capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-    }
-    let cfg = capture_config::vault_config(&app_config(paths), id);
+    let (vault_path, root, cfg) = tasks_root_for(paths, id)?;
+    assert_root_if_exists(&vault_path, &root)?;
     let id_property =
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
     tasks::delete_task_list(&root, list, id_property)
