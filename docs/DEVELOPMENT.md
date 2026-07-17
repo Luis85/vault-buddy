@@ -447,9 +447,15 @@ ever written into your vaults except recordings and their notes.
   embeds.
 - `transcriptionModel` (`"base"` | `"small"` | `"medium"` | `"turbo"`, default
   `"small"`) — accuracy/speed/size trade-off. Models download to
-  `%APPDATA%\vault-buddy\models`.
+  `%APPDATA%\vault-buddy\models`; Buddy settings → Integrations → the
+  Transcription models card lists every cached artifact with its on-disk
+  size (or an approximate download size when absent) and can delete one to
+  force a re-download — the remedy for a suspect cached model (GAP-14).
 - `transcriptionLanguage` (string or omit, default auto-detect) — e.g.
-  `"es"`; omit to auto-detect per recording.
+  `"es"`; omit to auto-detect per recording. An auto-detect job records what
+  whisper actually detected: the transcript sidecar's `detected-language`
+  frontmatter field and the stats footer's Language row (e.g. `auto
+  (detected: es)`); a pinned language never populates either.
 - `transcriptionVocabulary` (string, optional) — free-text names/acronyms/jargon
   primed into whisper's initial prompt together with the recording's title;
   absent = no priming.

@@ -248,7 +248,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 61 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 63 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -261,6 +261,7 @@ Keep this table in sync when adding/removing commands.
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -798,7 +799,13 @@ user aborting a job says nothing about the network). State is surfaced as `captu
 `transcribeFailed` / `transcribeCancelled` (each carries the `mp3`).
 `whisper-rs` is pinned at 0.16 deliberately — `transcribe/src/engine.rs`
 hand-wires abort/progress callbacks around upstream bugs; treat an upgrade
-as its own tracked change (see docs/DEVELOPMENT.md).
+as its own tracked change (see docs/DEVELOPMENT.md). That upgrade is a
+tracked trigger, not an open backlog item: 0.16.0 is the newest release on
+crates.io (verified 2026-07-16), and chasing a newer commit via a git pin
+isn't an option — `deny.toml`'s `[sources] unknown-git = "deny"` rejects
+any git-sourced dependency outright. Upgrade when 0.17 ships, with the
+hand-wired abort/progress trampoline regression tests already in
+`engine.rs` as the acceptance gate.
 
 **GPU inference (Vulkan, v0.6.1+).** The app-global `transcription.useGpu`
 setting (Buddy settings → Integrations → *Transcription — GPU*, default on) asks
@@ -836,6 +843,41 @@ CPU-only so contributors never need the SDK). Deliberately NO per-transcript
 device row in the stats footer — the VAD stats-row lesson (never record intent
 as engagement); the honesty principle is unchanged. **Sidecar-process architecture
 is the documented future fix for in-process driver faults** (see docs/Gaps.md).
+
+**Detected language.** Landed in the transcription housekeeping increment
+(spec: `docs/superpowers/specs/2026-07-16-transcription-housekeeping-design.md`).
+An auto-language job (`language: None`) now really engages whisper's own
+detection — `5aac08e` fixed wiring that had silently forced every auto job
+onto an English decode (`set_language` was skipped on `None`, so
+whisper.cpp's own default language "en" won by default). `detected_language`
+on `EngineOutput` is `Some` only when the vault's language setting is auto
+AND inference actually ran: the VAD all-silence short-circuit returns
+`None` before whisper runs at all, a pinned language is never asked
+(echoing the pin back as "detected" would be the setting masquerading as an
+observation), and a failed lang-id lookup degrades to `None` like the rest
+of the pipeline's honesty posture — detection is garnish, never a job
+outcome. `transcribe_recording` re-filters on the setting again before
+building `TranscriptMeta`, so an over-eager future `Transcriber` can't
+smuggle a detection into a pinned-language transcript. The sidecar records
+what it detected: a `detected-language` frontmatter line (kebab-case,
+yaml-quoted, emitted only when present) and the stats footer's Language row
+reads `auto (detected: de)`; a pinned-language transcript stays
+byte-identical to before. **Transcription models card.** Buddy settings →
+Integrations (beside `TranscriptionAppSettings`) gained a card listing
+every model artifact (`base`/`small`/`medium`/`turbo`/`vad`) with its
+on-disk size or an approximate download size when absent, and deleting one
+to force a re-download — the user-facing remedy for a suspect cached model
+(GAP-14). `list_transcription_models` is sync; `delete_transcription_model`
+is async — it refuses while any transcription job is active (the running
+job's terminal write may target the model being deleted, and mid-inference
+the mmap is guaranteed live), posts a purge request that wakes the worker
+to drop a matching cached transcriber on its next wake, then
+`spawn_blocking` unlinks the file with a bounded retry (20 × 100 ms, riding
+out that cache-drop race — Windows refuses to unlink a still-mapped file)
+where `NotFound` counts as success ("the path is clear"). The id is
+validated strictly against the artifact list — `ModelTier::from_str`'s
+default-to-Small must never back a delete, or a typo'd id would delete the
+Small model instead of erroring.
 
 The transcript is the second sanctioned vault write — a `<base>.transcript.md`
 sidecar the note embeds, under the same never-clobber discipline as the audio

@@ -237,6 +237,12 @@ GPU toggle off avoids the redownload entirely; named as an accepted rough
 edge in the GPU design spec's risk section
 (`docs/superpowers/specs/2026-07-16-gpu-vulkan-transcription-design.md`).
 
+**Update (transcription housekeeping increment):** the Transcription models
+card (Buddy settings → Integrations) is the user-facing remedy for a
+suspect cached model — delete a cached artifact in-app to force a
+SHA-verified re-download instead of waiting for the load-failure self-heal
+to fire.
+
 ### GAP-15 · Low · `bitrateKbps` wraps via `as u32` and has no range validation
 `src-tauri/core/src/capture_config.rs:158-162`.
 A hand-edited `4294967424` truncates to `128`; `0` or `999999999` pass
