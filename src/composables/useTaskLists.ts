@@ -30,6 +30,24 @@ function withListArchived(cfg: TasksConfig | undefined, list: string) {
   };
 }
 
+// Rewrite the list preferences after a rename (`to` = the landed name) or a
+// delete (`to` = null) so the default / order / archived set never point at a
+// stale name — otherwise an untouched add would reapply the old default and
+// recreate the old folder (Codex, PR #59). Pure so syncListPrefs stays thin.
+function remapListPrefs(cfg: TasksConfig | undefined, from: string, to: string | null) {
+  const { defaultList = null, listOrder = [], archivedLists = [] } = (cfg ?? {}) as Partial<TasksConfig>;
+  const low = from.toLowerCase();
+  const remap = (arr: string[]) =>
+    to === null
+      ? arr.filter((l) => l.toLowerCase() !== low)
+      : arr.map((l) => (l.toLowerCase() === low ? to : l));
+  return {
+    defaultList: defaultList && defaultList.toLowerCase() === low ? to : defaultList,
+    listOrder: remap(listOrder),
+    archivedLists: remap(archivedLists),
+  };
+}
+
 export function useTaskLists(vaultId: string | null) {
   const notifications = useNotificationsStore();
   const vaultLists = ref(new Map<string, string[]>());
@@ -160,6 +178,23 @@ export function useTaskLists(vaultId: string | null) {
   // these all key off the view's own `vaultId`). Each toasts + logs on failure
   // and returns a success signal the container uses to close the popover and
   // decide whether to reload tasks.
+  // Persist + cache the remapped list prefs after a rename/delete so a stale
+  // default/order/archived entry can't survive (Codex, PR #59). Only when the
+  // config is cached — with none loaded there's nothing to remap and writing
+  // computed-empty prefs would clobber the real (unread) settings.
+  async function syncListPrefs(id: string, from: string, to: string | null) {
+    const cfg = vaultConfigs.value.get(id);
+    if (!cfg) return;
+    const next = remapListPrefs(cfg, from, to);
+    try {
+      await invoke("set_task_lists_config", { id, ...next });
+      vaultConfigs.value.set(id, { ...cfg, ...next });
+      vaultConfigs.value = new Map(vaultConfigs.value);
+    } catch (e) {
+      logWarning(`sync list prefs after lifecycle change failed: ${String(e)}`);
+    }
+  }
+
   async function renameList(from: string, to: string): Promise<string | null> {
     if (vaultId === null) return null;
     const id = vaultId;
@@ -169,6 +204,7 @@ export function useTaskLists(vaultId: string | null) {
       // drops and the landed one (which may carry a ` (N)` collision suffix)
       // appears.
       await loadVaultLists(id);
+      await syncListPrefs(id, from, landed);
       return landed;
     } catch (e) {
       notifications.error(String(e));
@@ -183,6 +219,7 @@ export function useTaskLists(vaultId: string | null) {
     try {
       await invoke("delete_task_list", { id, list });
       await loadVaultLists(id);
+      await syncListPrefs(id, list, null);
       return true;
     } catch (e) {
       notifications.error(String(e));

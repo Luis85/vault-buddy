@@ -1253,6 +1253,55 @@ describe("Tasks", () => {
     expect(listCalls).toBeGreaterThan(1);
   });
 
+  it("rewrites a referenced default + order when a list is renamed (Codex)", async () => {
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      rename_task_list: () => "Later",
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    // The stale "Inbox" default + order entry are rewritten to the landed name,
+    // so an untouched add can't recreate the old folder.
+    expect(save?.args).toMatchObject({ defaultList: "Later", listOrder: ["Later"] });
+  });
+
+  it("clears the default when the default list is deleted (Codex)", async () => {
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      delete_task_list: () => ({ moved: 0, folderRemoved: true }),
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    expect(save?.args).toMatchObject({ defaultList: null, listOrder: [] });
+  });
+
+  it("skips the prefs sync on rename when the config never cached", async () => {
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => null, // uncached → syncListPrefs has nothing to remap
+      rename_task_list: () => "Later",
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "rename_task_list")).toBeDefined();
+    // No cached config → no remap write (would otherwise clobber unread settings).
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
+  });
+
   it("aggregate mode merges every vault's tasks in global sort order", async () => {
     const { wrapper, calls } = mountAggregate();
     await flushPromises();
