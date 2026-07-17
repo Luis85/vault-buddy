@@ -17,7 +17,7 @@ mod vault;
 pub use recordings::{list_recordings, RecordingDto};
 pub use tasks::{
     add_task, count_open_tasks, create_task_list, delete_task_list, list_task_lists, list_tasks,
-    move_task_to_list, rename_task_list, set_task_status, TaskDto,
+    move_task_to_list, rename_task_list, set_task_status, MovedTask, TaskDto,
 };
 pub use vault::{
     find_vault, list_vaults, list_vaults_with, open_daily_note, open_vault, DAILY_NOTE_CREATE_GATED,

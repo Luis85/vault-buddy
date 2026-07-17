@@ -220,11 +220,17 @@ pub async fn create_task_list(id: String, name: String) -> Result<String, String
 }
 
 /// Move a task file into another list's folder; returns the landed absolute
-/// path (which may carry a collision suffix the UI must adopt).
+/// path (which may carry a collision suffix the UI must adopt) and the task's
+/// current id (freshly stamped when the vault opts in and it lacked one), so
+/// the drag / editor-move callers reveal copy-ID without a reload.
 ///
 /// ASYNC (GAP-22 class): a vault file move (fsync-class I/O).
 #[tauri::command]
-pub async fn move_task_to_list(id: String, path: String, list: String) -> Result<String, String> {
+pub async fn move_task_to_list(
+    id: String,
+    path: String,
+    list: String,
+) -> Result<services::MovedTask, String> {
     tauri::async_runtime::spawn_blocking(move || {
         services::move_task_to_list(&ServicePaths::real(), &id, &path, &list)
     })

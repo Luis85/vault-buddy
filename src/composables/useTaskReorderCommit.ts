@@ -71,8 +71,17 @@ export function useTaskReorderCommit(opts: {
     busy.value.add(prevPath);
     reordering.value = true;
     try {
-      const landed = await invoke<string>("move_task_to_list", { id: task.vaultId, path: prevPath, list });
-      task.path = landed;
+      // move_task_to_list returns the landed path (possibly ` (N)`-suffixed)
+      // AND the task's id (freshly stamped when the vault opts in and it lacked
+      // one) — adopt both so a moved legacy task reveals copy-id without a
+      // reload, like the reorder/edit paths (Codex, PR #59).
+      const moved = await invoke<{ path: string; id: string | null }>("move_task_to_list", {
+        id: task.vaultId,
+        path: prevPath,
+        list,
+      });
+      task.path = moved.path;
+      reflectStampedId(task, moved.id);
       sortInPlace();
     } catch (e) {
       task.list = prevList;

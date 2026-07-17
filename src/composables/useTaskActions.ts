@@ -143,13 +143,16 @@ export function useTaskActions(opts: {
   // half-reverted) — the toast names exactly what failed.
   async function moveToList(task: AggTask, targetList: string, fieldsSaved: boolean) {
     try {
-      const landed = await invoke<string>("move_task_to_list", {
+      const moved = await invoke<{ path: string; id: string | null }>("move_task_to_list", {
         id: task.vaultId,
         path: task.path,
         list: targetList,
       });
-      task.path = landed;
+      task.path = moved.path;
       task.list = targetList;
+      // Reflect a freshly-stamped id (a list-only editor save can be the first
+      // edit on a legacy task) so copy-id shows without a reload (Codex, PR #59).
+      if (moved.id) task.id = moved.id;
       sortInPlace();
     } catch (e) {
       const prefix = fieldsSaved ? "Saved fields, but couldn't move" : "Couldn't move";

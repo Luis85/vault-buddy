@@ -289,21 +289,14 @@ breaking the existing `Result<DeleteListOutcome, String>` contract today's
 callers depend on.
 
 ### GAP-65 · Low · Tasks-polish increment residuals (list lifecycle / copy-ID / drag-to-move, accepted)
-- **A move stamps a Task ID on disk but the row reflects it only after a
-  reload.** `update_task` returns the current/just-stamped ID so the inline
-  editor reveals its copy-ID affordance immediately (Codex, PR #59), but a
-  **list-only editor save** and a **drag-to-move** go through
-  `move_task_to_list`, which stamps the ID on the landed file yet keeps its
-  path-only `String` return. So on an ID-enabled vault, moving a legacy Task
-  that lacked an ID backfills the ID correctly on disk but the row's `id` stays
-  null (copy-ID hidden) until the next `list_tasks` reload. **No data loss**
-  (the ID is written, stable, and correct); only the in-session UI reflection
-  lags. Deliberately not fixed to avoid changing `move_task_to_list`'s IPC
-  contract (a richer `{path, id}` return) and rippling through the drag and
-  editor-move call sites + their tests; the same immediacy class as the
-  `update_task` fix, just on the move path. **Fix, if pursued:** return
-  `{path, id}` from `move_task_to_list` and have `moveToList` /
-  `Tasks.vue moveTaskToList` set `task.id` alongside the landed path.
+- ~~**A move stamps a Task ID on disk but the row reflects it only after a
+  reload.**~~ — FIXED in the polish pass (Codex, PR #59): `move_task_to_list`
+  now returns `{path, id}` (the effective id rides back from the same
+  `update_task_fields` stamp write), and the drag (`useTaskReorderCommit`) and
+  list-only editor-save (`useTaskActions.moveToList`) callers set `task.id`
+  alongside the landed path — so a moved legacy Task reveals copy-ID
+  immediately, matching the `update_task` edit/reorder paths. Every id-stamping
+  write path now returns its effective id.
 - **The two oversized-file splits flagged here are now done** (polish pass,
   both pure refactors, behavior-preserving): `services.rs` (1229 LOC) was
   split into a per-domain `services/` module — `vault` (registry/open/daily-

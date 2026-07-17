@@ -38,17 +38,28 @@ pub fn create_task_list(paths: &ServicePaths, id: &str, name: &str) -> Result<St
     tasks::create_task_list(&root, name)
 }
 
+/// The result of a task move: the landed absolute path (which may carry a
+/// ` (N)` collision suffix the caller must adopt) plus the task's id when the
+/// vault opts in — the freshly-backfilled value or the existing one, `None`
+/// when ids are off. The id lets the drag / editor-move callers reflect a
+/// just-stamped id without a reload, the same reason `update_task` returns it.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedTask {
+    pub path: String,
+    pub id: Option<String>,
+}
+
 /// Move a task file into another list's folder (the tasks domain's file
 /// move). The core layer re-validates source containment and lands on
 /// `rename_noreplace` + suffix retry; this layer adds the vault-level root
-/// assert every task write shares. Returns the landed absolute path (which
-/// may carry a collision suffix).
+/// assert every task write shares.
 pub fn move_task_to_list(
     paths: &ServicePaths,
     id: &str,
     task_path: &str,
     list: &str,
-) -> Result<String, String> {
+) -> Result<MovedTask, String> {
     let (vault_path, root) = tasks_root_for(paths, id)?;
     if root.exists() {
         capture_paths::assert_root_inside_vault(&vault_path, &root)?;
@@ -60,17 +71,23 @@ pub fn move_task_to_list(
     // runs on the LANDED path, so a still-QUEUED transcription/rename can't be
     // affected. Best-effort: the move already mutated the vault, so a stamp
     // failure degrades to a warning rather than failing the move and reverting
-    // the UI (audio-first discipline, borrowed from the capture domain).
+    // the UI (audio-first discipline, borrowed from the capture domain). The
+    // effective id (freshly stamped or already present) rides back in MovedTask.
     let cfg = capture_config::vault_config(&app_config(paths), id);
+    let mut task_id = None;
     if let Some(property) =
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())
     {
         let generated = tasks::new_task_id();
-        if let Err(e) = tasks::update_task_fields(&root, &landed, &[], &[(property, &generated)]) {
-            log::warn!("move_task_to_list: could not stamp task id: {e}");
+        match tasks::update_task_fields(&root, &landed, &[], &[(property, &generated)]) {
+            Ok(stamped) => task_id = stamped,
+            Err(e) => log::warn!("move_task_to_list: could not stamp task id: {e}"),
         }
     }
-    Ok(landed.to_string_lossy().into_owned())
+    Ok(MovedTask {
+        path: landed.to_string_lossy().into_owned(),
+        id: task_id,
+    })
 }
 
 /// Rename a list folder (see `tasks::rename_task_list`). Adds the vault-level
@@ -134,11 +151,11 @@ mod tests {
             Some(""),
         )
         .unwrap();
-        let landed = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
-        assert!(std::path::Path::new(&landed).exists());
+        let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
+        assert!(std::path::Path::new(&moved.path).exists());
         let listed = list_tasks(&paths, "deadbeef01234567");
         assert_eq!(listed[0].list, "Inbox");
-        assert!(move_task_to_list(&paths, "unknown", &landed, "Inbox").is_err());
+        assert!(move_task_to_list(&paths, "unknown", &moved.path, "Inbox").is_err());
     }
 
     #[test]
@@ -166,18 +183,17 @@ mod tests {
             r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "uid" } } }"#,
         )
         .unwrap();
-        let landed = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
-        let body = std::fs::read_to_string(&landed).unwrap();
-        let id = body
-            .lines()
-            .find(|l| l.starts_with("uid: "))
-            .expect("id stamped on move")
-            .trim_start_matches("uid: ");
+        let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
+        // The move RETURNS the freshly-stamped id (so the UI can reflect it)...
+        let id = moved.id.clone().expect("id stamped on move");
         assert_eq!(id.len(), 8);
-        // list_tasks now surfaces the backfilled id for the moved task.
+        // ...and it's the id that actually landed on disk and that list_tasks reads.
+        assert!(std::fs::read_to_string(&moved.path)
+            .unwrap()
+            .contains(&format!("uid: {id}\n")));
         assert_eq!(
             list_tasks(&paths, "deadbeef01234567")[0].id.as_deref(),
-            Some(id)
+            Some(id.as_str())
         );
     }
 
@@ -197,8 +213,9 @@ mod tests {
             Some(""),
         )
         .unwrap();
-        let landed = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
-        assert!(!std::fs::read_to_string(&landed)
+        let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
+        assert!(moved.id.is_none());
+        assert!(!std::fs::read_to_string(&moved.path)
             .unwrap()
             .contains("task-id"));
     }

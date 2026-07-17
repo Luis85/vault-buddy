@@ -6,6 +6,7 @@ use crate::{capture_config, capture_note, capture_paths, tasks};
 mod lists;
 pub use lists::{
     create_task_list, delete_task_list, list_task_lists, move_task_to_list, rename_task_list,
+    MovedTask,
 };
 
 #[derive(Clone, serde::Serialize)]

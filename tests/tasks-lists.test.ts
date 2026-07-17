@@ -419,7 +419,7 @@ describe("Tasks — lists & sorting", () => {
       const { wrapper, calls } = mountView({
         list_tasks: inList,
         list_task_lists: () => ["Inbox"],
-        move_task_to_list: () => "C:/v/Tasks/Inbox/e (2).md", // collision suffix
+        move_task_to_list: () => ({ path: "C:/v/Tasks/Inbox/e (2).md", id: null }), // collision suffix
       });
       await flushPromises();
       await openEditorAndPick(wrapper, "Inbox");
@@ -504,7 +504,7 @@ describe("Tasks — lists & sorting", () => {
         list_tasks: inOldList,
         list_task_lists: () => ["Old", "Keep"],
         get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] }),
-        move_task_to_list: () => "C:/v/Tasks/Keep/e.md",
+        move_task_to_list: () => ({ path: "C:/v/Tasks/Keep/e.md", id: null }),
       });
       await flushPromises();
       // The Lists grouping (the default view) hides both the section and the row.

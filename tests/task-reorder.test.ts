@@ -371,7 +371,7 @@ describe("manual reordering", () => {
 
   it("drags a task onto another list's section to move it (Task 11)", async () => {
     const { wrapper, calls } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
-      move_task_to_list: () => "C:/v/Tasks/B/x.md",
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),
     });
     await flushPromises();
     await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
@@ -395,9 +395,26 @@ describe("manual reordering", () => {
     expect(moved?.path).toBe("C:/v/Tasks/B/x.md");
   });
 
+  it("reflects an id the cross-list move stamps so copy-id shows without reload (Codex)", async () => {
+    const { wrapper } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: "movedid9" }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper);
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 }));
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; id: string | null }[] }).tasks;
+    expect(rows.find((t) => t.title === "x")?.id).toBe("movedid9");
+  });
+
   it("highlights the target section during a cross-list drag and drops the origin's drop line", async () => {
     const { wrapper } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
-      move_task_to_list: () => "C:/v/Tasks/B/x.md",
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),
     });
     await flushPromises();
     await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
@@ -425,7 +442,7 @@ describe("manual reordering", () => {
     // (the pointer is momentarily between sections) so a brief gap on the way
     // to release doesn't silently drop the move target.
     const { wrapper, calls } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
-      move_task_to_list: () => "C:/v/Tasks/B/x.md",
+      move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),
     });
     await flushPromises();
     await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
@@ -443,7 +460,7 @@ describe("manual reordering", () => {
 
   it("drags a task out to the No list section (list becomes empty)", async () => {
     const { wrapper, calls } = mountManual([inList("x", "A", 1024), task("root", 2048)], {
-      move_task_to_list: () => "C:/v/Tasks/x.md",
+      move_task_to_list: () => ({ path: "C:/v/Tasks/x.md", id: null }),
     });
     await flushPromises();
     await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
