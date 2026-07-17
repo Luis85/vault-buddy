@@ -7,6 +7,7 @@ import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
 import Tasks from "../src/components/Tasks.vue";
 import { useCaptureStore } from "../src/stores/capture";
+import { useDocumentImportsStore } from "../src/stores/documentImports";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useSettingsStatusStore } from "../src/stores/settingsStatus";
 import { useVaultsStore } from "../src/stores/vaults";
@@ -652,5 +653,28 @@ describe("ActionPanel save indicator", () => {
     await flushPromises();
     expect(status.state).toBe("idle");
     void wrapper;
+  });
+
+  it("shows the import working card on the list view while a conversion runs", async () => {
+    // Backing out of an intake view (or the panel reopening on the list
+    // default) must not lose the running import's working state — the same
+    // list-view visibility RecordingBar/TranscriptionSummary give their
+    // domains' background work.
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="import-progress"]').exists()).toBe(false);
+    useDocumentImportsStore().active = {
+      fileName: "Report.docx",
+      sourcePath: "C:/x/Report.docx",
+      vaultId: "d4e5f6",
+      vaultName: "Personal",
+      startedAtMs: Date.now(),
+    };
+    await flushPromises();
+    expect(wrapper.get('[data-testid="import-progress"]').text()).toContain(
+      "Report.docx",
+    );
   });
 });

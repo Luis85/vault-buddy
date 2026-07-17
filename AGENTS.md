@@ -746,7 +746,29 @@ because a review found the failure it prevents:
   missing/too old) routes to the focused `documentImport` view
   (`store.openDocumentImport()`), **not** the buried Buddy-settings card. A
   successful conversion raises a success toast whose "Open in Obsidian" action
-  calls `open_imported_document`. The `vaults` store carries the `importPicker`
+  calls `open_imported_document`. The **conversion lifecycle lives in the
+  shared `documentImports` store** (`src/stores/documentImports.ts`):
+  `convert()` sets the single `active` slot (the Rust `ImportLock` allows one
+  conversion process-wide; a concurrent second call rejects with the lock's
+  message WITHOUT touching the first run's slot — only the owning run's
+  `finally` may clear it), always clears in `finally`, and rethrows raw IPC
+  errors so each surface keeps its own toast/navigation. The self-contained
+  `ImportProgress.vue` card renders that state everywhere it matters — Pandoc
+  reports no incremental progress, so the card is honestly indeterminate
+  (spinner + elapsed tick + sweeping activity bar with a
+  `prefers-reduced-motion` static fallback; the ticking timer sits OUTSIDE
+  the `role="status"` live region so screen readers aren't chattered every
+  second). While converting, `RecordMode` swaps the Import button for the
+  card (a grayed-out button both read as inert and was a dead-end click into
+  the lock error — also for a conversion another surface started),
+  `ImportVaultPicker`'s `viewState` gains a top-priority `converting` branch
+  replacing the vault list with the card (keeping the "+N more queued" line,
+  counted against the active import's `sourcePath` so a RecordMode-started
+  conversion doesn't hide that the whole queue still waits), and
+  `ActionPanel` shows the card on the list view beside
+  RecordingBar/TranscriptionSummary so backing out — or a panel reopen
+  landing on the list default — never loses the working state.
+  The `vaults` store carries the `importPicker`
   view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
   **before** the list default so a drag-dropped path survives `panel-shown`.
   `tauri-plugin-dialog` (Cargo + `dialog:allow-open` capability) backs both
@@ -1274,7 +1296,10 @@ character/animation/message duration, persisted to localStorage), `capture`
 (recording state mirrored from Rust: `paused`, `pausedTotalMs`,
 `pausedSinceMs`, `level`, `vaultId`, `lastSaved`, plus the transcription
 job map and active/queued state driven by the `capture:transcribe*` events),
-and `notifications` (the toast queue rendered by `NotificationHost`).
+`documentImports` (the single in-flight document conversion — owns the
+`convert_document` lifecycle, rendered by `ImportProgress` on the intake
+views and the list view; see the document-import domain), and
+`notifications` (the toast queue rendered by `NotificationHost`).
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture

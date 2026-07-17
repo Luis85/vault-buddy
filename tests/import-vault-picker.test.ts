@@ -203,6 +203,40 @@ describe("ImportVaultPicker", () => {
     expect(wrapper.find('[data-testid="import-picker-gate-hint"]').exists()).toBe(true);
   });
 
+  it("swaps the vault list for the working card while converting, keeping the queue visible", async () => {
+    // The pick decision is made — a grayed-out list under a one-line hint was
+    // the "working state not clear enough" complaint. The card replaces it.
+    let resolveConvert: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document")
+        return new Promise((r) => {
+          resolveConvert = r;
+        });
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.enqueueImports(["C:/x/Report.docx", "C:/x/Second.docx"]);
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+
+    const card = wrapper.get('[data-testid="import-progress"]');
+    expect(card.text()).toContain("Report.docx");
+    expect(card.text()).toContain("Personal");
+    expect(wrapper.find('[data-testid="import-picker-vault"]').exists()).toBe(false);
+    // The un-picked tail is still communicated while the head converts.
+    expect(wrapper.get('[data-testid="import-picker-queued"]').text()).toContain("1");
+
+    resolveConvert("Documents/2026/07/note.md");
+    await flushPromises();
+    // Conversion done: the card clears and the list returns for the next doc.
+    expect(wrapper.find('[data-testid="import-progress"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Second.docx");
+    expect(wrapper.findAll('[data-testid="import-picker-vault"]')).toHaveLength(2);
+  });
+
   it("processes a queue of dropped documents one at a time (GAP-55)", async () => {
     const convertSources: string[] = [];
     mockIPC((cmd, args) => {
