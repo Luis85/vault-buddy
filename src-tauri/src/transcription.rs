@@ -78,6 +78,12 @@ struct TranscriptionQueue {
     pending: VecDeque<TranscriptionJob>,
     /// The job the worker is presently on; None between jobs and at idle.
     active: Option<ActiveJob>,
+    /// A one-shot request (artifact id) for the worker to drop its cached
+    /// transcriber before the delete command unlinks the model file —
+    /// whisper.cpp mmaps the model, and Windows refuses to delete a mapped
+    /// file, so an idle worker's cache would otherwise block deletion
+    /// forever. Latest-wins on overwrite (see the test).
+    pending_purge: Option<String>,
 }
 
 /// Outcome of an enqueue attempt, so `enqueue_transcription` knows whether to
@@ -227,6 +233,18 @@ impl TranscriptionQueue {
             CancelOutcome::NotFound
         }
     }
+
+    fn request_purge(&mut self, id: &str) {
+        self.pending_purge = Some(id.to_string());
+    }
+    fn take_purge(&mut self) -> Option<String> {
+        self.pending_purge.take()
+    }
+    /// Whether the worker is presently on a job — the delete command's
+    /// refusal gate (see model_commands.rs).
+    fn any_active(&self) -> bool {
+        self.active.is_some()
+    }
 }
 
 /// Background transcription queue. One worker (see `run_transcription`)
@@ -290,6 +308,28 @@ pub(crate) fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
         }
         Enqueued::Duplicate => {}
     }
+}
+
+/// Post a one-shot cache-purge request and wake the worker — the delete
+/// command's first half (see model_commands.rs for the second).
+// consumed by model_commands.rs (H5)
+#[allow(dead_code)]
+pub(crate) fn request_model_purge(app: &AppHandle, id: &str) {
+    let state = app.state::<TranscriptionState>();
+    let mut guard = lock_ignoring_poison(&state.inner);
+    guard.request_purge(id);
+    state.cv.notify_all();
+}
+
+/// Whether ANY transcription job is currently in flight — the delete
+/// command refuses while one is (its terminal write may target the model
+/// being deleted, and mid-inference the mmap is guaranteed live).
+// consumed by model_commands.rs (H5)
+#[allow(dead_code)]
+pub(crate) fn is_any_transcription_active(app: &AppHandle) -> bool {
+    let state = app.state::<TranscriptionState>();
+    let guard = lock_ignoring_poison(&state.inner);
+    guard.any_active()
 }
 
 /// True when `mp3` is the transcription job currently running — the shell's
@@ -808,15 +848,33 @@ pub fn run_transcription(app: &AppHandle) {
                 // below may leave it queued, and popping before that gate would
                 // drop the job (or a force upgrade that lands between the peek
                 // and the pop). We claim it only once we've decided to run it.
-                {
+                let purge = {
                     let state = app.state::<TranscriptionState>();
                     let mut guard = lock_ignoring_poison(&state.inner);
-                    while guard.pending.is_empty() {
+                    while guard.pending.is_empty() && guard.pending_purge.is_none() {
                         // The Condvar guard is poisonable too — recover it the
                         // same way `lock_ignoring_poison` recovers the mutex, so
                         // a panic elsewhere can't wedge the worker permanently on
                         // a poisoned wait.
                         guard = state.cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+                    }
+                    guard.take_purge()
+                };
+                // Drop the cached transcriber BEFORE any delete attempt can
+                // race the mmap (the requesting command retries the unlink
+                // while we get here). "vad" is accepted as a no-op for
+                // symmetry — the worker never caches the silero model.
+                if let Some(id) = purge {
+                    if loaded.as_ref().map(|(t, _, _)| t.as_str()) == Some(id.as_str()) {
+                        log::info!("transcribe: dropping cached {id} model for deletion");
+                        loaded = None;
+                    }
+                    // A purge with no pending work: loop back to the wait
+                    // rather than falling through to the recording gate.
+                    let state = app.state::<TranscriptionState>();
+                    let guard = lock_ignoring_poison(&state.inner);
+                    if guard.pending.is_empty() {
+                        continue;
                     }
                 }
                 // Never contend with a live recording for CPU — re-check soon.
@@ -1350,5 +1408,31 @@ mod tests {
             true
         ));
         assert!(needs_reload(None, ModelTier::Small, true));
+    }
+
+    #[test]
+    fn purge_request_round_trips_and_is_one_shot() {
+        let mut q = TranscriptionQueue::default();
+        assert_eq!(q.take_purge(), None);
+        q.request_purge("small");
+        assert_eq!(q.take_purge(), Some("small".to_string()));
+        assert_eq!(q.take_purge(), None, "one-shot: taken means gone");
+        // A second request before the worker wakes overwrites — deleting
+        // two models back-to-back must not strand the first request as a
+        // stale drop of the wrong tier later.
+        q.request_purge("base");
+        q.request_purge("turbo");
+        assert_eq!(q.take_purge(), Some("turbo".to_string()));
+    }
+
+    #[test]
+    fn any_active_reflects_the_active_slot() {
+        // The delete command's refusal gate, at the queue-logic level:
+        // deleting a model out from under a running job would race its
+        // guaranteed-live mmap (and possibly its terminal write's tier).
+        let mut q = TranscriptionQueue::default();
+        assert!(!q.any_active());
+        q.active = Some(active_job("X")); // existing test helper
+        assert!(q.any_active());
     }
 }
