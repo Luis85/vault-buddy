@@ -312,8 +312,6 @@ pub(crate) fn enqueue_transcription(app: &AppHandle, job: TranscriptionJob) {
 
 /// Post a one-shot cache-purge request and wake the worker — the delete
 /// command's first half (see model_commands.rs for the second).
-// consumed by model_commands.rs (H5)
-#[allow(dead_code)]
 pub(crate) fn request_model_purge(app: &AppHandle, id: &str) {
     let state = app.state::<TranscriptionState>();
     let mut guard = lock_ignoring_poison(&state.inner);
@@ -324,8 +322,6 @@ pub(crate) fn request_model_purge(app: &AppHandle, id: &str) {
 /// Whether ANY transcription job is currently in flight — the delete
 /// command refuses while one is (its terminal write may target the model
 /// being deleted, and mid-inference the mmap is guaranteed live).
-// consumed by model_commands.rs (H5)
-#[allow(dead_code)]
 pub(crate) fn is_any_transcription_active(app: &AppHandle) -> bool {
     let state = app.state::<TranscriptionState>();
     let guard = lock_ignoring_poison(&state.inner);
