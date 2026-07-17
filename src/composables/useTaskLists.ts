@@ -4,7 +4,7 @@ import { computed, ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TasksConfig } from "../types";
-import { orderLists } from "../utils/taskSections";
+import { orderLists, remapListRef } from "../utils/taskSections";
 
 // The Tasks view's lists state: a List is a folder under the vault's tasks
 // root; enumeration is fetched per vault (fan-out in aggregate mode,
@@ -44,25 +44,28 @@ function withListArchived(cfg: TasksConfig | undefined, list: string) {
 // Pure so syncListPrefs stays thin.
 function remapListPrefs(cfg: TasksConfig | undefined, from: string, to: string | null) {
   const { defaultList = null, listOrder = [], archivedLists = [] } = (cfg ?? {}) as Partial<TasksConfig>;
-  const low = from.toLowerCase();
-  const prefix = `${low}/`;
-  // Map one entry: the exact list → `to` (renamed) or dropped (deleted); a
-  // descendant → rewritten under `to` on a RENAME only, else unchanged.
-  const one = (l: string): string | null => {
-    const ll = l.toLowerCase();
-    if (ll === low) return to;
-    if (to !== null && ll.startsWith(prefix)) return to + l.slice(from.length);
-    return l;
-  };
-  const remap = (arr: string[]) => arr.map(one).filter((l): l is string => l !== null);
+  // `remapListRef` (shared with the add composer's touched pick) is the exact/
+  // descendant/unchanged mapping: exact → `to` (renamed) or null (deleted); a
+  // descendant → rewritten under `to` on a rename only, else unchanged.
+  const remap = (arr: string[]) =>
+    arr.map((l) => remapListRef(l, from, to)).filter((l): l is string => l !== null);
   return {
-    defaultList: defaultList === null ? null : one(defaultList),
+    defaultList: defaultList === null ? null : remapListRef(defaultList, from, to),
     listOrder: remap(listOrder),
     archivedLists: remap(archivedLists),
   };
 }
 
-export function useTaskLists(vaultId: string | null) {
+// `onListRemap(from, to)` lets the container keep OTHER list references in sync
+// with a lifecycle change the way `syncListPrefs` keeps the persisted prefs in
+// sync — today the add composer's touched pick, so renaming/archiving/deleting
+// the list it points at can't make the next quick-add recreate a renamed folder
+// or land in a hidden/gone list. `to` is the landed name on a rename, or null
+// on an archive or a delete that actually removed the folder.
+export function useTaskLists(
+  vaultId: string | null,
+  onListRemap?: (from: string, to: string | null) => void,
+) {
   const notifications = useNotificationsStore();
   const vaultLists = ref(new Map<string, string[]>());
   const vaultConfigs = ref(new Map<string, TasksConfig>());
@@ -219,6 +222,7 @@ export function useTaskLists(vaultId: string | null) {
       // appears.
       await loadVaultLists(id);
       await syncListPrefs(id, from, landed);
+      onListRemap?.(from, landed);
       return landed;
     } catch (e) {
       notifications.error(String(e));
@@ -239,7 +243,13 @@ export function useTaskLists(vaultId: string | null) {
       // strand it — and its descendants were never removed either (Codex, PR
       // #59 re-review). A removed folder was empty, so there are no descendant
       // prefs to worry about; dropping the exact entry is complete.
-      if (outcome?.folderRemoved) await syncListPrefs(id, list, null);
+      if (outcome?.folderRemoved) {
+        await syncListPrefs(id, list, null);
+        // Only a REMOVED folder invalidates a pick of it; a kept folder (still
+        // holding sub-lists/foreign files) is a valid target, so the composer
+        // keeps pointing at it.
+        onListRemap?.(list, null);
+      }
       return true;
     } catch (e) {
       notifications.error(String(e));
@@ -261,6 +271,10 @@ export function useTaskLists(vaultId: string | null) {
         vaultConfigs.value.set(id, { ...cfg, ...next });
         vaultConfigs.value = new Map(vaultConfigs.value);
       }
+      // Archiving hides the list from every picker, so a composer pointing at
+      // it must fall back to the default (else the next add lands in a hidden
+      // list). Descendants aren't archived, so only the exact pick clears.
+      onListRemap?.(list, null);
       return true;
     } catch (e) {
       notifications.error(String(e));

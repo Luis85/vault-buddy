@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AggTask } from "../src/types";
-import { type Bucket, crossListDropTargetKey, dateBuckets, dropTargetList, listSections, tagSections } from "../src/utils/taskSections";
+import { type Bucket, crossListDropTargetKey, dateBuckets, dropTargetList, listSections, remapListRef, tagSections } from "../src/utils/taskSections";
 
 const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   path: `C:/v/Tasks/${title.replace(/\s+/g, "-")}.md`,
@@ -136,5 +136,27 @@ describe("crossListDropTargetKey (drag target highlight)", () => {
   it("returns null outside Lists grouping (moves only happen under Lists)", () => {
     expect(crossListDropTargetKey(drag("list:a", "list:b"), "dates", buckets)).toBeNull();
     expect(crossListDropTargetKey(drag("list:a", "list:b"), "tags", buckets)).toBeNull();
+  });
+});
+
+describe("remapListRef (lifecycle reference reconcile)", () => {
+  it("rewrites the exact list under the landed name on a rename (case-insensitive)", () => {
+    expect(remapListRef("Inbox", "Inbox", "Later")).toBe("Later");
+    expect(remapListRef("inbox", "Inbox", "Later")).toBe("Later"); // case-folded match
+  });
+  it("prefix-rewrites descendants on a rename (a rename moves the subtree)", () => {
+    expect(remapListRef("Work/Q3", "Work", "Projects")).toBe("Projects/Q3");
+    expect(remapListRef("work/q3/deep", "Work", "Projects")).toBe("Projects/q3/deep");
+  });
+  it("drops the exact list on an archive/delete (to === null)", () => {
+    expect(remapListRef("Inbox", "Inbox", null)).toBeNull();
+  });
+  it("leaves descendants UNCHANGED on an archive/delete (neither removes children)", () => {
+    // A delete never removes sub-lists, so a descendant reference must survive.
+    expect(remapListRef("Work/Q3", "Work", null)).toBe("Work/Q3");
+  });
+  it("leaves an unrelated list untouched", () => {
+    expect(remapListRef("Someday", "Inbox", "Later")).toBe("Someday");
+    expect(remapListRef("Inboxes", "Inbox", "Later")).toBe("Inboxes"); // not a path segment
   });
 });

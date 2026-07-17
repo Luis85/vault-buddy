@@ -1362,6 +1362,98 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
   });
 
+  // Pick a list in the add composer (open options → open the picker → click the
+  // option). Shared by the composer-pick remap regressions below.
+  async function pickComposerList(wrapper: ReturnType<typeof mountLists>["wrapper"], name: string) {
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    await wrapper.get('[data-testid="task-add-list"]').trigger("click");
+    await flushPromises();
+    (document.body.querySelector(`[data-testid="task-add-list-option-${name}"]`) as HTMLElement).click();
+    await flushPromises();
+  }
+
+  it("remaps the composer's picked list when that list is renamed (Codex PR #59)", async () => {
+    // The persisted prefs already follow a rename; the composer's OWN touched
+    // pick must too. Otherwise the next Add submits the stale "Inbox" and
+    // add_task — write-strict on an explicit pick — recreates the renamed-away
+    // folder instead of landing under the new name.
+    let lists = ["Inbox"];
+    const { wrapper, calls } = mountLists({
+      list_task_lists: () => lists,
+      rename_task_list: () => {
+        lists = ["Later"];
+        return "Later";
+      },
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await pickComposerList(wrapper, "Inbox");
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Follow-up");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    // The add targets the LANDED name, not the stale "Inbox".
+    expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Later" });
+  });
+
+  it("clears the composer's picked list when that list is archived (Codex PR #59)", async () => {
+    // Archiving hides the list from every picker; a composer still pointing at
+    // it would land the next task in a now-hidden list. The pick clears and the
+    // Add omits `list`, so the backend applies the vault default instead.
+    const { wrapper, calls } = mountLists({ set_task_lists_config: () => null });
+    await flushPromises();
+    await pickComposerList(wrapper, "Inbox");
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("After archive");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")?.args).not.toHaveProperty("list");
+  });
+
+  it("clears the composer's picked list when that list is deleted (Codex PR #59)", async () => {
+    // A removed folder invalidates a pick of it — the next Add must not
+    // recreate it. The pick clears, so the Add omits `list`.
+    const { wrapper, calls } = mountLists({
+      delete_task_list: () => ({ moved: 1, folderRemoved: true }),
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await pickComposerList(wrapper, "Inbox");
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("After delete");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")?.args).not.toHaveProperty("list");
+  });
+
+  it("keeps the composer's picked list when a delete leaves the folder (Codex PR #59)", async () => {
+    // delete_task_list KEEPS a folder that still holds sub-lists/foreign files
+    // (folderRemoved false) — the list still exists, so the composer's pick of
+    // it stays valid and the next Add still targets it.
+    const { wrapper, calls } = mountLists({
+      delete_task_list: () => ({ moved: 0, folderRemoved: false }),
+    });
+    await flushPromises();
+    await pickComposerList(wrapper, "Inbox");
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Kept folder");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")?.args).toMatchObject({ list: "Inbox" });
+  });
+
   it("aggregate mode merges every vault's tasks in global sort order", async () => {
     const { wrapper, calls } = mountAggregate();
     await flushPromises();

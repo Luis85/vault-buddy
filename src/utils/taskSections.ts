@@ -128,6 +128,26 @@ export function listSections(
   return sections;
 }
 
+/** Rewrite ONE list reference after a lifecycle change — the single-value core
+ * shared by the config-prefs reconcile (default / order / archived) and the add
+ * composer's touched pick, so the two can never disagree on what a rename or
+ * delete does. `to` is the landed name on a RENAME, or `null` on an
+ * archive/delete. Case-insensitive, matching the rest of the list domain:
+ *   - the exact list → `to` (renamed) or `null` (archived/deleted → the caller
+ *     drops or clears it);
+ *   - a descendant (`from/…`) → prefix-rewritten under `to` on a RENAME only (a
+ *     rename moves the whole subtree; `Work` → `Projects` turns `Work/Q3` into
+ *     `Projects/Q3`), left UNCHANGED on archive/delete (neither removes
+ *     descendants, so a still-existing child must not be dropped);
+ *   - anything else → unchanged. */
+export function remapListRef(value: string, from: string, to: string | null): string | null {
+  const low = from.toLowerCase();
+  const vl = value.toLowerCase();
+  if (vl === low) return to;
+  if (to !== null && vl.startsWith(`${low}/`)) return to + value.slice(from.length);
+  return value;
+}
+
 /** Display order for list names: `listOrder` entries first (case-insensitive
  * match against what exists, order names without a match ignored), the rest
  * alphabetical. Shared by the sections above and the pickers so a list never

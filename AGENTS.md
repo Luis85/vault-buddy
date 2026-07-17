@@ -1088,7 +1088,20 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   when `folderRemoved` is reported and touches ONLY the exact entry, leaving
   descendant prefs intact. The sync writes only when a config is already
   cached (nothing to remap otherwise, and writing computed-empty prefs would
-  clobber unread settings). **Grouping persistence**: the `Lists | Dates |
+  clobber unread settings). The single-value core of this reconcile —
+  exact→`to` / descendant-prefix-on-rename / else-unchanged — is the pure
+  `remapListRef` in `taskSections`, shared so the composer pick (next) and the
+  persisted prefs can never disagree. **The add composer's touched pick is
+  reconciled the same way** (`useTaskLists`' `onListRemap` callback →
+  `TaskComposer.remapPick`, wired in `Tasks.vue`): a rename rewrites an
+  explicit pick (and any descendant) under the landed name; an archive, or a
+  delete that removed the folder, CLEARS it back to the vault default — else
+  the next Add would submit the stale name and `add_task` (write-strict on an
+  explicit pick) would recreate the renamed/deleted folder or land the task in
+  a now-hidden archived list (Codex, PR #59). An UNTOUCHED picker needs nothing
+  — it already tracks the vault default reactively (`displayList`); a delete
+  that KEPT the folder leaves the pick, the list still exists. **Grouping
+  persistence**: the `Lists | Dates |
   Tags` choice persists per view (`vault-buddy:task-grouping` via the shared
   `perViewStore` envelope, same keying as the sort pref). **Drag a task
   between lists**: in Manual sort under Lists grouping (never aggregate — ranks

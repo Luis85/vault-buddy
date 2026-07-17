@@ -55,7 +55,10 @@ const {
   renameList,
   deleteList,
   archiveList,
-} = useTaskLists(props.vaultId);
+  // A rename/archive/delete of the composer's picked list must remap or clear
+  // that pick, else the next Add would recreate the renamed folder or land in a
+  // hidden/gone list (Codex, PR #59). The composer owns the touched-pick state.
+} = useTaskLists(props.vaultId, (from, to) => composer.value?.remapPick(from, to));
 // Read side: filter / sort / group → buckets (+ the shared sortInPlace).
 const sortViewKey = props.vaultId ?? "all";
 const {
