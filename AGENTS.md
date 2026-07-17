@@ -1110,7 +1110,13 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `sectionAt` hit-test over the rendered `[data-section-key]` wrappers; the
   pure `dropTargetList` in `taskSections` decides move-vs-reorder); the row
   optimistically re-homes to the dropped section and adopts the landed path,
-  reverting + toasting on failure — same feel as the rank-write path.
+  reverting + toasting on failure — same feel as the rank-write path. A release
+  over a DIFFERENT section that is NOT a valid list target (Done, or any
+  section under Dates/Tags grouping) is a **no-op**: the drag gate commits on
+  `overSectionKey !== sectionKey` to allow a slot-unchanged move, so
+  `commitReorder` must early-return there rather than fall through to an in-list
+  `planReorder` — the origin's drop line only renders for a same-section drop,
+  so a silent rank write from the pointer slot would surprise (Codex, PR #59).
 - **Task-ID stamping now spans every structural write path.** Create
   (`render_task`), edit (`update_task` via `update_task_fields`' ensure-absent
   key), move (`services::move_task_to_list` backfills a missing id on the

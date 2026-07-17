@@ -412,6 +412,38 @@ describe("manual reordering", () => {
     expect(rows.find((t) => t.title === "x")?.id).toBe("movedid9");
   });
 
+  it("ignores a drag released over a non-target section like Done (Codex PR #59)", async () => {
+    // Dropping a list row onto Done (or any section that isn't a valid list
+    // move target) must do NOTHING: the drag gate commits on a different
+    // over-section (to allow a slot-unchanged move), but the UI showed neither
+    // a target highlight nor the origin's drop line, so persisting a rank from
+    // the origin's pointer slot would be a silent surprise.
+    const done: TaskItem = {
+      path: "C:/v/Tasks/z.md", title: "z", status: "done", created: "2026-07-06",
+      done: true, due: null, priority: null, tags: [], list: "", order: null, id: null,
+    };
+    const { wrapper, calls } = mountManual([inList("x1", "A", 1024), inList("x2", "A", 2048), done]);
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackRowRects(wrapper); // x1 [0,30), x2 [30,60), z [60,90)
+    stackSectionRects(wrapper); // section 0 = list:a [0,60), section 1 = done [60,120)
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    // Drag x1 (in list A) and release over the Done section.
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over done
+    window.dispatchEvent(new PointerEvent("pointerup", {}));
+    await flushPromises();
+    // No reorder write and no move — the drop was a no-op.
+    expect(calls.some((c) => c.cmd === "update_task")).toBe(false);
+    expect(calls.some((c) => c.cmd === "move_task_to_list")).toBe(false);
+    // x1 is unchanged: still in list A, still ranked 1024.
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; list: string; order: number | null }[] }).tasks;
+    const x1 = rows.find((t) => t.title === "x1");
+    expect(x1?.list).toBe("A");
+    expect(x1?.order).toBe(1024);
+  });
+
   it("highlights the target section during a cross-list drag and drops the origin's drop line", async () => {
     const { wrapper } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
       move_task_to_list: () => ({ path: "C:/v/Tasks/B/x.md", id: null }),

@@ -52,6 +52,15 @@ export function useTaskReorderCommit(opts: {
       await moveTaskToList(task, targetList);
       return;
     }
+    // A release over a DIFFERENT section that was NOT a valid list move is not
+    // an in-list reorder. The drag gate commits on `overSectionKey !==
+    // sectionKey` (to allow a cross-section move with an unchanged slot), and
+    // the UI shows neither a target highlight nor the origin's drop line for it
+    // (that line renders only for a same-section drop) — so falling through to
+    // planReorder would silently persist a rank from the origin's pointer slot
+    // (e.g. dragging a list row onto Done, or across date/tag buckets that can't
+    // be moved between). Only a same-section release reorders (Codex, PR #59).
+    if (overSectionKey !== sectionKey) return;
     const plan = planReorder(tasks, fromIndex, toIndex);
     if (!plan) return;
     if (plan.kind === "single") await writeSingleRank(tasks[fromIndex], plan.order);
