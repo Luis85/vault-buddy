@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed } from "vue";
 
+import { useNowTicker } from "../composables/useNowTicker";
 import { formatDuration } from "../utils/formatDuration";
 
 const props = defineProps<{
@@ -15,14 +16,7 @@ const props = defineProps<{
 }>();
 defineEmits<{ (e: "stop"): void; (e: "pause"): void; (e: "resume"): void }>();
 
-const now = ref(Date.now());
-let timer: ReturnType<typeof setInterval> | null = null;
-onMounted(() => {
-  timer = setInterval(() => (now.value = Date.now()), 1000);
-});
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
-});
+const now = useNowTicker();
 
 // Wall time minus accumulated pauses (and the still-open span while
 // paused) — the display freezes during a pause and never counts the gap.

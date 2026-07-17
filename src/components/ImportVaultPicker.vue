@@ -1,25 +1,35 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref } from "vue";
+import { open } from "@tauri-apps/plugin-dialog";
+import { computed, onMounted } from "vue";
 
 import { logWarning } from "../logging";
+import { useDocumentImportsStore } from "../stores/documentImports";
 import { useNotificationsStore } from "../stores/notifications";
 import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
 import { basename } from "../utils/basename";
+import { withDialogSuppressed } from "../utils/nativeDialog";
+import ImportProgress from "./ImportProgress.vue";
 
-// Reached only via a buddy drag-drop: Rust stashes the dropped path
-// (begin_document_import) and shows the panel; the panel's refresh()
-// consumes it (take_pending_import) into store.pendingImports and lands
-// here. The extension (.docx/.odt/.rtf) is already validated by the drop
-// handler in BuddyRoot, so this view only needs to pick the destination
-// vault and gate on Pandoc — same convert_document contract RecordMode's
-// "Import Document" action uses.
+// Two ways in, one mode split on the queue. (1) A buddy drag-drop: Rust
+// stashes the dropped path (begin_document_import) and shows the panel; the
+// panel's refresh() consumes it (take_pending_import) into
+// store.pendingImports and lands here — the queue HEAD is the file. (2) The
+// buddy-menu "Import document…" request (begin_add_document →
+// take_add_document_request): the queue is EMPTY, so picking a vault opens
+// the OS file picker for the file AFTER the vault choice (vault-first mode).
+// Drop extensions (.docx/.odt/.rtf) are validated by BuddyRoot's drop
+// handler; the vault-first dialog filters to the same set — either way this
+// view only picks the destination vault and gates on Pandoc, same convert
+// contract RecordMode's "Import Document" action uses.
 const store = useVaultsStore();
 const notifications = useNotificationsStore();
 const pandocStore = usePandocStore();
-
-const busyVaultId = ref<string | null>(null);
+// The conversion lifecycle lives in the shared documentImports store (not a
+// local busy ref) so the working state renders identically here, in
+// RecordMode, and on the list view — and survives leaving this view.
+const documentImports = useDocumentImportsStore();
 // The shared pandoc store owns detection: the picker reuses a cached
 // "installed" result instead of re-probing on every drop, and
 // `pandocStore.checking` gates the pre-probe window so a quick drop-then-click
@@ -51,32 +61,80 @@ const sourceName = computed(() => {
 });
 const queuedMore = computed(() => Math.max(0, store.pendingImports.length - 1));
 
+// While converting: how many queue entries are NOT covered by the running
+// conversion. The head is "covered" only when the picker itself started it
+// (sourcePath matches); a conversion started from RecordMode leaves the whole
+// queue — head included — waiting for a vault pick.
+const waitingCount = computed(() => {
+  const head = store.pendingImports[0];
+  const headIsConverting =
+    head !== undefined && documentImports.active?.sourcePath === head;
+  return Math.max(0, store.pendingImports.length - (headIsConverting ? 1 : 0));
+});
+// ONE queue indicator for both body states (folded into a computed — the
+// template's branch count is what the complexity gate measures): while
+// converting, the entries the running conversion doesn't cover; otherwise the
+// entries behind the head the header line is asking about. "" = hidden.
+const queueLabel = computed(() => {
+  if (documentImports.active) {
+    return waitingCount.value > 0 ? `+${waitingCount.value} more queued` : "";
+  }
+  return queuedMore.value > 0 ? `(+${queuedMore.value} more queued)` : "";
+});
+
 // One discriminated state drives the body, so the template branches on a
 // single value instead of scattered `checking` / `gate.blocked` / length
 // booleans (which pushed the render function past the complexity gate).
-const viewState = computed<"checking" | "blocked" | "empty" | "list">(() => {
+// `converting` outranks everything: once a conversion runs, the pick decision
+// is made and the working card replaces the (inert) list — a grayed-out list
+// under a one-line hint was the "working state not clear enough" complaint.
+const viewState = computed<
+  "converting" | "checking" | "blocked" | "empty" | "list"
+>(() => {
+  if (documentImports.active) return "converting";
   if (pandocStore.checking) return "checking";
   if (gate.value.blocked) return "blocked";
   if (store.vaults.length === 0) return "empty";
   return "list";
 });
 
+// Vault-first mode's file prompt, shown only after the vault choice. Wrapped
+// in withDialogSuppressed so the OS dialog stealing focus can't trip the
+// panel's focus-out auto-hide. null = cancelled.
+async function pickSourceFile(): Promise<string | null> {
+  const picked = await withDialogSuppressed(() =>
+    open({
+      multiple: false,
+      filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
+    }),
+  );
+  return typeof picked === "string" ? picked : null;
+}
+
 async function pick(vaultId: string) {
-  // Convert the head of the queue; a mid-conversion drop appends to the tail
-  // (GAP-55), so afterward we drop the head and either advance to the next
-  // queued document or return to the list.
-  const source = store.pendingImports[0];
-  if (busyVaultId.value || !source) return;
+  // Drop mode converts the head of the queue (a mid-conversion drop appends
+  // to the tail — GAP-55 — so afterward we drop the head and either advance
+  // to the next queued document or return to the list); vault-first mode
+  // (empty queue) asks for the file now that the vault is chosen.
+  if (documentImports.active) return;
   // Capture the queue epoch before the (slow) conversion: if the user backs out
   // — and maybe re-drops the same path — before it resolves, the epoch moves on
-  // and dequeueImport must not consume the wrong entry or navigate (Codex P2).
+  // and the completion must not consume a queue entry or navigate (Codex P2).
+  // The vault-first flow shares the guard via settleAddImport.
   const epoch = store.importEpoch;
-  busyVaultId.value = vaultId;
+  const vault = store.vaults.find((v) => v.id === vaultId);
   try {
-    const notePath = await invoke<string>("convert_document", {
-      id: vaultId,
-      sourcePath: source,
-    });
+    // Remember WHERE the source came from: only a queue-sourced conversion
+    // may consume the queue head on success. A dialog-sourced (vault-first)
+    // one must not — a document dropped mid-conversion lands in the queue
+    // and dequeueImport's shift would silently eat it (Codex PR #63).
+    const queuedSource = store.pendingImports[0];
+    const source = queuedSource ?? (await pickSourceFile());
+    if (source === null) return; // cancelled file picker — stay on the picker
+    const notePath = await documentImports.convert(
+      { id: vaultId, name: vault?.name ?? "" },
+      source,
+    );
     // Offer to open the freshly-imported note in the vault it landed in, rather
     // than leaving the user to hunt for it after the picker returns to the list.
     notifications.notify("success", `Imported ${basename(notePath)}`, {
@@ -85,28 +143,22 @@ async function pick(vaultId: string) {
         run: () => invoke("open_imported_document", { id: vaultId, path: notePath }),
       },
     });
-    store.dequeueImport(epoch);
+    if (queuedSource !== undefined) store.dequeueImport(epoch);
+    else store.settleAddImport(epoch);
   } catch (e) {
     // Stay on the picker (queue head unchanged) so the user can retry a
     // different vault for this same document.
     logWarning(`import picker: convert_document failed: ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
-  } finally {
-    busyVaultId.value = null;
   }
 }
 </script>
 
 <template>
   <div class="flex flex-col gap-2">
-    <p
-      v-if="busyVaultId"
-      data-testid="import-picker-converting"
-      class="text-xs text-slate-400"
-    >
-      Converting <span class="font-medium text-slate-200">{{ sourceName }}</span>… this can
-      take a few seconds.
-    </p>
+    <!-- Converting: the working card replaces the header (the pick is made)
+         — only the queue tail still needs communicating. -->
+    <ImportProgress v-if="viewState === 'converting'" />
     <p
       v-else
       class="text-xs text-slate-400"
@@ -116,12 +168,18 @@ async function pick(vaultId: string) {
         v-if="sourceName"
         class="font-medium text-slate-200"
       >{{ sourceName }}</span>
+      <!-- v-else costs no template-complexity branch, unlike a second v-if -->
+      <template v-else>
+        a document
+      </template>
       into which vault?
-      <span
-        v-if="queuedMore > 0"
-        data-testid="import-picker-queued"
-        class="text-slate-500"
-      >(+{{ queuedMore }} more queued)</span>
+    </p>
+    <p
+      v-if="queueLabel"
+      data-testid="import-picker-queued"
+      class="text-xs text-slate-500"
+    >
+      {{ queueLabel }}
     </p>
     <p
       v-if="viewState === 'checking'"
@@ -156,7 +214,7 @@ async function pick(vaultId: string) {
       No vaults found.
     </p>
     <ul
-      v-else
+      v-else-if="viewState === 'list'"
       class="space-y-1"
     >
       <li
@@ -166,19 +224,12 @@ async function pick(vaultId: string) {
         <button
           type="button"
           data-testid="import-picker-vault"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-          :disabled="busyVaultId !== null"
+          class="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
           @click="pick(vault.id)"
         >
           <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">
             {{ vault.name }}
           </span>
-          <span
-            v-if="busyVaultId === vault.id"
-            class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white"
-            role="status"
-            aria-label="Importing…"
-          />
         </button>
       </li>
     </ul>

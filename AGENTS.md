@@ -248,7 +248,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 63 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 64 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -260,7 +260,7 @@ Keep this table in sync when adding/removing commands.
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
@@ -649,11 +649,18 @@ A second Capture Provider (Knowledge Intake): convert a `.docx` / `.odt` /
 detecting Pandoc, never bundled (Pandoc is GPL-2 and a ~150–200 MB Windows
 binary; neither fits this MIT, light-installer app). It is the fifth sanctioned
 vault write, riding the same never-clobber/atomic machinery as capture. Spec:
-`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Two
+`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Three
 entry points: dragging a document onto the buddy (`BuddyRoot` filters
 `docx/odt/rtf`, `begin_document_import` stashes the path + shows the panel on
-the `importPicker` view) and the **Import Document** action in the per-vault
-record chooser (a `tauri-plugin-dialog` file picker). Invariants — each exists
+the `importPicker` view), the **Import Document** action in the per-vault
+record chooser (a `tauri-plugin-dialog` file picker), and the buddy
+right-click menu's **Import document…** item (`begin_add_document` arms a
+Rust-owned flag + shows the panel; `refresh()` drains it via
+`take_add_document_request` onto the `importPicker` with an EMPTY queue —
+its vault-FIRST mode, where picking a vault opens the same file picker and
+converts; spec
+`docs/superpowers/specs/2026-07-17-buddy-menu-import-document-design.md`).
+Invariants — each exists
 because a review found the failure it prevents:
 
 - **Pandoc resolution recovers past stale/old installs.** `resolve_working_pandoc`
@@ -748,7 +755,29 @@ because a review found the failure it prevents:
   missing/too old) routes to the focused `documentImport` view
   (`store.openDocumentImport()`), **not** the buried Buddy-settings card. A
   successful conversion raises a success toast whose "Open in Obsidian" action
-  calls `open_imported_document`. The `vaults` store carries the `importPicker`
+  calls `open_imported_document`. The **conversion lifecycle lives in the
+  shared `documentImports` store** (`src/stores/documentImports.ts`):
+  `convert()` sets the single `active` slot (the Rust `ImportLock` allows one
+  conversion process-wide; a concurrent second call rejects with the lock's
+  message WITHOUT touching the first run's slot — only the owning run's
+  `finally` may clear it), always clears in `finally`, and rethrows raw IPC
+  errors so each surface keeps its own toast/navigation. The self-contained
+  `ImportProgress.vue` card renders that state everywhere it matters — Pandoc
+  reports no incremental progress, so the card is honestly indeterminate
+  (spinner + elapsed tick + sweeping activity bar with a
+  `prefers-reduced-motion` static fallback; the ticking timer sits OUTSIDE
+  the `role="status"` live region so screen readers aren't chattered every
+  second). While converting, `RecordMode` swaps the Import button for the
+  card (a grayed-out button both read as inert and was a dead-end click into
+  the lock error — also for a conversion another surface started),
+  `ImportVaultPicker`'s `viewState` gains a top-priority `converting` branch
+  replacing the vault list with the card (keeping the "+N more queued" line,
+  counted against the active import's `sourcePath` so a RecordMode-started
+  conversion doesn't hide that the whole queue still waits), and
+  `ActionPanel` shows the card on the list view beside
+  RecordingBar/TranscriptionSummary so backing out — or a panel reopen
+  landing on the list default — never loses the working state.
+  The `vaults` store carries the `importPicker`
   view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
   **before** the list default so a drag-dropped path survives `panel-shown`.
   `tauri-plugin-dialog` (Cargo + `dialog:allow-open` capability) backs both
@@ -1354,8 +1383,10 @@ tree (no history stack): the vault-row capture button `openRecordMode`s (titled
 "Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
 Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
-per-vault todo view, `importPicker` (parent: the list) is the drag-drop vault
-chooser, `documentImport` (parent: the list) is the focused Pandoc setup screen
+per-vault todo view, `importPicker` (parent: the list) is the import vault
+chooser (drop mode when the queue holds a dropped file; vault-first mode on
+an empty queue — the buddy-menu entry — where picking a vault opens the OS
+file picker), `documentImport` (parent: the list) is the focused Pandoc setup screen
 the blocked Import gates (`RecordMode`'s Import action, `ImportVaultPicker`'s
 "Set up Pandoc") route to — `openDocumentImport`, rendering
 `DocumentImportSettings` — instead of dumping the user at the bottom of the
@@ -1371,7 +1402,10 @@ character/animation/message duration, persisted to localStorage), `capture`
 (recording state mirrored from Rust: `paused`, `pausedTotalMs`,
 `pausedSinceMs`, `level`, `vaultId`, `lastSaved`, plus the transcription
 job map and active/queued state driven by the `capture:transcribe*` events),
-and `notifications` (the toast queue rendered by `NotificationHost`).
+`documentImports` (the single in-flight document conversion — owns the
+`convert_document` lifecycle, rendered by `ImportProgress` on the intake
+views and the list view; see the document-import domain), and
+`notifications` (the toast queue rendered by `NotificationHost`).
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture

@@ -6,12 +6,14 @@ import { computed, onMounted, ref } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
+import { useDocumentImportsStore } from "../stores/documentImports";
 import { useNotificationsStore } from "../stores/notifications";
 import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
 import type { CaptureConfig, Recording } from "../types";
 import { basename } from "../utils/basename";
 import { withDialogSuppressed } from "../utils/nativeDialog";
+import ImportProgress from "./ImportProgress.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -19,6 +21,7 @@ const store = useVaultsStore();
 const capture = useCaptureStore();
 const notifications = useNotificationsStore();
 const pandocStore = usePandocStore();
+const documentImports = useDocumentImportsStore();
 
 const OPTIONS = [
   { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting" },
@@ -83,8 +86,9 @@ const browseLabel = computed(() =>
 // between a blocked-flag computed and a hint-text computed. `blocked` (Pandoc
 // missing/too old) does NOT disable the button — a disabled button that says
 // "go to Settings" is a dead end, so a blocked click routes to Settings
-// instead (matching ImportVaultPicker). The button only truly disables while a
-// conversion is in flight.
+// instead (matching ImportVaultPicker). The button only truly disables while
+// the Pandoc probe is in flight; during a conversion it is replaced outright
+// by the ImportProgress card (see the template).
 const importStatus = computed(() => {
   if (!pandocStore.status?.installed) {
     return { blocked: true, hint: "Install Pandoc to import documents" };
@@ -94,10 +98,6 @@ const importStatus = computed(() => {
   }
   return { blocked: false, hint: "Convert a Word, ODT, or RTF file into a note" };
 });
-
-// True while a conversion is running — Pandoc can take several seconds, so the
-// button disables and shows a "Converting…" hint rather than looking inert.
-const importing = ref(false);
 
 interface TranscriptionBundle {
   transcribe: boolean;
@@ -254,7 +254,7 @@ function onImportClick() {
 }
 
 async function importDocument() {
-  if (importing.value) return;
+  if (documentImports.active) return;
   try {
     const path = await withDialogSuppressed(() =>
       open({
@@ -263,12 +263,15 @@ async function importDocument() {
       }),
     );
     if (typeof path !== "string") return; // cancelled — no-op
-    // Flip busy only after the picker resolves, so a cancel doesn't strand it.
-    importing.value = true;
-    const notePath = await invoke<string>("convert_document", {
-      id: props.vaultId,
-      sourcePath: path,
-    });
+    // The shared documentImports store owns the converting state (set only
+    // after the picker resolves, so a cancel never flashes the card) and
+    // renders it through ImportProgress here, on the picker view, and on the
+    // list view — the working state survives navigating away.
+    const vaultName = store.vaults.find((v) => v.id === props.vaultId)?.name ?? "";
+    const notePath = await documentImports.convert(
+      { id: props.vaultId, name: vaultName },
+      path,
+    );
     // Offer to open the freshly-imported note rather than leaving the user to
     // hunt for it — the action opens it in Obsidian via the logged command.
     notifications.notify("success", `Imported ${basename(notePath)}`, {
@@ -281,8 +284,6 @@ async function importDocument() {
   } catch (e) {
     logWarning(`convert_document failed (vault ${props.vaultId}): ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
-  } finally {
-    importing.value = false;
   }
 }
 </script>
@@ -302,21 +303,23 @@ async function importDocument() {
         <span class="block text-sm font-medium text-slate-100">{{ option.title }}</span>
         <span class="block text-xs text-slate-400">{{ option.hint }}</span>
       </button>
+      <!-- While a conversion runs (this vault's or any other's — the Rust
+           ImportLock allows only one process-wide) the button gives way to
+           the working card: a grayed-out button both looked inert and was a
+           dead-end click into the lock's error. -->
+      <ImportProgress v-if="documentImports.active" />
       <button
+        v-else
         type="button"
         data-testid="import-document"
         aria-label="Import a document into this vault"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-        :disabled="importing || pandocStore.checking"
+        :disabled="pandocStore.checking"
         @click="onImportClick"
       >
         <span class="block text-sm font-medium text-slate-100">Import Document</span>
         <span class="block text-xs text-slate-400">{{
-          pandocStore.checking
-            ? "Checking Pandoc…"
-            : importing
-              ? "Converting… this can take a few seconds"
-              : importStatus.hint
+          pandocStore.checking ? "Checking Pandoc…" : importStatus.hint
         }}</span>
       </button>
       <!-- Browse recordings is the last action: the two capture actions
