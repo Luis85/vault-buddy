@@ -6,6 +6,7 @@ import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import type { TasksConfig } from "../types";
 import { orderLists } from "../utils/taskSections";
+import TaskArchivedLists from "./TaskArchivedLists.vue";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // The per-vault lists settings object (defaultList + listOrder), rendered
@@ -25,6 +26,10 @@ const defaultList = ref("");
 // alphabetical — exactly what the sections and pickers render). Reordering
 // edits this array; a save persists it as the new listOrder.
 const order = ref<string[]>([]);
+// The archived set (Task 8) — hidden from the Lists grouping + pickers. This
+// card is where they're unarchived; a save carries the current set so a
+// default/order change preserves it and an unarchive shrinks it.
+const archived = ref<string[]>([]);
 
 const autosave = useAutosave(
   async () => {
@@ -32,6 +37,7 @@ const autosave = useAutosave(
       id: props.vaultId,
       defaultList: defaultList.value || null,
       listOrder: order.value,
+      archivedLists: archived.value,
     });
   },
   { label: "task lists" },
@@ -49,6 +55,7 @@ onMounted(async () => {
       Array.isArray(lists) ? lists : [],
       Array.isArray(cfg?.listOrder) ? cfg.listOrder : [],
     );
+    archived.value = Array.isArray(cfg?.archivedLists) ? cfg.archivedLists : [];
   } catch (e) {
     // Read failures degrade to an empty card (log-only) — a later save still
     // field-errors if attempted, so nothing is silently lost.
@@ -70,6 +77,12 @@ function move(index: number, delta: -1 | 1) {
   const next = [...order.value];
   [next[index], next[target]] = [next[target], next[index]];
   order.value = next;
+  autosave.saveNow();
+}
+// Unarchive: drop the name so the save carries the shrunken set and the list
+// reappears in the Lists grouping + pickers. The folder + tasks never moved.
+function unarchive(list: string) {
+  archived.value = archived.value.filter((a) => a !== list);
   autosave.saveNow();
 }
 </script>
@@ -135,6 +148,10 @@ function move(index: number, delta: -1 | 1) {
             </li>
           </ul>
         </template>
+        <TaskArchivedLists
+          :lists="archived"
+          @unarchive="unarchive"
+        />
         <p
           v-if="order.length === 0"
           class="mt-1 text-xs text-slate-500"

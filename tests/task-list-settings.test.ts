@@ -61,6 +61,7 @@ describe("TaskListSettings", () => {
       id: "v1",
       defaultList: "Inbox",
       listOrder: ["Next", "Waiting", "Inbox"],
+      archivedLists: [],
     });
   });
 
@@ -108,5 +109,28 @@ describe("TaskListSettings", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("No lists yet");
     expect(wrapper.findAll('[data-testid="list-order-row"]')).toHaveLength(0);
+  });
+
+  it("lists archived lists and unarchives one, saving the shrunken set", async () => {
+    const { wrapper, calls } = mountSettings({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Next"], archivedLists: ["Old", "Stale"] }),
+    });
+    await flushPromises();
+    // Both archived lists render with an Unarchive control.
+    expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(2);
+    await wrapper.get('[data-testid="unarchive-Old"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    // The save carries the remaining archived set (Old removed) alongside the
+    // preserved default/order.
+    expect((save?.args as { archivedLists: string[] }).archivedLists).toEqual(["Stale"]);
+    // The unarchived row disappears from the list.
+    expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(1);
+  });
+
+  it("shows no archived section when nothing is archived", async () => {
+    const { wrapper } = mountSettings(); // default config carries no archivedLists
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(0);
   });
 });
