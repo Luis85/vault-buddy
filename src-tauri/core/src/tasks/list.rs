@@ -144,8 +144,11 @@ fn collect_task_file(
     // Case-insensitive, top-level-only via the SAME scalar_field_ci the
     // id-stamp path uses, or a task stamped under a different casing than the
     // configured property has a stable id on disk that never surfaces (Codex
-    // review, PR #59).
-    let id = id_property.and_then(|p| scalar_field_ci(&content, p));
+    // review, PR #59). Blank counts as ABSENT, agreeing with the stamp's
+    // non-empty predicate — a bare `task-id:` must not surface "" as the id.
+    let id = id_property
+        .and_then(|p| scalar_field_ci(&content, p))
+        .filter(|v| !v.is_empty());
     out.push(TaskItem {
         path: path.to_path_buf(),
         title,
@@ -607,5 +610,22 @@ mod tests {
         // Feature off (None property) never reads, regardless of on-disk casing.
         let off = list_tasks(root, None);
         assert_eq!(off.iter().find(|t| t.title == "Upper").unwrap().id, None);
+    }
+
+    #[test]
+    fn list_tasks_treats_a_blank_id_property_as_absent() {
+        // A bare `task-id:` (an Obsidian property panel / template leaves the
+        // key valueless) reads as Some("") through scalar_field_ci. The STAMP
+        // path treats that as missing and generates; the read must agree —
+        // surfacing "" as TaskDto.id would hand the UI/MCP an unusable id
+        // until the next edit (review, PR #59).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "blank.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Blank\"\ncreated: 2026-07-08\ntask-id:\n---\n",
+        );
+        assert_eq!(list_tasks(root, Some("task-id"))[0].id, None);
     }
 }
