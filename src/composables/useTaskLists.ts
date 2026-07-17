@@ -12,6 +12,24 @@ import { orderLists } from "../utils/taskSections";
 // lists and the pickers can offer every list. listOrder comes from the
 // vault's lists settings object. Split out of Tasks.vue for the LOC cap —
 // this is state + IPC, no rendering.
+// The lists-config that "toggle archive on" produces: add `list` to the
+// archived set (idempotent) and clear the default when it IS the list being
+// archived — otherwise the composer would render a blank picker and unpicked
+// adds would silently land in the now-hidden list (Task 8 review, Minor #3).
+// Pure so archiveList stays a thin invoke + cache update.
+function withListArchived(cfg: TasksConfig | undefined, list: string) {
+  const { archivedLists = [], defaultList = null, listOrder = [] } = (cfg ?? {}) as Partial<TasksConfig>;
+  const low = list.toLowerCase();
+  return {
+    defaultList: defaultList && defaultList.toLowerCase() === low ? null : defaultList,
+    listOrder,
+    // Set-dedup rather than a branch: re-archiving isn't reachable from the UI
+    // (an archived list's section is hidden), so the idempotency is only a
+    // guard, not a tested path — keep it branchless.
+    archivedLists: [...new Set([...archivedLists, list])],
+  };
+}
+
 export function useTaskLists(vaultId: string | null) {
   const notifications = useNotificationsStore();
   const vaultLists = ref(new Map<string, string[]>());
@@ -138,6 +156,62 @@ export function useTaskLists(vaultId: string | null) {
     }
   }
 
+  // Section-menu actions (per-vault only — the menu is hidden in aggregate, so
+  // these all key off the view's own `vaultId`). Each toasts + logs on failure
+  // and returns a success signal the container uses to close the popover and
+  // decide whether to reload tasks.
+  async function renameList(from: string, to: string): Promise<string | null> {
+    if (vaultId === null) return null;
+    const id = vaultId;
+    try {
+      const landed = await invoke<string>("rename_task_list", { id, from, to });
+      // Paths changed: refresh this vault's list enumeration so the old name
+      // drops and the landed one (which may carry a ` (N)` collision suffix)
+      // appears.
+      await loadVaultLists(id);
+      return landed;
+    } catch (e) {
+      notifications.error(String(e));
+      logWarning(`rename_task_list failed: ${String(e)}`);
+      return null;
+    }
+  }
+
+  async function deleteList(list: string): Promise<boolean> {
+    if (vaultId === null) return false;
+    const id = vaultId;
+    try {
+      await invoke("delete_task_list", { id, list });
+      await loadVaultLists(id);
+      return true;
+    } catch (e) {
+      notifications.error(String(e));
+      logWarning(`delete_task_list failed: ${String(e)}`);
+      return false;
+    }
+  }
+
+  async function archiveList(list: string): Promise<boolean> {
+    if (vaultId === null) return false;
+    const id = vaultId;
+    const cfg = vaultConfigs.value.get(id);
+    const next = withListArchived(cfg, list);
+    try {
+      await invoke("set_task_lists_config", { id, ...next });
+      // Update the cached config so the section hides immediately (the
+      // archivedLists computed re-filters) without a round-trip.
+      if (cfg) {
+        vaultConfigs.value.set(id, { ...cfg, ...next });
+        vaultConfigs.value = new Map(vaultConfigs.value);
+      }
+      return true;
+    } catch (e) {
+      notifications.error(String(e));
+      logWarning(`archive list failed: ${String(e)}`);
+      return false;
+    }
+  }
+
   return {
     listOrder,
     knownLists,
@@ -151,5 +225,8 @@ export function useTaskLists(vaultId: string | null) {
     loadVaultConfig,
     onComposerVaultChange,
     createList,
+    renameList,
+    deleteList,
+    archiveList,
   };
 }

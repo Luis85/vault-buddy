@@ -1026,6 +1026,233 @@ describe("Tasks", () => {
     }
   });
 
+  // A per-vault Lists view with one task in "Inbox" and one at the root, plus
+  // whatever section-command handlers a test needs merged in.
+  const mountLists = (extra: Parameters<typeof mountView>[0] = {}) =>
+    mountView({
+      list_tasks: () => [
+        { path: "C:/v1/Tasks/Inbox/a.md", title: "In inbox", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Inbox", order: null, id: null },
+        { path: "C:/v1/Tasks/b.md", title: "At root", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+      list_task_lists: () => ["Inbox"],
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: ["Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      ...extra,
+    });
+
+  it("shows a section menu on real list sections but not No list / Done", async () => {
+    const { wrapper } = mountLists({
+      list_tasks: () => [
+        { path: "C:/v1/Tasks/Inbox/a.md", title: "In inbox", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Inbox", order: null, id: null },
+        { path: "C:/v1/Tasks/b.md", title: "At root", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
+        { path: "C:/v1/Tasks/c.md", title: "Done one", status: "done", created: "2026-07-06", done: true, due: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-section-menu-Inbox"]').exists()).toBe(true);
+    // No list + Done buckets carry no list identity → exactly one menu (Inbox).
+    expect(wrapper.findAll('[data-testid^="task-section-menu-"]')).toHaveLength(1);
+  });
+
+  it("renames a list from its section menu", async () => {
+    const { wrapper, calls } = mountLists({ rename_task_list: () => "Later" });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "rename_task_list")?.args).toEqual({ id: "v1", from: "Inbox", to: "Later" });
+  });
+
+  it("archives a list from its section menu", async () => {
+    const { wrapper, calls } = mountLists({ set_task_lists_config: () => null });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    const call = calls.find((c) => c.cmd === "set_task_lists_config");
+    expect((call?.args as { archivedLists: string[] }).archivedLists).toContain("Inbox");
+  });
+
+  it("archives even when the vault config never cached (older / absent config)", async () => {
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => null, // uncached → archiveList computes off an absent cfg
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    const args = calls.find((c) => c.cmd === "set_task_lists_config")?.args as {
+      archivedLists: string[];
+      defaultList: string | null;
+      listOrder: string[];
+    };
+    expect(args.archivedLists).toEqual(["Inbox"]);
+    expect(args.defaultList).toBeNull();
+    expect(args.listOrder).toEqual([]);
+  });
+
+  it("archiving the default list also clears the default (Task 8 review Minor 3)", async () => {
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    const args = calls.find((c) => c.cmd === "set_task_lists_config")?.args as { defaultList: string | null; archivedLists: string[] };
+    expect(args.defaultList).toBeNull(); // archiving the default clears it
+    expect(args.archivedLists).toContain("Inbox");
+  });
+
+  it("deletes a list from its section menu after a confirm", async () => {
+    const { wrapper, calls } = mountLists({ delete_task_list: () => ({ moved: 1, folderRemoved: true }) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    // First Delete click only asks for confirmation — no command yet.
+    expect(calls.find((c) => c.cmd === "delete_task_list")).toBeUndefined();
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "delete_task_list")?.args).toEqual({ id: "v1", list: "Inbox" });
+  });
+
+  it("keeps the rename input open when the rename fails", async () => {
+    const { wrapper } = mountLists({
+      rename_task_list: () => {
+        throw new Error("A list named that already exists.");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    // Failure doesn't bump resetNonce → the input stays open to correct + retry.
+    expect(wrapper.find('[data-testid="task-section-rename-input-Inbox"]').exists()).toBe(true);
+  });
+
+  it("reloads tasks even when a delete fails mid-move (GAP-64)", async () => {
+    const { wrapper, calls } = mountLists({
+      delete_task_list: () => {
+        throw new Error("boom mid-move");
+      },
+    });
+    await flushPromises();
+    const before = calls.filter((c) => c.cmd === "list_tasks").length;
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    // A partial move may have relocated tasks, so the view reloads regardless.
+    expect(calls.filter((c) => c.cmd === "list_tasks").length).toBeGreaterThan(before);
+  });
+
+  it("surfaces an archive failure and keeps the section visible", async () => {
+    const { wrapper, calls } = mountLists({
+      set_task_lists_config: () => {
+        throw new Error("write failed");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeDefined();
+    // The write failed, so the section is NOT hidden.
+    expect(wrapper.find('[data-testid="task-section-menu-Inbox"]').exists()).toBe(true);
+  });
+
+  it("no-ops a rename to the unchanged name without calling the backend", async () => {
+    const { wrapper, calls } = mountLists({ rename_task_list: () => "Inbox" });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    // The input seeds with the current leaf; confirming unchanged is a no-op.
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "rename_task_list")).toBeUndefined();
+    expect(wrapper.find('[data-testid="task-section-rename-input-Inbox"]').exists()).toBe(false);
+  });
+
+  it("cancels the delete confirm without deleting", async () => {
+    const { wrapper, calls } = mountLists({ delete_task_list: () => ({ moved: 0, folderRemoved: false }) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    // Escape out of the rename input path is covered elsewhere; here Cancel
+    // in the confirm sub-state returns to the menu without deleting.
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click"); // toggle closed
+    expect(calls.find((c) => c.cmd === "delete_task_list")).toBeUndefined();
+  });
+
+  it("archiving a non-default list leaves the default untouched", async () => {
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Other", listOrder: ["Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    const args = calls.find((c) => c.cmd === "set_task_lists_config")?.args as { defaultList: string | null };
+    expect(args.defaultList).toBe("Other"); // only the default itself gets cleared
+  });
+
+  it("Escape in the rename input returns to the menu (does not bubble to the panel)", async () => {
+    const { wrapper } = mountLists();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper
+      .get('[data-testid="task-section-rename-input-Inbox"]')
+      .trigger("keydown", { key: "Escape", isComposing: false });
+    expect(wrapper.find('[data-testid="task-section-rename-input-Inbox"]').exists()).toBe(false); // input gone
+    expect(wrapper.find('[data-testid="task-section-rename-Inbox"]').exists()).toBe(true); // menu back
+  });
+
+  it("degrades gracefully when the list and config reads throw", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v1/Tasks/b.md", title: "At root", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+      list_task_lists: () => {
+        throw new Error("lists read boom");
+      },
+      get_tasks_config: () => {
+        throw new Error("config read boom");
+      },
+    });
+    await flushPromises();
+    // Both reads fail (log-only, best-effort) but the tasks still render.
+    expect(wrapper.findAll('[data-testid="task-row"]').length).toBeGreaterThan(0);
+  });
+
+  it("swallows a failed reload after a successful rename (log-only)", async () => {
+    let listCalls = 0;
+    const { wrapper } = mountLists({
+      rename_task_list: () => "Later",
+      list_tasks: () => {
+        listCalls += 1;
+        if (listCalls > 1) throw new Error("reload boom");
+        return [
+          { path: "C:/v1/Tasks/Inbox/a.md", title: "In inbox", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Inbox", order: null, id: null },
+        ];
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    // The reload threw but was swallowed (log-only); the rename still went through.
+    expect(listCalls).toBeGreaterThan(1);
+  });
+
   it("aggregate mode merges every vault's tasks in global sort order", async () => {
     const { wrapper, calls } = mountAggregate();
     await flushPromises();

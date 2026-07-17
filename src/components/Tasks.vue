@@ -24,6 +24,7 @@ import {
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
+import TaskSectionMenu from "./TaskSectionMenu.vue";
 import TaskViewControls from "./TaskViewControls.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
@@ -73,6 +74,9 @@ const {
   loadVaultConfig,
   onComposerVaultChange,
   createList,
+  renameList,
+  deleteList,
+  archiveList,
 } = useTaskLists(props.vaultId);
 
 // New list flow: create + cache, then re-select here. `target` (the vault
@@ -95,6 +99,51 @@ async function onControlsCreateList(name: string) {
   const created = await createList(name);
   if (created !== null) controlsListResetNonce.value += 1;
 }
+
+// The Lists-view section menu (rename/archive/delete). A per-list in-flight
+// guard disables the menu during its write; one shared nonce closes the open
+// popover on success (only one is open at a time — the TaskViewControls
+// precedent).
+const sectionBusy = ref(new Set<string>());
+const sectionMenuResetNonce = ref(0);
+
+// Re-fetch this vault's tasks after a rename/delete relocates files on disk.
+// Per-vault only (the section menu is hidden in the aggregate).
+async function reloadTasks() {
+  if (props.vaultId === null) return;
+  const id = props.vaultId;
+  try {
+    const items = await invoke<TaskItem[]>("list_tasks", { id });
+    tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
+    sortInPlace();
+  } catch (e) {
+    logWarning(`list_tasks reload failed for vault ${id}: ${String(e)}`);
+  }
+}
+
+async function runSectionAction(
+  list: string,
+  action: () => Promise<boolean>,
+  reload: "onSuccess" | "always" | "never",
+) {
+  if (sectionBusy.value.has(list)) return;
+  sectionBusy.value = new Set(sectionBusy.value).add(list);
+  try {
+    const ok = await action();
+    if (ok) sectionMenuResetNonce.value += 1;
+    if (reload === "always" || (reload === "onSuccess" && ok)) await reloadTasks();
+  } finally {
+    const next = new Set(sectionBusy.value);
+    next.delete(list);
+    sectionBusy.value = next;
+  }
+}
+const onSectionRename = (list: string, to: string) =>
+  runSectionAction(list, async () => (await renameList(list, to)) !== null, "onSuccess");
+const onSectionArchive = (list: string) => runSectionAction(list, () => archiveList(list), "never");
+// GAP-64: delete moves tasks one-by-one and can leave a PARTIAL state even on
+// failure, so reload regardless — "Err ⇒ nothing happened" is false here.
+const onSectionDelete = (list: string) => runSectionAction(list, () => deleteList(list), "always");
 
 // done / total of the visible (non-archived) list; drives the progress bar.
 const progress = computed(() => {
@@ -510,14 +559,27 @@ async function add(payload: AddPayload) {
         :key="bucket.key"
         class="mt-1 first:mt-0"
       >
-        <h3
+        <div
           v-if="bucket.label"
-          data-testid="task-bucket-header"
-          class="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider"
-          :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-slate-500'"
+          class="mb-1 flex items-center gap-1 px-1"
         >
-          {{ bucket.label }}
-        </h3>
+          <h3
+            data-testid="task-bucket-header"
+            class="text-[10px] font-semibold uppercase tracking-wider"
+            :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-slate-500'"
+          >
+            {{ bucket.label }}
+          </h3>
+          <TaskSectionMenu
+            v-if="bucket.list && grouping === 'lists' && !isAggregate"
+            :list="bucket.list!"
+            :busy="sectionBusy.has(bucket.list!)"
+            :reset-nonce="sectionMenuResetNonce"
+            @rename="onSectionRename(bucket.list!, $event)"
+            @archive="onSectionArchive(bucket.list!)"
+            @delete="onSectionDelete(bucket.list!)"
+          />
+        </div>
         <ul class="flex flex-col gap-1">
           <TaskRow
             v-for="(task, i) in bucket.tasks"
