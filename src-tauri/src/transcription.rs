@@ -78,12 +78,15 @@ struct TranscriptionQueue {
     pending: VecDeque<TranscriptionJob>,
     /// The job the worker is presently on; None between jobs and at idle.
     active: Option<ActiveJob>,
-    /// A one-shot request (artifact id) for the worker to drop its cached
+    /// One-shot requests (artifact ids) for the worker to drop its cached
     /// transcriber before the delete command unlinks the model file —
     /// whisper.cpp mmaps the model, and Windows refuses to delete a mapped
     /// file, so an idle worker's cache would otherwise block deletion
-    /// forever. Latest-wins on overwrite (see the test).
-    pending_purge: Option<String>,
+    /// forever. A deduped LIST, not a latest-wins slot: two different-tier
+    /// deletes racing before the worker's next wake must both survive, or
+    /// the first tier's still-mapped file makes its delete fail with a
+    /// spurious "still in use" (H4 review).
+    pending_purges: Vec<String>,
 }
 
 /// Outcome of an enqueue attempt, so `enqueue_transcription` knows whether to
@@ -235,10 +238,12 @@ impl TranscriptionQueue {
     }
 
     fn request_purge(&mut self, id: &str) {
-        self.pending_purge = Some(id.to_string());
+        if !self.pending_purges.iter().any(|p| p == id) {
+            self.pending_purges.push(id.to_string());
+        }
     }
-    fn take_purge(&mut self) -> Option<String> {
-        self.pending_purge.take()
+    fn take_purges(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_purges)
     }
     /// Whether the worker is presently on a job — the delete command's
     /// refusal gate (see model_commands.rs).
@@ -844,25 +849,29 @@ pub fn run_transcription(app: &AppHandle) {
                 // below may leave it queued, and popping before that gate would
                 // drop the job (or a force upgrade that lands between the peek
                 // and the pop). We claim it only once we've decided to run it.
-                let purge = {
+                let purges = {
                     let state = app.state::<TranscriptionState>();
                     let mut guard = lock_ignoring_poison(&state.inner);
-                    while guard.pending.is_empty() && guard.pending_purge.is_none() {
+                    while guard.pending.is_empty() && guard.pending_purges.is_empty() {
                         // The Condvar guard is poisonable too — recover it the
                         // same way `lock_ignoring_poison` recovers the mutex, so
                         // a panic elsewhere can't wedge the worker permanently on
                         // a poisoned wait.
                         guard = state.cv.wait(guard).unwrap_or_else(|e| e.into_inner());
                     }
-                    guard.take_purge()
+                    guard.take_purges()
                 };
                 // Drop the cached transcriber BEFORE any delete attempt can
                 // race the mmap (the requesting command retries the unlink
                 // while we get here). "vad" is accepted as a no-op for
                 // symmetry — the worker never caches the silero model.
-                if let Some(id) = purge {
-                    if loaded.as_ref().map(|(t, _, _)| t.as_str()) == Some(id.as_str()) {
-                        log::info!("transcribe: dropping cached {id} model for deletion");
+                if !purges.is_empty() {
+                    let cached = loaded.as_ref().map(|(t, _, _)| t.as_str());
+                    if cached.is_some_and(|t| purges.iter().any(|p| p == t)) {
+                        log::info!(
+                            "transcribe: dropping cached {} model for deletion",
+                            cached.unwrap_or_default()
+                        );
                         loaded = None;
                     }
                     // A purge with no pending work: loop back to the wait
@@ -1409,16 +1418,21 @@ mod tests {
     #[test]
     fn purge_request_round_trips_and_is_one_shot() {
         let mut q = TranscriptionQueue::default();
-        assert_eq!(q.take_purge(), None);
+        assert!(q.take_purges().is_empty());
         q.request_purge("small");
-        assert_eq!(q.take_purge(), Some("small".to_string()));
-        assert_eq!(q.take_purge(), None, "one-shot: taken means gone");
-        // A second request before the worker wakes overwrites — deleting
-        // two models back-to-back must not strand the first request as a
-        // stale drop of the wrong tier later.
+        assert_eq!(q.take_purges(), vec!["small".to_string()]);
+        assert!(q.take_purges().is_empty(), "one-shot: taken means gone");
+        // Two different tiers requested before the worker's next wake must
+        // BOTH survive — an Option-shaped latest-wins slot dropped the
+        // first request, so its still-mmap'd model never got released and
+        // that delete failed with a spurious "still in use" (H4 review).
         q.request_purge("base");
         q.request_purge("turbo");
-        assert_eq!(q.take_purge(), Some("turbo".to_string()));
+        q.request_purge("base"); // repeat request: deduped, not doubled
+        assert_eq!(
+            q.take_purges(),
+            vec!["base".to_string(), "turbo".to_string()]
+        );
     }
 
     #[test]
