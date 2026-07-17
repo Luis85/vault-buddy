@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
@@ -31,11 +31,23 @@ const order = ref<string[]>([]);
 // default/order change preserves it and an unarchive shrinks it.
 const archived = ref<string[]>([]);
 
+// The archived set as a case-insensitive lookup, shared by the picker's
+// options and the save-time default normalization below.
+const archivedSet = computed(() => new Set(archived.value.map((a) => a.toLowerCase())));
+// A default can't be an archived list: the picker must not offer one, and an
+// archived default (e.g. a hand-edited config, or a default that was archived
+// elsewhere) must clear on the next save — otherwise unpicked adds keep
+// landing in a hidden list. Filter archived out of the options and null the
+// default when it's archived.
+const selectableLists = computed(() => order.value.filter((l) => !archivedSet.value.has(l.toLowerCase())));
+
 const autosave = useAutosave(
   async () => {
+    const dl = defaultList.value;
+    const effectiveDefault = dl && !archivedSet.value.has(dl.toLowerCase()) ? dl : null;
     await invoke("set_task_lists_config", {
       id: props.vaultId,
-      defaultList: defaultList.value || null,
+      defaultList: effectiveDefault,
       listOrder: order.value,
       archivedLists: archived.value,
     });
@@ -106,7 +118,7 @@ function unarchive(list: string) {
         </label>
         <TaskListPicker
           :model-value="defaultList"
-          :lists="order"
+          :lists="selectableLists"
           :allow-create="false"
           aria-label="Default list for new tasks"
           data-testid="default-list"

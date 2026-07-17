@@ -133,4 +133,30 @@ describe("TaskListSettings", () => {
     await flushPromises();
     expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(0);
   });
+
+  it("excludes archived lists from the default-list picker options (Codex re-review)", async () => {
+    const { wrapper } = mountSettings({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox", listOrder: ["Next"], archivedLists: ["Waiting"] }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="default-list"]').trigger("click");
+    await flushPromises();
+    // A visible list is offered; the archived "Waiting" is not a pickable
+    // default — otherwise unpicked adds would land in a hidden list.
+    expect(document.body.querySelector('[data-testid="default-list-option-Next"]')).not.toBeNull();
+    expect(document.body.querySelector('[data-testid="default-list-option-Waiting"]')).toBeNull();
+  });
+
+  it("clears an archived default on the next save (Codex re-review)", async () => {
+    const { wrapper, calls } = mountSettings({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Old", listOrder: ["Next"], archivedLists: ["Old", "Stale"] }),
+    });
+    await flushPromises();
+    // Unarchiving a DIFFERENT list triggers a save; the still-archived default
+    // ("Old") must normalize to null so unpicked adds stop landing in it.
+    await wrapper.get('[data-testid="unarchive-Stale"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    expect(save?.args).toMatchObject({ defaultList: null, archivedLists: ["Old"] });
+  });
 });
