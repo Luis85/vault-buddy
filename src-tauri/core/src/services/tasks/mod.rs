@@ -277,20 +277,33 @@ pub fn set_task_status(
     Ok(title)
 }
 
-/// Number of OPEN tasks (status != "done"; archived already excluded by
-/// list_tasks) in a vault, for the vault-row badge. Unknown vault / unsafe or
-/// missing folder / escape → 0, never an error (mirrors list_tasks). Read-only.
+/// Number of OPEN tasks (status != "done"; archived-STATUS tasks already
+/// excluded by list_tasks) in a vault, for the vault-row badge. Open tasks in
+/// an ARCHIVED LIST are excluded too: the badge must agree with the default
+/// Lists grouping, which hides them — counting them showed a nonzero badge
+/// over an empty-looking view, the same phantom count the frontend's
+/// visibleTasks fix removed one layer up (review, PR #59). The match mirrors
+/// visibleTasks/listSections exactly: case-insensitive on the task's OWN list
+/// (a nested sub-list of an archived list still renders, so it still counts).
+/// Unknown vault / unsafe or missing folder / escape → 0, never an error
+/// (mirrors list_tasks). Read-only.
 pub fn count_open_tasks(paths: &ServicePaths, id: &str) -> usize {
-    let Ok((vault_path, root, _)) = tasks_root_for(paths, id) else {
+    let Ok((vault_path, root, cfg)) = tasks_root_for(paths, id) else {
         return 0;
     };
     if let Err(e) = assert_root_if_exists(&vault_path, &root) {
         log::warn!("count_open_tasks: tasks folder resolves outside the vault: {e}");
         return 0;
     }
+    let archived: std::collections::HashSet<String> = cfg
+        .archived_lists
+        .iter()
+        .map(|a| a.to_lowercase())
+        .collect();
     tasks::list_tasks(&root, None)
         .into_iter()
         .filter(|t| t.status != "done")
+        .filter(|t| t.list.is_empty() || !archived.contains(&t.list.to_lowercase()))
         .count()
 }
 
@@ -478,6 +491,44 @@ mod tests {
             listed[0].id, None,
             "list_tasks must not surface the task's own status: value (\"new\") as its id"
         );
+    }
+
+    #[test]
+    fn count_open_tasks_excludes_open_tasks_in_archived_lists() {
+        // The vault-row badge must agree with the DEFAULT Lists grouping,
+        // which hides an archived list's open tasks: a vault whose only open
+        // tasks sat in an archived list showed a nonzero badge over an
+        // empty-looking view — the same phantom count the frontend's
+        // visibleTasks fix removed one layer up (review, PR #59). The match
+        // is case-insensitive and exact (a nested sub-list of an archived
+        // list still renders, so it still counts).
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "archivedLists": ["Old"] } } }"#,
+        )
+        .unwrap();
+        let mk = |title: &str, list: &str| {
+            add_task(
+                &paths,
+                "deadbeef01234567",
+                title,
+                "2026-07-09",
+                None,
+                None,
+                &[],
+                Some(list),
+            )
+            .unwrap()
+        };
+        mk("Parked", "old"); // archived under a case variant → hidden → not counted
+        mk("Rooted", ""); // No list → counted
+        mk("Live one", "Live"); // visible list → counted
+        mk("Nested", "Old/Sub"); // sub-list of an archived list still renders → counted
+        let done = mk("Done parked", "old"); // done is out of the count regardless
+        set_task_status(&paths, "deadbeef01234567", &done.path, "done").unwrap();
+        assert_eq!(count_open_tasks(&paths, "deadbeef01234567"), 3);
     }
 
     #[test]
