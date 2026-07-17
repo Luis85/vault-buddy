@@ -350,7 +350,24 @@ pub fn delete_task_list(
         moved += 1;
     }
     // Remove only if empty; a folder with sub-lists / foreign files stays.
-    let folder_removed = std::fs::remove_dir(&list_dir).is_ok();
+    // Only DirectoryNotEmpty IS that deliberate keep — collapsing every error
+    // into folderRemoved:false swallowed real failures (PermissionDenied, a
+    // Windows AV/indexer lock on the now-empty dir), leaving a phantom
+    // "deleted" empty list with no error shown. Those propagate; per GAP-64
+    // the Err still does NOT mean nothing happened (the tasks above already
+    // moved — callers reload regardless). NotFound counts as removed: the
+    // folder being gone is the outcome, whoever got there first (the
+    // delete_transcription_model "path is clear" precedent).
+    let folder_removed = match std::fs::remove_dir(&list_dir) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => false,
+        Err(e) => {
+            return Err(format!(
+                "Moved {moved} task(s) to No list, but the list folder could not be removed: {e}"
+            ))
+        }
+    };
     Ok(DeleteListOutcome {
         moved,
         folder_removed,
@@ -738,6 +755,34 @@ mod tests {
         assert!(root.join("Proj").join("notes.txt").exists()); // foreign untouched
         assert!(root.join("Proj/Sub").join("s.md").exists()); // sub-list untouched
         assert!(root.join("t.md").exists()); // the moved task landed at the root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_task_list_propagates_an_unexpected_removal_failure() {
+        // remove_dir failing on a now-EMPTY folder (PermissionDenied, a
+        // Windows AV/indexer lock) is NOT the deliberate kept-folder outcome —
+        // returning Ok{folderRemoved:false} there swallowed the error, so the
+        // UI closed silently while a phantom "deleted" empty list lingered.
+        // Only DirectoryNotEmpty means "kept"; anything else must surface.
+        // Force EACCES by making the PARENT read-only (removing a dir needs
+        // write on its parent); the list itself is empty so no moves are
+        // attempted first. Root bypasses DAC — probe and skip under root
+        // (the move rollback test's pattern); CI's rust-core runs non-root.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(root.join("Empty")).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let bypassed = std::fs::write(root.join(".probe"), b"x").is_ok();
+        if bypassed {
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let res = delete_task_list(&root, "Empty", None);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(res.is_err(), "an unexpected removal failure must propagate");
+        assert!(root.join("Empty").is_dir(), "the folder is still there");
     }
 
     #[test]
