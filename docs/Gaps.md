@@ -327,6 +327,29 @@ callers depend on.
   list can briefly appear in that row's list picker. Fails open (worst case:
   a hidden list is offered as a move target), single-vault mode unaffected;
   cosmetic, deferred.
+- **2026-07-17 full-PR review pass — fixed:** Escape with a section ⋯ menu /
+  delete-confirm open closed the whole panel (GAP-27 class; focus-managed
+  popover + root Escape handler now step back a level); `archiveList` could
+  persist computed-empty prefs over a vault's stored `defaultList`/`listOrder`
+  when the config read had failed (now retry-then-refuse); `count_open_tasks`
+  counted archived-list open tasks the default Lists view hides (badge now
+  mirrors `visibleTasks`); the settings card rendered an archived list as an
+  unmarked reorderable row above its own unarchive row (reorder rows now
+  filter, slots preserved); stale hidden filter text blocked manual reorder
+  (`reorderView` now consumes `filterActive`); config.json was read twice per
+  core task-service call; the id-stamp machinery pre-drew discarded CSPRNG ids
+  across four duplicated sites (now generated inside `update_task_fields`,
+  shared `backfill_task_id`).
+- **2026-07-17 review pass — accepted residuals (deliberately not churned):**
+  the SelectMenu/TaskSectionMenu outside-click wiring stays two bespoke copies
+  (different needs: teleported dual-ref capture-phase vs in-tree single-ref;
+  extract only when a third popover appears); TaskViewControls duplicates
+  TaskListPicker's inline-create state machine (~15 lines; the two surfaces
+  are deliberately distinct entry points — extract on the next consumer);
+  `sectionAt`/`rowsFor` re-query rects per pointermove (layout-neutral classes,
+  single-digit section counts in a 400×420 panel — negligible);
+  `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
+  calls vs N fsync'd writes — negligible).
 
 ## 2. Main-thread responsiveness (shell)
 

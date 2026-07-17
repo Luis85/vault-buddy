@@ -495,7 +495,7 @@ exist, each documented in its own domain section below:
    files);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
    (status toggle, rename, due/priority/tags edit, the manual `order`
-   rank, and the ensure-absent task-ID stamp — one generalized writer);
+   rank, and the ensure-id task-ID stamp — one generalized writer);
 5. the **tasks** domain — the in-root task file move between list folders
    (`move_task_to_list`: `rename_noreplace` + ` (N)` suffix retry, never
    clobbers, same-list no-op; also backfills a missing task ID on the landed
@@ -505,7 +505,10 @@ exist, each documented in its own domain section below:
 
 They all ride the same never-clobber/atomic machinery in
 `core::capture_note` / `core::capture_paths` (exclusive-create temps,
-`rename_noreplace`, suffix retry). Any other code touching vault contents
+`rename_noreplace`, suffix retry) — except where a write documents its own
+deliberate variant: `rename_task_list` REFUSES a collision instead of
+suffix-retrying (the name is user-chosen), and `delete_task_list` removes
+an already-empty folder. Any other code touching vault contents
 directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`,
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`,
@@ -1069,15 +1072,32 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   unchanged), archive, delete-with-confirm; the container's per-list
   `sectionBusy` guard serializes these and a `sectionMenuResetNonce` closes the
   popover on success. Delete ALWAYS reloads the task list afterward (GAP-64: a
-  kept folder means the section must reflect reality). **Archiving**
+  kept folder means the section must reflect reality). Every open menu state
+  swallows its OWN Escape (GAP-27 class): the popover takes focus on open and
+  on each sub-mode change (entering delete-confirm unmounts the clicked item,
+  which would drop focus to body where PanelRoot's window listener sees
+  Escape first), and a root-level keydown handler steps back one level —
+  a closed menu still lets Escape through to the panel. **Archiving**
   (`archivedLists` in the lists settings object, round-tripped by
   `serialize_config` and preserved by `set_capture_config` / the
   `config_merge` capture-owned merge): an archived list hides from the Lists
-  grouping and every picker; archiving the list that IS the `defaultList`
+  grouping and every picker — including the open-task badge
+  (`count_open_tasks` skips open tasks whose own list is archived, mirroring
+  `visibleTasks` exactly, so the vault-row / All-tasks counts agree with the
+  default Lists view) and the settings card's reorder rows (archived names
+  keep their SLOT in the persisted `listOrder`, unrendered, so unarchiving
+  restores their position); archiving the list that IS the `defaultList`
   clears the default (else unpicked adds would silently land in a hidden
-  list). Reversal is `TaskListSettings.vue` (extracted `TaskArchivedLists.vue`
+  list), and `archiveList` REFUSES (retry-then-toast) while the vault's
+  config is uncached — uncached means the read FAILED (the real
+  `get_tasks_config` always returns a defaults DTO), and writing
+  computed-empty prefs then would clobber the stored `defaultList`/
+  `listOrder` (the same guard `syncListPrefs` has). Reversal is
+  `TaskListSettings.vue` (extracted `TaskArchivedLists.vue`
   unarchive rows); that card also excludes archived lists from the default
-  picker and normalizes an archived default to `null` on save.
+  picker and normalizes an archived default to `null` on save. The
+  case-insensitive membership rule itself is single-sourced:
+  `archivedMatcher` in `taskSections`, used by every surface above.
   **List-prefs sync** (`useTaskLists`' `remapListPrefs` + `syncListPrefs`):
   after a rename/delete the cached + persisted `defaultList` / `listOrder` /
   `archivedLists` are reconciled so a stale entry can't recreate the old
@@ -1088,7 +1108,9 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   when `folderRemoved` is reported and touches ONLY the exact entry, leaving
   descendant prefs intact. The sync writes only when a config is already
   cached (nothing to remap otherwise, and writing computed-empty prefs would
-  clobber unread settings). The single-value core of this reconcile —
+  clobber unread settings), and SKIPS the write when the remap changed
+  nothing — a rename/delete of a list no pref references must not cost an
+  fsync'd config.json rewrite. The single-value core of this reconcile —
   exact→`to` / descendant-prefix-on-rename / else-unchanged — is the pure
   `remapListRef` in `taskSections`, shared so the composer pick (next) and the
   persisted prefs can never disagree. **The add composer's touched pick is
@@ -1118,14 +1140,15 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `planReorder` — the origin's drop line only renders for a same-section drop,
   so a silent rank write from the pointer slot would surprise (Codex, PR #59).
 - **Task-ID stamping now spans every structural write path.** Create
-  (`render_task`), edit (`update_task` via `update_task_fields`' ensure-absent
-  key), move (`services::move_task_to_list` backfills a missing id on the
-  LANDED file — best-effort, so a stamp failure can't fail the move), AND
-  delete-list (`services::delete_task_list` threads the vault's id property into
-  the core delete loop, which stamps each task it relocates to No list —
-  best-effort, same as the move) all stamp a generated id when the vault opts
-  in; only a status toggle/archive is deliberately excluded (a checkbox click
-  isn't editing the task). `update_task_fields` RETURNS the effective id (the
+  (`render_task`), edit (`update_task` via `update_task_fields`' `ensure_id`
+  parameter — the id is generated INSIDE the writer, only when the property
+  lacks a usable value), move (`services::move_task_to_list` backfills a
+  missing id on the LANDED file), AND delete-list (the core delete loop
+  backfills each task it relocates to No list) all stamp a generated id when
+  the vault opts in — the move and delete sites share the best-effort
+  `tasks::backfill_task_id` (warn-only, a stamp failure can't fail the move
+  that carried it); only a status toggle/archive is deliberately excluded (a
+  checkbox click isn't editing the task). `update_task_fields` RETURNS the effective id (the
   freshly-stamped value, or the existing one read case-insensitively to match
   the stamp predicate) and short-circuits the redundant write when nothing
   changes; `update_task` surfaces it so the inline editor reveals its copy-ID
@@ -1174,23 +1197,30 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `due`/`priority`/`tags`/`tag`/`order`), which is what lets the writer
   treat the ID as a plain "ensure present" key without ever colliding with
   a real patch key. Two write sites, same never-clobber discipline as
-  every other vault write: **create** — `services::add_task` computes
-  `cfg.task_id_enabled.then(tasks::new_task_id)` and threads
+  every other vault write: **create** — `services::add_task` resolves the
+  property through `tasks::id_property_for_generation` (enabled AND a
+  valid, non-reserved name — a hand-edited config with a reserved property
+  generates nothing), draws `tasks::new_task_id()`, and threads
   `(property, id)` into `tasks::create_task`/`render_task`, which emits it
   as a plain unquoted scalar line right after `created`, before
   `due`/`priority`/`tags`; **edit** — `update_task_fields(root, path,
-  updates, ensure_absent)` gained the `ensure_absent: &[(&str, &str)]`
-  parameter: each entry is added to the write **only when
-  `parse::scalar_field` finds the key absent** from the current content, so
-  an existing (including hand-authored) ID is never overwritten and IDs
-  stay stable across renames/edits. The shell's `update_task` command
-  builds that ensure list on every call when the vault opts in — a plain
-  field edit AND an order-only reorder patch both stamp a missing ID,
-  because both go through the same non-empty `updates` path. A **status
+  updates, ensure_id: Option<&str>)` takes the PROPERTY NAME and generates
+  the id INTERNALLY, only when `parse::frontmatter_scalar_ci` finds no
+  usable value — absent, or present with a BLANK scalar (a bare `task-id:`
+  from an Obsidian property panel), which is rewritten under its ON-DISK
+  casing so the case-sensitive writer replaces the line instead of
+  inserting a case-mismatched duplicate. An existing non-empty value (any
+  casing) is never overwritten, so IDs stay stable across renames/edits,
+  and no caller pre-draws an id it may discard. The shell's `update_task`
+  command passes the resolved property on every call when the vault opts
+  in — a plain field edit AND an order-only reorder patch both stamp a
+  missing ID, because both go through the same non-empty `updates` path;
+  the move/delete relocation sites share `tasks::backfill_task_id`, the
+  best-effort (warn-only) wrapper over the same ensure path. A **status
   toggle/archive does NOT stamp**: `services::set_task_status` (what the
   `set_task_status` command calls) delegates to the core
   `tasks::set_task_status`, itself a thin one-entry wrapper over
-  `update_task_fields` that passes an empty `ensure_absent` slice — the one
+  `update_task_fields` that passes `ensure_id: None` — the one
   write path deliberately excluded, since a checkbox click isn't "editing"
   the task. `set_task_id_config` is the
   independent field-save command (the `set_task_lists_config` pattern):
