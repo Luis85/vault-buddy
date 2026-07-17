@@ -1095,9 +1095,13 @@ describe("Tasks", () => {
     expect((call?.args as { archivedLists: string[] }).archivedLists).toContain("Inbox");
   });
 
-  it("archives even when the vault config never cached (older / absent config)", async () => {
+  it("archives when no list settings were ever stored (defaults config)", async () => {
+    // The real get_tasks_config never returns null — an absent stored config
+    // comes back as a fully-populated defaults DTO, which loadVaultConfig
+    // caches. Archiving against those defaults writes the empty prefs
+    // honestly (they ARE what's stored).
     const { wrapper, calls } = mountLists({
-      get_tasks_config: () => null, // uncached → archiveList computes off an absent cfg
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
       set_task_lists_config: () => null,
     });
     await flushPromises();
@@ -1112,6 +1116,60 @@ describe("Tasks", () => {
     expect(args.archivedLists).toEqual(["Inbox"]);
     expect(args.defaultList).toBeNull();
     expect(args.listOrder).toEqual([]);
+  });
+
+  it("refuses to archive while the config read keeps failing (never clobbers stored prefs)", async () => {
+    // An UNCACHED config means the get_tasks_config invoke REJECTED (the real
+    // command always returns a defaults DTO) — the vault may hold real stored
+    // prefs the frontend just couldn't read. Archiving then would persist
+    // withListArchived(undefined) = {defaultList:null, listOrder:[]} over
+    // them (the Rust command writes those two fields verbatim). archiveList
+    // must retry the read and REFUSE with a toast, not write blind — the
+    // same clobber guard syncListPrefs already has (Codex-class data loss).
+    const notifications = useNotificationsStore();
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => {
+        throw new Error("config read boom");
+      },
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    // Retried the read (mount + archive-time), then refused the write.
+    expect(calls.filter((c) => c.cmd === "get_tasks_config").length).toBeGreaterThan(1);
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+    // The section is NOT hidden — nothing was archived.
+    expect(wrapper.find('[data-testid="task-section-menu-Inbox"]').exists()).toBe(true);
+  });
+
+  it("archives with the REAL prefs after a transient config read failure", async () => {
+    // First read (mount) fails, the archive-time retry succeeds: the write
+    // must carry the vault's actual stored defaultList/listOrder, proving the
+    // retry result (not computed-empty prefs) is what gets persisted.
+    let readCalls = 0;
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => {
+        readCalls += 1;
+        if (readCalls === 1) throw new Error("transient boom");
+        return { tasksFolder: null, defaultList: "Keep", listOrder: ["Keep", "Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" };
+      },
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    const args = calls.find((c) => c.cmd === "set_task_lists_config")?.args as {
+      archivedLists: string[];
+      defaultList: string | null;
+      listOrder: string[];
+    };
+    expect(args.defaultList).toBe("Keep"); // real stored prefs, not null
+    expect(args.listOrder).toEqual(["Keep", "Inbox"]);
+    expect(args.archivedLists).toEqual(["Inbox"]);
   });
 
   it("archiving the default list also clears the default (Task 8 review Minor 3)", async () => {

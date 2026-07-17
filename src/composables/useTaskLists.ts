@@ -17,8 +17,8 @@ import { orderLists, remapListRef } from "../utils/taskSections";
 // archived — otherwise the composer would render a blank picker and unpicked
 // adds would silently land in the now-hidden list (Task 8 review, Minor #3).
 // Pure so archiveList stays a thin invoke + cache update.
-function withListArchived(cfg: TasksConfig | undefined, list: string) {
-  const { archivedLists = [], defaultList = null, listOrder = [] } = (cfg ?? {}) as Partial<TasksConfig>;
+function withListArchived(cfg: TasksConfig, list: string) {
+  const { archivedLists = [], defaultList = null, listOrder = [] } = cfg as Partial<TasksConfig>;
   const low = list.toLowerCase();
   return {
     defaultList: defaultList && defaultList.toLowerCase() === low ? null : defaultList,
@@ -261,16 +261,32 @@ export function useTaskLists(
   async function archiveList(list: string): Promise<boolean> {
     if (vaultId === null) return false;
     const id = vaultId;
-    const cfg = vaultConfigs.value.get(id);
+    let cfg = vaultConfigs.value.get(id);
+    if (!cfg) {
+      // Uncached means the mount-time read FAILED — the real get_tasks_config
+      // always returns a fully-populated defaults DTO, which loadVaultConfig
+      // caches — never "no config stored". Archiving blind would persist
+      // withListArchived's computed-empty defaultList/listOrder over the
+      // vault's REAL stored settings (the Rust command writes those two
+      // fields verbatim) — the exact clobber syncListPrefs guards with its
+      // `if (!cfg) return`. Retry the read once, then refuse: an archive the
+      // user can repeat beats silent pref loss. (If the mount-time read is
+      // literally still in flight, the deduped retry returns without waiting
+      // and we refuse too — rare, and re-clicking succeeds.)
+      await loadVaultConfig(id);
+      cfg = vaultConfigs.value.get(id);
+      if (!cfg) {
+        notifications.error("Couldn't load the list settings — try archiving again.");
+        return false;
+      }
+    }
     const next = withListArchived(cfg, list);
     try {
       await invoke("set_task_lists_config", { id, ...next });
       // Update the cached config so the section hides immediately (the
       // archivedLists computed re-filters) without a round-trip.
-      if (cfg) {
-        vaultConfigs.value.set(id, { ...cfg, ...next });
-        vaultConfigs.value = new Map(vaultConfigs.value);
-      }
+      vaultConfigs.value.set(id, { ...cfg, ...next });
+      vaultConfigs.value = new Map(vaultConfigs.value);
       // Archiving hides the list from every picker, so a composer pointing at
       // it must fall back to the default (else the next add lands in a hidden
       // list). Descendants aren't archived, so only the exact pick clears.
