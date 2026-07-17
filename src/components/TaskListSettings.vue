@@ -23,8 +23,9 @@ const emit = defineEmits<{ "saving-change": [value: boolean] }>();
 const loading = ref(true);
 const defaultList = ref("");
 // The vault's lists in effective display order (listOrder first, the rest
-// alphabetical — exactly what the sections and pickers render). Reordering
-// edits this array; a save persists it as the new listOrder.
+// alphabetical). This FULL array — archived slots included — is what a save
+// persists as listOrder; only the visible subset below renders as reorder
+// rows.
 const order = ref<string[]>([]);
 // The archived set (Task 8) — hidden from the Lists grouping + pickers. This
 // card is where they're unarchived; a save carries the current set so a
@@ -34,11 +35,14 @@ const archived = ref<string[]>([]);
 // The archived set as a case-insensitive lookup, shared by the picker's
 // options and the save-time default normalization below.
 const archivedSet = computed(() => new Set(archived.value.map((a) => a.toLowerCase())));
-// A default can't be an archived list: the picker must not offer one, and an
-// archived default (e.g. a hand-edited config, or a default that was archived
-// elsewhere) must clear on the next save — otherwise unpicked adds keep
-// landing in a hidden list. Filter archived out of the options and null the
-// default when it's archived.
+// The visible lists: the default-list picker's options AND the reorder rows.
+// A default can't be an archived list (the picker must not offer one, and an
+// archived default must clear on the next save — otherwise unpicked adds keep
+// landing in a hidden list), and an archived list must not render as an
+// unmarked reorderable row either — it already renders in the Archived
+// section below, and "hidden from every picker" (the spec) includes this
+// card. Its SLOT in `order` survives unrendered, so unarchiving restores its
+// position instead of dumping it at the alphabetical tail.
 const selectableLists = computed(() => order.value.filter((l) => !archivedSet.value.has(l.toLowerCase())));
 
 const autosave = useAutosave(
@@ -83,11 +87,18 @@ function onDefaultChange(value: string) {
   defaultList.value = value;
   autosave.saveNow();
 }
+// `index`/`delta` address the VISIBLE rows; the swap lands on the two rows'
+// slots in the FULL order array, so archived names keep their hidden slots
+// while the visible pair still ends up in the dropped order around them.
 function move(index: number, delta: -1 | 1) {
+  const visible = selectableLists.value;
   const target = index + delta;
-  if (target < 0 || target >= order.value.length) return;
+  if (target < 0 || target >= visible.length) return;
+  const a = order.value.indexOf(visible[index]);
+  const b = order.value.indexOf(visible[target]);
+  if (a < 0 || b < 0) return;
   const next = [...order.value];
-  [next[index], next[target]] = [next[target], next[index]];
+  [next[a], next[b]] = [next[b], next[a]];
   order.value = next;
   autosave.saveNow();
 }
@@ -124,14 +135,14 @@ function unarchive(list: string) {
           data-testid="default-list"
           @update:model-value="onDefaultChange"
         />
-        <template v-if="order.length > 1">
+        <template v-if="selectableLists.length > 1">
           <p class="mb-1 mt-2 text-sm text-slate-200">
             List order
             <span class="block text-xs text-slate-500">How sections and pickers arrange the lists</span>
           </p>
           <ul class="flex flex-col gap-1">
             <li
-              v-for="(list, i) in order"
+              v-for="(list, i) in selectableLists"
               :key="list"
               data-testid="list-order-row"
               class="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5"
@@ -150,7 +161,7 @@ function unarchive(list: string) {
               <button
                 type="button"
                 :data-testid="`list-order-down-${i}`"
-                :disabled="i === order.length - 1"
+                :disabled="i === selectableLists.length - 1"
                 :aria-label="`Move ${list} down`"
                 class="cursor-pointer rounded px-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-30"
                 @click="move(i, 1)"

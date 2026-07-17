@@ -147,6 +147,30 @@ describe("TaskListSettings", () => {
     expect(document.body.querySelector('[data-testid="default-list-option-Waiting"]')).toBeNull();
   });
 
+  it("hides archived lists from the reorder rows but keeps their order slot", async () => {
+    // An archived list rendered as an unmarked, fully-reorderable row right
+    // above its own Unarchive row — the same list twice in one card, and
+    // interactive while hidden from every picker/grouping. The reorder rows
+    // now show only visible lists; the archived name KEEPS its slot in the
+    // persisted listOrder so unarchiving restores its position instead of
+    // dumping it at the alphabetical tail.
+    const { wrapper, calls } = mountSettings({
+      list_task_lists: () => ["Inbox", "Next", "Old", "Waiting"], // Old's folder still exists
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: ["Next", "Old", "Waiting"], archivedLists: ["Old"] }),
+    });
+    await flushPromises();
+    const rows = wrapper
+      .findAll('[data-testid="list-order-row"]')
+      .map((r) => r.text().replace(/[↑↓]/g, "").trim());
+    expect(rows).toEqual(["Next", "Waiting", "Inbox"]); // "Old" not offered for reorder
+    // Move "Waiting" (visible row 1) up: it swaps with "Next" AROUND the
+    // hidden "Old" slot — the saved order keeps Old exactly where it was.
+    await wrapper.get('[data-testid="list-order-up-1"]').trigger("click");
+    await flushPromises();
+    const save = calls.find((c) => c.cmd === "set_task_lists_config");
+    expect((save?.args as { listOrder: string[] }).listOrder).toEqual(["Waiting", "Old", "Next", "Inbox"]);
+  });
+
   it("clears an archived default on the next save (Codex re-review)", async () => {
     const { wrapper, calls } = mountSettings({
       get_tasks_config: () => ({ tasksFolder: null, defaultList: "Old", listOrder: ["Next"], archivedLists: ["Old", "Stale"] }),
