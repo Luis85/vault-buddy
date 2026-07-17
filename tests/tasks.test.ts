@@ -1309,12 +1309,14 @@ describe("Tasks", () => {
     });
   });
 
-  it("prefix-removes descendant lists when a parent list is deleted (Codex re-review)", async () => {
-    // Deleting Inbox removes Inbox/Sub too — the prefs drop both (the exact
-    // name and its descendants) and keep the unrelated "Keep".
+  it("preserves a surviving child list's prefs when a parent delete keeps the folder (Codex re-review)", async () => {
+    // delete_task_list keeps a folder that still holds sub-lists (folderRemoved
+    // false), so deleting Inbox does NOT remove Inbox/Sub — Inbox still exists
+    // as a folder too. Its prefs (and the child's) must all survive, so no
+    // prefs reconcile write happens at all.
     const { wrapper, calls } = mountLists({
-      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox/Sub", listOrder: ["Inbox", "Inbox/Sub", "Keep"], archivedLists: ["Inbox/Old"], taskIdEnabled: false, taskIdProperty: "task-id" }),
-      delete_task_list: () => ({ moved: 0, folderRemoved: true }),
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox/Sub", listOrder: ["Inbox", "Inbox/Sub"], archivedLists: ["Inbox/Old"], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      delete_task_list: () => ({ moved: 0, folderRemoved: false }),
       set_task_lists_config: () => null,
     });
     await flushPromises();
@@ -1322,8 +1324,8 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
     await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
     await flushPromises();
-    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
-    expect(save?.args).toMatchObject({ defaultList: null, listOrder: ["Keep"], archivedLists: [] });
+    // Folder kept → no reconcile write; every entry (parent + descendants) stays.
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
   });
 
   it("skips the prefs sync on rename when the config never cached", async () => {

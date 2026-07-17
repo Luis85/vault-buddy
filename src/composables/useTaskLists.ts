@@ -33,23 +33,25 @@ function withListArchived(cfg: TasksConfig | undefined, list: string) {
 // Rewrite the list preferences after a rename (`to` = the landed name) or a
 // delete (`to` = null) so the default / order / archived set never point at a
 // stale name — otherwise an untouched add would reapply the old default and
-// recreate the old folder (Codex, PR #59). A List IS a folder, so a rename or
-// delete of a PARENT list moves/removes its whole subtree on disk (Work →
-// Projects turns Work/Q3 into Projects/Q3; deleting Work removes Work/Q3
-// too) — remap must follow descendants by prefix, not only the exact name, or
-// a nested list's prefs would point at a folder that no longer exists (Codex,
-// PR #59 re-review). Pure so syncListPrefs stays thin.
+// recreate the old folder (Codex, PR #59). A List IS a folder, and the two
+// lifecycle ops treat descendants DIFFERENTLY on disk:
+//   - RENAME moves the whole subtree (Work → Projects turns Work/Q3 into
+//     Projects/Q3), so descendants are prefix-rewritten under `to`.
+//   - DELETE never removes descendants — `tasks::delete_task_list` keeps a
+//     folder that still holds sub-lists or foreign files — so descendant prefs
+//     are LEFT UNTOUCHED; dropping them would strand a still-existing child
+//     list (unarchiving it, losing its order) (Codex, PR #59 re-review).
+// Pure so syncListPrefs stays thin.
 function remapListPrefs(cfg: TasksConfig | undefined, from: string, to: string | null) {
   const { defaultList = null, listOrder = [], archivedLists = [] } = (cfg ?? {}) as Partial<TasksConfig>;
   const low = from.toLowerCase();
   const prefix = `${low}/`;
-  // Map one entry: the renamed list → `to`, a descendant → same relative tail
-  // under `to`, everything else unchanged; `null` (dropped) on a delete of the
-  // list or any of its descendants.
+  // Map one entry: the exact list → `to` (renamed) or dropped (deleted); a
+  // descendant → rewritten under `to` on a RENAME only, else unchanged.
   const one = (l: string): string | null => {
     const ll = l.toLowerCase();
     if (ll === low) return to;
-    if (ll.startsWith(prefix)) return to === null ? null : to + l.slice(from.length);
+    if (to !== null && ll.startsWith(prefix)) return to + l.slice(from.length);
     return l;
   };
   const remap = (arr: string[]) => arr.map(one).filter((l): l is string => l !== null);
@@ -229,9 +231,15 @@ export function useTaskLists(vaultId: string | null) {
     if (vaultId === null) return false;
     const id = vaultId;
     try {
-      await invoke("delete_task_list", { id, list });
+      const outcome = await invoke<{ moved: number; folderRemoved: boolean }>("delete_task_list", { id, list });
       await loadVaultLists(id);
-      await syncListPrefs(id, list, null);
+      // Reconcile prefs ONLY when the folder was actually removed. A folder
+      // kept because it still holds sub-lists or foreign files is a list that
+      // STILL EXISTS, so clearing its default/order/archived entry would
+      // strand it — and its descendants were never removed either (Codex, PR
+      // #59 re-review). A removed folder was empty, so there are no descendant
+      // prefs to worry about; dropping the exact entry is complete.
+      if (outcome?.folderRemoved) await syncListPrefs(id, list, null);
       return true;
     } catch (e) {
       notifications.error(String(e));
