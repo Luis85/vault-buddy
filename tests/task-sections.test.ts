@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AggTask } from "../src/types";
-import { dateBuckets, listSections, tagSections } from "../src/utils/taskSections";
+import { type Bucket, dateBuckets, dropTargetList, listSections, tagSections } from "../src/utils/taskSections";
 
 const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   path: `C:/v/Tasks/${title.replace(/\s+/g, "-")}.md`,
@@ -100,5 +100,22 @@ describe("moved builders keep their contracts", () => {
       t("Fin", { done: true, status: "done" }),
     ]);
     expect(labels(sections)).toEqual(["#home", "#Work", "No tags", "Done"]);
+  });
+});
+
+describe("dropTargetList (drag-to-move target)", () => {
+  const list = (name: string): Bucket => ({ key: `list:${name.toLowerCase()}`, label: name, list: name, tasks: [] });
+  it("returns the over-section's list name for a real list", () => {
+    expect(dropTargetList(list("B"), "list:a")).toBe("B");
+  });
+  it("returns '' for the No-list section", () => {
+    expect(dropTargetList({ key: "nolist", label: "No list", tasks: [] }, "list:a")).toBe("");
+  });
+  it("returns null over the same section (a within-section reorder)", () => {
+    expect(dropTargetList(list("A"), "list:a")).toBeNull();
+  });
+  it("returns null over Done or nothing (not a list target)", () => {
+    expect(dropTargetList({ key: "done", label: "Done", tasks: [] }, "list:a")).toBeNull();
+    expect(dropTargetList(undefined, "list:a")).toBeNull();
   });
 });

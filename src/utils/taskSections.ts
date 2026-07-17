@@ -154,3 +154,14 @@ export function orderLists(names: string[], listOrder: string[]): string[] {
     .map(([, label]) => label);
   return [...ordered, ...rest];
 }
+
+/** The list a cross-section drop targets under Lists grouping: the
+ * over-section's `list` name, `""` for the No-list section, or `null` when the
+ * drop is a within-section reorder (same section) or onto a section that isn't
+ * a list target (Done carries no `list`). Pure so the drag-to-move decision
+ * stays testable and out of the component's branch budget. */
+export function dropTargetList(over: Bucket | undefined, sectionKey: string): string | null {
+  if (!over || over.key === sectionKey) return null;
+  if (over.list !== undefined) return over.list;
+  return over.key === "nolist" ? "" : null;
+}

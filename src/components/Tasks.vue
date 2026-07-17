@@ -12,7 +12,7 @@ import type { AggTask, TaskItem, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
 import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
 import { planReorder } from "../utils/taskOrder";
-import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
+import { type Bucket, dateBuckets, dropTargetList, listSections, tagSections } from "../utils/taskSections";
 import {
   loadSortPref,
   NATURAL_DIR,
@@ -236,15 +236,70 @@ const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({
           (el) => el.dataset.reorderSection === sectionKey,
         ))
       : [],
+  // Which section wrapper (by key) sits under the pointer — hit-test the
+  // rendered section containers so a drop onto another list's section becomes
+  // a cross-list move (Task 11).
+  sectionAt: (x, y) => {
+    if (!rootRef.value) return null;
+    for (const el of rootRef.value.querySelectorAll<HTMLElement>("[data-section-key]")) {
+      const r = el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return el.dataset.sectionKey ?? null;
+    }
+    return null;
+  },
   commit: commitReorder,
 });
 
-async function commitReorder(sectionKey: string, fromIndex: number, toIndex: number) {
-  const section = buckets.value.find((b) => b.key === sectionKey)?.tasks ?? [];
-  const plan = planReorder(section, fromIndex, toIndex);
+async function commitReorder(
+  sectionKey: string,
+  fromIndex: number,
+  toIndex: number,
+  overSectionKey: string | null,
+) {
+  const origin = buckets.value.find((b) => b.key === sectionKey);
+  const tasks = origin?.tasks ?? [];
+  const task = tasks[fromIndex];
+  // A release over a DIFFERENT list section is a cross-list move (Lists
+  // grouping only); everything else is a within-section rank reorder.
+  const targetList = dropTargetList(
+    buckets.value.find((b) => b.key === overSectionKey),
+    sectionKey,
+  );
+  if (task && targetList !== null && grouping.value === "lists") {
+    await moveTaskToList(task, targetList);
+    return;
+  }
+  const plan = planReorder(tasks, fromIndex, toIndex);
   if (!plan) return;
-  if (plan.kind === "single") await writeSingleRank(section[fromIndex], plan.order);
-  else await materializeRanks(section, plan.orders);
+  if (plan.kind === "single") await writeSingleRank(tasks[fromIndex], plan.order);
+  else await materializeRanks(tasks, plan.orders);
+}
+
+// Cross-list move via drag: optimistic list change (the row jumps to the
+// target section), then adopt the landed path (move_task_to_list may add a
+// ` (N)` collision suffix), revert + toast on failure. Serialized view-wide
+// through `reordering` like the rank writes.
+async function moveTaskToList(task: AggTask, list: string) {
+  if (busy.value.has(task.path) || task.list === list) return;
+  const prevPath = task.path;
+  const prevList = task.list;
+  task.list = list;
+  sortInPlace();
+  busy.value.add(prevPath);
+  reordering.value = true;
+  try {
+    const landed = await invoke<string>("move_task_to_list", { id: task.vaultId, path: prevPath, list });
+    task.path = landed;
+    sortInPlace();
+  } catch (e) {
+    task.list = prevList;
+    sortInPlace();
+    notifications.error(String(e));
+    logWarning(`move_task_to_list failed: ${String(e)}`);
+  } finally {
+    busy.value.delete(prevPath);
+    reordering.value = false;
+  }
 }
 
 // One midpoint write, optimistic with revert — the common drop.
@@ -557,6 +612,7 @@ async function add(payload: AddPayload) {
       <div
         v-for="bucket in buckets"
         :key="bucket.key"
+        :data-section-key="bucket.key"
         class="mt-1 first:mt-0"
       >
         <div

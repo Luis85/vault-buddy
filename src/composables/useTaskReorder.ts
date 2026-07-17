@@ -10,12 +10,24 @@ export interface DragState {
   sectionKey: string;
   fromIndex: number;
   toIndex: number;
+  // The section the pointer is currently over — the origin when a drag starts,
+  // another section's key when the pointer moves onto it. A release over a
+  // DIFFERENT section is a cross-section move rather than a within-section
+  // reorder (Task 11: drag a task onto another list).
+  overSectionKey: string | null;
 }
 
 export function useTaskReorder(opts: {
   enabled: () => boolean;
   rowsFor: (sectionKey: string) => HTMLElement[];
-  commit: (sectionKey: string, fromIndex: number, toIndex: number) => void | Promise<void>;
+  // Which section (by key) sits under the pointer, or null when over none.
+  sectionAt: (clientX: number, clientY: number) => string | null;
+  commit: (
+    sectionKey: string,
+    fromIndex: number,
+    toIndex: number,
+    overSectionKey: string | null,
+  ) => void | Promise<void>;
 }): {
   dragState: Ref<DragState | null>;
   onHandlePointerDown: (e: PointerEvent, sectionKey: string, index: number) => void;
@@ -48,13 +60,17 @@ export function useTaskReorder(opts: {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault();
     (e.target as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
-    dragState.value = { sectionKey, fromIndex: index, toIndex: index };
+    dragState.value = { sectionKey, fromIndex: index, toIndex: index, overSectionKey: sectionKey };
 
     const onMove = (ev: PointerEvent) => {
       if (!dragState.value) return;
+      // Keep the last known section when the pointer is momentarily between
+      // sections (over none) so a brief gap doesn't drop the target.
+      const over = opts.sectionAt(ev.clientX, ev.clientY);
       dragState.value = {
         ...dragState.value,
         toIndex: slotFor(sectionKey, index, ev.clientY),
+        overSectionKey: over ?? dragState.value.overSectionKey,
       };
     };
     const finish = (commitIt: boolean) => {
@@ -65,8 +81,10 @@ export function useTaskReorder(opts: {
       window.removeEventListener("keydown", onKey, true);
       const st = dragState.value;
       dragState.value = null;
-      if (commitIt && st && st.toIndex !== st.fromIndex) {
-        void opts.commit(st.sectionKey, st.fromIndex, st.toIndex);
+      // Commit a within-section reorder (slot changed) OR a cross-section move
+      // (released over a different section, where the slot may be unchanged).
+      if (commitIt && st && (st.toIndex !== st.fromIndex || st.overSectionKey !== st.sectionKey)) {
+        void opts.commit(st.sectionKey, st.fromIndex, st.toIndex, st.overSectionKey);
       }
     };
     const onUp = () => finish(true);
@@ -95,7 +113,8 @@ export function useTaskReorder(opts: {
     e.stopPropagation();
     const to = e.key === "ArrowUp" ? index - 1 : index + 1;
     if (to < 0 || to >= opts.rowsFor(sectionKey).length) return;
-    void opts.commit(sectionKey, index, to);
+    // Keyboard only reorders within the section — the over-section is the origin.
+    void opts.commit(sectionKey, index, to, sectionKey);
   }
 
   return { dragState, onHandlePointerDown, onHandleKeydown };
