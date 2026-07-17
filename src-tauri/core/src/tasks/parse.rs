@@ -202,6 +202,47 @@ pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
     frontmatter_scalar_ci(content, key).map(|(_, v)| v)
 }
 
+/// True when the top-level `key:` line (exact, ON-DISK casing) opens a BLOCK
+/// value — a nested mapping or block list on the following lines — rather than
+/// standing alone as a truly blank scalar. The id-stamp asks this before
+/// rewriting a present-but-empty key: `set_fields`' rewrite CONSUMES a block
+/// (indented continuations and `- ` items, comment lines deferred) along with
+/// the key line, so stamping over `uid:` + `  source: jira` would DELETE the
+/// user's nested frontmatter (review, PR #59). The walk mirrors the writer's
+/// consumption predicate exactly, biased safe: whitespace-only lines count as
+/// block (the writer would consume them), a blank line or the closing fence
+/// ends the block before it starts.
+pub(super) fn key_opens_block(content: &str, key: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    let mut past_key = false;
+    for line in lines {
+        let t = line.trim_end();
+        if t == "---" {
+            return false;
+        }
+        if !past_key {
+            // Find the key's own line: top-level, exact casing, colon-anchored
+            // (the same match set_fields will make).
+            if !line.starts_with([' ', '\t'])
+                && t.strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with(':'))
+            {
+                past_key = true;
+            }
+            continue;
+        }
+        let trimmed = t.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // deferred, like the writer's pending_comments buffer
+        }
+        return line.starts_with([' ', '\t']) || trimmed.starts_with("- ");
+    }
+    false
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.
@@ -359,6 +400,38 @@ mod tests {
             .as_deref(),
             Some("abc")
         );
+    }
+
+    #[test]
+    fn key_opens_block_mirrors_the_writer_consumption_rules() {
+        // The stamp's non-scalar guard (review, PR #59): true exactly when
+        // set_fields' rewrite of the empty-valued key would consume following
+        // lines — a nested mapping, a block list (indented or not), stray
+        // indented whitespace — so stamping over the user's data is refused.
+        let map = "---\ntype: Task\nuid:\n  source: jira\n---\n";
+        assert!(key_opens_block(map, "uid"));
+        let list = "---\ntype: Task\nuid:\n- a\n- b\n---\n";
+        assert!(key_opens_block(list, "uid"));
+        let indented_list = "---\ntype: Task\nuid:\n  - a\n---\n";
+        assert!(key_opens_block(indented_list, "uid"));
+        // A comment DEFERS the decision, like the writer's pending buffer.
+        let comment_then_item = "---\ntype: Task\nuid:\n# note\n- a\n---\n";
+        assert!(key_opens_block(comment_then_item, "uid"));
+        let comment_then_fence = "---\ntype: Task\nuid:\n# note\n---\n";
+        assert!(!key_opens_block(comment_then_fence, "uid"));
+        // Truly blank: next line is another key, a blank line, or the fence.
+        assert!(!key_opens_block("---\ntype: Task\nuid:\n---\n", "uid"));
+        assert!(!key_opens_block(
+            "---\ntype: Task\nuid:\nstatus: new\n---\n",
+            "uid"
+        ));
+        assert!(!key_opens_block(
+            "---\ntype: Task\nuid:\n\n- body\n---\n",
+            "uid"
+        ));
+        // Absent key / no frontmatter → false (nothing to guard).
+        assert!(!key_opens_block("---\ntype: Task\n---\n", "uid"));
+        assert!(!key_opens_block("no frontmatter", "uid"));
     }
 
     #[test]

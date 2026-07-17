@@ -140,21 +140,28 @@ pub fn update_task_fields(
     // line is rewritten under — both must outlive `effective`'s borrows.
     let mut generated: Option<String> = None;
     let mut blank_casing: Option<String> = None;
-    let ensured = ensure_id.map(|key| {
+    let ensured = ensure_id.and_then(|key| {
         match super::parse::frontmatter_scalar_ci(&content, key) {
             // Already has a usable id (any casing) → never overwritten.
-            Some((_, v)) if !v.is_empty() => v,
-            // Blank or absent → generate + stamp. A BLANK line is rewritten
-            // under its ON-DISK casing so set_fields (case-sensitive) replaces
-            // it — stamping the configured casing would insert a
-            // case-mismatched DUPLICATE that scalar_field_ci's CI read then
-            // shadows, hiding the id forever (Codex, PR #59). Absent stamps a
-            // new line under the configured property name.
+            Some((_, v)) if !v.is_empty() => Some(v),
+            // Empty-valued but opening a BLOCK (a nested map or block list
+            // under the configured key): that is the USER'S frontmatter, not a
+            // blank stamp target — set_fields' rewrite would consume the
+            // indented block along with the key line, deleting their data
+            // (review, PR #59). Leave it untouched; there is no usable id to
+            // report (reads agree: scalar_field_ci yields "" → filtered).
+            Some((on_disk, _)) if super::parse::key_opens_block(&content, &on_disk) => None,
+            // Truly blank or absent → generate + stamp. A BLANK line is
+            // rewritten under its ON-DISK casing so set_fields (case-
+            // sensitive) replaces it — stamping the configured casing would
+            // insert a case-mismatched DUPLICATE that scalar_field_ci's CI
+            // read then shadows, hiding the id forever (Codex, PR #59).
+            // Absent stamps a new line under the configured property name.
             found => {
                 blank_casing = found.map(|(on_disk, _)| on_disk);
                 let id = super::id::new_task_id();
                 generated = Some(id.clone());
-                id
+                Some(id)
             }
         }
     });
@@ -537,6 +544,44 @@ mod tests {
             .filter(|l| l.trim_start().to_ascii_lowercase().starts_with("task-id:"))
             .count();
         assert_eq!(id_lines, 1);
+    }
+
+    #[test]
+    fn update_task_fields_never_stamps_over_a_non_scalar_id_property() {
+        // review, PR #59: a configured id property can collide with a key the
+        // user already owns as a nested MAP or block LIST (`uid:` + indented
+        // lines). frontmatter_scalar_ci reads that as an empty scalar, so the
+        // blank-stamp branch would rewrite the key line — and set_fields'
+        // block consumption would DELETE the user's nested data with it. A
+        // non-scalar value is the user's frontmatter, never a stamp target:
+        // the edit still applies, the block survives byte-for-byte, and no id
+        // is reported.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        for (name, block) in [
+            ("map", "task-id:\n  source: jira\n  ref: ABC-1\n"),
+            ("list", "task-id:\n- a1\n- b2\n"),
+        ] {
+            let p = create_task(&root, name, "2026-07-08", None, None, &[], None).unwrap();
+            let content = std::fs::read_to_string(&p).unwrap();
+            let seeded = content.replacen(
+                "created: 2026-07-08\n",
+                &format!("created: 2026-07-08\n{block}"),
+                1,
+            );
+            std::fs::write(&p, &seeded).unwrap();
+
+            let reported =
+                update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id"))
+                    .unwrap();
+            assert_eq!(reported, None, "{name}: no usable id to report");
+            let body = std::fs::read_to_string(&p).unwrap();
+            assert!(body.contains("status: done\n"), "{name}: the edit applied");
+            assert!(
+                body.contains(block),
+                "{name}: the user's block survives byte-for-byte, got: {body}"
+            );
+        }
     }
 
     #[test]
