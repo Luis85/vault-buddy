@@ -1046,7 +1046,10 @@ describe("Tasks", () => {
 
   // A per-vault Lists view with one task in "Inbox" and one at the root, plus
   // whatever section-command handlers a test needs merged in.
-  const mountLists = (extra: Parameters<typeof mountView>[0] = {}) =>
+  const mountLists = (
+    extra: Parameters<typeof mountView>[0] = {},
+    opts: Parameters<typeof mountView>[1] = {},
+  ) =>
     mountView({
       list_tasks: () => [
         { path: "C:/v1/Tasks/Inbox/a.md", title: "In inbox", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "Inbox", order: null, id: null },
@@ -1055,7 +1058,7 @@ describe("Tasks", () => {
       list_task_lists: () => ["Inbox"],
       get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: ["Inbox"], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
       ...extra,
-    });
+    }, opts);
 
   it("shows a section menu on real list sections but not No list / Done", async () => {
     const { wrapper } = mountLists({
@@ -1230,6 +1233,61 @@ describe("Tasks", () => {
       .trigger("keydown", { key: "Escape", isComposing: false });
     expect(wrapper.find('[data-testid="task-section-rename-input-Inbox"]').exists()).toBe(false); // input gone
     expect(wrapper.find('[data-testid="task-section-rename-Inbox"]').exists()).toBe(true); // menu back
+  });
+
+  it("Escape closes the open section menu without reaching the panel (GAP-27 class)", async () => {
+    // Only the rename input handled Escape; in plain menu mode focus sits on
+    // the ⋯ trigger, so Escape bubbled to the window — where PanelRoot's
+    // listener closes the WHOLE panel. The popover now takes focus on open
+    // (the SelectMenu precedent) and the component swallows its own Escape,
+    // stepping the menu closed instead.
+    const reached: string[] = [];
+    const spy = (e: KeyboardEvent) => {
+      if (e.key === "Escape") reached.push(e.key);
+    };
+    window.addEventListener("keydown", spy);
+    const { wrapper } = mountLists({}, { attach: true });
+    try {
+      await flushPromises();
+      await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+      await flushPromises();
+      const popover = wrapper.get('[data-testid="task-section-popover-Inbox"]');
+      // Focus moved into the popover, so the keydown fires inside the
+      // component even though the ⋯ click left focus on the trigger.
+      expect(document.activeElement).toBe(popover.element);
+      await popover.trigger("keydown", { key: "Escape", isComposing: false });
+      expect(wrapper.find('[data-testid="task-section-rename-Inbox"]').exists()).toBe(false); // menu closed
+      expect(reached).toHaveLength(0); // swallowed — never bubbled to the window
+    } finally {
+      window.removeEventListener("keydown", spy);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("Escape steps the delete confirm back to the menu, then closes it", async () => {
+    // Entering confirmDelete unmounts the clicked Delete item, dropping focus
+    // to body (outside the component) — the popover is refocused on every
+    // sub-state change so Escape keeps landing inside the component instead
+    // of on the window listener that closes the panel.
+    const { wrapper } = mountLists({}, { attach: true });
+    try {
+      await flushPromises();
+      await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+      await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+      await flushPromises();
+      const popover = wrapper.get('[data-testid="task-section-popover-Inbox"]');
+      expect(document.activeElement).toBe(popover.element);
+      await popover.trigger("keydown", { key: "Escape", isComposing: false });
+      // One level back: confirm gone, the menu itself still open.
+      expect(wrapper.find('[data-testid="task-section-delete-confirm-Inbox"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="task-section-rename-Inbox"]').exists()).toBe(true);
+      await popover.trigger("keydown", { key: "Escape", isComposing: false });
+      expect(wrapper.find('[data-testid="task-section-rename-Inbox"]').exists()).toBe(false);
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
   });
 
   it("degrades gracefully when the list and config reads throw", async () => {

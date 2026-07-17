@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 // The ⋯ menu on a Lists-grouping section header: Rename / Archive / Delete the
 // list. Presentational — it owns only its open/sub-state; the container runs
 // the commands and bumps `resetNonce` on success to close the popover (the
 // TaskViewControls resetNonce precedent, Codex PR #59). Rename edits the
 // list's LEAF (rename_task_list renames the leaf at the same parent) and
-// mirrors TaskListPicker's inline input: IME-guarded Enter, and Escape that
-// stops propagation so it doesn't bubble to the panel's own Escape handler.
+// mirrors TaskListPicker's inline input: IME-guarded Enter. EVERY open state
+// swallows its own Escape (stepping back one level) via focus management +
+// the root keydown handler below — see the GAP-27 notes on the watch.
 const props = defineProps<{ list: string; busy: boolean; resetNonce?: number }>();
 const emit = defineEmits<{
   (e: "rename", name: string): void;
@@ -20,6 +21,8 @@ const mode = ref<Mode>("closed");
 const leaf = computed(() => props.list.split("/").pop() || props.list);
 const renameValue = ref("");
 const root = ref<HTMLElement | null>(null);
+const popover = ref<HTMLElement | null>(null);
+const renameInput = ref<HTMLInputElement | null>(null);
 
 function toggle() {
   mode.value = mode.value === "closed" ? "menu" : "closed";
@@ -61,6 +64,32 @@ watch(
   () => props.resetNonce,
   () => close(),
 );
+// Every open (sub-)state pulls focus into the component: entering the menu
+// leaves focus on the ⋯ trigger, and switching sub-modes UNMOUNTS the
+// clicked item (Delete/Cancel), dropping focus to body — where the next
+// Escape would hit PanelRoot's window listener FIRST and close the whole
+// panel (GAP-27 class; a window listener here can't help, it registers
+// after PanelRoot's and fires second). Focusing the popover (SelectMenu's
+// precedent) / the rename input keeps the keydown inside `root`, where
+// onRootKeydown below swallows it.
+watch(mode, (m) => {
+  if (m === "closed") return;
+  void nextTick(() => {
+    if (m === "rename") renameInput.value?.focus();
+    else popover.value?.focus();
+  });
+});
+// One Escape handler on the component root (bubble phase — catches the ⋯
+// trigger and every popover child): swallow and step BACK one level, the
+// Cancel buttons' behavior. The rename input's own handler runs first at
+// its target and already stops propagation. A CLOSED menu deliberately
+// lets Escape through — the panel's own close-on-Escape must keep working.
+function onRootKeydown(e: KeyboardEvent) {
+  if (e.key !== "Escape" || e.isComposing || mode.value === "closed") return;
+  e.preventDefault();
+  e.stopPropagation();
+  mode.value = mode.value === "menu" ? "closed" : "menu";
+}
 // A click outside the open popover closes it. Guarded on being open so idle
 // section menus don't each field every window click.
 function onWindowPointerDown(e: PointerEvent) {
@@ -78,6 +107,7 @@ const itemClass =
   <div
     ref="root"
     class="relative inline-flex"
+    @keydown="onRootKeydown"
   >
     <button
       type="button"
@@ -91,7 +121,10 @@ const itemClass =
     </button>
     <div
       v-if="mode !== 'closed'"
-      class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-lg border border-white/10 bg-slate-800 p-1 shadow-lg"
+      ref="popover"
+      :data-testid="`task-section-popover-${list}`"
+      tabindex="-1"
+      class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-lg border border-white/10 bg-slate-800 p-1 shadow-lg focus:outline-none"
       @click.stop
     >
       <template v-if="mode === 'menu'">
@@ -123,6 +156,7 @@ const itemClass =
       </template>
       <template v-else-if="mode === 'rename'">
         <input
+          ref="renameInput"
           v-model="renameValue"
           :data-testid="`task-section-rename-input-${list}`"
           type="text"

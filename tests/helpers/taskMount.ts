@@ -70,7 +70,7 @@ export const sample: TaskItem[] = [
   { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, priority: null, tags: [], list: "", order: null, id: null },
 ];
 
-export function mountView(handlers: Handlers = {}) {
+export function mountView(handlers: Handlers = {}, opts: { attach?: boolean } = {}) {
   const calls: Calls = [];
   // Per-item clone, not just a new array: toggle() mutates task.done/status in
   // place on the object it's handed, and sample's objects are shared across
@@ -90,6 +90,13 @@ export function mountView(handlers: Handlers = {}) {
     }
     if (cmd === "set_task_status") return null;
   });
-  const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+  // attach: true mounts into document.body — needed by tests that assert
+  // focus (document.activeElement) or real window-level event propagation;
+  // detached nodes reach neither in happy-dom. Callers own the cleanup
+  // (wrapper.unmount() + document.body.innerHTML = "").
+  const wrapper = mount(Tasks, {
+    props: { vaultId: "v1" },
+    ...(opts.attach ? { attachTo: document.body } : {}),
+  });
   return { wrapper, calls };
 }
