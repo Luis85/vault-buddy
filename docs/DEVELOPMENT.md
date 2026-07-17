@@ -36,6 +36,14 @@ where it's going, see the [PRD](PRD.md).
    — e.g. `_IO_FILE` sized at 216 bytes — fail to compile on MSVC, so bindgen
    must regenerate them from the local headers.)
 
+5. **GPU transcription (optional).** Plain `npm run test-build` compiles the app
+   CPU-only. To enable GPU inference via Vulkan (v0.6.1+), download and install
+   the **LunarG Vulkan SDK 1.4.350.0** directly from
+   [vulkan.lunarg.com](https://vulkan.lunarg.com/sdk/home) (version pinned in CI
+   workflows; select Windows x64), then build with `npx tauri build --features gpu`.
+   A plain Windows build without the SDK is unchanged — no Vulkan headers needed.
+   Agents and Linux compile gates stay CPU-only by design (no SDK needed locally).
+
 ### Check out and run
 
 ```bash
@@ -392,8 +400,10 @@ ever written into your vaults except recordings and their notes.
       "inputDevice": "USB Mic",    // optional — cpal device name; omit for system default
       "outputDevice": "Speakers",  // optional — loopback source (Meeting mode); omit for system default
       "transcribe": false,         // opt in to local speech-to-text
-      "transcriptionModel": "small", // "base" | "small" | "medium"
+      "transcriptionModel": "small", // "base" | "small" | "medium" | "turbo"
       "transcriptionLanguage": "es", // optional — omit to auto-detect per recording
+      "transcriptionVocabulary": "Anna Kowalska, ggml", // optional — names/acronyms/jargon primed into whisper's initial prompt
+      "transcriptionVad": true,    // skip silence via Silero VAD (default true)
       "transcriptTimestamps": true, // prefix each segment with [HH:MM:SS]
       "tasksFolder": "Tasks",      // optional — vault-relative home of task documents
       "documentsFolder": "Documents", // optional — vault-relative home of imported documents
@@ -435,11 +445,23 @@ ever written into your vaults except recordings and their notes.
   Enabling it downloads a Whisper model on the next recording (or backfills
   existing recordings) and writes a `<name>.transcript.md` sidecar the note
   embeds.
-- `transcriptionModel` (`"base"` | `"small"` | `"medium"`, default
+- `transcriptionModel` (`"base"` | `"small"` | `"medium"` | `"turbo"`, default
   `"small"`) — accuracy/speed/size trade-off. Models download to
-  `%APPDATA%\vault-buddy\models`.
+  `%APPDATA%\vault-buddy\models`; Buddy settings → Integrations → the
+  Transcription models card lists every cached artifact with its on-disk
+  size (or an approximate download size when absent) and can delete one to
+  force a re-download — the remedy for a suspect cached model (GAP-14).
 - `transcriptionLanguage` (string or omit, default auto-detect) — e.g.
-  `"es"`; omit to auto-detect per recording.
+  `"es"`; omit to auto-detect per recording. An auto-detect job records what
+  whisper actually detected: the transcript sidecar's `detected-language`
+  frontmatter field and the stats footer's Language row (e.g. `auto
+  (detected: es)`); a pinned language never populates either.
+- `transcriptionVocabulary` (string, optional) — free-text names/acronyms/jargon
+  primed into whisper's initial prompt together with the recording's title;
+  absent = no priming.
+- `transcriptionVad` (bool, default `true`) — skip silence via Silero VAD
+  (`models\ggml-silero-v5.1.2.bin`, downloaded on first use). If the model
+  can't be fetched the job still transcribes without VAD.
 - `transcriptTimestamps` (bool, default `true`) — prefix each segment with
   `[HH:MM:SS]`.
 - `tasksFolder` (string, default `"Tasks"`) — vault-relative folder holding
@@ -451,6 +473,27 @@ ever written into your vaults except recordings and their notes.
   preferences about them, edited in Vault settings → Task lists.
 
 The file is written by the panel's per-vault ⚙ form (atomic temp + rename); it stays hand-editable and malformed fields still degrade per-field to defaults; a configured device that is missing at record time falls back to the system default with a warning.
+
+## Transcription configuration
+
+The local speech-to-text pipeline keeps app-global settings in the same
+`config.json` as a top-level `transcription` section beside `vaults` — written
+by Buddy settings → *Integrations — Transcription — GPU*:
+
+```json
+{
+  "transcription": {
+    "useGpu": true     // GPU inference via Vulkan (v0.6.1+); omitted when true (default)
+  },
+  "vaults": { }
+}
+```
+
+- `useGpu` (bool, default `true`) — ask whisper for GPU inference when a
+  compatible Vulkan device is found. CPU fallback is automatic (logged at
+  context init). Toggle applies from the next transcription job (the worker
+  reloads the cached model; no restart needed). Omitted when `true` (the
+  default), written only when `false` — the hand-editable file stays minimal.
 
 ## MCP server configuration
 

@@ -79,6 +79,14 @@ jobs:
     name: Build and publish Windows installers
     needs: validate
     runs-on: windows-latest
+    env:
+      # Same MAX_PATH + disk-headroom guard as ci.yml's windows-app job
+      # (see its comment for the full rationale): the Vulkan backend's
+      # nested vulkan-shaders-gen build overflows FileTracker's .tlog paths
+      # (FTK1011) under the default deep cargo target dir, and C:\ has more
+      # free space than the runner's ~14 GB D: drive for a restored
+      # rust-cache archive alongside a release-profile build.
+      CARGO_TARGET_DIR: C:\vbt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -90,9 +98,27 @@ jobs:
         with:
           workspaces: src-tauri
           # restore the CI Windows job's cache (built on pushes to main) so
-          # tagged release builds start warm
+          # tagged release builds start warm — cache-directories below is
+          # what actually makes that true: without it rust-cache caches
+          # only the default `src-tauri/target`, not the CARGO_TARGET_DIR
+          # override above, so the shared key alone was silently restoring
+          # nothing and every release build compiled from scratch.
           shared-key: windows-app
+          cache-directories: C:\vbt
       - run: npm ci
+      # GPU builds: whisper.cpp's Vulkan backend needs the SDK's headers +
+      # glslc at compile time. Pinned version + SHA-256 (the same pinned-
+      # download discipline as the app's own model downloads); ~2 min
+      # install per run, accepted — revisit with a cache if it hurts.
+      - name: Install Vulkan SDK (pinned)
+        shell: bash
+        run: |
+          VK_VERSION="1.4.350.0"
+          VK_SHA256="855b27ba05d2d8119c5114c5d4ff870ca38f2c632b11e1bb9923b9b7e6ecfe7b"
+          curl -fsSL -o vulkan-sdk.exe "https://sdk.lunarg.com/sdk/download/${VK_VERSION}/windows/vulkansdk-windows-X64-${VK_VERSION}.exe"
+          echo "${VK_SHA256}  vulkan-sdk.exe" | sha256sum -c -
+          ./vulkan-sdk.exe --accept-licenses --default-answer --confirm-command install
+          echo "VULKAN_SDK=C:\\VulkanSDK\\${VK_VERSION}" >> "$GITHUB_ENV"
       - name: Build app and publish release
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
@@ -107,6 +133,10 @@ jobs:
           # expanding to an unintended subcommand and launching the app on the
           # runner)
           tauriScript: npx tauri
+          # whisper.cpp's Vulkan backend, gated behind the shell's `gpu`
+          # feature (the SDK installed above provides the headers + glslc
+          # it needs at compile time)
+          args: --features gpu
           # we ship both MSI and NSIS but the release notes tell users to
           # install the NSIS setup.exe; without this latest.json points
           # self-updates at the MSI and updaters silently switch installer

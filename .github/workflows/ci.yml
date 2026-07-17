@@ -119,6 +119,20 @@ jobs:
     name: Windows app (build + installer)
     runs-on: windows-latest
     needs: [frontend, rust-core]
+    env:
+      # whisper.cpp's Vulkan backend builds a nested vulkan-shaders-gen
+      # ExternalProject whose MSBuild FileTracker .tlog paths overflow
+      # Windows' 260-char MAX_PATH under the default deep cargo target dir
+      # (FileTracker error FTK1011 in the compiler probe). A short
+      # top-level target dir keeps every nested path under the limit. C:\
+      # rather than D:\ — the runner's D: drive is only ~14 GB, and a
+      # restored rust-cache archive alongside a release-profile Vulkan
+      # build needs more headroom than that reliably leaves; C:\ (the OS
+      # drive) has room to spare. tauri-action resolves the target dir
+      # through cargo automatically, but rust-cache does NOT — left alone
+      # it only caches its default `<workspace>/target`, so the
+      # `cache-directories` input below points it at this same override.
+      CARGO_TARGET_DIR: C:\vbt
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -133,7 +147,27 @@ jobs:
           # cache produced by pushes to main instead of compiling ~450
           # release-profile crates from scratch
           shared-key: windows-app
+          # rust-cache's own target-dir detection does not follow the
+          # CARGO_TARGET_DIR override above — without this it caches (and
+          # later finds nothing in) the default `src-tauri/target`, so
+          # Windows artifact caching was silently a no-op while the real
+          # build output sat in C:\vbt. Documented rust-cache input for
+          # extra cache paths.
+          cache-directories: C:\vbt
       - run: npm ci
+      # GPU builds: whisper.cpp's Vulkan backend needs the SDK's headers +
+      # glslc at compile time. Pinned version + SHA-256 (the same pinned-
+      # download discipline as the app's own model downloads); ~2 min
+      # install per run, accepted — revisit with a cache if it hurts.
+      - name: Install Vulkan SDK (pinned)
+        shell: bash
+        run: |
+          VK_VERSION="1.4.350.0"
+          VK_SHA256="855b27ba05d2d8119c5114c5d4ff870ca38f2c632b11e1bb9923b9b7e6ecfe7b"
+          curl -fsSL -o vulkan-sdk.exe "https://sdk.lunarg.com/sdk/download/${VK_VERSION}/windows/vulkansdk-windows-X64-${VK_VERSION}.exe"
+          echo "${VK_SHA256}  vulkan-sdk.exe" | sha256sum -c -
+          ./vulkan-sdk.exe --accept-licenses --default-answer --confirm-command install
+          echo "VULKAN_SDK=C:\\VulkanSDK\\${VK_VERSION}" >> "$GITHUB_ENV"
       - name: Build Tauri app and installers
         shell: bash
         env:
@@ -147,9 +181,9 @@ jobs:
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "no signing key available — building without updater artifacts"
-            npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            npx tauri build --features gpu --config '{"bundle":{"createUpdaterArtifacts":false}}'
           else
-            npx tauri build
+            npx tauri build --features gpu
           fi
       # The most platform-sensitive code (process detection, GetKeyState,
       # WASAPI loopback gates, MoveFileExW's non-replacing fallback, whisper
@@ -165,13 +199,28 @@ jobs:
       - name: tests (transcribe crate, whisper feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper
         working-directory: src-tauri
+      # The ONLY place the Vulkan-feature Rust tests execute (the release
+      # workflow builds but never tests). What this pins on the shipped
+      # MSVC-static toolchain: the ggml backend-registry guard in engine.rs
+      # (upstream whisper.cpp#3750 — the registry can silently come up
+      # CPU-only) must neither crash on a headless runner (the SDK installs
+      # the loader; the runner has no GPU, so this exercises the
+      # caught-failure → CPU-fallback path) nor double-register. Costs one
+      # more dev-profile whisper.cpp build with the Vulkan backend — same
+      # accepted trade as the step above.
+      - name: tests (transcribe crate, whisper-vulkan feature, Windows)
+        run: cargo test -p vault_buddy_transcribe --features whisper-vulkan
+        working-directory: src-tauri
       - name: Upload Windows installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vault-buddy-windows-${{ github.sha }}
+          # Must track the job-level CARGO_TARGET_DIR override above — the
+          # bundles land under it, not src-tauri/target. if-no-files-found:
+          # error is the tripwire if these two ever drift apart again.
           path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            C:/vbt/release/bundle/msi/*.msi
+            C:/vbt/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 14
 

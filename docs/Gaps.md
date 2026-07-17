@@ -44,6 +44,50 @@ naive fix would violate one (noted inline).
 
 ## 1. Correctness & data safety (Rust)
 
+### GAP-62 · Low · In-process GPU driver fault can crash the app
+`src-tauri/transcribe/src/engine.rs` (`WhisperTranscriber::load`, the
+`use_gpu` parameter passed to whisper.cpp). GPU inference runs in the same
+process as the Tauri runtime. A faulty graphics driver or an incompatible GPU
+can crash whisper.cpp during model load or inference (native fault: SEH
+exception on Windows, fatal signal on Unix), taking the app with it. Symptom:
+crash.log shows a `native crash` record during transcription. Diagnostics:
+the first GPU-enabled model load logs the Vulkan device list (id, name,
+VRAM) via `ensure_vulkan_backend_registered` — the same guard that works
+around upstream whisper.cpp#3750 (a silently CPU-only backend registry on
+MSVC static builds) — so the log names the device involved before any fault. **Remedy:** the
+`Use GPU (Vulkan)` toggle (Buddy settings → Integrations → Transcription — GPU)
+is the immediate escape hatch — turn it off to fall back to CPU inference, which
+is always safe. **Permanent fix:** run GPU inference in a sidecar process (a
+separate executable), so a GPU fault isolates and the parent app recovers —
+the future fix named in the GPU design spec
+(`docs/superpowers/specs/2026-07-16-gpu-vulkan-transcription-design.md`).
+Mitigation is low-cost (a boolean toggle). Data blast radius is nil even in
+the crash case: the recording and its note are fully written before
+transcription starts, and the interrupted job's `pending` sidecar is
+re-queued by the next launch's backfill — the crash costs the session, not
+the vault. That same backfill requeue is also what turns a deterministic
+fault (a specific driver/file combination that always crashes) into a
+**crash-repeat loop**: every launch re-enqueues the same `pending` job, hits
+the same fault, and crashes again, with no built-in circuit breaker. If the
+crash recurs too fast to reach Buddy settings and click the toggle, the
+last resort is hand-editing `"transcription": {"useGpu": false}` directly
+into `config.json` (see docs/DEVELOPMENT.md § Transcription configuration)
+before the next launch.
+
+### GAP-63 · Low · Auto-detect can fail a job that used to get a "No speech detected" transcript
+`src-tauri/transcribe/src/engine.rs` (the `state.full` call; whisper.cpp
+returns -3 when `whisper_lang_auto_detect_with_state` cannot run). Since the
+auto-language fix (auto now truly engages whisper's detection), an
+auto-language vault with VAD off transcribing audio whose spectrogram is too
+short for even one detection window fails the job with the mapped
+inference-failure message, where the old forced-"en" path would have produced
+an empty "No speech detected" transcript. Strictly more honest (the engine
+really couldn't classify anything) and vanishingly rare — capture minimums
+make sub-window recordings hard to produce — but it is a behavior delta from
+the housekeeping increment's C1 fix (final review, Minor). Remediation
+sketch if it ever bites: pre-check the decoded sample count and short-circuit
+to the no-speech transcript before invoking the engine.
+
 ### GAP-56 · Low · Search content cache: fill-to-cap tail and dead entries
 `core/src/search_cache.rs`. The cache fills to 256 MiB then stops inserting
 (no eviction — uniform per-search access makes LRU pointless), so once total
@@ -182,6 +226,36 @@ failures during finalize only warn, then the rename proceeds; a torn
 the load-failure → `remove_model` path fires.
 **Fix:** treat `sync_all` failure as download failure (delete the `.part`);
 optionally verify the cached file's SHA-256 once per app version.
+
+Also covers the Silero VAD artifact (`ggml-silero-v5.1.2.bin`,
+`transcribe/src/model.rs::download_vad_model`) since the accuracy & speed
+increment: verified at download, trusted from disk thereafter — same class,
+same accepted posture. A corrupt cached VAD file surfaces as an inference
+failure (`failed` sidecar), not a silent wrong transcript. **Update:** the
+engine's `Err` arm of `detect_speech_centiseconds` (`transcribe/src/engine.rs`)
+now best-effort removes the cached VAD file whenever Silero fails to
+load/detect on it, so the next VAD-enabled job redownloads (SHA-verified)
+instead of silently degrading to no-VAD forever — self-heal parity with the
+main model's load-failure → `remove_model` path. The residual accepted gap
+for VAD is narrower: a corrupt file that still LOADS and DETECTS (wrong but
+non-erroring segments) is caught by neither self-heal path.
+
+**Update (GPU increment):** the same load-failure → `remove_model` self-heal
+also fires on a GPU-side load failure that has nothing to do with disk
+corruption — e.g. VRAM exhaustion loading `medium`/`turbo` with `Use GPU`
+on. The model file is fine; `process_transcription` can't tell a corrupt
+download apart from a transient/environmental GPU failure, so it deletes a
+perfectly good 0.5–3 GB file and the next attempt (a manual retry, or the
+next launch's backfill) re-downloads it. Wasteful, not wrong — turning the
+GPU toggle off avoids the redownload entirely; named as an accepted rough
+edge in the GPU design spec's risk section
+(`docs/superpowers/specs/2026-07-16-gpu-vulkan-transcription-design.md`).
+
+**Update (transcription housekeeping increment):** the Transcription models
+card (Buddy settings → Integrations) is the user-facing remedy for a
+suspect cached model — delete a cached artifact in-app to force a
+SHA-verified re-download instead of waiting for the load-failure self-heal
+to fire.
 
 ### GAP-15 · Low · `bitrateKbps` wraps via `as u32` and has no range validation
 `src-tauri/core/src/capture_config.rs:158-162`.

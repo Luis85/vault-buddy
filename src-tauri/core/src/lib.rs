@@ -20,6 +20,7 @@ pub mod sync_util;
 pub mod tasks;
 pub mod throttle;
 pub mod transcript;
+pub mod transcription_config;
 pub mod uri;
 pub mod vault_config;
 pub mod vault_walk;

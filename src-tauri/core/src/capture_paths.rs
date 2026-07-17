@@ -54,6 +54,21 @@ pub fn is_capture_base(base: &str) -> bool {
         && b[15] == ' '
 }
 
+/// The human title of a capture base name: everything after the
+/// `YYYY-MM-DD HHmm ` prefix. `is_capture_base` guarantees the first
+/// `CAPTURE_PREFIX_CHARS` characters are ASCII (digits/dash/space), so the
+/// byte slice below can never split a UTF-8 sequence. A non-capture name
+/// passes through unchanged (defensive — callers only hand in capture
+/// names, and the title's use is prompt priming, where the whole name is
+/// still a harmless prompt).
+pub fn capture_title(base: &str) -> &str {
+    if is_capture_base(base) {
+        &base[CAPTURE_PREFIX_CHARS..]
+    } else {
+        base
+    }
+}
+
 pub fn part_file_name(base: &str) -> String {
     format!(".{base}.mp3.part")
 }
@@ -922,5 +937,25 @@ mod tests {
         };
         let vaults = vec![dead, vault_at(&vault_dir)];
         assert_eq!(vault_owning_path(&vaults, &mp3).unwrap().vault.id, "v1");
+    }
+
+    #[test]
+    fn capture_title_strips_the_prefix_and_keeps_suffixes() {
+        assert_eq!(
+            capture_title("2026-07-16 0930 Budget review with Anna"),
+            "Budget review with Anna"
+        );
+        assert_eq!(capture_title("2026-07-16 0930 Meeting (2)"), "Meeting (2)");
+        // Round-trip with the generator every capture name comes from.
+        let base = base_name(date(), 14, 5, "Standup");
+        assert_eq!(capture_title(&base), "Standup");
+        // Unicode after the ASCII prefix must not panic or split a char.
+        assert_eq!(capture_title("2026-07-16 0930 Café müsli"), "Café müsli");
+    }
+
+    #[test]
+    fn capture_title_passes_a_non_capture_name_through() {
+        assert_eq!(capture_title("download"), "download");
+        assert_eq!(capture_title(""), "");
     }
 }
