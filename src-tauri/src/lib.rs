@@ -332,6 +332,7 @@ pub fn run() {
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
         .manage(document_commands::DocumentImportPending::default())
+        .manage(document_commands::AddDocumentPending::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -460,6 +461,7 @@ pub fn run() {
             document_commands::set_pandoc_path,
             document_commands::begin_document_import,
             document_commands::take_pending_import,
+            document_commands::take_add_document_request,
             document_commands::open_imported_document,
         ])
         .setup(|app| {
@@ -556,6 +558,9 @@ pub fn run() {
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {
+                // Vault-first document intake: arm the request + show the
+                // panel; the panel's refresh() drains it into the picker.
+                "buddy-import-document" => document_commands::begin_add_document(app),
                 "buddy-hide" => tray::hide_buddy(app),
                 "buddy-quit" => tray::quit(app),
                 // the animation/dragging settings live in the frontend

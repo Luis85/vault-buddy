@@ -516,4 +516,48 @@ describe("vaults store", () => {
     await store.refresh();
     expect(store.view).toBe("list");
   });
+
+  it("refresh routes to the vault-first picker on a buddy-menu add request", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") return [];
+      if (cmd === "take_add_document_request") return true;
+      if (cmd === "list_vaults") return [];
+      if (cmd === "count_open_tasks") return 0;
+      return undefined;
+    });
+    const store = useVaultsStore();
+    store.requestViewOnNextOpen("settings"); // an armed one-shot must not fire later
+    await store.refresh();
+    // Empty queue = the picker's vault-first mode (pick vault, then file).
+    expect(store.view).toBe("importPicker");
+    expect(store.pendingImports).toEqual([]);
+
+    // The menu request superseded the armed view AND is one-shot: a later
+    // plain refresh lands on the list, not stale settings or a stale picker.
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") return [];
+      if (cmd === "take_add_document_request") return false;
+      if (cmd === "list_vaults") return [];
+      if (cmd === "count_open_tasks") return 0;
+      return undefined;
+    });
+    await store.refresh();
+    expect(store.view).toBe("list");
+  });
+
+  it("a dropped document outranks a simultaneous buddy-menu add request", async () => {
+    // Both land on the same picker view; the drop carries more information
+    // (a concrete file), so the queue must be showing — not vault-first mode.
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") return ["C:/x/Report.docx"];
+      if (cmd === "take_add_document_request") return true;
+      if (cmd === "list_vaults") return [];
+      if (cmd === "count_open_tasks") return 0;
+      return undefined;
+    });
+    const store = useVaultsStore();
+    await store.refresh();
+    expect(store.view).toBe("importPicker");
+    expect(store.pendingImports).toEqual(["C:/x/Report.docx"]);
+  });
 });

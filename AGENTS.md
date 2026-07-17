@@ -247,7 +247,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 59 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 60 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -259,7 +259,7 @@ Keep this table in sync when adding/removing commands.
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `move_task_to_list` *(async — returns the landed path, which may carry a collision suffix)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -647,11 +647,18 @@ A second Capture Provider (Knowledge Intake): convert a `.docx` / `.odt` /
 detecting Pandoc, never bundled (Pandoc is GPL-2 and a ~150–200 MB Windows
 binary; neither fits this MIT, light-installer app). It is the fifth sanctioned
 vault write, riding the same never-clobber/atomic machinery as capture. Spec:
-`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Two
+`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Three
 entry points: dragging a document onto the buddy (`BuddyRoot` filters
 `docx/odt/rtf`, `begin_document_import` stashes the path + shows the panel on
-the `importPicker` view) and the **Import Document** action in the per-vault
-record chooser (a `tauri-plugin-dialog` file picker). Invariants — each exists
+the `importPicker` view), the **Import Document** action in the per-vault
+record chooser (a `tauri-plugin-dialog` file picker), and the buddy
+right-click menu's **Import document…** item (`begin_add_document` arms a
+Rust-owned flag + shows the panel; `refresh()` drains it via
+`take_add_document_request` onto the `importPicker` with an EMPTY queue —
+its vault-FIRST mode, where picking a vault opens the same file picker and
+converts; spec
+`docs/superpowers/specs/2026-07-17-buddy-menu-import-document-design.md`).
+Invariants — each exists
 because a review found the failure it prevents:
 
 - **Pandoc resolution recovers past stale/old installs.** `resolve_working_pandoc`
@@ -1279,8 +1286,10 @@ tree (no history stack): the vault-row capture button `openRecordMode`s (titled
 "Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
 Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
-per-vault todo view, `importPicker` (parent: the list) is the drag-drop vault
-chooser, `documentImport` (parent: the list) is the focused Pandoc setup screen
+per-vault todo view, `importPicker` (parent: the list) is the import vault
+chooser (drop mode when the queue holds a dropped file; vault-first mode on
+an empty queue — the buddy-menu entry — where picking a vault opens the OS
+file picker), `documentImport` (parent: the list) is the focused Pandoc setup screen
 the blocked Import gates (`RecordMode`'s Import action, `ImportVaultPicker`'s
 "Set up Pandoc") route to — `openDocumentImport`, rendering
 `DocumentImportSettings` — instead of dumping the user at the bottom of the

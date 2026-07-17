@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted } from "vue";
 
 import { logWarning } from "../logging";
@@ -8,15 +9,20 @@ import { useNotificationsStore } from "../stores/notifications";
 import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
 import { basename } from "../utils/basename";
+import { withDialogSuppressed } from "../utils/nativeDialog";
 import ImportProgress from "./ImportProgress.vue";
 
-// Reached only via a buddy drag-drop: Rust stashes the dropped path
-// (begin_document_import) and shows the panel; the panel's refresh()
-// consumes it (take_pending_import) into store.pendingImports and lands
-// here. The extension (.docx/.odt/.rtf) is already validated by the drop
-// handler in BuddyRoot, so this view only needs to pick the destination
-// vault and gate on Pandoc — same convert contract RecordMode's
-// "Import Document" action uses.
+// Two ways in, one mode split on the queue. (1) A buddy drag-drop: Rust
+// stashes the dropped path (begin_document_import) and shows the panel; the
+// panel's refresh() consumes it (take_pending_import) into
+// store.pendingImports and lands here — the queue HEAD is the file. (2) The
+// buddy-menu "Import document…" request (begin_add_document →
+// take_add_document_request): the queue is EMPTY, so picking a vault opens
+// the OS file picker for the file AFTER the vault choice (vault-first mode).
+// Drop extensions (.docx/.odt/.rtf) are validated by BuddyRoot's drop
+// handler; the vault-first dialog filters to the same set — either way this
+// view only picks the destination vault and gates on Pandoc, same convert
+// contract RecordMode's "Import Document" action uses.
 const store = useVaultsStore();
 const notifications = useNotificationsStore();
 const pandocStore = usePandocStore();
@@ -92,18 +98,35 @@ const viewState = computed<
   return "list";
 });
 
+// Vault-first mode's file prompt, shown only after the vault choice. Wrapped
+// in withDialogSuppressed so the OS dialog stealing focus can't trip the
+// panel's focus-out auto-hide. null = cancelled.
+async function pickSourceFile(): Promise<string | null> {
+  const picked = await withDialogSuppressed(() =>
+    open({
+      multiple: false,
+      filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
+    }),
+  );
+  return typeof picked === "string" ? picked : null;
+}
+
 async function pick(vaultId: string) {
-  // Convert the head of the queue; a mid-conversion drop appends to the tail
-  // (GAP-55), so afterward we drop the head and either advance to the next
-  // queued document or return to the list.
-  const source = store.pendingImports[0];
-  if (documentImports.active || !source) return;
+  // Drop mode converts the head of the queue (a mid-conversion drop appends
+  // to the tail — GAP-55 — so afterward we drop the head and either advance
+  // to the next queued document or return to the list); vault-first mode
+  // (empty queue) asks for the file now that the vault is chosen.
+  if (documentImports.active) return;
   // Capture the queue epoch before the (slow) conversion: if the user backs out
   // — and maybe re-drops the same path — before it resolves, the epoch moves on
   // and dequeueImport must not consume the wrong entry or navigate (Codex P2).
+  // The vault-first flow shares the guard: dequeueImport on an EMPTY queue is
+  // exactly its return-to-list semantics, epoch-checked the same way.
   const epoch = store.importEpoch;
   const vault = store.vaults.find((v) => v.id === vaultId);
   try {
+    const source = store.pendingImports[0] ?? (await pickSourceFile());
+    if (source === null) return; // cancelled file picker — stay on the picker
     const notePath = await documentImports.convert(
       { id: vaultId, name: vault?.name ?? "" },
       source,
@@ -140,6 +163,10 @@ async function pick(vaultId: string) {
         v-if="sourceName"
         class="font-medium text-slate-200"
       >{{ sourceName }}</span>
+      <!-- v-else costs no template-complexity branch, unlike a second v-if -->
+      <template v-else>
+        a document
+      </template>
       into which vault?
     </p>
     <p

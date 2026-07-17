@@ -90,11 +90,25 @@ export const useVaultsStore = defineStore("vaults", {
         (await invoke<string[]>("take_pending_import").catch(
           () => [] as string[],
         )) ?? [];
+      // Drain the buddy-menu "Import document…" request in the same pass —
+      // even when a drop wins below — so it can never fire stale on a later
+      // reopen. Same Rust-owned-stash reasoning as the drop queue.
+      const addRequested = await invoke<boolean>(
+        "take_add_document_request",
+      ).catch(() => false);
       if (dropped.length) {
         this.enqueueImports(dropped);
         // A drop supersedes any armed one-shot view (e.g. the startup update
         // check's "settings"): clear it so a LATER panel-shown refresh doesn't
         // consume it stale and navigate away after the import returns to list.
+        this.pendingView = null;
+        this.pendingCaptureVaultId = null;
+      } else if (addRequested) {
+        // The picker with an EMPTY queue is its vault-first mode: pick the
+        // vault, then the file (ImportVaultPicker opens the OS picker on
+        // pick). The menu click is why this refresh is happening, so it
+        // supersedes an armed one-shot view exactly like a drop does.
+        this.view = "importPicker";
         this.pendingView = null;
         this.pendingCaptureVaultId = null;
       } else if (this.view === "importPicker" && this.pendingImports.length) {

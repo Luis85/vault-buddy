@@ -485,6 +485,19 @@ pub fn show_buddy_menu(
 ) -> Result<(), String> {
     use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
+    // The menu's only vault ACTION leads; the toggles and window controls
+    // follow. Ellipsis = more UI follows (the vault-first import picker).
+    // "Import document" is the domain's verb for this capability (CONTEXT.md;
+    // the panel view title and RecordMode's action use it too).
+    let import_doc = MenuItem::with_id(
+        &app,
+        "buddy-import-document",
+        "Import document…",
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let sep_import = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
     let animation = CheckMenuItem::with_id(
         &app,
         "buddy-animation",
@@ -511,8 +524,19 @@ pub fn show_buddy_menu(
         .map_err(|e| e.to_string())?;
     let quit = MenuItem::with_id(&app, "buddy-quit", "Quit Vault Buddy", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let menu = Menu::with_items(&app, &[&animation, &dragging, &separator, &hide, &quit])
-        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(
+        &app,
+        &[
+            &import_doc,
+            &sep_import,
+            &animation,
+            &dragging,
+            &separator,
+            &hide,
+            &quit,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
     // Win32 popup menus require the owning window to be foreground —
     // without this the menu is delayed or silently ignored until the user
     // left-clicks the (unfocused) buddy first.
