@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
+import { useVaultsStore } from "../stores/vaults";
 import type { TasksConfig } from "../types";
 import { archivedMatcher, orderLists, remapListRef } from "../utils/taskSections";
 
@@ -67,6 +68,7 @@ export function useTaskLists(
   onListRemap?: (from: string, to: string | null) => void,
 ) {
   const notifications = useNotificationsStore();
+  const vaultsStore = useVaultsStore();
   const vaultLists = ref(new Map<string, string[]>());
   const vaultConfigs = ref(new Map<string, TasksConfig>());
   // Sections honor the vault's configured order in per-vault mode; the
@@ -306,6 +308,10 @@ export function useTaskLists(
       // it must fall back to the default (else the next add lands in a hidden
       // list). Descendants aren't archived, so only the exact pick clears.
       onListRemap?.(list, null);
+      // count_open_tasks skips archived lists, so this write MOVED the badge
+      // count — refresh the cached vault-row / All-tasks badges now, like
+      // every other count-moving mutation (GAP-32 precedent; review, PR #59).
+      void vaultsStore.refreshTaskCount(id);
       return true;
     } catch (e) {
       notifications.error(String(e));

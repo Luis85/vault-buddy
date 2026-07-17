@@ -1093,6 +1093,24 @@ describe("Tasks", () => {
     await flushPromises();
     const call = calls.find((c) => c.cmd === "set_task_lists_config");
     expect((call?.args as { archivedLists: string[] }).archivedLists).toContain("Inbox");
+    // count_open_tasks skips archived lists, so archiving one MOVES the badge
+    // count — the cached vault-row / All-tasks badges must refresh now, not on
+    // the next panel open (the GAP-32 add/toggle precedent; review, PR #59).
+    expect(calls.find((c) => c.cmd === "count_open_tasks")?.args).toEqual({ id: "v1" });
+  });
+
+  it("a failed archive does not refresh the badge", async () => {
+    const { wrapper, calls } = mountLists({
+      set_task_lists_config: () => {
+        throw new Error("write failed");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    // Nothing changed on disk — the count is still right; no wasted walk.
+    expect(calls.find((c) => c.cmd === "count_open_tasks")).toBeUndefined();
   });
 
   it("archives when no list settings were ever stored (defaults config)", async () => {

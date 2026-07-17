@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
+import { useVaultsStore } from "../stores/vaults";
 import type { TasksConfig } from "../types";
 import { archivedMatcher, orderLists } from "../utils/taskSections";
 import TaskArchivedLists from "./TaskArchivedLists.vue";
@@ -46,6 +47,14 @@ const isArchived = computed(() => archivedMatcher(archived.value));
 // position instead of dumping it at the alphabetical tail.
 const selectableLists = computed(() => order.value.filter((l) => !isArchived.value(l)));
 
+const vaultsStore = useVaultsStore();
+// The archived set as of the last successful save (seeded on load). Only an
+// archived-membership change moves the open-task count (count_open_tasks
+// skips archived lists), so an unarchive must refresh the cached badges the
+// moment it lands — returning to the list view reloads nothing — while a
+// plain default/reorder save must not pay a per-save vault walk.
+let persistedArchived = new Set<string>();
+const archivedKey = () => new Set(archived.value.map((a) => a.toLowerCase()));
 const autosave = useAutosave(
   async () => {
     const dl = defaultList.value;
@@ -56,6 +65,11 @@ const autosave = useAutosave(
       listOrder: order.value,
       archivedLists: archived.value,
     });
+    const now = archivedKey();
+    const changed =
+      now.size !== persistedArchived.size || [...now].some((a) => !persistedArchived.has(a));
+    persistedArchived = now;
+    if (changed) void vaultsStore.refreshTaskCount(props.vaultId);
   },
   { label: "task lists" },
 );
@@ -73,6 +87,7 @@ onMounted(async () => {
       Array.isArray(cfg?.listOrder) ? cfg.listOrder : [],
     );
     archived.value = Array.isArray(cfg?.archivedLists) ? cfg.archivedLists : [];
+    persistedArchived = archivedKey(); // the loaded set is what's on disk
   } catch (e) {
     // Read failures degrade to an empty card (log-only) — a later save still
     // field-errors if attempted, so nothing is silently lost.

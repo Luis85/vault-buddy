@@ -126,6 +126,22 @@ describe("TaskListSettings", () => {
     expect((save?.args as { archivedLists: string[] }).archivedLists).toEqual(["Stale"]);
     // The unarchived row disappears from the list.
     expect(wrapper.findAll('[data-testid="archived-list-row"]')).toHaveLength(1);
+    // Unarchiving makes the list's open tasks countable again
+    // (count_open_tasks skips only currently-archived lists), so the cached
+    // vault-row / All-tasks badges must refresh with the save — returning to
+    // the list view reloads nothing (review, PR #59).
+    expect(calls.find((c) => c.cmd === "count_open_tasks")?.args).toEqual({ id: "v1" });
+  });
+
+  it("a default/order save leaves the badge alone (no archived change)", async () => {
+    // Only archived-membership moves the open-task count; a reorder or
+    // default pick must not pay a per-save vault walk.
+    const { wrapper, calls } = mountSettings();
+    await flushPromises();
+    await wrapper.get('[data-testid="list-order-up-2"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeDefined();
+    expect(calls.find((c) => c.cmd === "count_open_tasks")).toBeUndefined();
   });
 
   it("shows no archived section when nothing is archived", async () => {
