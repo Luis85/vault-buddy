@@ -38,8 +38,8 @@
       "reason": "Crossed the 800 cap when two concurrent increments' per-vault config fields landed in the same merge: the transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) added `transcription_vocabulary`/`transcription_vad` \u2014 fields, Default entries, vault_entry parse branches, serialize_vault_entry branches, and their tests \u2014 and the document-import images-vs-text-only toggle (PR #60, docs/superpowers/specs/2026-07-16-document-import-image-text-toggle-design.md, merged from main) added `document_extract_images` the same way. Splitting the per-field defensive parse/serialize module (vault_entry/serialize_vault_entry) out from the struct+defaults is the follow-up when next touched. Shrink only; split when next touched."
     },
     "src-tauri/core/src/transcript.rs": {
-      "loc": 821,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 2026-07-16: +21 for detected-language (field + frontmatter/stats rendering + render test) \u2014 Increment A, honest auto-detection reporting."
+      "loc": 832,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 2026-07-16: +21 for detected-language (field + frontmatter/stats rendering + render test) \u2014 Increment A, honest auto-detection reporting. +11 defense-in-depth parity for the frontmatter gate (H2 review M1) with pinned+detected render assertions."
     },
     "src/stores/capture.ts": {
       "loc": 642,

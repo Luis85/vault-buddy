@@ -104,7 +104,10 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
     out.push_str(&format!("model: {}\n", yaml_quote(&meta.model_label)));
     let lang = meta.language.as_deref().unwrap_or("auto");
     out.push_str(&format!("language: {}\n", yaml_quote(lang)));
-    if let Some(detected) = &meta.detected_language {
+    // Same auto-only gate as the stats row below (defense-in-depth parity —
+    // H2 review M1): the pipeline already filters detection on the setting,
+    // but neither renderer should trust the other's caller.
+    if let (None, Some(detected)) = (&meta.language, &meta.detected_language) {
         out.push_str(&format!("detected-language: {}\n", yaml_quote(detected)));
     }
     out.push_str(&format!(
@@ -888,5 +891,14 @@ mod tests {
         let t = render_transcript(&m, &[]);
         assert!(!t.contains("detected-language"));
         assert!(t.contains("| Language | auto |"));
+
+        // Defense-in-depth parity with the stats row (review M1): a
+        // pinned-language meta never emits the frontmatter line either,
+        // even if a (buggy) caller left a detection populated.
+        m.language = Some("es".to_string());
+        m.detected_language = Some("de".to_string());
+        let t = render_transcript(&m, &[]);
+        assert!(!t.contains("detected-language"));
+        assert!(t.contains("| Language | es |"));
     }
 }

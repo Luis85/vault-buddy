@@ -394,19 +394,26 @@ impl Transcriber for WhisperTranscriber {
         // the reliable fix, and a pinned language (settings dropdown) removes
         // the drift entirely.
         params.set_translate(false);
-        if let Some(lang) = opts.language {
-            // NOTE: `set_language` leaks a small `CString` per job — whisper-rs
-            // `CString::into_raw()`s the language and `FullParams` has no `Drop`
-            // that reclaims `fp.language`. Unlike the progress closure (an
-            // `AppHandle` + `PathBuf`, owned/freed above), this is a bounded
-            // few-bytes-per-job upstream leak (a 2-letter code + NUL), and it is
-            // UNFIXABLE from here: the only public setter is this leaking one,
-            // and `FullParams::fp` is `pub(crate)`, so we cannot point the C
-            // struct at a `CString` we own without transferring ownership to it.
-            // Left as-is deliberately; revisit if whisper-rs adds a non-leaking
-            // language API.
-            params.set_language(Some(lang));
-        }
+        // Auto (None) must be set EXPLICITLY: whisper.cpp's default FullParams
+        // language is "en", NOT auto, so skipping set_language on an auto job
+        // silently pinned every auto-language vault to an English decode and
+        // whisper's auto-detect never ran (H2 review C1 — verified against the
+        // vendored whisper_full_with_state: detection fires only on language
+        // == nullptr/""/"auto"). None maps to a null pointer, which is that
+        // trigger; `detect_language` stays false deliberately — it is the
+        // detect-ONLY early-return mode, not "please detect then transcribe".
+        //
+        // NOTE (pinned path): `set_language(Some(..))` leaks a small `CString`
+        // per job — whisper-rs `CString::into_raw()`s the language and
+        // `FullParams` has no `Drop` that reclaims `fp.language`. Unlike the
+        // progress closure (an `AppHandle` + `PathBuf`, owned/freed above),
+        // this is a bounded few-bytes-per-job upstream leak (a 2-letter code +
+        // NUL), and it is UNFIXABLE from here: the only public setter is this
+        // leaking one, and `FullParams::fp` is `pub(crate)`, so we cannot point
+        // the C struct at a `CString` we own without transferring ownership to
+        // it. Left as-is deliberately; revisit if whisper-rs adds a non-leaking
+        // language API. (The None/auto arm installs a null — nothing leaks.)
+        params.set_language(opts.language);
         if let Some(prompt) = opts.initial_prompt {
             // NOTE: same bounded upstream leak class as `set_language` above —
             // whisper-rs `CString::into_raw()`s the prompt and `FullParams`
@@ -664,6 +671,18 @@ mod tests {
                 detected_language.is_some(),
                 "an auto-language run over real speech must report a detected language"
             );
+            // is_some() alone cannot catch a regression of the forced-"en"
+            // wiring bug (H2 review C1): an English clip legitimately
+            // detects "en". To exercise auto-detect end-to-end, run with a
+            // NON-English clip and pin the expectation via
+            // VB_TEST_AUDIO_LANG=<code> (e.g. de).
+            if let Ok(expected) = std::env::var("VB_TEST_AUDIO_LANG") {
+                assert_eq!(
+                    detected_language.as_deref(),
+                    Some(expected.as_str()),
+                    "detected language must match the clip's actual language"
+                );
+            }
             // With or without VAD, timestamps must stay on the original
             // timeline: monotonically non-decreasing starts, end >= start.
             for w in segments.windows(2) {
