@@ -65,23 +65,15 @@ pub fn move_task_to_list(
     // a structural edit like a field edit / reorder (only a status toggle is
     // excluded), and `update_task` (the OTHER edit path) already stamps. This
     // runs on the LANDED path, so a still-QUEUED transcription/rename can't be
-    // affected. Best-effort: the move already mutated the vault, so a stamp
-    // failure degrades to a warning rather than failing the move and reverting
-    // the UI (audio-first discipline, borrowed from the capture domain). The
-    // effective id (freshly stamped or already present) rides back in MovedTask.
-    let mut task_id = None;
-    if let Some(property) =
-        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())
-    {
-        let generated = tasks::new_task_id();
-        match tasks::update_task_fields(&root, &landed, &[], &[(property, &generated)]) {
-            Ok(stamped) => task_id = stamped,
-            Err(e) => log::warn!("move_task_to_list: could not stamp task id: {e}"),
-        }
-    }
+    // affected. The shared backfill is best-effort (warn-only — the move
+    // already mutated the vault; audio-first discipline) and returns the
+    // effective id, freshly stamped or already present, riding back in
+    // MovedTask.
+    let id_property =
+        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
     Ok(MovedTask {
         path: landed.to_string_lossy().into_owned(),
-        id: task_id,
+        id: tasks::backfill_task_id(&root, &landed, id_property),
     })
 }
 

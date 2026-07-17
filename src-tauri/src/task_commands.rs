@@ -524,21 +524,16 @@ pub async fn update_task(
         }
         let refs: Vec<(&str, Option<&str>)> =
             updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-        // Stamp a generated ID when the vault opted in and the task lacks one
-        // (update_task_fields only writes an ensure key that is absent). Any
-        // update_task write — a field edit OR an order-only reorder — stamps.
-        // cfg comes from tasks_root_for, which already loaded config.json for
-        // the folder resolution above — reusing it here avoids a second
-        // uncached read and the TOCTOU window a second read would open
-        // against a concurrent config write.
+        // Stamp a generated ID when the vault opted in and the task lacks one:
+        // update_task_fields generates + writes internally only when the
+        // property has no usable value. Any update_task write — a field edit
+        // OR an order-only reorder — stamps. cfg comes from tasks_root_for,
+        // which already loaded config.json for the folder resolution above —
+        // reusing it here avoids a second uncached read and the TOCTOU window
+        // a second read would open against a concurrent config write.
         let id_property =
             tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-        let generated_id = id_property.is_some().then(tasks::new_task_id);
-        let ensure: Vec<(&str, &str)> = id_property
-            .zip(generated_id.as_deref())
-            .into_iter()
-            .collect();
-        tasks::update_task_fields(&root, Path::new(&path), &refs, &ensure)
+        tasks::update_task_fields(&root, Path::new(&path), &refs, id_property)
     })
     .await
     .map_err(|e| format!("update_task: task failed: {e}"))?

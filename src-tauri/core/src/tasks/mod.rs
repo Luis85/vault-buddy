@@ -12,7 +12,9 @@ mod lists;
 mod parse;
 mod writer;
 
-pub use disk::{create_task, render_task, set_task_status, task_basename, update_task_fields};
+pub use disk::{
+    backfill_task_id, create_task, render_task, set_task_status, task_basename, update_task_fields,
+};
 pub use doc::is_task;
 pub use id::{id_property_for_generation, is_valid_id_property, new_task_id};
 pub use list::{list_tasks, priority_rank, TaskItem};

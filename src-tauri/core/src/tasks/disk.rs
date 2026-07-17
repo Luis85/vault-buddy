@@ -108,17 +108,23 @@ pub fn create_task(
 /// and writes atomically (hidden `create_new` temp + fsync + REPLACING
 /// rename). Replacing is correct here: the target is the `type: Task` file we
 /// just read and are editing in place, touching only the named lines.
-/// Returns the effective value of the FIRST `ensure_absent` key after the
-/// operation — the value now on the file for that key (the freshly-stamped one
-/// if it was absent, or the pre-existing value if already present), or `None`
-/// when `ensure_absent` is empty or the key resolves to no readable value. In
-/// practice that key is the generated task ID, and the caller uses this return
-/// to reflect a just-stamped ID without a second read (Codex, PR #59).
+/// `ensure_id` names the vault's task-id property (`None` = ids off): when the
+/// property has no USABLE value — absent, or present with a blank scalar (a
+/// bare `task-id:` from an Obsidian property panel / template; Codex, PR #59)
+/// — a fresh id is GENERATED HERE and stamped alongside the patch. Generating
+/// inside this branch, rather than callers pre-drawing a candidate, means no
+/// discarded CSPRNG draws on already-stamped tasks and no caller can get the
+/// blank/casing rules wrong. An existing non-empty value (top-level, any
+/// casing — `frontmatter_scalar_ci`; a nested `metadata.task-id` never
+/// counts) is never overwritten, so IDs stay stable. Returns the property's
+/// effective value after the write — freshly stamped or pre-existing — or
+/// `None` when `ensure_id` is `None`; callers reflect a just-stamped ID
+/// without a second read (Codex, PR #59).
 pub fn update_task_fields(
     root: &Path,
     path: &Path,
     updates: &[(&str, Option<&str>)],
-    ensure_absent: &[(&str, &str)],
+    ensure_id: Option<&str>,
 ) -> Result<Option<String>, String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -129,46 +135,36 @@ pub fn update_task_fields(
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    // Stamp-if-absent keys (the generated task ID): written only when the
-    // property has no USABLE value yet — absent, OR present with a blank scalar.
-    // A bare `task-id:` (an Obsidian property panel / template leaves the key
-    // with no value) is not a usable id, so it must NOT suppress the stamp
-    // (Codex, PR #59); an existing non-empty value (top-level, any casing) is
-    // never overwritten, so IDs stay stable. `scalar_field_ci` is top-level
-    // only, so a nested `metadata.task-id` never counts either.
     let mut effective: Vec<(&str, Option<&str>)> = updates.to_vec();
-    // Owned on-disk key casings we stamp a BLANK line under, kept alive for
-    // set_fields' `&str` refs below.
-    let mut blank_stamp: Vec<(String, &str)> = Vec::new();
-    for (key, val) in ensure_absent {
+    // Owned storage for a freshly-generated id and the on-disk casing a blank
+    // line is rewritten under — both must outlive `effective`'s borrows.
+    let mut generated: Option<String> = None;
+    let mut blank_casing: Option<String> = None;
+    let ensured = ensure_id.map(|key| {
         match super::parse::frontmatter_scalar_ci(&content, key) {
             // Already has a usable id (any casing) → never overwritten.
-            Some((_, v)) if !v.is_empty() => {}
-            // Present but BLANK (a bare `task-id:` from an Obsidian property
-            // panel / template): stamp it, rewriting the existing line under its
-            // ON-DISK casing so set_fields (which matches case-sensitively)
-            // replaces it — stamping the configured casing would insert a
+            Some((_, v)) if !v.is_empty() => v,
+            // Blank or absent → generate + stamp. A BLANK line is rewritten
+            // under its ON-DISK casing so set_fields (case-sensitive) replaces
+            // it — stamping the configured casing would insert a
             // case-mismatched DUPLICATE that scalar_field_ci's CI read then
-            // shadows, hiding the id forever (Codex, PR #59).
-            Some((on_disk, _)) => blank_stamp.push((on_disk, val)),
-            // Absent → a new line under the configured property name.
-            None => effective.push((key, Some(val))),
+            // shadows, hiding the id forever (Codex, PR #59). Absent stamps a
+            // new line under the configured property name.
+            found => {
+                blank_casing = found.map(|(on_disk, _)| on_disk);
+                let id = super::id::new_task_id();
+                generated = Some(id.clone());
+                id
+            }
         }
-    }
-    for (k, v) in &blank_stamp {
-        effective.push((k.as_str(), Some(v)));
-    }
-    // The id to report back: the first ensure key's usable value, else the one
-    // we are about to stamp (fresh, for both the absent and blank cases).
-    let ensured = ensure_absent.first().map(|(key, val)| {
-        super::parse::scalar_field_ci(&content, key)
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| (*val).to_string())
     });
-    // Nothing to write (e.g. a move that only needs to stamp, but the id is
-    // already present): skip the redundant atomic rewrite, still report the id.
-    // update_task always passes a non-empty `updates`, so this only short-
-    // circuits the ensure-only callers.
+    if let (Some(key), Some(id)) = (ensure_id, generated.as_deref()) {
+        effective.push((blank_casing.as_deref().unwrap_or(key), Some(id)));
+    }
+    // Nothing to write (an ensure-only call — a move backfill — on a task
+    // whose id is already present): skip the redundant atomic rewrite, still
+    // report the id. update_task always passes a non-empty `updates`, so this
+    // only short-circuits those callers.
     if effective.is_empty() {
         return Ok(ensured);
     }
@@ -180,11 +176,29 @@ pub fn update_task_fields(
     Ok(ensured)
 }
 
+/// Best-effort id backfill on a task file a structural move just relocated
+/// (drag / editor move, delete-list): stamp a missing/blank id under
+/// `property` (`None` = ids off → no-op). The move already mutated the vault,
+/// so a stamp failure only WARNS — it must never fail the move that carried
+/// it (audio-first discipline, borrowed from the capture domain). Returns the
+/// task's effective id — freshly stamped or already present — for callers
+/// that reflect it without a reload.
+pub fn backfill_task_id(root: &Path, path: &Path, property: Option<&str>) -> Option<String> {
+    let prop = property?;
+    match update_task_fields(root, path, &[], Some(prop)) {
+        Ok(id) => id,
+        Err(e) => {
+            log::warn!("task id backfill on {path:?} failed: {e}");
+            None
+        }
+    }
+}
+
 /// Set a task's `status:` frontmatter on disk (see `update_task_fields`). A
-/// status toggle never stamps an ID (no ensure keys), so the id return is
-/// discarded.
+/// status toggle never stamps an ID (`ensure_id: None` — a checkbox click is
+/// not an edit), so the id return is discarded.
 pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(), String> {
-    update_task_fields(root, path, &[("status", Some(new_status))], &[]).map(|_| ())
+    update_task_fields(root, path, &[("status", Some(new_status))], None).map(|_| ())
 }
 
 #[cfg(test)]
@@ -401,29 +415,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
         let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
-        // Absent → stamped alongside the edit, and the stamped id is returned.
-        let stamped = update_task_fields(
-            &root,
-            &p,
-            &[("status", Some("done"))],
-            &[("task-id", "abcd1234")],
-        )
-        .unwrap();
-        assert_eq!(stamped.as_deref(), Some("abcd1234"));
+        // Absent → a fresh id is generated INTERNALLY, stamped alongside the
+        // edit, and returned (shape-asserted: generation is random now).
+        let stamped = update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id"))
+            .unwrap()
+            .expect("an absent id must be stamped");
+        assert_eq!(stamped.len(), 8);
+        assert!(stamped
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.contains("status: done\n"));
-        assert!(body.contains("task-id: abcd1234\n"));
-        // Present → never overwritten (a second stamp with a new id is a no-op),
-        // and the EXISTING id is reported back, not the ignored candidate.
-        let existing = update_task_fields(&root, &p, &[], &[("task-id", "zzzz9999")]).unwrap();
-        assert_eq!(existing.as_deref(), Some("abcd1234"));
+        assert!(body.contains(&format!("task-id: {stamped}\n")));
+        // Present → never overwritten (a second ensure is a no-op), and the
+        // EXISTING id is reported back, not a fresh draw.
+        let existing = update_task_fields(&root, &p, &[], Some("task-id")).unwrap();
+        assert_eq!(existing.as_deref(), Some(stamped.as_str()));
         assert!(std::fs::read_to_string(&p)
             .unwrap()
-            .contains("task-id: abcd1234\n"));
+            .contains(&format!("task-id: {stamped}\n")));
     }
 
     #[test]
-    fn update_task_fields_ensure_absent_detects_an_existing_id_case_insensitively() {
+    fn update_task_fields_detects_an_existing_id_case_insensitively() {
         // Regression: scalar_field's exact-case match let a config using
         // "task-id" stamp a SECOND, conflicting id line onto a task already
         // carrying "Task-ID:" (e.g. stamped under a since-changed config
@@ -441,20 +455,14 @@ mod tests {
         );
         std::fs::write(&p, &seeded).unwrap();
 
-        let reported = update_task_fields(
-            &root,
-            &p,
-            &[("status", Some("done"))],
-            &[("task-id", "new456")],
-        )
-        .unwrap();
-        // The existing id (under its own casing) is reported, not the candidate.
+        let reported =
+            update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id")).unwrap();
+        // The existing id (under its own casing) is reported — no fresh stamp.
         assert_eq!(reported.as_deref(), Some("existing123"));
 
         let body = std::fs::read_to_string(&p).unwrap();
         assert!(body.contains("status: done\n"));
         assert!(body.contains("Task-ID: existing123\n"));
-        assert!(!body.contains("new456"));
         // Exactly one id-ish line, case-insensitively — never a second,
         // conflicting one under a different casing.
         let id_lines = body
@@ -481,17 +489,13 @@ mod tests {
         );
         std::fs::write(&p, &seeded).unwrap();
 
-        let reported = update_task_fields(
-            &root,
-            &p,
-            &[("status", Some("done"))],
-            &[("task-id", "fresh777")],
-        )
-        .unwrap();
-        // Blank → treated as missing → stamped, and the fresh id is returned.
-        assert_eq!(reported.as_deref(), Some("fresh777"));
+        let reported = update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id"))
+            .unwrap()
+            .expect("a blank id must be stamped");
+        // Blank → treated as missing → a fresh id generated + returned.
+        assert_eq!(reported.len(), 8);
         let body = std::fs::read_to_string(&p).unwrap();
-        assert!(body.contains("task-id: fresh777\n"));
+        assert!(body.contains(&format!("task-id: {reported}\n")));
         // The blank line was rewritten in place, not duplicated.
         let id_lines = body.lines().filter(|l| l.starts_with("task-id:")).count();
         assert_eq!(id_lines, 1);
@@ -518,19 +522,15 @@ mod tests {
         );
         std::fs::write(&p, &seeded).unwrap();
 
-        let reported = update_task_fields(
-            &root,
-            &p,
-            &[("status", Some("done"))],
-            &[("task-id", "fresh777")],
-        )
-        .unwrap();
+        let reported = update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id"))
+            .unwrap()
+            .expect("a blank id must be stamped");
         // Blank (any casing) → stamped, fresh id reported.
-        assert_eq!(reported.as_deref(), Some("fresh777"));
+        assert_eq!(reported.len(), 8);
         let body = std::fs::read_to_string(&p).unwrap();
         // Rewritten in place under the ON-DISK casing — no lowercase duplicate.
-        assert!(body.contains("Task-ID: fresh777\n"));
-        assert!(!body.contains("task-id: fresh777\n"));
+        assert!(body.contains(&format!("Task-ID: {reported}\n")));
+        assert!(!body.contains("task-id:"));
         // Exactly one id-ish line, case-insensitively — no conflicting second.
         let id_lines = body
             .lines()

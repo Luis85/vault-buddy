@@ -340,19 +340,13 @@ pub fn delete_task_list(
     // Ok/Err. Verbatim from the design plan — do not change without
     // updating GAP-64.
     for f in &task_files {
-        // to No list; rails already never-clobber. The landed path is where the
-        // best-effort id stamp below must land.
+        // to No list; rails already never-clobber. The relocation is a
+        // structural move, so the shared best-effort backfill stamps a missing
+        // id on the LANDED file (warn-only on failure — the move already
+        // mutated the vault). The id is discarded: the frontend reloads after
+        // a delete regardless (GAP-64), which surfaces fresh ids.
         let landed = move_task_to_list(&canon_root, f, "")?;
-        if let Some(prop) = id_property {
-            let generated = super::id::new_task_id();
-            if let Err(e) =
-                super::disk::update_task_fields(&canon_root, &landed, &[], &[(prop, &generated)])
-            {
-                // The move already succeeded; a stamp failure must not fail the
-                // delete (audio-first discipline, the move service's posture).
-                log::warn!("delete_task_list: could not stamp task id on {landed:?}: {e}");
-            }
-        }
+        super::disk::backfill_task_id(&canon_root, &landed, id_property);
         moved += 1;
     }
     // Remove only if empty; a folder with sub-lists / foreign files stays.
