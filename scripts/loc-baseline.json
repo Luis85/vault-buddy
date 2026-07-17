@@ -22,8 +22,8 @@
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched."
     },
     "src-tauri/transcribe/src/model.rs": {
-      "loc": 938,
-      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 846->938: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) \u2014 the ModelTier::Turbo (large-v3-turbo-q5_0) tier variant and the pinned Silero VAD model artifact (vad_model_path + download_vad_model, same pinned-URL/SHA-256/.part-then-rename discipline as the speech tiers), plus their tests."
+      "loc": 1037,
+      "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 846->938: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) \u2014 the ModelTier::Turbo (large-v3-turbo-q5_0) tier variant and the pinned Silero VAD model artifact (vad_model_path + download_vad_model, same pinned-URL/SHA-256/.part-then-rename discipline as the speech tiers), plus their tests. 2026-07-17: +105 for the artifact registry (ModelArtifact/model_artifacts/ArtifactStatus/list_artifacts_in + coverage/part-file tests) \u2014 Increment A models management; rustfmt block-expands the five artifact literals."
     },
     "src-tauri/core/src/services.rs": {
       "loc": 927,

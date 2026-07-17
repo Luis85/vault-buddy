@@ -107,6 +107,76 @@ pub fn vad_model_path() -> Option<PathBuf> {
     model_dir().map(|d| d.join(VAD_MODEL_FILE))
 }
 
+/// The complete set of downloadable model artifacts — the four speech
+/// tiers plus the Silero VAD model — for the models-management surface.
+/// One list so the card, the deleter, and the downloaders can never
+/// disagree about what exists or where it lives.
+pub struct ModelArtifact {
+    pub id: &'static str,
+    pub file_name: &'static str,
+    /// UI display for absent rows. Exact for turbo/vad (their download
+    /// pins record the real byte counts); round approximations for the
+    /// older tiers, whose pins only record a floor.
+    pub approx_download_bytes: u64,
+}
+
+pub fn model_artifacts() -> [ModelArtifact; 5] {
+    [
+        ModelArtifact {
+            id: "base",
+            file_name: ModelTier::Base.file_name(),
+            approx_download_bytes: 148_000_000,
+        },
+        ModelArtifact {
+            id: "small",
+            file_name: ModelTier::Small.file_name(),
+            approx_download_bytes: 488_000_000,
+        },
+        ModelArtifact {
+            id: "medium",
+            file_name: ModelTier::Medium.file_name(),
+            approx_download_bytes: 1_600_000_000,
+        },
+        ModelArtifact {
+            id: "turbo",
+            file_name: ModelTier::Turbo.file_name(),
+            approx_download_bytes: 574_041_195,
+        },
+        ModelArtifact {
+            id: "vad",
+            file_name: VAD_MODEL_FILE,
+            approx_download_bytes: 885_098,
+        },
+    ]
+}
+
+pub struct ArtifactStatus {
+    pub id: String,
+    pub file_name: String,
+    pub present: bool,
+    pub size_bytes: Option<u64>,
+}
+
+/// Stat every known artifact under `dir`. Takes the dir (rather than
+/// resolving %APPDATA% itself) so it's testable against a tempdir — the
+/// command layer feeds it `model_dir()`.
+pub fn list_artifacts_in(dir: &Path) -> Vec<ArtifactStatus> {
+    model_artifacts()
+        .into_iter()
+        .map(|a| {
+            let size_bytes = std::fs::metadata(dir.join(a.file_name))
+                .ok()
+                .map(|m| m.len());
+            ArtifactStatus {
+                id: a.id.to_string(),
+                file_name: a.file_name.to_string(),
+                present: size_bytes.is_some(),
+                size_bytes,
+            }
+        })
+        .collect()
+}
+
 /// Download the Silero VAD model with progress — `download_model`'s exact
 /// contract at ~1 MB scale: skips if present, cancellable per chunk,
 /// `.part`-then-rename, checksum-verified.
@@ -993,5 +1063,40 @@ mod tests {
             download_vad_model(&cancel, &mut progress).is_err(),
             "a pre-cancelled VAD download must not proceed to the network"
         );
+    }
+
+    #[test]
+    fn model_artifacts_cover_every_tier_plus_vad_with_valid_ids() {
+        let arts = model_artifacts();
+        let ids: Vec<_> = arts.iter().map(|a| a.id).collect();
+        assert_eq!(ids, vec!["base", "small", "medium", "turbo", "vad"]);
+        // Every speech tier's file name agrees with the tier registry —
+        // the card and the downloader must never disagree on a path.
+        for t in [
+            ModelTier::Base,
+            ModelTier::Small,
+            ModelTier::Medium,
+            ModelTier::Turbo,
+        ] {
+            assert!(arts.iter().any(|a| a.file_name == t.file_name()), "{t:?}");
+        }
+        assert!(arts.iter().any(|a| a.file_name == VAD_MODEL_FILE));
+        assert!(arts.iter().all(|a| a.approx_download_bytes > 0));
+    }
+
+    #[test]
+    fn list_artifacts_reports_presence_and_real_sizes_ignoring_part_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ggml-base.bin"), vec![0u8; 1234]).unwrap();
+        // A half-download must not read as present (the janitor's business).
+        std::fs::write(dir.path().join("ggml-small.bin.part"), b"partial").unwrap();
+        let statuses = list_artifacts_in(dir.path());
+        assert_eq!(statuses.len(), 5);
+        let base = statuses.iter().find(|s| s.id == "base").unwrap();
+        assert!(base.present);
+        assert_eq!(base.size_bytes, Some(1234));
+        let small = statuses.iter().find(|s| s.id == "small").unwrap();
+        assert!(!small.present);
+        assert_eq!(small.size_bytes, None);
     }
 }
