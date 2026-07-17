@@ -141,10 +141,10 @@ fn collect_task_file(
     let order = scalar_field(&content, "order")
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|f| f.is_finite());
-    // Case-insensitive, top-level-only — must agree with the id-stamp path's
-    // has_frontmatter_key_ci, or a task stamped under a different casing than
-    // the configured property has a stable id on disk that never surfaces
-    // (Codex review, PR #59).
+    // Case-insensitive, top-level-only via the SAME scalar_field_ci the
+    // id-stamp path uses, or a task stamped under a different casing than the
+    // configured property has a stable id on disk that never surfaces (Codex
+    // review, PR #59).
     let id = id_property.and_then(|p| scalar_field_ci(&content, p));
     out.push(TaskItem {
         path: path.to_path_buf(),
@@ -571,13 +571,12 @@ mod tests {
 
     #[test]
     fn list_tasks_reads_the_id_property_case_insensitively() {
-        // Codex PR #59: the id STAMP path (has_frontmatter_key_ci) treats an
-        // existing id key as present under ANY casing, but list_tasks read it
-        // with scalar_field's exact-case lookup — so a task stamped
-        // `Task-ID:` while the vault resolves the property to `task-id` had a
-        // stable id on disk that was invisible in TaskDto.id (dead to the
-        // UI/MCP and the upcoming copy-id feature). The read must agree with
-        // the write on case.
+        // Codex PR #59: the id STAMP path detects an existing id under ANY
+        // casing (via scalar_field_ci), but list_tasks once read it with
+        // scalar_field's exact-case lookup — so a task stamped `Task-ID:` while
+        // the vault resolves the property to `task-id` had a stable id on disk
+        // that was invisible in TaskDto.id (dead to the UI/MCP and the copy-id
+        // feature). Both now share scalar_field_ci, so read agrees with write.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(
@@ -591,8 +590,8 @@ mod tests {
             "---\ntype: Task\nstatus: new\ntitle: \"Exact\"\ncreated: 2026-07-08\ntask-id: xyz\n---\n",
         );
         // A NESTED indented `task-id` under a mapping is NOT the top-level
-        // property — same top-level-only discipline as has_frontmatter_key_ci
-        // — so this file carries no usable id at all.
+        // property — scalar_field_ci is top-level-only, the same discipline the
+        // id-stamp uses — so this file carries no usable id at all.
         write(
             root,
             "nested.md",

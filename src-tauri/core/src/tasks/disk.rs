@@ -129,25 +129,26 @@ pub fn update_task_fields(
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    // Stamp-if-absent keys (the generated task ID): included in the write only
-    // when the property is not already present, so an existing/hand-authored
-    // value is never overwritten and IDs stay stable.
+    // Stamp-if-absent keys (the generated task ID): written only when the
+    // property has no USABLE value yet — absent, OR present with a blank scalar.
+    // A bare `task-id:` (an Obsidian property panel / template leaves the key
+    // with no value) is not a usable id, so it must NOT suppress the stamp
+    // (Codex, PR #59); an existing non-empty value (top-level, any casing) is
+    // never overwritten, so IDs stay stable. `scalar_field_ci` is top-level
+    // only, so a nested `metadata.task-id` never counts either.
     let mut effective: Vec<(&str, Option<&str>)> = updates.to_vec();
+    let usable_id =
+        |key: &str| super::parse::scalar_field_ci(&content, key).filter(|v| !v.is_empty());
     for (key, val) in ensure_absent {
-        if !super::parse::has_frontmatter_key_ci(&content, key) {
+        if usable_id(key).is_none() {
             effective.push((key, Some(val)));
         }
     }
-    // The id to report back: the first ensure key's value now on the file —
-    // read the existing one when present (any casing, matching the stamp
-    // predicate above), else the value we are about to stamp.
-    let ensured = ensure_absent.first().and_then(|(key, val)| {
-        if super::parse::has_frontmatter_key_ci(&content, key) {
-            super::parse::scalar_field_ci(&content, key)
-        } else {
-            Some((*val).to_string())
-        }
-    });
+    // The id to report back: the first ensure key's usable value, else the one
+    // we are about to stamp.
+    let ensured = ensure_absent
+        .first()
+        .map(|(key, val)| usable_id(key).unwrap_or_else(|| (*val).to_string()));
     // Nothing to write (e.g. a move that only needs to stamp, but the id is
     // already present): skip the redundant atomic rewrite, still report the id.
     // update_task always passes a non-empty `updates`, so this only short-
@@ -411,8 +412,8 @@ mod tests {
         // "task-id" stamp a SECOND, conflicting id line onto a task already
         // carrying "Task-ID:" (e.g. stamped under a since-changed config
         // casing, or hand-authored). Obsidian folds frontmatter key case, so
-        // the task would show a duplicate id. has_frontmatter_key_ci must
-        // catch the existing key under any casing.
+        // the task would show a duplicate id. The case-insensitive
+        // scalar_field_ci read must catch the existing key under any casing.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
         let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
@@ -444,6 +445,39 @@ mod tests {
             .lines()
             .filter(|l| l.trim_start().to_ascii_lowercase().starts_with("task-id:"))
             .count();
+        assert_eq!(id_lines, 1);
+    }
+
+    #[test]
+    fn update_task_fields_stamps_over_a_blank_id_property() {
+        // Codex PR #59: a bare `task-id:` (an Obsidian property panel/template
+        // leaves the key valueless) is NOT a usable id — the presence-only
+        // predecessor treated it as present and suppressed the stamp forever.
+        // The non-empty check now stamps it and reports the fresh id.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None).unwrap();
+        let content = std::fs::read_to_string(&p).unwrap();
+        let seeded = content.replacen(
+            "created: 2026-07-08\n",
+            "created: 2026-07-08\ntask-id:\n",
+            1,
+        );
+        std::fs::write(&p, &seeded).unwrap();
+
+        let reported = update_task_fields(
+            &root,
+            &p,
+            &[("status", Some("done"))],
+            &[("task-id", "fresh777")],
+        )
+        .unwrap();
+        // Blank → treated as missing → stamped, and the fresh id is returned.
+        assert_eq!(reported.as_deref(), Some("fresh777"));
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("task-id: fresh777\n"));
+        // The blank line was rewritten in place, not duplicated.
+        let id_lines = body.lines().filter(|l| l.starts_with("task-id:")).count();
         assert_eq!(id_lines, 1);
     }
 

@@ -157,51 +157,18 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
-/// True iff the frontmatter declares `key` under ANY casing. The id-stamp
-/// uses this (not the exact `scalar_field`) to decide "already has an id":
-/// Obsidian folds frontmatter key case and `is_valid_id_property` accepts
-/// case variants, so a task stamped `Task-ID:` must count as present when the
-/// config later uses `task-id`, or a second conflicting line would be stamped.
-pub(super) fn has_frontmatter_key_ci(content: &str, key: &str) -> bool {
-    let mut lines = content.lines();
-    if lines.next().map(str::trim_end) != Some("---") {
-        return false;
-    }
-    for line in lines {
-        let t = line.trim_end();
-        if t.trim_end() == "---" {
-            return false; // closing fence — key not found in frontmatter
-        }
-        // Only TOP-LEVEL keys count: set_fields inserts/rewrites unindented
-        // `key:` lines, so an indented (nested) `task-id:` under a mapping is
-        // NOT the top-level property and must not suppress a stamp (Codex) —
-        // else a task whose only `task-id` is nested would never get a usable
-        // top-level id.
-        if t.starts_with([' ', '\t']) {
-            continue;
-        }
-        if let Some((k, _)) = t.split_once(':') {
-            if k.trim().eq_ignore_ascii_case(key) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// Read a STRUCTURED frontmatter scalar (see `scalar_field`), matching the
-/// key CASE-INSENSITIVELY at the TOP LEVEL only — the read-side counterpart
-/// to `has_frontmatter_key_ci`, used wherever a read must agree with a write
-/// that already treats case as insignificant (the task-id property: the
-/// stamp path detects an existing id under ANY casing via
-/// `has_frontmatter_key_ci`, so `list_tasks` reading it back must find the
-/// same key or a stable on-disk id becomes invisible in `TaskItem.id`,
-/// Codex review, PR #59). Finds the first top-level `key:` line whose name
-/// case-folds to `key`, skipping indented/nested lines exactly like
-/// `has_frontmatter_key_ci` (a nested `  task-id:` under a mapping is never
-/// the top-level property), then delegates to `scalar_field` with the
-/// ACTUAL casing found — the value parsing (comment-strip, quote-unwrap)
-/// lives in one place, not forked.
+/// key CASE-INSENSITIVELY at the TOP LEVEL only. Obsidian folds frontmatter
+/// key case and `is_valid_id_property` accepts case variants, so a read must
+/// agree with a write that treats case as insignificant: the id-stamp decides
+/// "already has a usable id" from `scalar_field_ci(..).filter(non-empty)`
+/// (a bare `task-id:` reads as `Some("")` → still stamped; Codex, PR #59), and
+/// `list_tasks` reads the id back through the same path, so a stable on-disk id
+/// stays visible in `TaskItem.id`. Finds the first TOP-LEVEL `key:` line whose
+/// name case-folds to `key`, skipping indented/nested lines (a nested
+/// `  task-id:` under a mapping is never the top-level property `set_fields`
+/// would rewrite), then delegates to `scalar_field` with the ACTUAL casing
+/// found — the value parsing (comment-strip, quote-unwrap) lives in one place.
 pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
     let mut lines = content.lines();
     if lines.next().map(str::trim_end) != Some("---") {
@@ -212,7 +179,8 @@ pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
         if t == "---" {
             return None; // closing fence — key not found in frontmatter
         }
-        // Top-level keys only — mirrors has_frontmatter_key_ci.
+        // Top-level keys only: a nested `  task-id:` under a mapping is never
+        // the property set_fields would rewrite, so the id-stamp must skip it.
         if t.starts_with([' ', '\t']) {
             continue;
         }
@@ -322,63 +290,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_frontmatter_key_ci_matches_regardless_of_casing() {
-        // A task stamped `Task-ID:` must be seen as "already has an id" by a
-        // config using the lowercase `task-id` property name, and vice versa
-        // — Obsidian folds frontmatter key case, so a case-sensitive check
-        // would stamp a second, conflicting id line (the disk.rs regression).
+    fn scalar_field_ci_matches_regardless_of_casing() {
+        // A task stamped `Task-ID:` must be readable by a config using the
+        // lowercase `task-id` property name, and vice versa — Obsidian folds
+        // frontmatter key case, so a case-sensitive read would miss a stable
+        // on-disk id (and the stamp would write a second, conflicting line).
         let upper = "---\ntype: Task\nTask-ID: abc123\n---\n";
-        assert!(has_frontmatter_key_ci(upper, "task-id"));
-        assert!(has_frontmatter_key_ci(upper, "TASK-ID"));
+        assert_eq!(scalar_field_ci(upper, "task-id").as_deref(), Some("abc123"));
+        assert_eq!(scalar_field_ci(upper, "TASK-ID").as_deref(), Some("abc123"));
         let lower = "---\ntype: Task\ntask-id: abc123\n---\n";
-        assert!(has_frontmatter_key_ci(lower, "Task-ID"));
+        assert_eq!(scalar_field_ci(lower, "Task-ID").as_deref(), Some("abc123"));
     }
 
     #[test]
-    fn has_frontmatter_key_ci_false_for_absent_key_and_body_only_occurrence() {
-        assert!(!has_frontmatter_key_ci("---\ntype: Task\n---\n", "task-id"));
+    fn scalar_field_ci_none_for_absent_key_and_body_only_occurrence() {
+        assert_eq!(scalar_field_ci("---\ntype: Task\n---\n", "task-id"), None);
         // A same-named line AFTER the closing fence is body content, not
-        // frontmatter — it must never count as "present".
-        assert!(!has_frontmatter_key_ci(
-            "---\ntype: Task\n---\ntask-id: sneaky\n",
-            "task-id"
-        ));
-        assert!(!has_frontmatter_key_ci("no frontmatter", "task-id"));
-    }
-
-    #[test]
-    fn has_frontmatter_key_ci_handles_colonless_lines_and_unterminated_frontmatter() {
-        // A frontmatter line with no colon at all (malformed/hand-edited)
-        // must not match and must not panic — split_once yields None, so the
-        // scan just continues to the next line.
-        assert!(!has_frontmatter_key_ci(
-            "---\ntype: Task\nnotacolonhere\ntask-id: abc\n---\n",
-            "missing"
-        ));
+        // frontmatter — it must never be read as the property.
+        assert_eq!(
+            scalar_field_ci("---\ntype: Task\n---\ntask-id: sneaky\n", "task-id"),
+            None
+        );
+        assert_eq!(scalar_field_ci("no frontmatter", "task-id"), None);
         // Unterminated frontmatter (opens but the closing fence never comes)
-        // falls through to false rather than treating a stray line as a
-        // match past where a real document would have closed.
-        assert!(!has_frontmatter_key_ci("---\ntype: Task\n", "due"));
+        // falls through to None.
+        assert_eq!(scalar_field_ci("---\ntype: Task\n", "due"), None);
     }
 
     #[test]
-    fn has_frontmatter_key_ci_ignores_nested_indented_keys() {
-        // Codex PR #59: an indented `task-id:` nested under a mapping is NOT
-        // the top-level property. set_fields only inserts/rewrites unindented
-        // keys, so treating the nested key as "present" would suppress a stamp
-        // and leave the task with no usable top-level id. The top-level scan
-        // must skip indented lines.
-        let nested = "---\ntype: Task\nmetadata:\n  task-id: old\n---\n";
-        assert!(!has_frontmatter_key_ci(nested, "task-id"));
-        assert!(!has_frontmatter_key_ci(
-            "---\ntype: Task\nmeta:\n\ttask-id: old\n---\n", // tab-indented too
-            "task-id"
-        ));
-        // A genuinely top-level key (any casing) still matches.
-        assert!(has_frontmatter_key_ci(
-            "---\ntype: Task\nTask-ID: abc\n---\n",
-            "task-id"
-        ));
+    fn scalar_field_ci_reads_blank_as_empty_and_skips_nested_keys() {
+        // A bare `task-id:` (an Obsidian property panel / template leaves the
+        // key valueless) reads as an EMPTY value, so the id-stamp's
+        // `.filter(non-empty)` treats it as MISSING and writes a usable id
+        // (Codex, PR #59) — the presence-only predecessor suppressed the stamp.
+        assert_eq!(
+            scalar_field_ci("---\ntype: Task\ntask-id:\n---\n", "task-id").as_deref(),
+            Some("")
+        );
+        // An indented `task-id:` nested under a mapping is NOT the top-level
+        // property set_fields rewrites — the top-level scan skips it (space and
+        // tab indentation alike).
+        assert_eq!(
+            scalar_field_ci(
+                "---\ntype: Task\nmetadata:\n  task-id: old\n---\n",
+                "task-id"
+            ),
+            None
+        );
+        assert_eq!(
+            scalar_field_ci("---\ntype: Task\nmeta:\n\ttask-id: old\n---\n", "task-id"),
+            None
+        );
+        // A colonless malformed line neither matches nor panics; a genuine
+        // top-level key later in the block still reads.
+        assert_eq!(
+            scalar_field_ci(
+                "---\ntype: Task\nnotacolonhere\ntask-id: abc\n---\n",
+                "task-id"
+            )
+            .as_deref(),
+            Some("abc")
+        );
     }
 
     #[test]
