@@ -1145,6 +1145,24 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-section-menu-Inbox"]').exists()).toBe(true);
   });
 
+  it("does not cache a malformed lists config (listOrder not an array)", async () => {
+    // loadVaultConfig only caches a shape whose listOrder is an array; a
+    // hand-broken response must leave the vault uncached, which the archive
+    // guard then treats like a failed read — retry, then refuse rather than
+    // persist computed-empty prefs over unknown stored settings.
+    const notifications = useNotificationsStore();
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: "not-an-array" }),
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-archive-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
+    expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
+  });
+
   it("archives with the REAL prefs after a transient config read failure", async () => {
     // First read (mount) fails, the archive-time retry succeeds: the write
     // must carry the vault's actual stored defaultList/listOrder, proving the
@@ -1291,6 +1309,82 @@ describe("Tasks", () => {
       .trigger("keydown", { key: "Escape", isComposing: false });
     expect(wrapper.find('[data-testid="task-section-rename-input-Inbox"]').exists()).toBe(false); // input gone
     expect(wrapper.find('[data-testid="task-section-rename-Inbox"]').exists()).toBe(true); // menu back
+  });
+
+  it("a second rename confirm while the first is in flight is ignored", async () => {
+    // The Save button disables while busy, but the INPUT stays live — Enter
+    // during the in-flight rename reaches confirmRename directly, so its own
+    // busy guard (not just the disabled attribute) must swallow the retry.
+    let resolveRename!: (v: string) => void;
+    const { wrapper, calls } = mountLists({
+      rename_task_list: () => new Promise<string>((r) => (resolveRename = r)),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    const input = wrapper.get('[data-testid="task-section-rename-input-Inbox"]');
+    await input.setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await input.trigger("keydown.enter", { isComposing: false }); // in-flight retry
+    resolveRename("Later");
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "rename_task_list")).toHaveLength(1);
+  });
+
+  it("a second delete confirm while the first is in flight is ignored", async () => {
+    // Same busy guard as rename: the confirm row stays mounted until the
+    // reload lands, so a double-click must not fire a second destructive
+    // delete against the in-flight one.
+    let resolveDelete!: (v: { moved: number; folderRemoved: boolean }) => void;
+    const { wrapper, calls } = mountLists({
+      delete_task_list: () => new Promise((r) => (resolveDelete = r)),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    resolveDelete({ moved: 1, folderRemoved: true });
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "delete_task_list")).toHaveLength(1);
+  });
+
+  it("an IME candidate commit in the rename input neither saves nor steps back (GAP-31)", async () => {
+    // Committing an IME candidate fires Enter/Escape with isComposing=true —
+    // that must select the candidate, never run the rename (a vault write)
+    // or discard the half-composed name.
+    const { wrapper, calls } = mountLists({ rename_task_list: () => "Later" });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    const input = wrapper.get('[data-testid="task-section-rename-input-Inbox"]');
+    await input.trigger("keydown.enter", { isComposing: true });
+    expect(calls.find((c) => c.cmd === "rename_task_list")).toBeUndefined();
+    await input.trigger("keydown", { key: "Escape", isComposing: true });
+    // Still in rename mode — the composing Escape didn't step back.
+    expect(wrapper.find('[data-testid="task-section-rename-input-Inbox"]').exists()).toBe(true);
+  });
+
+  it("Escape with the menu CLOSED passes through to the panel", async () => {
+    // The root handler swallows Escape only while a menu state is open — a
+    // closed menu must not eat the panel's own close-on-Escape.
+    const reached: string[] = [];
+    const spy = (e: KeyboardEvent) => {
+      if (e.key === "Escape") reached.push(e.key);
+    };
+    window.addEventListener("keydown", spy);
+    const { wrapper } = mountLists({}, { attach: true });
+    try {
+      await flushPromises();
+      // No menu open: Escape from the trigger bubbles all the way up.
+      await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("keydown", { key: "Escape", isComposing: false });
+      expect(reached).toHaveLength(1);
+    } finally {
+      window.removeEventListener("keydown", spy);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
   });
 
   it("Escape closes the open section menu without reaching the panel (GAP-27 class)", async () => {
@@ -1475,6 +1569,49 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "rename_task_list")).toBeDefined();
     // No cached config → no remap write (would otherwise clobber unread settings).
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
+  });
+
+  it("a failed prefs sync after a rename is log-only (the rename itself stood)", async () => {
+    // The folder already moved on disk when syncListPrefs runs; its write
+    // failing must not surface as a scary toast over a rename that
+    // succeeded — the catch degrades to the log, and the next lifecycle
+    // action retries naturally.
+    const { wrapper, calls } = mountLists({
+      rename_task_list: () => "Later",
+      set_task_lists_config: () => {
+        throw new Error("prefs write boom");
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    // The sync was attempted (mountLists' config references Inbox in
+    // listOrder) and its failure didn't break the flow.
+    expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeDefined();
+    expect(calls.find((c) => c.cmd === "rename_task_list")).toBeDefined();
+  });
+
+  it("skips the prefs write when a rename touches no stored pref (review)", async () => {
+    // remapListPrefs returns values identical to the cached config when the
+    // renamed list appears in no pref — persisting that no-op still cost an
+    // fsync'd config.json read-modify-write on every rename/delete (this app
+    // targets possibly slow/network vault disks). The sync now compares and
+    // skips the unchanged write.
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      rename_task_list: () => "Later",
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "rename_task_list")).toBeDefined();
     expect(calls.find((c) => c.cmd === "set_task_lists_config")).toBeUndefined();
   });
 

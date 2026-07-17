@@ -5,6 +5,7 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskEditorPatch, TaskPatch } from "../types";
+import { applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 
 // The per-row write actions of the Tasks view (toggle / archive / open /
 // inline-editor save) plus the busy guard and editing-row state they share.
@@ -125,8 +126,10 @@ export function useTaskActions(opts: {
       // vault opts in and it lacked one, or the existing value; null when IDs
       // are off), so the row can reveal its copy-ID affordance immediately
       // rather than only after a view reload (Codex, PR #59).
-      const id = await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch });
-      if (id) task.id = id;
+      reflectStampedId(
+        task,
+        await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch }),
+      );
       return true;
     } catch (e) {
       Object.assign(task, before);
@@ -143,16 +146,16 @@ export function useTaskActions(opts: {
   // half-reverted) — the toast names exactly what failed.
   async function moveToList(task: AggTask, targetList: string, fieldsSaved: boolean) {
     try {
-      const moved = await invoke<{ path: string; id: string | null }>("move_task_to_list", {
+      const moved = await invoke<MovedTask>("move_task_to_list", {
         id: task.vaultId,
         path: task.path,
         list: targetList,
       });
-      task.path = moved.path;
+      // Shared adoption (landed path + any freshly-stamped id — a list-only
+      // editor save can be the first edit on a legacy task), same helper as
+      // the drag mover so the two can't drift (Codex, PR #59).
+      applyMovedTask(task, moved);
       task.list = targetList;
-      // Reflect a freshly-stamped id (a list-only editor save can be the first
-      // edit on a legacy task) so copy-id shows without a reload (Codex, PR #59).
-      if (moved.id) task.id = moved.id;
       sortInPlace();
     } catch (e) {
       const prefix = fieldsSaved ? "Saved fields, but couldn't move" : "Couldn't move";

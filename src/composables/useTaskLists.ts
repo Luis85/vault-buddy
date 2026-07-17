@@ -4,7 +4,7 @@ import { computed, ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { TasksConfig } from "../types";
-import { orderLists, remapListRef } from "../utils/taskSections";
+import { archivedMatcher, orderLists, remapListRef } from "../utils/taskSections";
 
 // The Tasks view's lists state: a List is a folder under the vault's tasks
 // root; enumeration is fetched per vault (fan-out in aggregate mode,
@@ -101,9 +101,9 @@ export function useTaskLists(
   // lists to pick for a NEW task, matching what the Lists grouping shows.
   function listsForVault(id: string): string[] {
     const cfg = vaultConfigs.value.get(id);
-    const archived = new Set((cfg?.archivedLists ?? []).map((a) => a.toLowerCase()));
+    const isArchived = archivedMatcher(cfg?.archivedLists ?? []);
     return orderLists(vaultLists.value.get(id) ?? [], cfg?.listOrder ?? []).filter(
-      (l) => !archived.has(l.toLowerCase()),
+      (l) => !isArchived(l),
     );
   }
   const composerLists = computed(() =>
@@ -203,6 +203,21 @@ export function useTaskLists(
     const cfg = vaultConfigs.value.get(id);
     if (!cfg) return;
     const next = remapListPrefs(cfg, from, to);
+    // Skip the write when the remap changed nothing (the list appears in no
+    // pref) — set_task_lists_config is an fsync'd read-modify-write of
+    // config.json, too dear for a no-op on the slow/network disks this app
+    // targets. Compare against the SAME normalized shape remapListPrefs
+    // destructures from, or an absent archivedLists vs a computed [] would
+    // read as a change.
+    const { defaultList = null, listOrder = [], archivedLists = [] } = cfg as Partial<TasksConfig>;
+    const sameList = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((v, i) => v === b[i]);
+    if (
+      next.defaultList === defaultList &&
+      sameList(next.listOrder, listOrder) &&
+      sameList(next.archivedLists, archivedLists)
+    )
+      return;
     try {
       await invoke("set_task_lists_config", { id, ...next });
       vaultConfigs.value.set(id, { ...cfg, ...next });

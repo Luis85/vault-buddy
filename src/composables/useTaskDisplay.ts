@@ -3,7 +3,7 @@ import { computed, type Ref, ref, watch } from "vue";
 import type { AggTask } from "../types";
 import { localToday } from "../utils/taskFields";
 import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
-import { type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
+import { archivedMatcher, type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
 import { loadSortPref, NATURAL_DIR, saveSortPref, type SortKey, taskComparator, type TaskSortPref } from "../utils/taskSort";
 
 // The read side of the Tasks view: how the flat task list is filtered (title +
@@ -37,8 +37,8 @@ export function useTaskDisplay(opts: {
   // PR #59). Filter-independent, so showFilter → filteredTasks stays acyclic.
   const visibleTasks = computed(() => {
     if (grouping.value !== "lists") return tasks.value;
-    const archived = new Set(archivedLists.value.map((a) => a.toLowerCase()));
-    return tasks.value.filter((t) => t.done || t.list === "" || !archived.has(t.list.toLowerCase()));
+    const isArchived = archivedMatcher(archivedLists.value);
+    return tasks.value.filter((t) => t.done || t.list === "" || !isArchived(t.list));
   });
 
   const filter = ref("");

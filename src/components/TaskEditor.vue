@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-import { logWarning } from "../logging";
 import type { AggTask, TaskEditorPatch, TaskItem } from "../types";
+import { copyToClipboard } from "../utils/clipboard";
 import { dueOf, parseTagsInput } from "../utils/taskFields";
 import TaskListPicker from "./TaskListPicker.vue";
 
@@ -59,17 +59,11 @@ function save() {
   emit("save", buildPatch());
 }
 
-async function copyId() {
+function copyId() {
   // Display-only: no editing, no new write path — just read the generated id
-  // (Task 4) and put it on the clipboard. A failed copy has no UI feedback,
-  // so the log line is the only trace a silently-dead Copy button leaves
-  // (mirrors McpSettings.vue's copy()).
+  // (Task 4) and put it on the clipboard via the shared helper.
   if (!props.task.id) return;
-  try {
-    await navigator.clipboard.writeText(props.task.id);
-  } catch (e) {
-    logWarning(`task editor: clipboard copy failed: ${String(e)}`);
-  }
+  copyToClipboard(props.task.id, "task editor");
 }
 
 function onTitleEnter(e: KeyboardEvent) {

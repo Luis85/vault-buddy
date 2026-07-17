@@ -5,7 +5,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import type { TasksConfig } from "../types";
-import { orderLists } from "../utils/taskSections";
+import { archivedMatcher, orderLists } from "../utils/taskSections";
 import TaskArchivedLists from "./TaskArchivedLists.vue";
 import TaskListPicker from "./TaskListPicker.vue";
 
@@ -32,9 +32,10 @@ const order = ref<string[]>([]);
 // default/order change preserves it and an unarchive shrinks it.
 const archived = ref<string[]>([]);
 
-// The archived set as a case-insensitive lookup, shared by the picker's
-// options and the save-time default normalization below.
-const archivedSet = computed(() => new Set(archived.value.map((a) => a.toLowerCase())));
+// The shared case-insensitive archived test (archivedMatcher — one folding
+// rule across every surface), used by the picker's options, the reorder-row
+// filter, and the save-time default normalization below.
+const isArchived = computed(() => archivedMatcher(archived.value));
 // The visible lists: the default-list picker's options AND the reorder rows.
 // A default can't be an archived list (the picker must not offer one, and an
 // archived default must clear on the next save — otherwise unpicked adds keep
@@ -43,12 +44,12 @@ const archivedSet = computed(() => new Set(archived.value.map((a) => a.toLowerCa
 // section below, and "hidden from every picker" (the spec) includes this
 // card. Its SLOT in `order` survives unrendered, so unarchiving restores its
 // position instead of dumping it at the alphabetical tail.
-const selectableLists = computed(() => order.value.filter((l) => !archivedSet.value.has(l.toLowerCase())));
+const selectableLists = computed(() => order.value.filter((l) => !isArchived.value(l)));
 
 const autosave = useAutosave(
   async () => {
     const dl = defaultList.value;
-    const effectiveDefault = dl && !archivedSet.value.has(dl.toLowerCase()) ? dl : null;
+    const effectiveDefault = dl && !isArchived.value(dl) ? dl : null;
     await invoke("set_task_lists_config", {
       id: props.vaultId,
       defaultList: effectiveDefault,

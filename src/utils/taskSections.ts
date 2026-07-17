@@ -94,7 +94,7 @@ export function listSections(
   listOrder: string[],
   opts: { includeEmpty: boolean; archived: string[] },
 ): Bucket[] {
-  const archived = new Set(opts.archived.map((a) => a.toLowerCase()));
+  const isArchived = archivedMatcher(opts.archived);
   const byList = new Map<string, { label: string; tasks: AggTask[] }>();
   const ensure = (label: string) => {
     const key = label.toLowerCase();
@@ -102,14 +102,13 @@ export function listSections(
     byList.set(key, entry);
     return entry;
   };
-  if (opts.includeEmpty)
-    for (const l of knownLists) if (!archived.has(l.toLowerCase())) ensure(l);
+  if (opts.includeEmpty) for (const l of knownLists) if (!isArchived(l)) ensure(l);
   const nolist: AggTask[] = [];
   const done: AggTask[] = [];
   for (const t of tasks) {
     if (t.done) done.push(t);
     else if (t.list === "") nolist.push(t);
-    else if (archived.has(t.list.toLowerCase())) continue; // hidden with its list
+    else if (isArchived(t.list)) continue; // hidden with its list
     else ensure(t.list).tasks.push(t);
   }
   // Explicitly Bucket[] (not inferred from the map below): the nolist/done
@@ -126,6 +125,17 @@ export function listSections(
   if (nolist.length > 0) sections.push({ key: "nolist", label: "No list", tasks: nolist });
   if (done.length > 0) sections.push({ key: "done", label: "Done", tasks: done });
   return sections;
+}
+
+/** The ONE implementation of "is this list archived": a case-insensitive
+ * membership test over the vault's archived set. Every surface that hides
+ * archived lists (the Lists sections, visibleTasks' counts, the composer /
+ * editor pickers, the settings card) builds its matcher here, so the folding
+ * rule can never drift between them — missing one surface silently un-hides
+ * an archived list exactly there (review, PR #59). */
+export function archivedMatcher(archived: string[]): (list: string) => boolean {
+  const set = new Set(archived.map((a) => a.toLowerCase()));
+  return (list) => set.has(list.toLowerCase());
 }
 
 /** Rewrite ONE list reference after a lifecycle change — the single-value core

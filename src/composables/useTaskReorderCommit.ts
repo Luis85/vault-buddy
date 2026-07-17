@@ -5,16 +5,9 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import type { AggTask } from "../types";
 import type { Grouping } from "../utils/taskGrouping";
+import { applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 import { planReorder } from "../utils/taskOrder";
 import { type Bucket, dropTargetList } from "../utils/taskSections";
-
-// Reflect a freshly-stamped task id (update_task's return) onto the row so the
-// editor's copy-id affordance shows without a reload. No-op when ids are off
-// (the command returns null). Module-level + branchless-at-the-call-site so the
-// reorder writers don't each carry the extra branch.
-function reflectStampedId(task: AggTask, id: string | null) {
-  if (id) task.id = id;
-}
 
 // The write side of manual reordering + drag-to-move: turns a dropped slot (or
 // a cross-list drop) into the `order`/`move` vault writes, optimistic with
@@ -80,17 +73,15 @@ export function useTaskReorderCommit(opts: {
     busy.value.add(prevPath);
     reordering.value = true;
     try {
-      // move_task_to_list returns the landed path (possibly ` (N)`-suffixed)
-      // AND the task's id (freshly stamped when the vault opts in and it lacked
-      // one) — adopt both so a moved legacy task reveals copy-id without a
-      // reload, like the reorder/edit paths (Codex, PR #59).
-      const moved = await invoke<{ path: string; id: string | null }>("move_task_to_list", {
+      // Adopt the landed path (possibly ` (N)`-suffixed) and any freshly
+      // stamped id via the shared helper — same adoption as the editor-save
+      // mover, so the two call sites can't drift (Codex, PR #59).
+      const moved = await invoke<MovedTask>("move_task_to_list", {
         id: task.vaultId,
         path: prevPath,
         list,
       });
-      task.path = moved.path;
-      reflectStampedId(task, moved.id);
+      applyMovedTask(task, moved);
       sortInPlace();
     } catch (e) {
       task.list = prevList;
