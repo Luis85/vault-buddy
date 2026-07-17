@@ -65,6 +65,7 @@ const {
   filter,
   tagFilter,
   showFilter,
+  filterActive,
   sortPref,
   sortInPlace,
   setSortKey,
@@ -164,12 +165,12 @@ const onSectionDelete = (list: string) => runSectionAction(list, () => deleteLis
 // interaction machine (useTaskReorder) and the DOM hit-tests.
 const rootRef = ref<HTMLElement | null>(null);
 const { reordering, commitReorder } = useTaskReorderCommit({ busy, sortInPlace, buckets, grouping });
+// `filterActive` (not a hand-rolled empty-string check) is the gate: it
+// applies the same showFilter rule the list itself uses, so STALE filter text
+// left behind when archiving hid the input no longer blocks reordering — the
+// list is unfiltered then, every neighbor visible (review, PR #59).
 const reorderView = computed(
-  () =>
-    !isAggregate.value &&
-    sortPref.value.key === "manual" &&
-    filter.value.trim() === "" &&
-    tagFilter.value === null,
+  () => !isAggregate.value && sortPref.value.key === "manual" && !filterActive.value,
 );
 const reorderEnabled = computed(() => reorderView.value && !reordering.value);
 const { dragState, onHandlePointerDown, onHandleKeydown } = useTaskReorder({

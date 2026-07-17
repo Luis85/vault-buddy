@@ -98,6 +98,29 @@ describe("manual reordering", () => {
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0);
   });
 
+  it("re-enables the handles when the filter input hides with stale text (review)", async () => {
+    // Archiving below the 5-task threshold hides the filter INPUT, and
+    // filteredTasks deliberately ignores the stale query then (the user has
+    // no control left to clear it) — the list is unfiltered, every neighbor
+    // visible, so reordering is safe. reorderView's hand-rolled
+    // `filter === ""` check lacked that showFilter gate and kept the grips
+    // hidden forever; it must consult the same filterActive rule the list
+    // itself uses.
+    const six = Array.from({ length: 6 }, (_, i) => task(`t${i}`, (i + 1) * 1024));
+    const { wrapper } = mountManual(six, { set_task_status: () => null });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-filter"]').setValue("t3");
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0); // narrowed → no grips
+    // Archive the one matching row → 5 tasks remain → the input hides.
+    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+    // The stale "t3" no longer narrows anything: all 5 rows render — and the
+    // grips must be back.
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(5);
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(5);
+  });
+
   it("ArrowDown on the handle moves the row one slot with a midpoint write", async () => {
     const { wrapper, calls } = mountManual([task("a", 1024), task("b", 2048), task("c", 3072)]);
     await flushPromises();

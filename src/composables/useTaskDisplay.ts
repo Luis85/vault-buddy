@@ -64,7 +64,11 @@ export function useTaskDisplay(opts: {
     });
   });
   // Whether a filter is actually narrowing the list (matches filteredTasks'
-  // own gates) — Lists grouping consults it to drop empty lists while filtering.
+  // own gates — including the showFilter gate, so stale hidden filter text
+  // counts as INACTIVE): Lists grouping consults it to drop empty lists while
+  // filtering, and the view's reorderView gates the drag grips on it (a
+  // narrowed list must not rank against invisible neighbors; an unfiltered
+  // one may reorder freely).
   const filterActive = computed(
     () => tagFilter.value !== null || (filter.value.trim() !== "" && showFilter.value),
   );
@@ -119,11 +123,12 @@ export function useTaskDisplay(opts: {
     return { total, done, pct: total === 0 ? 0 : Math.round((done / total) * 100) };
   });
 
+  // filteredTasks stays internal (only buckets consumes it) — exporting it
+  // would invite a caller to bypass the grouping pipeline.
   return {
     filter,
     tagFilter,
     showFilter,
-    filteredTasks,
     filterActive,
     sortPref,
     sortInPlace,
