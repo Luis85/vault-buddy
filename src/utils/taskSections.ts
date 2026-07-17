@@ -165,3 +165,18 @@ export function dropTargetList(over: Bucket | undefined, sectionKey: string): st
   if (over.list !== undefined) return over.list;
   return over.key === "nolist" ? "" : null;
 }
+
+/** The section key a cross-list DROP would land on during a drag — the over
+ * section's key when it's a different, valid list target under Lists grouping,
+ * else `null`. Drives the target-section highlight and suppresses the origin's
+ * now-misleading drop line. Pure wrapper over `dropTargetList` so the view
+ * binds one key comparison. */
+export function crossListDropTargetKey(
+  drag: { sectionKey: string; overSectionKey: string | null } | null,
+  grouping: string,
+  buckets: Bucket[],
+): string | null {
+  if (!drag || grouping !== "lists") return null;
+  const over = buckets.find((b) => b.key === drag.overSectionKey);
+  return dropTargetList(over, drag.sectionKey) !== null ? drag.overSectionKey : null;
+}

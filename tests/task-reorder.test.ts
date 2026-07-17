@@ -380,6 +380,31 @@ describe("manual reordering", () => {
     expect(moved?.path).toBe("C:/v/Tasks/B/x.md");
   });
 
+  it("highlights the target section during a cross-list drag and drops the origin's drop line", async () => {
+    const { wrapper } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
+      move_task_to_list: () => "C:/v/Tasks/B/x.md",
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+    await flushPromises();
+    stackSectionRects(wrapper); // section 0 = list:a [0,60), section 1 = list:b [60,120)
+    const handles = wrapper.findAll('[data-testid="task-drag"]');
+    await handles[0].trigger("pointerdown", { pointerType: "mouse", button: 0, clientY: 10 });
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 10, clientY: 90 })); // over list:b
+    await wrapper.vm.$nextTick();
+    // Mid-drag (before release): list:b is ringed as the drop target, list:a is not.
+    const section = (key: string) =>
+      wrapper.findAll("[data-section-key]").find((s) => s.attributes("data-section-key") === key)!;
+    expect(section("list:b").classes()).toContain("ring-2");
+    expect(section("list:a").classes()).not.toContain("ring-2");
+    // And no row shows the in-section drop-line border while pointing away —
+    // the origin's drop line is suppressed during a cross-list drag.
+    const rows = wrapper.findAll('[data-testid="task-row"]');
+    expect(rows.every((r) => !r.classes().includes("border-violet-400"))).toBe(true);
+    window.dispatchEvent(new PointerEvent("pointerup", {})); // end the drag cleanly
+    await flushPromises();
+  });
+
   it("retains the last section target when the pointer passes over a gap", async () => {
     // onMove keeps the last known over-section when sectionAt returns null
     // (the pointer is momentarily between sections) so a brief gap on the way

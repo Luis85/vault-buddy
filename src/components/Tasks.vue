@@ -12,7 +12,7 @@ import type { AggTask, TaskItem, Vault } from "../types";
 import { localToday } from "../utils/taskFields";
 import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
 import { planReorder } from "../utils/taskOrder";
-import { type Bucket, dateBuckets, dropTargetList, listSections, tagSections } from "../utils/taskSections";
+import { type Bucket, crossListDropTargetKey, dateBuckets, dropTargetList, listSections, tagSections } from "../utils/taskSections";
 import {
   loadSortPref,
   NATURAL_DIR,
@@ -405,6 +405,12 @@ const buckets = computed<Bucket[]>(() => {
 // aggregate omits empty lists) (Codex, PR #53 re-review).
 const hasDisplayableLists = computed(() => !isAggregate.value && knownLists.value.length > 0);
 
+// The section a cross-list drop would land on — drives its highlight and
+// suppresses the origin's now-misleading drop line (pure util, tested).
+const crossListDropTarget = computed(() =>
+  crossListDropTargetKey(dragState.value, grouping.value, buckets.value),
+);
+
 onMounted(async () => {
   try {
     if (props.vaultId !== null) {
@@ -613,7 +619,8 @@ async function add(payload: AddPayload) {
         v-for="bucket in buckets"
         :key="bucket.key"
         :data-section-key="bucket.key"
-        class="mt-1 first:mt-0"
+        class="mt-1 rounded-lg first:mt-0"
+        :class="bucket.key === crossListDropTarget ? 'bg-violet-500/10 ring-2 ring-violet-400/60' : ''"
       >
         <div
           v-if="bucket.label"
@@ -650,7 +657,8 @@ async function add(payload: AddPayload) {
             :drop-target="
               dragState?.sectionKey === bucket.key &&
                 dragState.toIndex === i &&
-                dragState.fromIndex !== i
+                dragState.fromIndex !== i &&
+                dragState.overSectionKey === dragState.sectionKey
             "
             :data-reorder-section="bucket.key"
             @toggle="toggle(task)"

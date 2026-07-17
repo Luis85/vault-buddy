@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AggTask } from "../src/types";
-import { type Bucket, dateBuckets, dropTargetList, listSections, tagSections } from "../src/utils/taskSections";
+import { type Bucket, crossListDropTargetKey, dateBuckets, dropTargetList, listSections, tagSections } from "../src/utils/taskSections";
 
 const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   path: `C:/v/Tasks/${title.replace(/\s+/g, "-")}.md`,
@@ -117,5 +117,24 @@ describe("dropTargetList (drag-to-move target)", () => {
   it("returns null over Done or nothing (not a list target)", () => {
     expect(dropTargetList({ key: "done", label: "Done", tasks: [] }, "list:a")).toBeNull();
     expect(dropTargetList(undefined, "list:a")).toBeNull();
+  });
+});
+
+describe("crossListDropTargetKey (drag target highlight)", () => {
+  const b = (key: string, list?: string): Bucket => ({ key, label: key, list, tasks: [] });
+  const buckets = [b("list:a", "A"), b("list:b", "B"), b("nolist"), b("done")];
+  const drag = (sectionKey: string, overSectionKey: string | null) => ({ sectionKey, overSectionKey });
+  it("returns the over-section key when dragging onto a different list", () => {
+    expect(crossListDropTargetKey(drag("list:a", "list:b"), "lists", buckets)).toBe("list:b");
+    expect(crossListDropTargetKey(drag("list:a", "nolist"), "lists", buckets)).toBe("nolist");
+  });
+  it("returns null within the same section, over Done, or with no drag", () => {
+    expect(crossListDropTargetKey(drag("list:a", "list:a"), "lists", buckets)).toBeNull();
+    expect(crossListDropTargetKey(drag("list:a", "done"), "lists", buckets)).toBeNull();
+    expect(crossListDropTargetKey(null, "lists", buckets)).toBeNull();
+  });
+  it("returns null outside Lists grouping (moves only happen under Lists)", () => {
+    expect(crossListDropTargetKey(drag("list:a", "list:b"), "dates", buckets)).toBeNull();
+    expect(crossListDropTargetKey(drag("list:a", "list:b"), "tags", buckets)).toBeNull();
   });
 });
