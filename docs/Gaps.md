@@ -296,7 +296,19 @@ callers depend on.
   list-only editor-save (`useTaskActions.moveToList`) callers set `task.id`
   alongside the landed path — so a moved legacy Task reveals copy-ID
   immediately, matching the `update_task` edit/reorder paths. Every id-stamping
-  write path now returns its effective id.
+  write path that a caller reads back now returns its effective id.
+- ~~**Deleting a list moved its tasks to No list without stamping a missing
+  Task ID.**~~ — FIXED in the polish pass (Codex, PR #59): a delete-list
+  relocates each direct task through the core `move_task_to_list`, which
+  bypassed the service wrapper's id backfill, so a legacy Task lost its one
+  chance to be stamped on that user-initiated move (inconsistent with drag /
+  editor moves, which stamp). `services::delete_task_list` now threads the
+  vault's `id_property` into the core delete loop, which stamps each relocated
+  Task best-effort (a stamp failure warns, never fails the delete; an existing
+  id is never overwritten). It returns no per-task id — the frontend already
+  reloads the task list after a delete (see the GAP-64 note), so the reload
+  surfaces the fresh ids. Stamping now spans create/edit/move/delete-list; only
+  a status toggle/archive is excluded.
 - **The two oversized-file splits flagged here are now done** (polish pass,
   both pure refactors, behavior-preserving): `services.rs` (1229 LOC) was
   split into a per-domain `services/` module — `vault` (registry/open/daily-

@@ -256,7 +256,7 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -1059,9 +1059,11 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   returns the landed relative name) and
   `delete_task_list` (core `tasks::delete_task_list` — moves the list's DIRECT
   tasks to No list, then removes the folder ONLY if it is now empty; a folder
-  still holding sub-lists or foreign files is KEPT; returns
-  `{moved, folderRemoved}`; the partial-failure window is GAP-64). Neither
-  recurses into sub-lists. **Per-list section menu** (`TaskSectionMenu.vue`, a
+  still holding sub-lists or foreign files is KEPT; takes the vault's
+  `id_property` and stamps a missing task ID on each relocated task,
+  best-effort — a delete-move is a structural move like drag/editor, so a
+  legacy task picks up its stable id here too; returns `{moved, folderRemoved}`;
+  the partial-failure window is GAP-64). Neither recurses into sub-lists. **Per-list section menu** (`TaskSectionMenu.vue`, a
   presentational ⋯ popover on each real list section header — never on No
   list / Done, which carry no `list`): rename (leaf-only, no-op when
   unchanged), archive, delete-with-confirm; the container's per-list
@@ -1096,20 +1098,26 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   pure `dropTargetList` in `taskSections` decides move-vs-reorder); the row
   optimistically re-homes to the dropped section and adopts the landed path,
   reverting + toasting on failure — same feel as the rank-write path.
-- **Task-ID stamping now spans all three structural write paths.** Create
+- **Task-ID stamping now spans every structural write path.** Create
   (`render_task`), edit (`update_task` via `update_task_fields`' ensure-absent
-  key), AND move (`services::move_task_to_list` backfills a missing id on the
-  LANDED file — best-effort, so a stamp failure can't fail the move) all stamp
-  a generated id when the vault opts in; only a status toggle/archive is
-  deliberately excluded. `update_task_fields` RETURNS the effective id (the
+  key), move (`services::move_task_to_list` backfills a missing id on the
+  LANDED file — best-effort, so a stamp failure can't fail the move), AND
+  delete-list (`services::delete_task_list` threads the vault's id property into
+  the core delete loop, which stamps each task it relocates to No list —
+  best-effort, same as the move) all stamp a generated id when the vault opts
+  in; only a status toggle/archive is deliberately excluded (a checkbox click
+  isn't editing the task). `update_task_fields` RETURNS the effective id (the
   freshly-stamped value, or the existing one read case-insensitively to match
   the stamp predicate) and short-circuits the redundant write when nothing
   changes; `update_task` surfaces it so the inline editor reveals its copy-ID
   affordance immediately instead of only after a reload. Every id-stamping
-  write path now RETURNS the effective id — `update_task` (edit / reorder) and
-  `move_task_to_list` (`{path, id}`, drag / list-only editor save) — so a moved
-  or reordered legacy task reveals copy-ID without a reload, not just an edited
-  one.
+  write path that a caller reads back RETURNS the effective id — `update_task`
+  (edit / reorder) and `move_task_to_list` (`{path, id}`, drag / list-only
+  editor save) — so a moved or reordered legacy task reveals copy-ID without a
+  reload, not just an edited one. Delete-list is the one stamping path that
+  returns NO per-task id: the frontend reloads the task list after a delete
+  regardless (GAP-64), so the reload — not a return value — surfaces the fresh
+  ids.
 - **Sorting & manual ordering.** A sort selector (Default / Due date /
   Priority / Created / Title / Manual + an asc/desc toggle, disabled where
   direction is meaningless) orders rows WITHIN sections; Default is

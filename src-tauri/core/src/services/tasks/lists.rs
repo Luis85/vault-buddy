@@ -106,6 +106,9 @@ pub fn rename_task_list(
 }
 
 /// Delete a list folder (see `tasks::delete_task_list`). Returns the outcome.
+/// The vault's id property is threaded down so a legacy task relocated to No
+/// list is stamped like any other structural move — the same gate
+/// `move_task_to_list` and `add_task` share; the core stamps best-effort.
 pub fn delete_task_list(
     paths: &ServicePaths,
     id: &str,
@@ -115,7 +118,10 @@ pub fn delete_task_list(
     if root.exists() {
         capture_paths::assert_root_inside_vault(&vault_path, &root)?;
     }
-    tasks::delete_task_list(&root, list)
+    let cfg = capture_config::vault_config(&app_config(paths), id);
+    let id_property =
+        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+    tasks::delete_task_list(&root, list, id_property)
 }
 
 #[cfg(test)]
@@ -247,5 +253,42 @@ mod tests {
             .iter()
             .all(|t| t.list.is_empty()));
         assert!(rename_task_list(&paths, "unknown", "a", "b").is_err());
+    }
+
+    #[test]
+    fn delete_task_list_stamps_moved_tasks_when_ids_enabled() {
+        // Deleting a list relocates its tasks to No list — a structural move, so
+        // a legacy task (created while ids were off) must be backfilled with an
+        // id, exactly like a drag/editor move. The frontend reloads after a
+        // delete, so list_tasks is what surfaces the fresh id (Codex, PR #59).
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Inbox"),
+        )
+        .unwrap();
+        assert!(created.id.is_none()); // ids were off at create
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "uid" } } }"#,
+        )
+        .unwrap();
+        let out = delete_task_list(&paths, "deadbeef01234567", "Inbox").unwrap();
+        assert_eq!(out.moved, 1);
+        let listed = list_tasks(&paths, "deadbeef01234567");
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].list.is_empty()); // moved to No list
+        assert!(
+            listed[0].id.as_ref().is_some_and(|s| s.len() == 8),
+            "the relocated legacy task must be stamped, got {:?}",
+            listed[0].id
+        );
     }
 }

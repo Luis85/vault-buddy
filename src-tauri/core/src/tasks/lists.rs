@@ -294,7 +294,20 @@ pub fn rename_task_list(root: &Path, from: &str, to: &str) -> Result<String, Str
 /// (No list), then remove the folder if it is now empty. A folder still
 /// holding nested sub-lists or foreign (non-task) files is kept — those are
 /// never moved or deleted.
-pub fn delete_task_list(root: &Path, list: &str) -> Result<DeleteListOutcome, String> {
+///
+/// `id_property` is the vault's configured task-id key (or `None` when IDs are
+/// off), threaded down exactly like `list_tasks`. A relocation to No list is a
+/// structural move — the same category `services::move_task_to_list` stamps —
+/// so a legacy task without an id picks one up here too; only a status
+/// toggle/archive is excluded. The stamp is best-effort (a failure warns, never
+/// fails the delete) and never overwrites an existing id. Unlike the move/edit
+/// paths it returns no per-task id: the frontend reloads the task list after a
+/// delete regardless (GAP-64), so the reload surfaces the fresh ids.
+pub fn delete_task_list(
+    root: &Path,
+    list: &str,
+    id_property: Option<&str>,
+) -> Result<DeleteListOutcome, String> {
     let rel = normalize_list_rel(list)?;
     if rel.is_empty() {
         return Err("The tasks root is not a list and cannot be deleted.".to_string());
@@ -327,7 +340,19 @@ pub fn delete_task_list(root: &Path, list: &str) -> Result<DeleteListOutcome, St
     // Ok/Err. Verbatim from the design plan — do not change without
     // updating GAP-64.
     for f in &task_files {
-        move_task_to_list(&canon_root, f, "")?; // to No list; rails already never-clobber
+        // to No list; rails already never-clobber. The landed path is where the
+        // best-effort id stamp below must land.
+        let landed = move_task_to_list(&canon_root, f, "")?;
+        if let Some(prop) = id_property {
+            let generated = super::id::new_task_id();
+            if let Err(e) =
+                super::disk::update_task_fields(&canon_root, &landed, &[], &[(prop, &generated)])
+            {
+                // The move already succeeded; a stamp failure must not fail the
+                // delete (audio-first discipline, the move service's posture).
+                log::warn!("delete_task_list: could not stamp task id on {landed:?}: {e}");
+            }
+        }
         moved += 1;
     }
     // Remove only if empty; a folder with sub-lists / foreign files stays.
@@ -698,7 +723,7 @@ mod tests {
         let root = dir.path().join("Tasks");
         write(&root.join("Inbox"), "a.md", TASK);
         write(&root.join("Inbox"), "b.md", TASK);
-        let out = delete_task_list(&root, "Inbox").unwrap();
+        let out = delete_task_list(&root, "Inbox", None).unwrap();
         assert_eq!(out.moved, 2);
         assert!(out.folder_removed);
         assert!(!root.join("Inbox").exists());
@@ -712,12 +737,55 @@ mod tests {
         write(&root.join("Proj"), "t.md", TASK);
         write(&root.join("Proj/Sub"), "s.md", TASK); // nested sub-list
         std::fs::write(root.join("Proj").join("notes.txt"), "keep me").unwrap(); // foreign
-        let out = delete_task_list(&root, "Proj").unwrap();
+        let out = delete_task_list(&root, "Proj", None).unwrap();
         assert_eq!(out.moved, 1); // only Proj's own direct task
         assert!(!out.folder_removed);
         assert!(root.join("Proj").exists()); // kept — not empty
         assert!(root.join("Proj").join("notes.txt").exists()); // foreign untouched
         assert!(root.join("Proj/Sub").join("s.md").exists()); // sub-list untouched
         assert!(root.join("t.md").exists()); // the moved task landed at the root
+    }
+
+    #[test]
+    fn delete_task_list_stamps_missing_ids_when_enabled() {
+        // A delete-list relocates the list's tasks to No list — a structural
+        // move, so a legacy task (no id) in an id-enabled vault must pick up its
+        // stable id here too, exactly like a drag/editor move (Codex, PR #59).
+        // An existing id is never overwritten.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "a.md", TASK); // legacy: no id
+        write(
+            &root.join("Inbox"),
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ncreated: 2026-07-08\ntask-id: keep1234\n---\n",
+        );
+        let out = delete_task_list(&root, "Inbox", Some("task-id")).unwrap();
+        assert_eq!(out.moved, 2);
+        assert!(out.folder_removed);
+        // The legacy task now carries a freshly-stamped 8-char id at the root.
+        let a = std::fs::read_to_string(root.join("a.md")).unwrap();
+        let id = a
+            .lines()
+            .find_map(|l| l.strip_prefix("task-id: "))
+            .expect("legacy task stamped on delete-move");
+        assert_eq!(id.len(), 8);
+        // The pre-existing id is untouched (never overwritten).
+        assert!(std::fs::read_to_string(root.join("b.md"))
+            .unwrap()
+            .contains("task-id: keep1234\n"));
+    }
+
+    #[test]
+    fn delete_task_list_stamps_nothing_when_id_property_is_none() {
+        // IDs off (None) → a delete-move never introduces one, the same posture
+        // as add_task/move with generation disabled.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "a.md", TASK);
+        delete_task_list(&root, "Inbox", None).unwrap();
+        assert!(!std::fs::read_to_string(root.join("a.md"))
+            .unwrap()
+            .contains("task-id"));
     }
 }
