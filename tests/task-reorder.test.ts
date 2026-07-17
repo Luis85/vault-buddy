@@ -354,6 +354,21 @@ describe("manual reordering", () => {
     expect(rowTitles(wrapper)).toEqual(["a", "b", "c"]); // unchanged
   });
 
+  it("reflects an id stamped by a reorder write so copy-id shows without reload (Codex)", async () => {
+    // A reorder is an order-only update_task, which stamps + returns a missing
+    // id on an id-enabled vault (like a field edit). Capture it here too, not
+    // just in the editor save, so the row reveals copy-id immediately.
+    const { wrapper } = mountManual([task("a", 1024), task("b", 2048)], {
+      update_task: () => "id9",
+    });
+    await flushPromises();
+    // ArrowUp on b (its neighbor a is ranked) → one midpoint writeSingleRank.
+    await wrapper.findAll('[data-testid="task-drag"]')[1].trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    const rows = (wrapper.vm as unknown as { tasks: { title: string; id: string | null }[] }).tasks;
+    expect(rows.find((t) => t.title === "b")?.id).toBe("id9");
+  });
+
   it("drags a task onto another list's section to move it (Task 11)", async () => {
     const { wrapper, calls } = mountManual([inList("x", "A", 1024), inList("y", "B", 2048)], {
       move_task_to_list: () => "C:/v/Tasks/B/x.md",

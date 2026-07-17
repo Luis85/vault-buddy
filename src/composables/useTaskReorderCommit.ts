@@ -8,6 +8,14 @@ import type { Grouping } from "../utils/taskGrouping";
 import { planReorder } from "../utils/taskOrder";
 import { type Bucket, dropTargetList } from "../utils/taskSections";
 
+// Reflect a freshly-stamped task id (update_task's return) onto the row so the
+// editor's copy-id affordance shows without a reload. No-op when ids are off
+// (the command returns null). Module-level + branchless-at-the-call-site so the
+// reorder writers don't each carry the extra branch.
+function reflectStampedId(task: AggTask, id: string | null) {
+  if (id) task.id = id;
+}
+
 // The write side of manual reordering + drag-to-move: turns a dropped slot (or
 // a cross-list drop) into the `order`/`move` vault writes, optimistic with
 // revert. Split out of Tasks.vue (LOC + churn hotspot) — state + IPC, no
@@ -90,7 +98,14 @@ export function useTaskReorderCommit(opts: {
     // later fails and reverts. Serialize reorders view-wide instead.
     reordering.value = true;
     try {
-      await invoke("update_task", { id: task.vaultId, path: task.path, patch: { order } });
+      // update_task returns the task's current id (freshly stamped when this
+      // order-only reorder is the first edit on an id-enabled vault) — reflect
+      // it so the editor's copy-id row shows without a reload, the same reason
+      // applyFieldPatch captures it (Codex, PR #59).
+      reflectStampedId(
+        task,
+        await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch: { order } }),
+      );
     } catch (e) {
       task.order = prev;
       sortInPlace();
@@ -136,7 +151,13 @@ export function useTaskReorderCommit(opts: {
     const written = new Set<string>();
     try {
       for (const t of affected) {
-        await invoke("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } });
+        // Reflect a freshly-stamped id here too (see writeSingleRank) — a
+        // materialize can be the first edit on several previously-unranked
+        // legacy tasks at once.
+        reflectStampedId(
+          t,
+          await invoke<string | null>("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } }),
+        );
         written.add(t.path);
       }
     } catch (e) {
