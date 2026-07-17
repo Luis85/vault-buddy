@@ -304,15 +304,17 @@ callers depend on.
   `update_task` fix, just on the move path. **Fix, if pursued:** return
   `{path, id}` from `move_task_to_list` and have `moveToList` /
   `Tasks.vue moveTaskToList` set `task.id` alongside the landed path.
-- **`services.rs` (1229 LOC) is well past its allowlisted LOC ceiling** and
-  carries a `split when next touched` note in `scripts/loc-baseline.json`: it
-  wants a per-domain module split (vault / tasks / recordings over the one
-  `ServicePaths`) — a pure refactor deferred to keep this increment's diff
-  reviewable. (`Tasks.vue`'s reorder-commit cluster —
-  `writeSingleRank` / `materializeRanks` / `moveTaskToList` / `commitReorder` —
-  was extracted into the `useTaskReorderCommit` composable in the polish pass,
-  dropping the view 648 → 555; the buckets/display-state group is the remaining
-  extraction candidate but the view is no longer over its historical mark.)
+- **The two oversized-file splits flagged here are now done** (polish pass,
+  both pure refactors, behavior-preserving): `services.rs` (1229 LOC) was
+  split into a per-domain `services/` module — `vault` (registry/open/daily-
+  note), `tasks/{mod,lists}` (task-document CRUD vs list-folder lifecycle),
+  `recordings`, with `ServicePaths` + the shared `app_config` and test
+  `fixture` in `mod.rs`; every resulting file is under the 800 cap, so its
+  allowlist entry was removed. `Tasks.vue`'s reorder-commit cluster
+  (`writeSingleRank` / `materializeRanks` / `moveTaskToList` / `commitReorder`)
+  moved into the `useTaskReorderCommit` composable, dropping the view 648 →
+  555. Remaining split candidate: `Tasks.vue`'s buckets/display-state group
+  (the view is no longer over its historical mark, so low priority).
 - **The aggregate inline editor can show an unselected vault's archived lists
   unfiltered.** `listsForEditor` filters archived lists per vault, but in
   aggregate mode a row's vault config may not be loaded yet
