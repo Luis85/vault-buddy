@@ -389,6 +389,22 @@ pub fn move_task_to_list(
         capture_paths::assert_root_inside_vault(&vault_path, &root)?;
     }
     let landed = tasks::move_task_to_list(&root, Path::new(task_path), list)?;
+    // Stamp a missing ID on the landed file when the vault opts in — a move is
+    // a structural edit like a field edit / reorder (only a status toggle is
+    // excluded), and `update_task` (the OTHER edit path) already stamps. This
+    // runs on the LANDED path, so a still-QUEUED transcription/rename can't be
+    // affected. Best-effort: the move already mutated the vault, so a stamp
+    // failure degrades to a warning rather than failing the move and reverting
+    // the UI (audio-first discipline, borrowed from the capture domain).
+    let cfg = capture_config::vault_config(&app_config(paths), id);
+    if let Some(property) =
+        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())
+    {
+        let generated = tasks::new_task_id();
+        if let Err(e) = tasks::update_task_fields(&root, &landed, &[], &[(property, &generated)]) {
+            log::warn!("move_task_to_list: could not stamp task id: {e}");
+        }
+    }
     Ok(landed.to_string_lossy().into_owned())
 }
 
@@ -1137,6 +1153,68 @@ mod tests {
         let listed = list_tasks(&paths, "deadbeef01234567");
         assert_eq!(listed[0].list, "Inbox");
         assert!(move_task_to_list(&paths, "unknown", &landed, "Inbox").is_err());
+    }
+
+    #[test]
+    fn move_task_to_list_stamps_a_missing_id_when_enabled() {
+        // A task created while IDs were off carries none; enabling IDs and then
+        // MOVING it must backfill one (a move is a structural edit, like a field
+        // edit — only a status toggle is excluded), so a legacy task picks up a
+        // stable ID the first time it is reorganized.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some(""),
+        )
+        .unwrap();
+        assert!(created.id.is_none());
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "taskIdProperty": "uid" } } }"#,
+        )
+        .unwrap();
+        let landed = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
+        let body = std::fs::read_to_string(&landed).unwrap();
+        let id = body
+            .lines()
+            .find(|l| l.starts_with("uid: "))
+            .expect("id stamped on move")
+            .trim_start_matches("uid: ");
+        assert_eq!(id.len(), 8);
+        // list_tasks now surfaces the backfilled id for the moved task.
+        assert_eq!(
+            list_tasks(&paths, "deadbeef01234567")[0].id.as_deref(),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn move_task_to_list_writes_no_id_when_disabled() {
+        // IDs off (default config): a move never introduces one.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        let created = add_task(
+            &paths,
+            "deadbeef01234567",
+            "Buy milk",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some(""),
+        )
+        .unwrap();
+        let landed = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
+        assert!(!std::fs::read_to_string(&landed)
+            .unwrap()
+            .contains("task-id"));
     }
 
     #[test]
