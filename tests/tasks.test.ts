@@ -1286,6 +1286,46 @@ describe("Tasks", () => {
     expect(save?.args).toMatchObject({ defaultList: null, listOrder: [] });
   });
 
+  it("prefix-rewrites descendant lists when a parent list is renamed (Codex re-review)", async () => {
+    // A List is a folder: renaming Inbox moves the whole subtree on disk
+    // (Inbox/Sub → Later/Sub), so the prefs must follow every descendant by
+    // prefix, not only the exact renamed name.
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox/Sub", listOrder: ["Inbox", "Inbox/Sub"], archivedLists: ["Inbox/Old"], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      rename_task_list: () => "Later",
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-rename-input-Inbox"]').setValue("Later");
+    await wrapper.get('[data-testid="task-section-rename-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    expect(save?.args).toMatchObject({
+      defaultList: "Later/Sub",
+      listOrder: ["Later", "Later/Sub"],
+      archivedLists: ["Later/Old"],
+    });
+  });
+
+  it("prefix-removes descendant lists when a parent list is deleted (Codex re-review)", async () => {
+    // Deleting Inbox removes Inbox/Sub too — the prefs drop both (the exact
+    // name and its descendants) and keep the unrelated "Keep".
+    const { wrapper, calls } = mountLists({
+      get_tasks_config: () => ({ tasksFolder: null, defaultList: "Inbox/Sub", listOrder: ["Inbox", "Inbox/Sub", "Keep"], archivedLists: ["Inbox/Old"], taskIdEnabled: false, taskIdProperty: "task-id" }),
+      delete_task_list: () => ({ moved: 0, folderRemoved: true }),
+      set_task_lists_config: () => null,
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-section-menu-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-Inbox"]').trigger("click");
+    await wrapper.get('[data-testid="task-section-delete-confirm-Inbox"]').trigger("click");
+    await flushPromises();
+    const save = [...calls].reverse().find((c) => c.cmd === "set_task_lists_config");
+    expect(save?.args).toMatchObject({ defaultList: null, listOrder: ["Keep"], archivedLists: [] });
+  });
+
   it("skips the prefs sync on rename when the config never cached", async () => {
     const { wrapper, calls } = mountLists({
       get_tasks_config: () => null, // uncached → syncListPrefs has nothing to remap

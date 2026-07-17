@@ -33,16 +33,28 @@ function withListArchived(cfg: TasksConfig | undefined, list: string) {
 // Rewrite the list preferences after a rename (`to` = the landed name) or a
 // delete (`to` = null) so the default / order / archived set never point at a
 // stale name — otherwise an untouched add would reapply the old default and
-// recreate the old folder (Codex, PR #59). Pure so syncListPrefs stays thin.
+// recreate the old folder (Codex, PR #59). A List IS a folder, so a rename or
+// delete of a PARENT list moves/removes its whole subtree on disk (Work →
+// Projects turns Work/Q3 into Projects/Q3; deleting Work removes Work/Q3
+// too) — remap must follow descendants by prefix, not only the exact name, or
+// a nested list's prefs would point at a folder that no longer exists (Codex,
+// PR #59 re-review). Pure so syncListPrefs stays thin.
 function remapListPrefs(cfg: TasksConfig | undefined, from: string, to: string | null) {
   const { defaultList = null, listOrder = [], archivedLists = [] } = (cfg ?? {}) as Partial<TasksConfig>;
   const low = from.toLowerCase();
-  const remap = (arr: string[]) =>
-    to === null
-      ? arr.filter((l) => l.toLowerCase() !== low)
-      : arr.map((l) => (l.toLowerCase() === low ? to : l));
+  const prefix = `${low}/`;
+  // Map one entry: the renamed list → `to`, a descendant → same relative tail
+  // under `to`, everything else unchanged; `null` (dropped) on a delete of the
+  // list or any of its descendants.
+  const one = (l: string): string | null => {
+    const ll = l.toLowerCase();
+    if (ll === low) return to;
+    if (ll.startsWith(prefix)) return to === null ? null : to + l.slice(from.length);
+    return l;
+  };
+  const remap = (arr: string[]) => arr.map(one).filter((l): l is string => l !== null);
   return {
-    defaultList: defaultList && defaultList.toLowerCase() === low ? to : defaultList,
+    defaultList: defaultList === null ? null : one(defaultList),
     listOrder: remap(listOrder),
     archivedLists: remap(archivedLists),
   };
