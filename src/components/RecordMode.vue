@@ -3,14 +3,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { computed, onMounted, ref } from "vue";
 
+import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
+import { useDocumentImportsStore } from "../stores/documentImports";
 import { useNotificationsStore } from "../stores/notifications";
 import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
 import type { CaptureConfig, Recording } from "../types";
 import { basename } from "../utils/basename";
 import { withDialogSuppressed } from "../utils/nativeDialog";
+import ImportProgress from "./ImportProgress.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -18,6 +21,7 @@ const store = useVaultsStore();
 const capture = useCaptureStore();
 const notifications = useNotificationsStore();
 const pandocStore = usePandocStore();
+const documentImports = useDocumentImportsStore();
 
 const OPTIONS = [
   { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting" },
@@ -54,6 +58,8 @@ const config = ref<CaptureConfig>({
   transcriptionModel: "small",
   transcriptionLanguage: null,
   transcriptTimestamps: true,
+  transcriptionVocabulary: null,
+  transcriptionVad: true,
   recordingDateFolders: true,
 });
 
@@ -80,8 +86,9 @@ const browseLabel = computed(() =>
 // between a blocked-flag computed and a hint-text computed. `blocked` (Pandoc
 // missing/too old) does NOT disable the button — a disabled button that says
 // "go to Settings" is a dead end, so a blocked click routes to Settings
-// instead (matching ImportVaultPicker). The button only truly disables while a
-// conversion is in flight.
+// instead (matching ImportVaultPicker). The button only truly disables while
+// the Pandoc probe is in flight; during a conversion it is replaced outright
+// by the ImportProgress card (see the template).
 const importStatus = computed(() => {
   if (!pandocStore.status?.installed) {
     return { blocked: true, hint: "Install Pandoc to import documents" };
@@ -92,42 +99,48 @@ const importStatus = computed(() => {
   return { blocked: false, hint: "Convert a Word, ODT, or RTF file into a note" };
 });
 
-// True while a conversion is running — Pandoc can take several seconds, so the
-// button disables and shows a "Converting…" hint rather than looking inert.
-const importing = ref(false);
+interface TranscriptionBundle {
+  transcribe: boolean;
+  transcriptionModel: string;
+  transcriptionLanguage: string;
+  transcriptTimestamps: boolean;
+  transcriptionVocabulary: string;
+  transcriptionVad: boolean;
+}
 
-// Bundles the four transcription fields for TranscriptionSettings' v-model.
-// The setter merges the change back into the FULL loaded config (preserving
-// mode/folder/bitrate/devices/etc. untouched) and persists it — same
-// command + arg shape as CaptureSettings.vue's save().
-const transcription = computed({
-  get: () => ({
+// The vocabulary textarea is the only free-text field in the bundle — it
+// emits update:modelValue on every keystroke (everything else is a
+// toggle/select, emitting only on a discrete pick). Mirrors
+// RecordingConfigTab.vue's TEXT_KEYS discipline: without it, typing a
+// vocabulary list fired a synchronous set_capture_config (a main-thread
+// Rust command) per character.
+const TEXT_KEYS = new Set<keyof TranscriptionBundle>(["transcriptionVocabulary"]);
+
+function transcriptionBundle(): TranscriptionBundle {
+  return {
     transcribe: config.value.transcribe,
     transcriptionModel: config.value.transcriptionModel,
     transcriptionLanguage: config.value.transcriptionLanguage ?? "",
     transcriptTimestamps: config.value.transcriptTimestamps,
-  }),
-  set: (v: {
-    transcribe: boolean;
-    transcriptionModel: string;
-    transcriptionLanguage: string;
-    transcriptTimestamps: boolean;
-  }) => {
-    config.value = {
-      ...config.value,
-      transcribe: v.transcribe,
-      transcriptionModel: v.transcriptionModel,
-      transcriptionLanguage: v.transcriptionLanguage.trim() || null,
-      transcriptTimestamps: v.transcriptTimestamps,
-    };
-    // Never persist against the default-seeded config — see `loaded` above.
-    if (loaded.value) void persist();
-  },
-});
+    transcriptionVocabulary: config.value.transcriptionVocabulary ?? "",
+    transcriptionVad: config.value.transcriptionVad,
+  };
+}
 
 async function persist() {
   try {
-    await invoke("set_capture_config", { id: props.vaultId, cfg: config.value });
+    await invoke("set_capture_config", {
+      id: props.vaultId,
+      cfg: {
+        ...config.value,
+        // Trimmed HERE, at the save boundary — not in the transcription
+        // computed's setter. config.value.transcriptionVocabulary carries
+        // the RAW (untrimmed) string so it can feed straight back into the
+        // textarea's v-model without Vue resetting the DOM mid-edit (see
+        // that setter's comment for the failure this avoids).
+        transcriptionVocabulary: (config.value.transcriptionVocabulary ?? "").trim() || null,
+      },
+    });
   } catch (e) {
     // RecordMode has no settings-save UI of its own (unlike CaptureSettings'
     // Save button + error banner) — the vault's full Capture Settings view is
@@ -136,8 +149,56 @@ async function persist() {
     // like it silently worked. logWarning stays as the file breadcrumb.
     logWarning(`transcription settings save failed (vault ${props.vaultId}): ${String(e)}`);
     notifications.error(`Couldn't save transcription settings: ${String(e)}`);
+    // useAutosave's own status/error tracking (and its in-flight
+    // coalescing) requires the save fn to reject on failure.
+    throw e;
   }
 }
+
+// schedule()/saveNow() share this one persist() — same command + arg shape
+// as CaptureSettings.vue's save() — so a failure notifies identically
+// whichever route triggered it. flush-on-unmount is built into useAutosave
+// (onBeforeUnmount), so a half-typed vocabulary scheduled just before the
+// user navigates away still lands instead of being dropped.
+const autosave = useAutosave(persist, { label: "transcription settings" });
+
+// Bundles the six transcription fields for TranscriptionSettings' v-model.
+// The setter merges the change back into the FULL loaded config (preserving
+// mode/folder/bitrate/devices/etc. untouched). Diff which keys changed: a
+// change confined to the free-text vocabulary field debounces; anything else
+// (a toggle/select, or a mix that includes one) saves now — same
+// changed-keys discipline as RecordingConfigTab.vue's onUpdate.
+const transcription = computed({
+  get: transcriptionBundle,
+  set: (v: TranscriptionBundle) => {
+    const cur = transcriptionBundle();
+    const changed = (Object.keys(v) as (keyof TranscriptionBundle)[]).filter(
+      (k) => v[k] !== cur[k],
+    );
+    config.value = {
+      ...config.value,
+      transcribe: v.transcribe,
+      transcriptionModel: v.transcriptionModel,
+      transcriptionLanguage: v.transcriptionLanguage.trim() || null,
+      transcriptTimestamps: v.transcriptTimestamps,
+      // RAW, untrimmed (mirrors RecordingConfigTab.vue's rec.value = next):
+      // this flows back into transcriptionBundle()'s getter and from there
+      // into TranscriptionSettings' v-model on the textarea. Trimming here
+      // used to feed the DOM back a shorter string than what was just
+      // typed — Vue then resets the textarea's value on the next render,
+      // silently eating a trailing space/newline (e.g. "Anna " -> "Anna"
+      // mid-keystroke, so typing "Kowalska" next produced "AnnaKowalska").
+      // persist() trims at the actual save boundary instead.
+      transcriptionVocabulary: v.transcriptionVocabulary,
+      transcriptionVad: v.transcriptionVad,
+    };
+    if (changed.length === 0) return;
+    // Never persist against the default-seeded config — see `loaded` above.
+    if (!loaded.value) return;
+    if (changed.every((k) => TEXT_KEYS.has(k))) autosave.schedule();
+    else autosave.saveNow();
+  },
+});
 
 async function loadConfig() {
   // A config read failure must never block recording — config keeps the
@@ -193,7 +254,7 @@ function onImportClick() {
 }
 
 async function importDocument() {
-  if (importing.value) return;
+  if (documentImports.active) return;
   try {
     const path = await withDialogSuppressed(() =>
       open({
@@ -202,12 +263,15 @@ async function importDocument() {
       }),
     );
     if (typeof path !== "string") return; // cancelled — no-op
-    // Flip busy only after the picker resolves, so a cancel doesn't strand it.
-    importing.value = true;
-    const notePath = await invoke<string>("convert_document", {
-      id: props.vaultId,
-      sourcePath: path,
-    });
+    // The shared documentImports store owns the converting state (set only
+    // after the picker resolves, so a cancel never flashes the card) and
+    // renders it through ImportProgress here, on the picker view, and on the
+    // list view — the working state survives navigating away.
+    const vaultName = store.vaults.find((v) => v.id === props.vaultId)?.name ?? "";
+    const notePath = await documentImports.convert(
+      { id: props.vaultId, name: vaultName },
+      path,
+    );
     // Offer to open the freshly-imported note rather than leaving the user to
     // hunt for it — the action opens it in Obsidian via the logged command.
     notifications.notify("success", `Imported ${basename(notePath)}`, {
@@ -220,8 +284,6 @@ async function importDocument() {
   } catch (e) {
     logWarning(`convert_document failed (vault ${props.vaultId}): ${String(e)}`);
     notifications.error(`Couldn't import document: ${String(e)}`);
-  } finally {
-    importing.value = false;
   }
 }
 </script>
@@ -241,21 +303,23 @@ async function importDocument() {
         <span class="block text-sm font-medium text-slate-100">{{ option.title }}</span>
         <span class="block text-xs text-slate-400">{{ option.hint }}</span>
       </button>
+      <!-- While a conversion runs (this vault's or any other's — the Rust
+           ImportLock allows only one process-wide) the button gives way to
+           the working card: a grayed-out button both looked inert and was a
+           dead-end click into the lock's error. -->
+      <ImportProgress v-if="documentImports.active" />
       <button
+        v-else
         type="button"
         data-testid="import-document"
         aria-label="Import a document into this vault"
         class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-        :disabled="importing || pandocStore.checking"
+        :disabled="pandocStore.checking"
         @click="onImportClick"
       >
         <span class="block text-sm font-medium text-slate-100">Import Document</span>
         <span class="block text-xs text-slate-400">{{
-          pandocStore.checking
-            ? "Checking Pandoc…"
-            : importing
-              ? "Converting… this can take a few seconds"
-              : importStatus.hint
+          pandocStore.checking ? "Checking Pandoc…" : importStatus.hint
         }}</span>
       </button>
       <!-- Browse recordings is the last action: the two capture actions
@@ -278,7 +342,11 @@ async function importDocument() {
         >{{ recordingCount }}</span>
       </button>
     </div>
-    <div class="flex flex-col gap-3 border-t border-white/10 pt-3">
+    <!-- focusout flushes a pending debounced vocabulary save when focus leaves. -->
+    <div
+      class="flex flex-col gap-3 border-t border-white/10 pt-3"
+      @focusout="autosave.flush()"
+    >
       <TranscriptionSettings v-model="transcription" />
     </div>
   </div>

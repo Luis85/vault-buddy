@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, watch } from "vue";
 
+import { useNowTicker } from "../composables/useNowTicker";
 import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
 import type { TranscriptionJob } from "../types";
@@ -21,15 +22,9 @@ const isEmpty = computed(
 );
 
 // Ticks once a second so `elapsed` and the stuck-hint check stay live
-// without a per-frame render loop — same pattern as RecordingBar.
-const now = ref(Date.now());
-let timer: ReturnType<typeof setInterval> | null = null;
-onMounted(() => {
-  timer = setInterval(() => (now.value = Date.now()), 1000);
-});
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
-});
+// without a per-frame render loop — the shared RecordingBar/ImportProgress
+// ticker.
+const now = useNowTicker();
 
 function percent(job: TranscriptionJob): number {
   return Math.round(Math.min(1, Math.max(0, job.progress ?? 0)) * 100);

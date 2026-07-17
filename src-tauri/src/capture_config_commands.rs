@@ -4,6 +4,11 @@
 //! `vault_config`/`mcp_config`/`document_import_config` split-out precedent.
 //! No behavior change: the IPC surface is unchanged, only the defining
 //! module moves (`lib.rs`'s `generate_handler!` repoints to here).
+//!
+//! Also carries `TranscriptionConfigDto` + `get_transcription_config`/
+//! `set_transcription_config` (GPU increment) — an app-global, not
+//! per-vault, section, but a single bool is too small to earn its own file;
+//! it lives beside its per-vault sibling instead.
 
 use std::path::Path;
 use vault_buddy_core::sync_util::lock_ignoring_poison;
@@ -12,7 +17,7 @@ use vault_buddy_core::{capture_config, capture_paths};
 use crate::capture_commands::ConfigWriteLock;
 
 pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
-pub const TRANSCRIPTION_MODELS: [&str; 3] = ["base", "small", "medium"];
+pub const TRANSCRIPTION_MODELS: [&str; 4] = ["base", "small", "medium", "turbo"];
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +33,11 @@ pub struct CaptureConfigDto {
     pub transcription_model: String,
     pub transcription_language: Option<String>,
     pub transcript_timestamps: bool,
+    /// Free-text vocabulary primed into whisper's initial prompt; None/blank
+    /// = no priming.
+    pub transcription_vocabulary: Option<String>,
+    /// Skip silence via Silero VAD before inference (default on).
+    pub transcription_vad: bool,
     pub follow_up_template: bool,
     /// Whether NEW recordings land in a dated `YYYY/MM` subfolder — the
     /// Recording settings surface for `VaultCaptureConfig::recording_date_folders`.
@@ -48,6 +58,8 @@ impl CaptureConfigDto {
             transcription_model: v.transcription_model.clone(),
             transcription_language: v.transcription_language.clone(),
             transcript_timestamps: v.transcript_timestamps,
+            transcription_vocabulary: v.transcription_vocabulary.clone(),
+            transcription_vad: v.transcription_vad,
             follow_up_template: v.follow_up_template,
             recording_date_folders: v.recording_date_folders,
         }
@@ -122,6 +134,15 @@ pub fn set_capture_config(
         transcription_model: cfg.transcription_model.clone(),
         transcription_language: cfg.transcription_language.clone().filter(|l| !l.is_empty()),
         transcript_timestamps: cfg.transcript_timestamps,
+        // Blank/whitespace vocabulary collapses to None (no priming), the
+        // same treatment transcription_language gets one line up.
+        transcription_vocabulary: cfg
+            .transcription_vocabulary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        transcription_vad: cfg.transcription_vad,
         follow_up_template: cfg.follow_up_template,
         recording_date_folders: cfg.recording_date_folders,
         ..capture_config::VaultCaptureConfig::default()
@@ -144,9 +165,63 @@ pub fn set_capture_config(
     result
 }
 
+/// App-global (not per-vault) GPU toggle — `capture_config::AppConfig.transcription`.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionConfigDto {
+    /// Ask whisper for GPU inference (Vulkan builds only; CPU fallback is
+    /// whisper.cpp's own). Applies from the next transcription — the worker
+    /// reloads the cached model when the flag changes (transcription.rs's
+    /// `needs_reload`, cache key `(tier, use_gpu)`), no app restart needed.
+    pub use_gpu: bool,
+}
+
+#[tauri::command]
+pub fn get_transcription_config() -> TranscriptionConfigDto {
+    TranscriptionConfigDto {
+        use_gpu: capture_config::load_config().transcription.use_gpu,
+    }
+}
+
+/// Persist the GPU toggle. Read-modify-write INSIDE the lock, like every
+/// sibling app-global-section writer (mcp/document-import), so a concurrent
+/// vault- or other-section save can't clobber this one or vice versa.
+#[tauri::command]
+pub fn set_transcription_config(
+    lock: tauri::State<ConfigWriteLock>,
+    cfg: TranscriptionConfigDto,
+) -> Result<(), String> {
+    let _guard = lock_ignoring_poison(&lock.0);
+    let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
+    let result = capture_config::update_transcription_config_at(
+        &path,
+        capture_config::TranscriptionConfig {
+            use_gpu: cfg.use_gpu,
+        },
+    )
+    .map_err(|e| format!("Could not save transcription settings: {e}"));
+    if result.is_ok() {
+        log::info!("transcription config saved: useGpu={}", cfg.use_gpu);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_models_gate_includes_every_tier_the_ui_offers() {
+        // The settings dropdown (TranscriptionSettings.vue MODELS) and this
+        // validation gate must agree — a tier the UI offers that this array
+        // misses would fail every save with "Unknown transcription model".
+        for m in ["base", "small", "medium", "turbo"] {
+            assert!(
+                TRANSCRIPTION_MODELS.contains(&m),
+                "{m} missing from the gate"
+            );
+        }
+    }
 
     #[test]
     fn clean_folder_blanks_to_none_and_trims_both_folders_the_same_way() {

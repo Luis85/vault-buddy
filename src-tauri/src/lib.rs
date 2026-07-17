@@ -4,6 +4,7 @@ mod commands;
 mod diagnostics;
 mod document_commands;
 mod mcp_commands;
+mod model_commands;
 mod pandoc;
 mod search_commands;
 mod task_commands;
@@ -332,6 +333,7 @@ pub fn run() {
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
         .manage(document_commands::DocumentImportPending::default())
+        .manage(document_commands::AddDocumentPending::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -432,6 +434,8 @@ pub fn run() {
             capture_commands::open_recording,
             capture_config_commands::get_capture_config,
             capture_config_commands::set_capture_config,
+            capture_config_commands::get_transcription_config,
+            capture_config_commands::set_transcription_config,
             capture_commands::list_audio_devices,
             capture_commands::pause_capture,
             capture_commands::resume_capture,
@@ -463,7 +467,10 @@ pub fn run() {
             document_commands::set_pandoc_path,
             document_commands::begin_document_import,
             document_commands::take_pending_import,
+            document_commands::take_add_document_request,
             document_commands::open_imported_document,
+            model_commands::list_transcription_models,
+            model_commands::delete_transcription_model,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
@@ -559,6 +566,9 @@ pub fn run() {
             // Items of the buddy's right-click popup menu (the tray handles
             // its own menu; ids are distinct so neither handles the other's).
             app.on_menu_event(|app, event| match event.id().as_ref() {
+                // Vault-first document intake: arm the request + show the
+                // panel; the panel's refresh() drains it into the picker.
+                "buddy-import-document" => document_commands::begin_add_document(app),
                 "buddy-hide" => tray::hide_buddy(app),
                 "buddy-quit" => tray::quit(app),
                 // the animation/dragging settings live in the frontend

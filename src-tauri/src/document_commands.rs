@@ -414,6 +414,38 @@ pub fn take_pending_import(app: tauri::AppHandle) -> Vec<String> {
     guard.drain(..).collect()
 }
 
+/// Pending buddy-menu "Import document…" request (the VAULT-FIRST intake
+/// flow: pick the vault, then the file). Rust-owned for the same reason as
+/// `DocumentImportPending`: the buddy and panel windows have separate Pinia
+/// stores, and an emitted event would race the panel-shown refresh's
+/// list-view default. A flag (not a queue) — repeated menu clicks before the
+/// panel drains it all mean the same thing, "open the vault picker once".
+/// Registered as app state in lib.rs beside DocumentImportPending:
+/// `.manage(AddDocumentPending::default())`.
+#[derive(Default)]
+pub struct AddDocumentPending(pub std::sync::atomic::AtomicBool);
+
+/// The buddy-menu "Import document…" click: arm the request, then SHOW the
+/// panel (idempotent — never toggles it hidden) so the panel's `refresh()`
+/// lands and consumes it via `take_add_document_request`. Runs in the menu
+/// event callback on the main thread, where `show_panel`'s window calls are
+/// valid — `begin_document_import`'s shape, minus the path (the file is
+/// picked AFTER the vault in this flow).
+pub fn begin_add_document(app: &tauri::AppHandle) {
+    let state = app.state::<AddDocumentPending>();
+    state.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::commands::show_panel(app);
+}
+
+/// One-shot drain of the buddy-menu request; the panel's `refresh()` calls
+/// this on every open (alongside `take_pending_import`) and routes to the
+/// vault-first import picker when it returns true.
+#[tauri::command]
+pub fn take_add_document_request(app: tauri::AppHandle) -> bool {
+    let state = app.state::<AddDocumentPending>();
+    state.0.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Open a freshly-imported note in Obsidian — the success toast's "Open in
 /// Obsidian" action. `path` is what `convert_document` returned (vault-relative
 /// on success, an absolute fallback otherwise); resolve the vault by id and

@@ -108,6 +108,11 @@ export interface CaptureConfig {
   transcriptionModel: string;
   transcriptionLanguage: string | null;
   transcriptTimestamps: boolean;
+  /** Free-text vocabulary (names, acronyms, jargon) primed into whisper's
+   * initial prompt. null = none. */
+  transcriptionVocabulary: string | null;
+  /** Skip silence via Silero VAD before inference (default on). */
+  transcriptionVad: boolean;
   followUpTemplate: boolean;
   /** Whether NEW recordings land in a dated `YYYY/MM` subfolder (true) or
    * flat in the recording root (false). Existing files in either layout are
@@ -140,7 +145,17 @@ export interface RecordingSettingsValue {
   transcriptionModel: string;
   transcriptionLanguage: string;
   transcriptTimestamps: boolean;
+  transcriptionVocabulary: string;
+  transcriptionVad: boolean;
   recordingDateFolders: boolean;
+}
+
+/** App-global transcription settings (machine-level; per-vault knobs live
+ * in CaptureConfig). */
+export interface TranscriptionAppConfig {
+  /** Ask whisper for GPU inference (Vulkan builds; CPU fallback is
+   * automatic). Applies from the next transcription. */
+  useGpu: boolean;
 }
 
 export interface TaskItem {
@@ -243,6 +258,15 @@ export interface SearchHit {
 export interface SearchResponse {
   hits: SearchHit[];
   truncated: boolean;
+}
+
+/** One transcription model artifact's cache status (models card). */
+export interface TranscriptionModelStatus {
+  id: string;
+  fileName: string;
+  present: boolean;
+  sizeBytes: number | null;
+  approxDownloadBytes: number;
 }
 
 export interface Recording {

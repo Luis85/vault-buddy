@@ -15,6 +15,8 @@ const value = {
   transcriptionModel: "small",
   transcriptionLanguage: "",
   transcriptTimestamps: true,
+  transcriptionVocabulary: "",
+  transcriptionVad: true,
   recordingDateFolders: true,
 };
 const devices = { inputs: [{ name: "USB Mic", isDefault: false }], outputs: [{ name: "Speakers", isDefault: true }] };

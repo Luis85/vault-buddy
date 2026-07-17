@@ -19,6 +19,7 @@ vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }
 import DocumentImportSettings from "../src/components/DocumentImportSettings.vue";
 import RecordMode from "../src/components/RecordMode.vue";
 import { logWarning } from "../src/logging";
+import { useDocumentImportsStore } from "../src/stores/documentImports";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useVaultsStore } from "../src/stores/vaults";
 
@@ -499,6 +500,59 @@ describe("RecordMode — Import Document", () => {
     await flushPromises();
 
     expect(mocks.invoke.mock.calls.some((c) => c[0] === "convert_document")).toBe(false);
+  });
+
+  it("replaces the Import button with the working card while its conversion runs", async () => {
+    // The old behavior — a grayed-out button with a swapped hint line — was
+    // the "working state not clear enough" complaint. While converting, the
+    // button gives way to the prominent progress card and comes back after.
+    let resolveConvert: (v: unknown) => void = () => {};
+    mocks.invoke.mockImplementation((cmd: string) => {
+      if (cmd === "detect_pandoc") return Promise.resolve(installed());
+      if (cmd === "get_capture_config") return Promise.resolve({});
+      if (cmd === "list_recordings") return Promise.resolve([]);
+      if (cmd === "convert_document")
+        return new Promise((r) => {
+          resolveConvert = r;
+        });
+      return Promise.resolve(undefined);
+    });
+    mocks.open.mockResolvedValue("/home/user/Report.docx");
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    await wrapper.get('[data-testid="import-document"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="import-document"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="import-progress"]').text()).toContain(
+      "Report.docx",
+    );
+
+    resolveConvert("Documents/2026/07/2026-07-17 Report.md");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="import-progress"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="import-document"]').exists()).toBe(true);
+  });
+
+  it("shows the working card for a conversion started elsewhere instead of a dead-end button", async () => {
+    // Only one import can run process-wide (Rust ImportLock): a click here
+    // while another surface's conversion runs would only fail fast, so the
+    // button is replaced by the same card, naming the file actually running.
+    routeRecordMode({});
+    const wrapper = mount(RecordMode, { props: { vaultId: "v1" } });
+    await flushPromises();
+    useDocumentImportsStore().active = {
+      fileName: "Other.docx",
+      sourcePath: "C:/elsewhere/Other.docx",
+      vaultId: "v2",
+      vaultName: "Work",
+      startedAtMs: Date.now(),
+    };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="import-document"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="import-progress"]').text()).toContain(
+      "Other.docx",
+    );
   });
 
   it("logs and toasts an error when convert_document fails", async () => {

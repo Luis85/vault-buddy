@@ -8,6 +8,8 @@ interface TranscriptionSettingsValue {
   transcriptionModel: string;
   transcriptionLanguage: string; // "" = auto-detect
   transcriptTimestamps: boolean;
+  transcriptionVocabulary: string; // "" = none
+  transcriptionVad: boolean;
 }
 
 // Controlled component: no persistence of its own. Every field is a
@@ -57,8 +59,16 @@ const transcriptTimestamps = computed({
   get: () => props.modelValue.transcriptTimestamps,
   set: (v: boolean) => patch({ transcriptTimestamps: v }),
 });
+const transcriptionVocabulary = computed({
+  get: () => props.modelValue.transcriptionVocabulary,
+  set: (v: string) => patch({ transcriptionVocabulary: v }),
+});
+const transcriptionVad = computed({
+  get: () => props.modelValue.transcriptionVad,
+  set: (v: boolean) => patch({ transcriptionVad: v }),
+});
 
-const MODELS = ["base", "small", "medium"] as const;
+const MODELS = ["base", "small", "medium", "turbo"] as const;
 const LANGUAGES = [
   { code: "", name: "Auto-detect" },
   { code: "en", name: "English" },
@@ -128,6 +138,39 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
         :options="languageOptions"
         data-testid="transcription-language-select"
       />
+    </section>
+    <section>
+      <label
+        :for="scopedId('capture-transcription-vocabulary')"
+        class="mb-1 block text-sm text-slate-200"
+      >
+        Custom vocabulary
+        <span class="block text-xs text-slate-500">Names, acronyms, project terms — primes the model</span>
+      </label>
+      <textarea
+        :id="scopedId('capture-transcription-vocabulary')"
+        v-model="transcriptionVocabulary"
+        data-testid="transcription-vocabulary-input"
+        rows="2"
+        placeholder="Anna Kowalska, Kubernetes, Vault Buddy…"
+        class="w-full resize-none rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      />
+    </section>
+    <section class="flex items-center justify-between">
+      <label
+        :for="scopedId('capture-transcription-vad-toggle')"
+        class="text-sm text-slate-200"
+      >
+        Skip silence
+        <span class="block text-xs text-slate-500">Faster meetings, fewer phantom phrases in silent stretches</span>
+      </label>
+      <input
+        :id="scopedId('capture-transcription-vad-toggle')"
+        v-model="transcriptionVad"
+        data-testid="transcription-vad-toggle"
+        type="checkbox"
+        class="h-4 w-4 accent-violet-500"
+      >
     </section>
     <section class="flex items-center justify-between">
       <label

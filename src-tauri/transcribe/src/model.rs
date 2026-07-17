@@ -13,6 +13,7 @@ pub enum ModelTier {
     Base,
     Small,
     Medium,
+    Turbo,
 }
 
 impl ModelTier {
@@ -24,6 +25,7 @@ impl ModelTier {
         match s {
             "base" => ModelTier::Base,
             "medium" => ModelTier::Medium,
+            "turbo" => ModelTier::Turbo,
             _ => ModelTier::Small, // small is the default tier
         }
     }
@@ -32,6 +34,7 @@ impl ModelTier {
             ModelTier::Base => "base",
             ModelTier::Small => "small",
             ModelTier::Medium => "medium",
+            ModelTier::Turbo => "turbo",
         }
     }
     /// Label recorded in transcript frontmatter.
@@ -43,6 +46,7 @@ impl ModelTier {
             ModelTier::Base => "ggml-base.bin",
             ModelTier::Small => "ggml-small.bin",
             ModelTier::Medium => "ggml-medium.bin",
+            ModelTier::Turbo => "ggml-large-v3-turbo-q5_0.bin",
         }
     }
     pub fn url(&self) -> String {
@@ -59,6 +63,7 @@ impl ModelTier {
             ModelTier::Base => "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
             ModelTier::Small => "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
             ModelTier::Medium => "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+            ModelTier::Turbo => "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         }
     }
     /// A sanity floor (not a checksum): a downloaded file far below this is a
@@ -69,6 +74,7 @@ impl ModelTier {
             ModelTier::Base => 100_000_000,     // ~142 MB
             ModelTier::Small => 300_000_000,    // ~466 MB
             ModelTier::Medium => 1_000_000_000, // ~1.5 GB
+            ModelTier::Turbo => 500_000_000,    // ~574 MB (574,041,195 bytes)
         }
     }
 }
@@ -83,6 +89,123 @@ pub fn model_dir() -> Option<PathBuf> {
 
 pub fn model_path(tier: ModelTier) -> Option<PathBuf> {
     model_dir().map(|d| d.join(tier.file_name()))
+}
+
+/// The Silero VAD model whisper.cpp uses to skip non-speech before
+/// inference. Deliberately NOT a `ModelTier` — it is not a speech model the
+/// user picks; it rides along whenever a vault's "Skip silence" is on. Same
+/// pinned-URL + SHA-256 + `.part`-then-rename discipline as the tiers.
+pub const VAD_MODEL_FILE: &str = "ggml-silero-v5.1.2.bin";
+const VAD_MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin";
+/// Canonical SHA-256 of the file above (ggml-org/whisper-vad on Hugging Face).
+const VAD_MODEL_SHA256: &str = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf";
+/// Sanity floor, not a checksum (the real file is 885,098 bytes).
+const VAD_MODEL_MIN_SIZE: u64 = 500_000;
+
+pub fn vad_model_path() -> Option<PathBuf> {
+    model_dir().map(|d| d.join(VAD_MODEL_FILE))
+}
+
+/// The complete set of downloadable model artifacts — the four speech
+/// tiers plus the Silero VAD model — for the models-management surface.
+/// One list so the card, the deleter, and the downloaders can never
+/// disagree about what exists or where it lives.
+pub struct ModelArtifact {
+    pub id: &'static str,
+    pub file_name: &'static str,
+    /// UI display for absent rows. Exact for turbo/vad (their download
+    /// pins record the real byte counts); round approximations for the
+    /// older tiers, whose pins only record a floor.
+    pub approx_download_bytes: u64,
+}
+
+pub fn model_artifacts() -> [ModelArtifact; 5] {
+    [
+        ModelArtifact {
+            id: "base",
+            file_name: ModelTier::Base.file_name(),
+            approx_download_bytes: 148_000_000,
+        },
+        ModelArtifact {
+            id: "small",
+            file_name: ModelTier::Small.file_name(),
+            approx_download_bytes: 488_000_000,
+        },
+        ModelArtifact {
+            id: "medium",
+            file_name: ModelTier::Medium.file_name(),
+            approx_download_bytes: 1_600_000_000,
+        },
+        ModelArtifact {
+            id: "turbo",
+            file_name: ModelTier::Turbo.file_name(),
+            approx_download_bytes: 574_041_195,
+        },
+        ModelArtifact {
+            id: "vad",
+            file_name: VAD_MODEL_FILE,
+            approx_download_bytes: 885_098,
+        },
+    ]
+}
+
+pub struct ArtifactStatus {
+    pub id: String,
+    pub file_name: String,
+    pub present: bool,
+    pub size_bytes: Option<u64>,
+}
+
+/// Stat every known artifact under `dir`. Takes the dir (rather than
+/// resolving %APPDATA% itself) so it's testable against a tempdir — the
+/// command layer feeds it `model_dir()`.
+pub fn list_artifacts_in(dir: &Path) -> Vec<ArtifactStatus> {
+    model_artifacts()
+        .into_iter()
+        .map(|a| {
+            let size_bytes = std::fs::metadata(dir.join(a.file_name))
+                .ok()
+                .map(|m| m.len());
+            ArtifactStatus {
+                id: a.id.to_string(),
+                file_name: a.file_name.to_string(),
+                present: size_bytes.is_some(),
+                size_bytes,
+            }
+        })
+        .collect()
+}
+
+/// Download the Silero VAD model with progress — `download_model`'s exact
+/// contract at ~1 MB scale: skips if present, cancellable per chunk,
+/// `.part`-then-rename, checksum-verified.
+pub fn download_vad_model(
+    cancel: &CancelToken,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<PathBuf, String> {
+    // Already cancelled: do no work and open no connection.
+    if cancel.is_cancelled() {
+        return Err("cancelled".to_string());
+    }
+    let dir = model_dir().ok_or("cannot resolve model directory")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create model dir: {e}"))?;
+    let dest = dir.join(VAD_MODEL_FILE);
+    if dest.exists() {
+        return Ok(dest);
+    }
+    let agent = model_download_agent();
+    download_stream(
+        &agent,
+        VAD_MODEL_URL,
+        &dir,
+        VAD_MODEL_FILE,
+        VAD_MODEL_MIN_SIZE,
+        VAD_MODEL_SHA256,
+        cancel,
+        on_progress,
+        std::time::Duration::from_secs(60),
+    )
 }
 
 /// Download the tier's ggml model with progress, `.part`-then-rename. Skips
@@ -348,6 +471,7 @@ mod tests {
         assert_eq!(ModelTier::from_str("base"), ModelTier::Base);
         assert_eq!(ModelTier::from_str("medium"), ModelTier::Medium);
         assert_eq!(ModelTier::from_str("small"), ModelTier::Small);
+        assert_eq!(ModelTier::from_str("turbo"), ModelTier::Turbo);
         assert_eq!(ModelTier::from_str("garbage"), ModelTier::Small);
     }
 
@@ -360,6 +484,12 @@ mod tests {
             .starts_with("https://huggingface.co/ggerganov/whisper.cpp"));
         assert_eq!(ModelTier::Base.label(), "whisper-base");
         assert_eq!(ModelTier::Small.as_str(), "small");
+        assert_eq!(ModelTier::Turbo.file_name(), "ggml-large-v3-turbo-q5_0.bin");
+        assert!(ModelTier::Turbo
+            .url()
+            .ends_with("/ggml-large-v3-turbo-q5_0.bin"));
+        assert_eq!(ModelTier::Turbo.label(), "whisper-turbo");
+        assert_eq!(ModelTier::Turbo.as_str(), "turbo");
     }
 
     #[test]
@@ -795,7 +925,12 @@ mod tests {
 
     #[test]
     fn tier_sha256_values_are_lowercase_hex_of_expected_length() {
-        for t in [ModelTier::Base, ModelTier::Small, ModelTier::Medium] {
+        for t in [
+            ModelTier::Base,
+            ModelTier::Small,
+            ModelTier::Medium,
+            ModelTier::Turbo,
+        ] {
             let h = t.sha256();
             assert_eq!(h.len(), 64, "sha256 hex is 64 chars for {t:?}");
             assert!(h
@@ -896,5 +1031,72 @@ mod tests {
         );
 
         remove_cached(dir.path(), name).expect("removing an absent file must still be Ok");
+    }
+
+    #[test]
+    fn vad_model_lives_in_the_models_dir_with_a_pinned_hash() {
+        if let (Some(vad), Some(dir)) = (vad_model_path(), model_dir()) {
+            assert_eq!(vad.parent(), Some(dir.as_path()));
+            assert_eq!(
+                vad.file_name().unwrap().to_string_lossy(),
+                "ggml-silero-v5.1.2.bin"
+            );
+        }
+        // Same hex discipline as the tier hashes.
+        assert_eq!(VAD_MODEL_SHA256.len(), 64);
+        assert!(VAD_MODEL_SHA256
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(VAD_MODEL_URL.starts_with("https://huggingface.co/ggml-org/whisper-vad"));
+        assert!(VAD_MODEL_URL.ends_with("/ggml-silero-v5.1.2.bin"));
+    }
+
+    #[test]
+    fn precancelled_vad_download_bails_without_touching_the_network() {
+        // Mirrors precancelled_download_bails_without_touching_the_network:
+        // hermetic in CI precisely because the abort happens before any
+        // request is made.
+        let cancel = crate::CancelToken::new();
+        cancel.cancel();
+        let mut progress = |_received: u64, _total: Option<u64>| {};
+        assert!(
+            download_vad_model(&cancel, &mut progress).is_err(),
+            "a pre-cancelled VAD download must not proceed to the network"
+        );
+    }
+
+    #[test]
+    fn model_artifacts_cover_every_tier_plus_vad_with_valid_ids() {
+        let arts = model_artifacts();
+        let ids: Vec<_> = arts.iter().map(|a| a.id).collect();
+        assert_eq!(ids, vec!["base", "small", "medium", "turbo", "vad"]);
+        // Every speech tier's file name agrees with the tier registry —
+        // the card and the downloader must never disagree on a path.
+        for t in [
+            ModelTier::Base,
+            ModelTier::Small,
+            ModelTier::Medium,
+            ModelTier::Turbo,
+        ] {
+            assert!(arts.iter().any(|a| a.file_name == t.file_name()), "{t:?}");
+        }
+        assert!(arts.iter().any(|a| a.file_name == VAD_MODEL_FILE));
+        assert!(arts.iter().all(|a| a.approx_download_bytes > 0));
+    }
+
+    #[test]
+    fn list_artifacts_reports_presence_and_real_sizes_ignoring_part_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ggml-base.bin"), vec![0u8; 1234]).unwrap();
+        // A half-download must not read as present (the janitor's business).
+        std::fs::write(dir.path().join("ggml-small.bin.part"), b"partial").unwrap();
+        let statuses = list_artifacts_in(dir.path());
+        assert_eq!(statuses.len(), 5);
+        let base = statuses.iter().find(|s| s.id == "base").unwrap();
+        assert!(base.present);
+        assert_eq!(base.size_bytes, Some(1234));
+        let small = statuses.iter().find(|s| s.id == "small").unwrap();
+        assert!(!small.present);
+        assert_eq!(small.size_bytes, None);
     }
 }

@@ -1,7 +1,14 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The vault-first mode opens the OS file picker AFTER the vault choice; the
+// suite has no Tauri runtime, so the dialog plugin is mocked at the module
+// boundary (the documentImport.test.ts pattern). Tests that never reach the
+// dialog are unaffected — the mock only fires when the component calls open().
+const dialogMocks = vi.hoisted(() => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: dialogMocks.open }));
 
 import ImportVaultPicker from "../src/components/ImportVaultPicker.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
@@ -31,6 +38,7 @@ const sampleVaults = [
 describe("ImportVaultPicker", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    dialogMocks.open.mockReset();
   });
 
   afterEach(() => {
@@ -201,6 +209,136 @@ describe("ImportVaultPicker", () => {
     const wrapper = mount(ImportVaultPicker);
     await flushPromises();
     expect(wrapper.find('[data-testid="import-picker-gate-hint"]').exists()).toBe(true);
+  });
+
+  it("swaps the vault list for the working card while converting, keeping the queue visible", async () => {
+    // The pick decision is made — a grayed-out list under a one-line hint was
+    // the "working state not clear enough" complaint. The card replaces it.
+    let resolveConvert: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document")
+        return new Promise((r) => {
+          resolveConvert = r;
+        });
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.enqueueImports(["C:/x/Report.docx", "C:/x/Second.docx"]);
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+
+    const card = wrapper.get('[data-testid="import-progress"]');
+    expect(card.text()).toContain("Report.docx");
+    expect(card.text()).toContain("Personal");
+    expect(wrapper.find('[data-testid="import-picker-vault"]').exists()).toBe(false);
+    // The un-picked tail is still communicated while the head converts.
+    expect(wrapper.get('[data-testid="import-picker-queued"]').text()).toContain("1");
+
+    resolveConvert("Documents/2026/07/note.md");
+    await flushPromises();
+    // Conversion done: the card clears and the list returns for the next doc.
+    expect(wrapper.find('[data-testid="import-progress"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Second.docx");
+    expect(wrapper.findAll('[data-testid="import-picker-vault"]')).toHaveLength(2);
+  });
+
+  it("vault-first mode: an empty queue asks for the vault, then the file, then converts", async () => {
+    // The buddy-menu "Import document…" flow: no file yet — picking a vault
+    // opens the OS file picker, and the chosen file converts into that vault.
+    const convertArgs: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document") {
+        convertArgs.push(args);
+        return "Documents/2026/07/2026-07-17 Notes.md";
+      }
+    });
+    dialogMocks.open.mockResolvedValue("C:/picked/Notes.docx");
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.view = "importPicker"; // empty pendingImports = vault-first mode
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    expect(wrapper.text()).toContain("a document");
+    expect(wrapper.text()).toContain("into which vault?");
+
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+
+    expect(dialogMocks.open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        multiple: false,
+        filters: [{ name: "Documents", extensions: ["docx", "odt", "rtf"] }],
+      }),
+    );
+    expect(convertArgs).toEqual([
+      { id: "d4e5f6", sourcePath: "C:/picked/Notes.docx" },
+    ]);
+    const notes = useNotificationsStore();
+    expect(
+      notes.items.some((i) => i.kind === "success" && i.message.includes("Imported")),
+    ).toBe(true);
+    // Nothing queued and the conversion is done — back to the list.
+    expect(store.view).toBe("list");
+  });
+
+  it("keeps a document dropped mid-conversion queued after a vault-first import (Codex PR #63)", async () => {
+    // The vault-first source came from the OS dialog, not the queue — a drop
+    // that lands while that conversion runs must NOT be consumed by the
+    // completion (dequeueImport's shift would silently lose it); it stays
+    // queued and is offered next.
+    let resolveConvert: (v: unknown) => void = () => {};
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document")
+        return new Promise((r) => {
+          resolveConvert = r;
+        });
+    });
+    dialogMocks.open.mockResolvedValue("C:/picked/Notes.docx");
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.view = "importPicker"; // vault-first mode
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises(); // dialog resolved; conversion held pending
+
+    // A buddy drop lands while the conversion runs (refresh() enqueues it).
+    store.enqueueImports(["C:/dropped/Later.docx"]);
+
+    resolveConvert("Documents/2026/07/x.md");
+    await flushPromises();
+
+    expect(store.pendingImports).toEqual(["C:/dropped/Later.docx"]);
+    expect(store.view).toBe("importPicker");
+    expect(wrapper.text()).toContain("Later.docx");
+  });
+
+  it("vault-first mode: a cancelled file picker stays on the picker without converting", async () => {
+    const convertCalls: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "detect_pandoc") return installed();
+      if (cmd === "convert_document") {
+        convertCalls.push(args);
+        return "x.md";
+      }
+    });
+    dialogMocks.open.mockResolvedValue(null); // user cancelled
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.view = "importPicker";
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    await wrapper.findAll('[data-testid="import-picker-vault"]')[0].trigger("click");
+    await flushPromises();
+
+    expect(convertCalls).toEqual([]);
+    expect(store.view).toBe("importPicker"); // free to pick another vault or back out
+    expect(useNotificationsStore().items).toEqual([]);
   });
 
   it("processes a queue of dropped documents one at a time (GAP-55)", async () => {

@@ -29,6 +29,14 @@ pub struct TranscriptMeta {
     pub generated_at: String,
     pub timestamps: bool,
     pub processing_secs: u64,
+    /// Whether this run skipped silence via Silero VAD (the effective state:
+    /// a degraded run in a VAD-enabled vault reports false).
+    pub vad: bool,
+    /// Whisper's detected language code, present only for auto-language
+    /// runs where inference actually ran (see EngineOutput). Renders as an
+    /// honest "(detected: xx)" suffix + a queryable frontmatter line —
+    /// `language:` itself keeps recording the SETTING.
+    pub detected_language: Option<String>,
 }
 
 /// `[HH:MM:SS]` — meetings can exceed an hour, so always render hours.
@@ -96,6 +104,12 @@ pub fn render_transcript(meta: &TranscriptMeta, segments: &[Segment]) -> String 
     out.push_str(&format!("model: {}\n", yaml_quote(&meta.model_label)));
     let lang = meta.language.as_deref().unwrap_or("auto");
     out.push_str(&format!("language: {}\n", yaml_quote(lang)));
+    // Same auto-only gate as the stats row below (defense-in-depth parity —
+    // H2 review M1): the pipeline already filters detection on the setting,
+    // but neither renderer should trust the other's caller.
+    if let (None, Some(detected)) = (&meta.language, &meta.detected_language) {
+        out.push_str(&format!("detected-language: {}\n", yaml_quote(detected)));
+    }
     out.push_str(&format!(
         "duration: {}\n",
         yaml_quote(&format_duration(meta.duration_secs))
@@ -144,7 +158,11 @@ pub fn render_stats(meta: &TranscriptMeta, segments: &[Segment]) -> String {
         Some(wpm) => format!("{wpm} wpm"),
         None => "—".to_string(),
     };
-    let language = meta.language.as_deref().unwrap_or("auto");
+    let language = match (&meta.language, &meta.detected_language) {
+        (None, Some(detected)) => format!("auto (detected: {detected})"),
+        (setting, _) => setting.as_deref().unwrap_or("auto").to_string(),
+    };
+    let vad = if meta.vad { "on" } else { "off" };
     format!(
         "## Statistics\n\n\
          | Metric | Value |\n\
@@ -155,6 +173,7 @@ pub fn render_stats(meta: &TranscriptMeta, segments: &[Segment]) -> String {
          | Speaking rate | {speaking_rate} |\n\
          | Model | {} |\n\
          | Language | {language} |\n\
+         | Silence skipping (VAD) | {vad} |\n\
          | Processing time | {} |\n\
          | Generated | {} |\n",
         format_duration(meta.duration_secs),
@@ -388,6 +407,8 @@ mod tests {
             generated_at: "2026-07-04T15:10:00+02:00".into(),
             timestamps: true,
             processing_secs: 47,
+            vad: true,
+            detected_language: None,
         }
     }
 
@@ -838,5 +859,46 @@ mod tests {
         std::fs::write(transcript_path(&mp3), content).unwrap();
         assert_eq!(transcript_status(&mp3), TranscriptStatus::Complete);
         assert!(!needs_transcription(&mp3));
+    }
+
+    #[test]
+    fn stats_report_vad_on_or_off() {
+        // The one visible trace of silence skipping: a transcript missing a
+        // quiet aside must be self-explaining ("VAD was on"), and a degraded
+        // (no-VAD) run must honestly say off even in a VAD-enabled vault.
+        let mut m = meta();
+        m.vad = true;
+        assert!(render_transcript(&m, &[]).contains("| Silence skipping (VAD) | on |"));
+        m.vad = false;
+        assert!(render_transcript(&m, &[]).contains("| Silence skipping (VAD) | off |"));
+    }
+
+    #[test]
+    fn detected_language_renders_in_frontmatter_and_stats_only_when_present() {
+        // Auto-language vaults finally learn what whisper detected. The
+        // label stays honest ("detected" — whisper's first-window
+        // classification, not a guarantee) and the `language:` field keeps
+        // recording the SETTING, wire-stable.
+        let mut m = meta();
+        m.language = None; // auto
+        m.detected_language = Some("de".to_string());
+        let t = render_transcript(&m, &[]);
+        assert!(t.contains(r#"detected-language: "de""#));
+        assert!(t.contains("| Language | auto (detected: de) |"));
+
+        // Absent detection: no frontmatter line, plain row — exactly today.
+        m.detected_language = None;
+        let t = render_transcript(&m, &[]);
+        assert!(!t.contains("detected-language"));
+        assert!(t.contains("| Language | auto |"));
+
+        // Defense-in-depth parity with the stats row (review M1): a
+        // pinned-language meta never emits the frontmatter line either,
+        // even if a (buggy) caller left a detection populated.
+        m.language = Some("es".to_string());
+        m.detected_language = Some("de".to_string());
+        let t = render_transcript(&m, &[]);
+        assert!(!t.contains("detected-language"));
+        assert!(t.contains("| Language | es |"));
     }
 }

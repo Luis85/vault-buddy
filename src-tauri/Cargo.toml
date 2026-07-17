@@ -12,6 +12,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# GPU (Vulkan) inference. Enabled ONLY by the Windows CI/release builds —
+# local builds stay CPU-only so contributors never need the Vulkan SDK.
+gpu = ["vault_buddy_transcribe/whisper-vulkan"]
+
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-log = "2"

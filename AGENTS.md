@@ -109,7 +109,7 @@ vault-buddy/
 │   │                           #   tray.rs, diagnostics.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
-│   │                           #   mcp_config + document_import_config (split-out config sections),
+│   │                           #   mcp_config + document_import_config + transcription_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
@@ -133,7 +133,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | Path | What it is | Compiles on |
 | --- | --- | --- |
 | `src-tauri/core/` | Pure crate: obsidian.json parsing, daily-note resolution, URI building, process detection, placement math, all vault-write logic. No GUI deps. | Anywhere — test and lint locally |
-| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows |
+| `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. GPU inference via `whisper-vulkan` (Vulkan SDK required; Windows CI builds only). | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows; `whisper-vulkan` compiles only where the Vulkan SDK exists (Windows CI/release jobs enable it through the shell's `gpu` feature; local builds stay CPU-only) |
 | `src-tauri/capture/` | Audio engine (cpal, LAME). | Anywhere (Linux needs `libasound2-dev`); the WASAPI loopback block is Windows-only, compile-gated |
 | `src-tauri/mcp/` | Tauri-free crate: the embedded MCP server — rmcp service (seven tools over `core::services`), HTTP guards, streamable-HTTP runner. | Anywhere — unit + real-socket integration tests run on Linux; CI gates it explicitly (`-p vault_buddy_mcp`) because `tauri build` alone wouldn't run its tests. |
 | `src-tauri/` (root crate) | Tauri shell: windows, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
@@ -160,6 +160,7 @@ npm run build                       # vue-tsc typecheck + production build
 npm run dev                         # Vite dev server only
 npm run test-build                  # `tauri dev` — full app, Windows only
 npx tauri build                     # real installer build (Windows only)
+npx tauri build --features gpu      # GPU (Vulkan) inference — Windows with LunarG SDK only
 
 # Frontend quality gates — CI runs these in this order; check:quality must
 # run with NO coverage/ dir present, so test:coverage goes last (see
@@ -247,19 +248,20 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 62 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 68 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
-| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` |
+| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config`, `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
 | `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -317,7 +319,7 @@ actually subscribe.
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
 | Per-vault capture/tasks/`documents_folder` settings + app-global `mcp` and `document_import` (user-set `pandoc_path` override) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
-| Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` (pinned Hugging Face URLs + SHA-256) |
+| Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
 | Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
@@ -655,11 +657,18 @@ A second Capture Provider (Knowledge Intake): convert a `.docx` / `.odt` /
 detecting Pandoc, never bundled (Pandoc is GPL-2 and a ~150–200 MB Windows
 binary; neither fits this MIT, light-installer app). It is the fifth sanctioned
 vault write, riding the same never-clobber/atomic machinery as capture. Spec:
-`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Two
+`docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`. Three
 entry points: dragging a document onto the buddy (`BuddyRoot` filters
 `docx/odt/rtf`, `begin_document_import` stashes the path + shows the panel on
-the `importPicker` view) and the **Import Document** action in the per-vault
-record chooser (a `tauri-plugin-dialog` file picker). Invariants — each exists
+the `importPicker` view), the **Import Document** action in the per-vault
+record chooser (a `tauri-plugin-dialog` file picker), and the buddy
+right-click menu's **Import document…** item (`begin_add_document` arms a
+Rust-owned flag + shows the panel; `refresh()` drains it via
+`take_add_document_request` onto the `importPicker` with an EMPTY queue —
+its vault-FIRST mode, where picking a vault opens the same file picker and
+converts; spec
+`docs/superpowers/specs/2026-07-17-buddy-menu-import-document-design.md`).
+Invariants — each exists
 because a review found the failure it prevents:
 
 - **Pandoc resolution recovers past stale/old installs.** `resolve_working_pandoc`
@@ -754,7 +763,29 @@ because a review found the failure it prevents:
   missing/too old) routes to the focused `documentImport` view
   (`store.openDocumentImport()`), **not** the buried Buddy-settings card. A
   successful conversion raises a success toast whose "Open in Obsidian" action
-  calls `open_imported_document`. The `vaults` store carries the `importPicker`
+  calls `open_imported_document`. The **conversion lifecycle lives in the
+  shared `documentImports` store** (`src/stores/documentImports.ts`):
+  `convert()` sets the single `active` slot (the Rust `ImportLock` allows one
+  conversion process-wide; a concurrent second call rejects with the lock's
+  message WITHOUT touching the first run's slot — only the owning run's
+  `finally` may clear it), always clears in `finally`, and rethrows raw IPC
+  errors so each surface keeps its own toast/navigation. The self-contained
+  `ImportProgress.vue` card renders that state everywhere it matters — Pandoc
+  reports no incremental progress, so the card is honestly indeterminate
+  (spinner + elapsed tick + sweeping activity bar with a
+  `prefers-reduced-motion` static fallback; the ticking timer sits OUTSIDE
+  the `role="status"` live region so screen readers aren't chattered every
+  second). While converting, `RecordMode` swaps the Import button for the
+  card (a grayed-out button both read as inert and was a dead-end click into
+  the lock error — also for a conversion another surface started),
+  `ImportVaultPicker`'s `viewState` gains a top-priority `converting` branch
+  replacing the vault list with the card (keeping the "+N more queued" line,
+  counted against the active import's `sourcePath` so a RecordMode-started
+  conversion doesn't hide that the whole queue still waits), and
+  `ActionPanel` shows the card on the list view beside
+  RecordingBar/TranscriptionSummary so backing out — or a panel reopen
+  landing on the list default — never loses the working state.
+  The `vaults` store carries the `importPicker`
   view + `pendingImportPath`, which `refresh()` drains via `take_pending_import`
   **before** the list default so a drag-dropped path survives `panel-shown`.
   `tauri-plugin-dialog` (Cargo + `dialog:allow-open` capability) backs both
@@ -783,12 +814,107 @@ force/rerun and cancellation (`cancel_transcription`), and is observable via
 The model downloads on demand (`ensure_model` → `download_model`, pinned
 Hugging Face URL + pinned SHA-256 + size floor, progress via
 `capture:modelDownload`, cancellable, `.part`-then-rename); tier + language
-come from the vault config. State is surfaced as `capture:transcribing` /
+come from the vault config. Three per-vault knobs joined in the accuracy & speed increment
+(spec: `docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md`):
+`transcriptionVocabulary` + the recording's title compose whisper's
+`initial_prompt` (title first, vocabulary LAST — whisper truncates over-long
+prompts from the front and the user's explicit vocabulary must survive; the
+prompt is never written into the transcript); the `turbo` model tier
+(`ggml-large-v3-turbo-q5_0`, ~574 MB, pinned SHA like the others); and
+`transcriptionVad` (default ON) — Silero VAD silence skipping via a separate
+pinned ~1 MB `ggml-silero-v5.1.2.bin` in the same models dir. The VAD model
+downloads on first VAD-enabled job (progress on `capture:modelDownload`,
+`model:"vad"`); a FAILED download degrades that job to a no-VAD run with a
+warning (never a job failure — the stats footer's
+`Silence skipping (VAD)` row reports the EFFECTIVE state), while a cancel
+during it is still a cancel. A failure also arms a 10-minute download
+backoff (`VAD_BACKOFF` in `transcription.rs`) so an offline setup with the
+main model cached degrades instantly instead of stalling every job through
+the network timeout; success clears it, and a cancel never arms it (the
+user aborting a job says nothing about the network). State is surfaced as `capture:transcribing` /
 `transcribeProgress` / `transcribed` / `transcribeSkipped` /
 `transcribeFailed` / `transcribeCancelled` (each carries the `mp3`).
 `whisper-rs` is pinned at 0.16 deliberately — `transcribe/src/engine.rs`
 hand-wires abort/progress callbacks around upstream bugs; treat an upgrade
-as its own tracked change (see docs/DEVELOPMENT.md).
+as its own tracked change (see docs/DEVELOPMENT.md). That upgrade is a
+tracked trigger, not an open backlog item: 0.16.0 is the newest release on
+crates.io (verified 2026-07-16), and chasing a newer commit via a git pin
+isn't an option — `deny.toml`'s `[sources] unknown-git = "deny"` rejects
+any git-sourced dependency outright. Upgrade when 0.17 ships, with the
+hand-wired abort/progress trampoline regression tests already in
+`engine.rs` as the acceptance gate.
+
+**GPU inference (Vulkan, v0.6.1+).** The app-global `transcription.useGpu`
+setting (Buddy settings → Integrations → *Transcription — GPU*, default on) asks
+whisper for GPU inference via a Vulkan backend when available. The
+`WhisperTranscriber::load(model_path, use_gpu)` call explicitly sets the flag;
+whisper.cpp's CPU fallback is automatic when no usable device exists (logged
+via `install_logging_hooks`, never a job failure). The toggle applies from the
+next transcription job — the worker reloads the cached model when the flag
+changes, keyed on `(ModelTier, use_gpu)`, with no app restart needed.
+**Gotcha: whisper-rs's own default already tracks the build** —
+`WhisperContextParameters::default()` sets `use_gpu: cfg!(feature = "_gpu")`,
+false CPU-only but TRUE once the `vulkan` feature is on, so a shipped GPU
+build defaults to "on" already; the explicit set still matters for BOTH
+directions, but especially OFF, since without it the toggle's off position
+would be a silent no-op on a shipped build. The toggle is an escape hatch for
+users with flaky graphics drivers (crash remedy: turn it off, fall back to CPU).
+**Registration guard (whisper.cpp#3750):** on MSVC static builds the ggml
+backend registry's one-shot constructor can silently come up CPU-only (a
+caught `vk::SystemError` in `ggml_vk_instance_init` → `ggml_backend_vk_reg`
+returns null → `register_backend(null)` is a silent no-op, its debug log
+compiled out) — the shipped GPU build would be inert while the toggle claims
+GPU. `ensure_vulkan_backend_registered` (engine.rs, `whisper-vulkan`-gated,
+once per process, called only when `use_gpu` is on so the toggle stays a true
+escape hatch) scans the registry by name and explicitly registers a re-attempted
+`ggml_backend_vk_reg()` when absent, then logs the device list (the GAP-62
+"which GPU" diagnostic). Never probe Vulkan via
+`whisper_rs::vulkan::list_devices()` FIRST: its device-count path runs the
+instance init uncaught, so a missing/pre-1.2 loader would throw across the C
+ABI into Rust instead of falling back to CPU. The windows-app CI job runs the
+transcribe tests with `--features whisper-vulkan` — the only place the
+guard's no-crash/no-duplicate contract executes on the shipped toolchain.
+The `whisper-vulkan` feature and the shell's `gpu` feature compile only where the
+Vulkan SDK exists (Windows CI/release builds enable it; local builds stay
+CPU-only so contributors never need the SDK). Deliberately NO per-transcript
+device row in the stats footer — the VAD stats-row lesson (never record intent
+as engagement); the honesty principle is unchanged. **Sidecar-process architecture
+is the documented future fix for in-process driver faults** (see docs/Gaps.md).
+
+**Detected language.** Landed in the transcription housekeeping increment
+(spec: `docs/superpowers/specs/2026-07-16-transcription-housekeeping-design.md`).
+An auto-language job (`language: None`) now really engages whisper's own
+detection — `5aac08e` fixed wiring that had silently forced every auto job
+onto an English decode (`set_language` was skipped on `None`, so
+whisper.cpp's own default language "en" won by default). `detected_language`
+on `EngineOutput` is `Some` only when the vault's language setting is auto
+AND inference actually ran: the VAD all-silence short-circuit returns
+`None` before whisper runs at all, a pinned language is never asked
+(echoing the pin back as "detected" would be the setting masquerading as an
+observation), and a failed lang-id lookup degrades to `None` like the rest
+of the pipeline's honesty posture — detection is garnish, never a job
+outcome. `transcribe_recording` re-filters on the setting again before
+building `TranscriptMeta`, so an over-eager future `Transcriber` can't
+smuggle a detection into a pinned-language transcript. The sidecar records
+what it detected: a `detected-language` frontmatter line (kebab-case,
+yaml-quoted, emitted only when present) and the stats footer's Language row
+reads `auto (detected: de)`; a pinned-language transcript stays
+byte-identical to before. **Transcription models card.** Buddy settings →
+Integrations (beside `TranscriptionAppSettings`) gained a card listing
+every model artifact (`base`/`small`/`medium`/`turbo`/`vad`) with its
+on-disk size or an approximate download size when absent, and deleting one
+to force a re-download — the user-facing remedy for a suspect cached model
+(GAP-14). `list_transcription_models` is sync; `delete_transcription_model`
+is async — it refuses while any transcription job is active (the running
+job's terminal write may target the model being deleted, and mid-inference
+the mmap is guaranteed live), posts a purge request that wakes the worker
+to drop a matching cached transcriber on its next wake, then
+`spawn_blocking` unlinks the file with a bounded retry (20 × 100 ms, riding
+out that cache-drop race — Windows refuses to unlink a still-mapped file)
+where `NotFound` counts as success ("the path is clear"). The id is
+validated strictly against the artifact list — `ModelTier::from_str`'s
+default-to-Small must never back a delete, or a typo'd id would delete the
+Small model instead of erroring.
 
 The transcript is the second sanctioned vault write — a `<base>.transcript.md`
 sidecar the note embeds, under the same never-clobber discipline as the audio
@@ -1439,8 +1565,10 @@ tree (no history stack): the vault-row capture button `openRecordMode`s (titled
 "Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
 Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
-per-vault todo view, `importPicker` (parent: the list) is the drag-drop vault
-chooser, `documentImport` (parent: the list) is the focused Pandoc setup screen
+per-vault todo view, `importPicker` (parent: the list) is the import vault
+chooser (drop mode when the queue holds a dropped file; vault-first mode on
+an empty queue — the buddy-menu entry — where picking a vault opens the OS
+file picker), `documentImport` (parent: the list) is the focused Pandoc setup screen
 the blocked Import gates (`RecordMode`'s Import action, `ImportVaultPicker`'s
 "Set up Pandoc") route to — `openDocumentImport`, rendering
 `DocumentImportSettings` — instead of dumping the user at the bottom of the
@@ -1456,7 +1584,10 @@ character/animation/message duration, persisted to localStorage), `capture`
 (recording state mirrored from Rust: `paused`, `pausedTotalMs`,
 `pausedSinceMs`, `level`, `vaultId`, `lastSaved`, plus the transcription
 job map and active/queued state driven by the `capture:transcribe*` events),
-and `notifications` (the toast queue rendered by `NotificationHost`).
+`documentImports` (the single in-flight document conversion — owns the
+`convert_document` lifecycle, rendered by `ImportProgress` on the intake
+views and the list view; see the document-import domain), and
+`notifications` (the toast queue rendered by `NotificationHost`).
 
 Cross-window state travels two ways: Tauri events broadcast to every window
 (Rust-driven animation/dragging toggles from the menu handlers; capture

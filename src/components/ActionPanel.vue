@@ -3,12 +3,14 @@ import { storeToRefs } from "pinia";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { useCaptureStore } from "../stores/capture";
+import { useDocumentImportsStore } from "../stores/documentImports";
 import { useSettingsStatusStore } from "../stores/settingsStatus";
 import { useVaultsStore } from "../stores/vaults";
 import AppIcon from "./AppIcon.vue";
 import BuddySettings from "./BuddySettings.vue";
 import CaptureSettings from "./CaptureSettings.vue";
 import DocumentImportSettings from "./DocumentImportSettings.vue";
+import ImportProgress from "./ImportProgress.vue";
 import ImportVaultPicker from "./ImportVaultPicker.vue";
 import NotificationHost from "./NotificationHost.vue";
 import RecordingBar from "./RecordingBar.vue";
@@ -23,6 +25,7 @@ import VaultList from "./VaultList.vue";
 
 const store = useVaultsStore();
 const capture = useCaptureStore();
+const documentImports = useDocumentImportsStore();
 
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
@@ -283,6 +286,15 @@ watch(
     />
     <TranscriptionSummary
       v-if="view === 'list'"
+      class="mb-2"
+    />
+    <!-- A running document import stays visible after leaving the intake
+         views (or a panel reopen landing on the list default) — the same
+         list-view visibility RecordingBar/TranscriptionSummary give their
+         domains' background work. Gated on `active` so the card's elapsed
+         tick only runs while a conversion is actually in flight. -->
+    <ImportProgress
+      v-if="view === 'list' && documentImports.active"
       class="mb-2"
     />
     <RenamePrompt
