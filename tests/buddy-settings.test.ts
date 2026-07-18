@@ -23,6 +23,7 @@ vi.mock("../src/logging", () => ({
 import { CHARACTERS } from "../src/characters";
 import BuddySettings from "../src/components/BuddySettings.vue";
 import { useSettingsStore } from "../src/stores/settings";
+import { useVaultsStore } from "../src/stores/vaults";
 
 const flush = () => new Promise((r) => setTimeout(r));
 
@@ -214,7 +215,7 @@ describe("BuddySettings", () => {
     expect(wrapper.text()).toContain("You're up to date.");
   });
 
-  it("offers install & restart when an update is available", async () => {
+  it("surfaces an available update with a link to the dedicated update view", async () => {
     updaterMocks.check.mockResolvedValue({
       version: "0.2.0",
       downloadAndInstall: vi.fn(),
@@ -223,7 +224,9 @@ describe("BuddySettings", () => {
     await wrapper.find('[data-testid="check-updates"]').trigger("click");
     await flush();
     expect(wrapper.text()).toContain("Version 0.2.0 is available");
-    expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
+    // install moved to the dedicated UpdateView; settings only links now
+    expect(wrapper.find('[data-testid="view-update"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(false);
   });
 
   it("groups the toggles under a Behavior card with a message-duration select", async () => {
@@ -251,21 +254,18 @@ describe("BuddySettings", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps the install button visible for retry after a failure", async () => {
-    // the store keeps `available` after a failed download/install exactly
-    // so the user can retry — the button must not vanish behind the error
+  it("the View update link opens the dedicated update view", async () => {
+    // install + retry live in UpdateView now (see update-view.test.ts); the
+    // settings card only routes there.
     updaterMocks.check.mockResolvedValue({
       version: "0.2.0",
-      download: vi.fn().mockRejectedValue("download broke"),
-      install: vi.fn(),
+      downloadAndInstall: vi.fn(),
     });
     const wrapper = mount(BuddySettings);
     await wrapper.find('[data-testid="check-updates"]').trigger("click");
     await flush();
-    await wrapper.find('[data-testid="install-update"]').trigger("click");
-    await flush();
-    expect(wrapper.text()).toContain("download broke");
-    expect(wrapper.find('[data-testid="install-update"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="view-update"]').trigger("click");
+    expect(useVaultsStore().view).toBe("update");
   });
 });
 

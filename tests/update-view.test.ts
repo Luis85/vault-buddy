@@ -17,7 +17,6 @@ function primeAvailable(overrides: Record<string, unknown> = {}) {
   const store = useUpdatesStore();
   store.phase = "available";
   store.currentVersion = "0.1.0";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   store.available = {
     version: "0.2.0",
     currentVersion: "0.1.0",

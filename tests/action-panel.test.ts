@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
-import UpdateView from "../src/components/UpdateView.vue";
 import Tasks from "../src/components/Tasks.vue";
+import UpdateView from "../src/components/UpdateView.vue";
 import { useCaptureStore } from "../src/stores/capture";
 import { useDocumentImportsStore } from "../src/stores/documentImports";
 import { useNotificationsStore } from "../src/stores/notifications";

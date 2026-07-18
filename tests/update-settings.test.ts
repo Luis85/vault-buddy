@@ -26,7 +26,6 @@ describe("UpdateSettings", () => {
   it("links an available update to the dedicated view instead of installing inline", async () => {
     const updates = useUpdatesStore();
     updates.phase = "available";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updates.available = { version: "0.2.0" } as any;
     const vaults = useVaultsStore();
     const wrapper = mount(UpdateSettings);
