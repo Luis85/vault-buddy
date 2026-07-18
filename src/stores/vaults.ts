@@ -5,11 +5,20 @@ import { announce } from "../announce";
 import { dailyNoteOpenedMessage, vaultOpenedMessage } from "../buddyMessages";
 import { logWarning } from "../logging";
 import type { Vault } from "../types";
+import {
+  loadFavorites,
+  toggleFavorite as persistFavorite,
+} from "../utils/favoriteVaults";
 
 export const useVaultsStore = defineStore("vaults", {
   state: () => ({
     vaults: [] as Vault[],
     loaded: false,
+    // Favorited vault ids — pure frontend localStorage state (the
+    // recentSearches.ts precedent: panel-list ordering only, Rust never
+    // needs it), hydrated once at store init. `toggleFavorite` (action)
+    // keeps this in sync with storage.
+    favorites: new Set<string>(loadFavorites()),
     // Which panel view is showing. Lives here (not in ActionPanel) because
     // the panel window is only hidden/shown, not destroyed — a failed update
     // install must be able to reopen it directly on settings, where the error
@@ -307,6 +316,13 @@ export const useVaultsStore = defineStore("vaults", {
       } else {
         this.showList();
       }
+    },
+    /** Toggle a vault's favorite state, persisting via the util and keeping
+     * the reactive set in sync so the panel-list ordering (Task 5) updates
+     * immediately. */
+    toggleFavorite(id: string) {
+      const next = persistFavorite(id);
+      this.favorites = new Set(next);
     },
   },
 });
