@@ -12,8 +12,20 @@ import { useSettingsStore } from "../stores/settings";
 // The bubble window is shown by Rust (startup greeting, or `announce` for an
 // acknowledgement); useBuddyBubble owns the current text + auto-dismiss timer.
 // When it dismisses, hide the window.
-const { visible, text, show, dismiss } = useBuddyBubble();
+const { visible, text, action, show, dismiss } = useBuddyBubble();
 useSuppressContextMenu();
+
+// A bubble that carries an action is clickable: route the action to Rust,
+// then dismiss. Best-effort like every other bubble command. `open_panel`
+// idempotently reveals the panel (safe whether it is open or closed); its
+// panel-shown refresh consumes the armed pending view — for the update
+// announcement, the dedicated update view.
+function onBubbleActivate() {
+  if (action.value === "openUpdate") {
+    void invoke("open_panel").catch(() => {});
+  }
+  dismiss();
+}
 
 // Duration changes are made in the panel window; this webview only hears
 // about them via the storage event, so it must install the sync like every
@@ -65,9 +77,14 @@ onMounted(async () => {
     // An acknowledgement the buddy should speak: the announcer (buddy/panel
     // window) called `announce`, Rust showed + positioned this window and
     // emitted the text here. Latest-wins replaces any lingering message.
-    unlistenMessage = await listen<{ text: string }>(
+    unlistenMessage = await listen<{ text: string; action?: string | null }>(
       "bubble-message",
-      (event) => show(event.payload.text, BUBBLE_MS[settings.messageDuration].ack),
+      (event) =>
+        show(
+          event.payload.text,
+          BUBBLE_MS[settings.messageDuration].ack,
+          event.payload.action ?? null,
+        ),
     );
     // The panel opens beside the buddy, over the bubble's spot — dismiss a
     // lingering bubble so the two never overlap.
@@ -103,6 +120,8 @@ onUnmounted(() => {
       :text="text"
       :side="side"
       :valign="valign"
+      :clickable="!!action"
+      @activate="onBubbleActivate"
     />
   </div>
 </template>
