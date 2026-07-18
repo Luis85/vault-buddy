@@ -342,15 +342,20 @@ pub fn set_documents_config(
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
     capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
     let _guard = lock_ignoring_poison(&lock.0);
-    // merge_documents_owned writes only the three documents-owned fields and
+    // merge_documents_owned writes only the documents-owned fields and
     // preserves everything else (recording settings, tasks, lists) — the
     // preserve-vs-write split is unit-tested in core now (GAP-60).
     let existing = capture_config::vault_config(&capture_config::load_config(), &id);
+    // This command's own DTO doesn't carry the two template fields yet, so we
+    // pass the existing values straight through to preserve them — Task 12
+    // wires these two params to the (future) documents-settings DTO.
     let value = capture_config::merge_documents_owned(
         &existing,
         folder,
         document_date_folders,
         document_extract_images,
+        existing.document_extra_frontmatter.clone(),
+        existing.document_body_template.clone(),
     );
     capture_config::update_vault_config(&id, value)
 }

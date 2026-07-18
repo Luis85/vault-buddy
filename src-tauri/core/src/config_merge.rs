@@ -13,12 +13,15 @@ use crate::vault_config::VaultCaptureConfig;
 /// Merge the fields `set_capture_config` OWNS from `incoming` onto `existing`,
 /// preserving every field another settings command owns
 /// (`set_documents_config`: documents_folder/document_date_folders/
-/// document_extract_images; `set_tasks_config`: tasks_folder;
-/// `set_task_lists_config`: default_list/list_order/archived_lists;
-/// `set_task_id_config`: task_id_enabled/task_id_property). The preserved
-/// fields are listed explicitly and everything else comes from `incoming` via
-/// `..`, so a capture save can never transpose an owned field with a preserved
-/// one.
+/// document_extract_images/document_extra_frontmatter/document_body_template;
+/// `set_tasks_config`: tasks_folder; `set_task_lists_config`:
+/// default_list/list_order/archived_lists; `set_task_id_config`:
+/// task_id_enabled/task_id_property; and the future task-template-editing
+/// surface: task_extra_frontmatter/task_body_template). The preserved fields
+/// are listed explicitly and everything else comes from `incoming` via `..`
+/// (which is how the capture-owned note_extra_frontmatter/note_body_template
+/// pair flows through), so a capture save can never transpose an owned field
+/// with a preserved one.
 pub fn merge_capture_owned(
     existing: &VaultCaptureConfig,
     incoming: VaultCaptureConfig,
@@ -35,23 +38,35 @@ pub fn merge_capture_owned(
         // must never reset them, same as the lists/documents fields above.
         task_id_enabled: existing.task_id_enabled,
         task_id_property: existing.task_id_property.clone(),
+        // The task/document template fields are owned by their own future
+        // template-editing surfaces, not by capture. The note_* pair is
+        // capture-owned and stays in `..incoming` below.
+        task_extra_frontmatter: existing.task_extra_frontmatter.clone(),
+        task_body_template: existing.task_body_template.clone(),
+        document_extra_frontmatter: existing.document_extra_frontmatter.clone(),
+        document_body_template: existing.document_body_template.clone(),
         ..incoming
     }
 }
 
 /// The `set_documents_config` counterpart: owns exactly documents_folder,
-/// document_date_folders, document_extract_images; every other field is
-/// preserved from `existing` via `..`.
+/// document_date_folders, document_extract_images, document_extra_frontmatter,
+/// document_body_template; every other field is preserved from `existing` via
+/// `..`.
 pub fn merge_documents_owned(
     existing: &VaultCaptureConfig,
     documents_folder: Option<String>,
     document_date_folders: bool,
     document_extract_images: bool,
+    document_extra_frontmatter: Option<String>,
+    document_body_template: Option<String>,
 ) -> VaultCaptureConfig {
     VaultCaptureConfig {
         documents_folder,
         document_date_folders,
         document_extract_images,
+        document_extra_frontmatter,
+        document_body_template,
         ..existing.clone()
     }
 }
@@ -74,6 +89,10 @@ mod tests {
             document_extract_images: false,
             task_id_enabled: true,
             task_id_property: Some("tid".into()),
+            task_extra_frontmatter: Some("project: A".into()),
+            task_body_template: Some("- [ ] {{title}}".into()),
+            document_extra_frontmatter: Some("area: X".into()),
+            document_body_template: Some("{{content}}".into()),
             ..VaultCaptureConfig::default()
         };
         // incoming carries the capture-owned fields (non-owned left at defaults).
@@ -102,6 +121,16 @@ mod tests {
         assert_eq!(merged.archived_lists, vec!["Old"]);
         assert!(merged.task_id_enabled);
         assert_eq!(merged.task_id_property.as_deref(), Some("tid"));
+        // The task/document template fields (owned by the future template-editing
+        // surfaces, not by capture) must ALSO survive a capture save.
+        assert_eq!(
+            merged.task_body_template.as_deref(),
+            Some("- [ ] {{title}}")
+        );
+        assert_eq!(
+            merged.document_extra_frontmatter.as_deref(),
+            Some("area: X")
+        );
     }
 
     #[test]
@@ -112,11 +141,26 @@ mod tests {
             tasks_folder: Some("T".into()),
             ..VaultCaptureConfig::default()
         };
-        let merged = merge_documents_owned(&existing, Some("Docs".into()), false, false);
+        let merged = merge_documents_owned(
+            &existing,
+            Some("Docs".into()),
+            false,
+            false,
+            Some("area: Legal".into()),
+            Some("{{content}}".into()),
+        );
         // owned
         assert_eq!(merged.documents_folder.as_deref(), Some("Docs"));
         assert!(!merged.document_date_folders);
         assert!(!merged.document_extract_images);
+        assert_eq!(
+            merged.document_extra_frontmatter.as_deref(),
+            Some("area: Legal")
+        );
+        assert_eq!(
+            merged.document_body_template.as_deref(),
+            Some("{{content}}")
+        );
         // preserved (would break if set_documents_config touched them)
         assert_eq!(merged.mode, RecordingMode::VoiceNote);
         assert!(!merged.recording_date_folders);

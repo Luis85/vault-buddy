@@ -104,6 +104,15 @@ pub struct VaultCaptureConfig {
     /// text-only note (false). Like the date-folder toggles, flipping this
     /// only changes what NEW imports produce — existing notes are untouched.
     pub document_extract_images: bool,
+    /// Additive per-vault templates. Extra-frontmatter is injected after the
+    /// managed identity keys (reserved keys dropped, fence-safe); body-template
+    /// composes the body with `{{placeholders}}`. None → today's exact output.
+    pub note_extra_frontmatter: Option<String>,
+    pub note_body_template: Option<String>,
+    pub task_extra_frontmatter: Option<String>,
+    pub task_body_template: Option<String>,
+    pub document_extra_frontmatter: Option<String>,
+    pub document_body_template: Option<String>,
 }
 
 impl Default for VaultCaptureConfig {
@@ -133,6 +142,12 @@ impl Default for VaultCaptureConfig {
             recording_date_folders: false,
             document_date_folders: false,
             document_extract_images: true,
+            note_extra_frontmatter: None,
+            note_body_template: None,
+            task_extra_frontmatter: None,
+            task_body_template: None,
+            document_extra_frontmatter: None,
+            document_body_template: None,
         }
     }
 }
@@ -222,6 +237,18 @@ fn parse_string_list(entry: &serde_json::Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Read an optional free-text field: trimmed, blank → None (the
+/// `transcriptionVocabulary` treatment) — but preserve interior whitespace
+/// (templates are multi-line, so only the ends are trimmed).
+fn template_field(entry: &serde_json::Value, key: &str) -> Option<String> {
+    entry
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
@@ -332,6 +359,12 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
             .get("documentExtractImages")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        note_extra_frontmatter: template_field(entry, "noteExtraFrontmatter"),
+        note_body_template: template_field(entry, "noteBodyTemplate"),
+        task_extra_frontmatter: template_field(entry, "taskExtraFrontmatter"),
+        task_body_template: template_field(entry, "taskBodyTemplate"),
+        document_extra_frontmatter: template_field(entry, "documentExtraFrontmatter"),
+        document_body_template: template_field(entry, "documentBodyTemplate"),
     }
 }
 
@@ -403,6 +436,24 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     }
     if !v.document_extract_images {
         entry.insert("documentExtractImages".to_string(), json!(false));
+    }
+    if let Some(t) = &v.note_extra_frontmatter {
+        entry.insert("noteExtraFrontmatter".to_string(), json!(t));
+    }
+    if let Some(t) = &v.note_body_template {
+        entry.insert("noteBodyTemplate".to_string(), json!(t));
+    }
+    if let Some(t) = &v.task_extra_frontmatter {
+        entry.insert("taskExtraFrontmatter".to_string(), json!(t));
+    }
+    if let Some(t) = &v.task_body_template {
+        entry.insert("taskBodyTemplate".to_string(), json!(t));
+    }
+    if let Some(t) = &v.document_extra_frontmatter {
+        entry.insert("documentExtraFrontmatter".to_string(), json!(t));
+    }
+    if let Some(t) = &v.document_body_template {
+        entry.insert("documentBodyTemplate".to_string(), json!(t));
     }
     entry
 }
@@ -648,6 +699,12 @@ mod tests {
                 recording_date_folders: false,
                 document_date_folders: false,
                 document_extract_images: false,
+                note_extra_frontmatter: Some("attendees:".to_string()),
+                note_body_template: Some("## Notes\n{{type}}".to_string()),
+                task_extra_frontmatter: Some("project: Alpha".to_string()),
+                task_body_template: Some("- [ ] {{title}}".to_string()),
+                document_extra_frontmatter: Some("area: Legal".to_string()),
+                document_body_template: Some("{{content}}".to_string()),
             },
         );
         cfg.vaults
@@ -973,6 +1030,41 @@ mod tests {
         assert_eq!(v.transcription_vocabulary, None);
         assert!(v.transcription_vad, "malformed bool falls back to on");
         assert_eq!(v.mode, RecordingMode::VoiceNote);
+    }
+
+    #[test]
+    fn template_fields_default_none_and_round_trip() {
+        let d = VaultCaptureConfig::default();
+        assert_eq!(d.note_body_template, None);
+        assert_eq!(d.task_extra_frontmatter, None);
+        assert_eq!(d.document_body_template, None);
+        // Omitted at default (keeps config.json minimal).
+        let j = serde_json::Value::Object(serialize_vault_entry(&d)).to_string();
+        assert!(!j.contains("noteBodyTemplate"), "{j}");
+
+        let set = VaultCaptureConfig {
+            note_extra_frontmatter: Some("attendees:".into()),
+            note_body_template: Some("## Notes\n{{type}}".into()),
+            task_extra_frontmatter: Some("project: Alpha".into()),
+            task_body_template: Some("- [ ] {{title}}".into()),
+            document_extra_frontmatter: Some("area: Legal".into()),
+            document_body_template: Some("> imported\n\n{{content}}".into()),
+            ..VaultCaptureConfig::default()
+        };
+        let entry = serde_json::Value::Object(serialize_vault_entry(&set));
+        let back = vault_entry(&entry);
+        assert_eq!(
+            back.note_body_template.as_deref(),
+            Some("## Notes\n{{type}}")
+        );
+        assert_eq!(
+            back.task_extra_frontmatter.as_deref(),
+            Some("project: Alpha")
+        );
+        assert_eq!(
+            back.document_body_template.as_deref(),
+            Some("> imported\n\n{{content}}")
+        );
     }
 
     #[test]
