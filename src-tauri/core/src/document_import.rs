@@ -98,9 +98,20 @@ pub fn render_frontmatter(meta: &DocMeta, extra_frontmatter: Option<&str>) -> St
 pub fn assemble_body(body_template: Option<&str>, content: &str) -> String {
     match body_template.map(str::trim) {
         Some(t) if !t.is_empty() => {
-            if t.contains("{{content}}") {
+            // Detect the {{content}} placeholder with the SAME whitespace
+            // tolerance `substitute` applies (so `{{ content }}` counts too), by
+            // probing with a sentinel that can't occur in real markdown (NUL
+            // bytes). A raw `.contains("{{content}}")` would miss a spaced
+            // spelling, fall into the append branch, AND still substitute it
+            // there — duplicating the imported document.
+            const CONTENT_PROBE: &str = "\u{0}vault-buddy-content\u{0}";
+            if crate::template::substitute(t, &[("content", CONTENT_PROBE)]).contains(CONTENT_PROBE)
+            {
                 crate::template::substitute(t, &[("content", content)])
             } else {
+                // No {{content}} placeholder anywhere → append the content so a
+                // conversion is never silently dropped, even if the template
+                // fills other placeholders.
                 let rendered = crate::template::substitute(t, &[("content", content)]);
                 format!("{}\n{content}", rendered.trim_end_matches('\n'))
             }
@@ -546,6 +557,21 @@ mod tests {
         // "blank means unset" posture as every other per-vault template field).
         assert_eq!(assemble_body(Some("   "), "BODY"), "BODY");
         assert_eq!(assemble_body(Some(""), "BODY"), "BODY");
+    }
+
+    #[test]
+    fn assemble_body_content_placeholder_is_whitespace_tolerant_no_duplication() {
+        // `{{ content }}` (whitespace inside the braces, which substitute()
+        // tolerates) is the content placeholder — filled ONCE, not
+        // filled-and-appended. Regression: the literal `.contains("{{content}}")`
+        // gate missed this spelling and DUPLICATED the whole imported document.
+        assert_eq!(
+            assemble_body(Some("> pre\n\n{{ content }}"), "BODY"),
+            "> pre\n\nBODY"
+        );
+        // A template that fills a DIFFERENT (unknown) placeholder but never
+        // references content still gets the content appended — never dropped.
+        assert_eq!(assemble_body(Some("{{other}} note"), "BODY"), " note\nBODY");
     }
 
     #[test]
