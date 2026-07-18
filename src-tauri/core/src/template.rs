@@ -52,9 +52,10 @@ pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
 ///   (case-insensitive, surrounding quotes stripped so `"type":` can't evade
 ///   it) is dropped along with its indented continuation lines, so a managed
 ///   key can't be redefined;
-/// - a top-level line that is not a `key: value` mapping — a bare scalar, or a
-///   `- list` sequence entry (even one with an inline `- key: value` mapping) —
-///   is dropped: injected into a mapping block it would be invalid YAML;
+/// - a top-level line that is not a real `key: value` / `key:` mapping entry —
+///   a bare scalar (including one whose colon is not a `: ` separator, like
+///   `https://x` or `project:Alpha`), or a `- list` sequence entry (even with
+///   an inline `- key: value`) — is dropped: in a mapping block it is invalid YAML;
 /// - blank lines are dropped.
 ///
 /// Everything else is kept verbatim, newline-terminated.
@@ -89,9 +90,17 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
             skipping = true;
             continue;
         }
-        // A top-level line must be a `key: value` mapping. A line with no colon
-        // (a bare scalar) would inject malformed YAML — drop it and its block.
-        let Some((raw_key, value)) = line.split_once(':') else {
+        // A top-level line must be a REAL YAML mapping entry: a `: ` (colon +
+        // space) separator, or a trailing `:` (empty value / block opener). A
+        // colon that is not a separator is part of a scalar (`https://x`,
+        // `project:Alpha`) — NOT a mapping — so drop the line and its block
+        // rather than inject a bare scalar that breaks the whole block.
+        let mapping = if let Some(i) = line.find(": ") {
+            Some((&line[..i], &line[i + 1..]))
+        } else {
+            line.trim_end().strip_suffix(':').map(|k| (k, ""))
+        };
+        let Some((raw_key, value)) = mapping else {
             skipping = true;
             continue;
         };
@@ -188,6 +197,25 @@ mod tests {
         );
         // A trailing-colon value (`due:` as a value) is also quoted.
         assert_eq!(sanitize_extra_frontmatter("x: a:", &[]), "x: \"a:\"\n");
+    }
+
+    #[test]
+    fn sanitize_drops_scalars_whose_colon_is_not_a_mapping_separator() {
+        // A colon not followed by a space (a URL, or a missing-space typo) is
+        // part of a scalar, not a mapping separator — drop the line rather than
+        // inject a bare scalar that breaks the whole block (Codex P2).
+        assert_eq!(sanitize_extra_frontmatter("https://example.com", &[]), "");
+        assert_eq!(sanitize_extra_frontmatter("project:Alpha", &[]), "");
+        // A real `: ` separator and a trailing `:` (block opener) are kept; a
+        // URL sitting as a VALUE (after a real separator) is fine.
+        assert_eq!(
+            sanitize_extra_frontmatter("home: https://example.com", &[]),
+            "home: https://example.com\n"
+        );
+        assert_eq!(
+            sanitize_extra_frontmatter("attendees:", &["type"]),
+            "attendees:\n"
+        );
     }
 
     #[test]
