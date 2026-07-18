@@ -823,8 +823,10 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 **Frontend**
 - `src/main.ts` — the Vue `errorHandler` and unexpected-label fallback are
   untested (only `rootFor` is).
-- `UpdateSettings.vue` is tested only indirectly through
-  `buddy-settings.test.ts`; `HighlightText.vue` only via the util's tests.
+- `UpdateSettings.vue` now has direct coverage (`update-settings.test.ts`:
+  the manual-check control + the "View update →" link), and the update view
+  itself is covered by `update-view.test.ts`. `HighlightText.vue` is still
+  tested only via the util's tests.
 - `SelectMenu.vue`'s tests now cover the keyboard path (GAP-33, fixed
   2026-07-10) but not outside-click close or positioning.
 - Event-listener cleanup paths in the roots and `capture.init()` re-entry

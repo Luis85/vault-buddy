@@ -248,12 +248,12 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 68 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 69 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
-| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `open_panel` (idempotent show — the clickable bubble's reveal), `close_bubble`, `announce` (optional `action` → a clickable bubble), `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config`, `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
@@ -277,7 +277,7 @@ actually subscribe.
 | `panel-shown` | Panel window just opened (the precise "opened" signal) | PanelRoot (refresh), BubbleRoot (dismiss) |
 | `buddy-facing` | Buddy crossed the screen midline (deduped) | BuddyRoot |
 | `bubble-anchor` | `{side, valign}` for the bubble tail | BubbleRoot |
-| `bubble-message` | Text for the bubble to show | BubbleRoot |
+| `bubble-message` | `{text, action?}` — the bubble's text plus an optional `action` (`openUpdate`) that makes it clickable | BubbleRoot (routes the action → `open_panel`) |
 | `buddy-toggle-animation` / `buddy-toggle-dragging` | Context-menu toggles | BuddyRoot |
 | `capture:started/paused/resumed/saved/failed/warning` | Recording lifecycle | capture store (init in BuddyRoot **and** PanelRoot) |
 | `capture:level` | Mic level ~5 Hz, 0–1, advisory & lossy | capture store |
@@ -1488,23 +1488,37 @@ Invariants — each exists because a review found the failure it prevents:
   successful writes emit `mcp:write`, announced by `useBuddyAnnouncements`
   in the buddy window through the existing Buddy-messages gate.
 
-## Updater flow (`src/stores/updates.ts`, `UpdateSettings.vue`)
+## Updater flow (`src/stores/updates.ts`, `UpdateView.vue`, `UpdateSettings.vue`)
 
 Check → download (panel stays open so spinner/errors are visible) →
 `close_panel` (hide the panel window) → `prepare_update_install` (Rust saves
 the buddy position and stamps a clean shutdown) → `install()` → `relaunch()`.
 The buddy window never shifts, so there is no home position to restore. On
-failure the panel reopens on the settings view via `toggle_panel`, `available`
-is kept so the install button stays visible for retry, and
-`rearm_crash_detection` turns the run marker back on (the prepare step latched
-it off). The `Update` object is stored with `markRaw()` — a Vue reactive
-proxy breaks its private-field `rid` and every real install would throw.
+failure the panel reopens on the dedicated update view (`requestView("update")`)
+via `toggle_panel`, `available` is kept so the install button stays visible for
+retry, and `rearm_crash_detection` turns the run marker back on (the prepare
+step latched it off). The `Update` object is stored with `markRaw()` — a Vue
+reactive proxy breaks its private-field `rid` and every real install would throw.
 A quiet startup check (`useStartupUpdateCheck`, installed by PanelRoot only,
 gated by the `checkUpdatesOnStart` setting, ~15 s settle for login networking)
 runs `checkForUpdatesQuietly`: zero trace when current or failed (phase stays
 `idle`, failures only log); on an available update the buddy announces via
-bubble and `requestViewOnNextOpen("settings")` arms the next panel open to
+bubble and `requestViewOnNextOpen("update")` arms the next panel open to
 land on the install UI without yanking an already-open panel.
+
+The available update lands on a dedicated `update` panel view
+(`UpdateView.vue`) — the new version, the release notes (`Update.body`,
+rendered as plain text with a graceful fallback), and Install & restart with
+the same installing/error/retry states — instead of the buried Buddy-settings
+Updates card, which now shows a "View update →" link to it. The announcement
+bubble is itself clickable: the startup check calls `announce(msg,
+"openUpdate")`, so `bubble-message` carries the action, `SpeechBubble` renders
+an interactive affordance (persistent violet ring + pointer + hover lift, and a
+custom `activate` event so a native card click can't be mistaken for the
+action), and a click invokes `open_panel` (idempotent show → the `panel-shown`
+refresh consumes the armed `pendingView="update"`). Buddy messages off / buddy
+hidden to tray still arm `pendingView`, so a manual open lands on the update
+view too.
 
 ## Diagnostics invariants
 
@@ -1556,7 +1570,7 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks | search | importPicker | documentImport`, with
+transcriptions | tasks | search | importPicker | documentImport | update`, with
 `captureSettingsVaultId` /
 `recordingsVaultId` / `recordModeVaultId` / `tasksVaultId` /
 `pendingImportPath`) because that must
