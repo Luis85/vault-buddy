@@ -143,17 +143,17 @@ describe("updates store", () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
-  it("reopens the panel on the settings view when the install fails", async () => {
+  it("reopens the panel on the update view when the install fails", async () => {
     const vaults = useVaultsStore();
     const download = vi.fn().mockResolvedValue(undefined);
     const install = vi.fn().mockImplementation(async () => {
       // whatever the view state was when the process was about to exit,
-      // the reopened panel must land on settings
+      // the reopened panel must land on the update view
       vaults.view = "list";
       throw "install broke";
     });
     mocks.check.mockResolvedValue({ version: "0.2.0", download, install });
-    vaults.view = "settings"; // installs start from the settings view
+    vaults.view = "update"; // installs start from the update view
     const store = useUpdatesStore();
     await store.checkForUpdates();
     await store.installUpdate();
@@ -161,9 +161,9 @@ describe("updates store", () => {
     expect(store.error).toContain("install broke");
     expect(store.available).not.toBeNull(); // retry stays possible
     // close_panel hid the panel window before the install threw — toggle_panel
-    // re-shows it, on the settings view where the error/retry button live
+    // re-shows it, on the update view where the error/retry button live
     expect(mocks.invoke).toHaveBeenCalledWith("toggle_panel");
-    expect(vaults.view).toBe("settings");
+    expect(vaults.view).toBe("update");
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 

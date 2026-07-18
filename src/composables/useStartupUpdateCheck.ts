@@ -20,9 +20,10 @@ export const STARTUP_CHECK_DELAY_MS = 15_000;
  * view reads, and is already an announcer (vault opens), so the check runs
  * once and its result is visible where the Install button lives.
  *
- * When an update exists the buddy asks: a bubble announcement (announce()
- * respects the Buddy-messages toggle) and the NEXT panel open lands on the
- * settings view — `requestViewOnNextOpen`, never a live-view yank. When the
+ * When an update exists the buddy asks: a clickable bubble announcement
+ * (announce() respects the Buddy-messages toggle; the "openUpdate" action
+ * makes the bubble clickable) and the NEXT panel open lands on the dedicated
+ * update view — `requestViewOnNextOpen`, never a live-view yank. When the
  * app is current, or the check fails, nothing is shown at all.
  */
 export function useStartupUpdateCheck(): void {
@@ -36,8 +37,13 @@ export function useStartupUpdateCheck(): void {
     timer = setTimeout(() => {
       void updates.checkForUpdatesQuietly().then(() => {
         if (updates.phase !== "available") return;
-        announce(updateAvailableMessage(updates.available?.version ?? ""));
-        vaults.requestViewOnNextOpen("settings");
+        // Announce with the openUpdate action so the bubble is clickable, and
+        // arm the next panel open to land on the dedicated update view.
+        announce(
+          updateAvailableMessage(updates.available?.version ?? ""),
+          "openUpdate",
+        );
+        vaults.requestViewOnNextOpen("update");
       });
     }, STARTUP_CHECK_DELAY_MS);
   });

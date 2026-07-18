@@ -106,14 +106,14 @@ export const useUpdatesStore = defineStore("updates", {
         await relaunch();
       } catch (e) {
         // The install threw, so the process is still alive: reopen the panel
-        // on the settings view so the error and retry button are visible.
-        // `close_panel`/`prepare_update_install` hid the panel window, so
-        // `toggle_panel` reliably re-shows it. Use `requestView` (not
-        // `openSettings`): reopening fires the panel-shown refresh, which
-        // resets to the vault list unless a view was explicitly requested —
-        // `openSettings` would be clobbered back to the list. `available` is
+        // on the dedicated update view so the error and retry button are
+        // visible. `close_panel`/`prepare_update_install` hid the panel window,
+        // so `toggle_panel` reliably re-shows it. Use `requestView` (not
+        // `openUpdate`): reopening fires the panel-shown refresh, which resets
+        // to the vault list unless a view was explicitly requested —
+        // `openUpdate` would be clobbered back to the list. `available` is
         // kept for retry.
-        vaults.requestView("settings");
+        vaults.requestView("update");
         await invoke("toggle_panel").catch(() => {});
         this.error = String(e);
         this.phase = "error";

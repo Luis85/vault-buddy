@@ -51,9 +51,10 @@ export function transcribedMessage(): string {
 }
 
 /**
- * The startup check found an update — the buddy asks; clicking it opens the
- * panel on the settings view where Install & restart is the answer. Generic
- * fallback so a blank version never renders a dangling "Update v is ready".
+ * The startup check found an update — the buddy asks; the bubble is clickable
+ * and clicking it opens the dedicated update view where Install & restart is
+ * the answer. Generic fallback so a blank version never renders a dangling
+ * "Update v is ready".
  */
 export function updateAvailableMessage(version: string): string {
   const v = version.trim();
