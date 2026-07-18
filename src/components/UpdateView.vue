@@ -15,10 +15,22 @@ const showUpdate = computed(
     updates.phase === "installing" ||
     (updates.phase === "error" && updates.available !== null),
 );
+// Named phase flags keep the template from repeating `updates.phase === …`.
+const installing = computed(() => updates.phase === "installing");
+const errored = computed(() => updates.phase === "error");
 
 // Release notes come from the signed release feed; render as PLAIN text
 // (never v-html, no markdown dependency) — honest and injection-proof.
 const releaseNotes = computed(() => updates.available?.body?.trim() ?? "");
+
+// "You're on v0.1.0 · released 2026-07-18" — assembled here so the template
+// carries one conditional line instead of a nested date span.
+const subhead = computed(() => {
+  const current = updates.currentVersion;
+  if (!current) return "";
+  const date = updates.available?.date;
+  return date ? `You're on v${current} · released ${date}` : `You're on v${current}`;
+});
 
 onMounted(() => {
   void updates.loadVersion();
@@ -35,12 +47,10 @@ onMounted(() => {
         Version {{ updates.available.version }} is available
       </p>
       <p
-        v-if="updates.currentVersion"
+        v-if="subhead"
         class="text-xs text-slate-400"
       >
-        You're on v{{ updates.currentVersion }}<span
-          v-if="updates.available.date"
-        > · released {{ updates.available.date }}</span>
+        {{ subhead }}
       </p>
     </div>
 
@@ -66,12 +76,12 @@ onMounted(() => {
     <button
       type="button"
       class="cursor-pointer rounded-lg border border-violet-400 bg-violet-500/20 px-3 py-1.5 text-sm text-slate-100 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-      :disabled="updates.phase === 'installing'"
+      :disabled="installing"
       data-testid="install-update"
       @click="updates.installUpdate()"
     >
       <span
-        v-if="updates.phase === 'installing'"
+        v-if="installing"
         class="flex items-center justify-center gap-1.5"
       >
         <span
@@ -85,7 +95,7 @@ onMounted(() => {
     </button>
 
     <p
-      v-if="updates.phase === 'error'"
+      v-if="errored"
       data-testid="update-error"
       class="text-xs text-red-300"
     >
