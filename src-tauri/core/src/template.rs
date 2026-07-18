@@ -3,9 +3,27 @@
 //! makes a user's extra-frontmatter text safe to inject before a closing
 //! `---` — it can never break the fence or redefine a managed key.
 
+/// Double-quote a YAML scalar, escaping `\` and `"` and flattening newlines to
+/// spaces. The home for the app's frontmatter quoting: `render_note`/
+/// `render_task`/`render_frontmatter`'s managed fields and this module's
+/// `sanitize_extra_frontmatter` value-quoting all use it, and `capture_note`
+/// re-exports it so its existing callers keep the `capture_note::yaml_quote`
+/// path.
+pub fn yaml_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\n', '\r'], " ");
+    format!("\"{escaped}\"")
+}
+
 /// Replace every `{{key}}` (whitespace inside the braces tolerated) with its
 /// value from `vars`. An unknown key renders empty (the available keys are
 /// documented in the UI). Unclosed `{{` is emitted literally. UTF-8 safe.
+/// Values are inserted RAW; for frontmatter templates,
+/// `sanitize_extra_frontmatter` quotes any resulting value that would be an
+/// unsafe YAML scalar, so callers substitute the same way for body and
+/// frontmatter.
 pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -73,7 +91,7 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
         }
         // A top-level line must be a `key: value` mapping. A line with no colon
         // (a bare scalar) would inject malformed YAML — drop it and its block.
-        let Some((raw_key, _)) = line.split_once(':') else {
+        let Some((raw_key, value)) = line.split_once(':') else {
             skipping = true;
             continue;
         };
@@ -86,10 +104,31 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
             continue;
         }
         skipping = false;
-        out.push_str(line);
+        // Quote a value that would be an unsafe YAML plain scalar — a `: `
+        // (colon-space) or trailing `:` inside it (e.g. a substituted title
+        // `Ship: v1`) reads as a nested mapping and corrupts the frontmatter.
+        out.push_str(&emit_line(raw_key, value));
         out.push('\n');
     }
     out
+}
+
+/// Emit a kept `key: value` frontmatter line, double-quoting the value when it
+/// would otherwise be an invalid YAML plain scalar — it contains a `: `
+/// (colon-space, which YAML reads as a nested mapping) or ends with `:` — unless
+/// the value is empty (a block/mapping opener like `key:`), already quoted, or a
+/// flow collection (`[…]`/`{…}`). `raw_key`/`value` are the two halves of the
+/// line's first `:`, so a value with no risky content is emitted byte-identical.
+fn emit_line(raw_key: &str, value: &str) -> String {
+    let v = value.trim();
+    let needs_quote = !v.is_empty()
+        && !v.starts_with(['"', '\'', '[', '{'])
+        && (v.contains(": ") || v.ends_with(':'));
+    if needs_quote {
+        format!("{raw_key}: {}", yaml_quote(v))
+    } else {
+        format!("{raw_key}:{value}")
+    }
 }
 
 /// Strip a single matched pair of surrounding ASCII quotes (`"` or `'`) from a
@@ -123,6 +162,32 @@ mod tests {
     fn substitute_is_utf8_safe_and_tolerates_unclosed() {
         assert_eq!(substitute("café {{x}}", &[]), "café ");
         assert_eq!(substitute("a {{ open", &[]), "a {{ open");
+    }
+
+    #[test]
+    fn sanitize_quotes_a_value_that_would_break_the_scalar() {
+        // A value with a colon-space (e.g. a substituted title `Ship: v1`) would
+        // read as a nested mapping — quote the whole value (Codex P2). A value
+        // with no risky content, an already-quoted value, and a flow collection
+        // are left byte-identical.
+        assert_eq!(
+            sanitize_extra_frontmatter("summary: Ship: v1", &[]),
+            "summary: \"Ship: v1\"\n"
+        );
+        assert_eq!(
+            sanitize_extra_frontmatter("ref: /x/a.docx (docx, 2026-07-10)", &[]),
+            "ref: /x/a.docx (docx, 2026-07-10)\n"
+        );
+        assert_eq!(
+            sanitize_extra_frontmatter("tags: [a, b]", &["type"]),
+            "tags: [a, b]\n"
+        );
+        assert_eq!(
+            sanitize_extra_frontmatter("note: \"a: b\"", &[]),
+            "note: \"a: b\"\n"
+        );
+        // A trailing-colon value (`due:` as a value) is also quoted.
+        assert_eq!(sanitize_extra_frontmatter("x: a:", &[]), "x: \"a:\"\n");
     }
 
     #[test]

@@ -35,17 +35,11 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
-/// Double-quote a YAML scalar, escaping `\` and `"` and flattening
-/// newlines to spaces. Vault and device names are user/system input;
-/// unquoted they could break the frontmatter or inject fields — and an
-/// unquoted `1:02:03` duration even parses as YAML sexagesimal.
-pub fn yaml_quote(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace(['\n', '\r'], " ");
-    format!("\"{escaped}\"")
-}
+// yaml_quote now lives in `crate::template` (the frontmatter-primitives home)
+// so `template::substitute_yaml` can quote values without a template↔capture_note
+// module cycle; re-exported here to keep the `capture_note::yaml_quote` path for
+// callers (document_import, tasks::disk) and this module's own field quoting.
+pub use crate::template::yaml_quote;
 
 /// Read one top-level `key:` scalar from a note's leading `---` frontmatter
 /// block, undoing `yaml_quote`'s escaping. Returns None if the note has no
