@@ -204,6 +204,17 @@ pub fn close_panel(app: tauri::AppHandle) {
     }
 }
 
+/// Show the panel window (idempotent). The clickable bubble calls this on a
+/// click that carries an action: unlike `toggle_panel` it never HIDES an
+/// already-open panel, so a bubble click always REVEALS the panel — which
+/// then runs its `panel-shown` refresh and consumes the armed pending view
+/// (for the update announcement, the dedicated update view). Sync, so it runs
+/// on the main thread where window show/focus are valid.
+#[tauri::command]
+pub fn open_panel(app: tauri::AppHandle) {
+    show_panel(&app);
+}
+
 /// Hide the greeting bubble window. Idempotent; called by the bubble's own
 /// auto-dismiss timer (Task 10) — `toggle_panel` also hides it when the panel
 /// opens.
