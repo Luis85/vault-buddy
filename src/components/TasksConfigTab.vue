@@ -130,6 +130,18 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
         :disabled="listSaving"
         @update:model-value="onFolderInput"
       />
+      <!-- Presentational (Task 9 review extraction) — state/autosave/load
+           stay up here; the card only renders and emits raw input back. -->
+      <TaskIdSettings
+        v-if="!loadError"
+        :enabled="taskIdEnabled"
+        :property="taskIdProperty"
+        :error="idAutosave.error.value"
+        :placeholder="DEFAULT_TASK_ID_PROPERTY"
+        @update:enabled="onIdEnabledChange"
+        @update:property="onIdPropertyInput"
+        @blur="idAutosave.flush()"
+      />
       <!-- Self-contained (own load/save); remounts on a persisted folder
            change. Hidden while a folder change is pending so it can't save
            old-root list preferences onto the about-to-change root. -->
@@ -146,18 +158,6 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
       >
         List settings reload once the tasks folder is saved…
       </p>
-      <!-- Presentational (Task 9 review extraction) — state/autosave/load
-           stay up here; the card only renders and emits raw input back. -->
-      <TaskIdSettings
-        v-if="!loadError"
-        :enabled="taskIdEnabled"
-        :property="taskIdProperty"
-        :error="idAutosave.error.value"
-        :placeholder="DEFAULT_TASK_ID_PROPERTY"
-        @update:enabled="onIdEnabledChange"
-        @update:property="onIdPropertyInput"
-        @blur="idAutosave.flush()"
-      />
     </template>
   </div>
 </template>
