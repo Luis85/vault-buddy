@@ -157,6 +157,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn yaml_crate_preserves_key_order_and_emits_no_doc_markers() {
+        // Gate-zero behaviour the design depends on: parse→emit keeps insertion
+        // order and does not wrap a root mapping in ---/... markers.
+        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str("b: 2\na: 1\n").unwrap();
+        let out = serde_yaml_ng::to_string(&v).unwrap();
+        assert_eq!(out, "b: 2\na: 1\n");
+        assert!(!out.contains("---") && !out.contains("..."));
+    }
+
+    #[test]
     fn substitute_fills_known_and_empties_unknown() {
         let vars = [("title", "Buy milk"), ("date", "2026-07-18")];
         assert_eq!(
