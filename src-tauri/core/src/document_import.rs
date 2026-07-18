@@ -170,8 +170,8 @@ pub fn is_real_dated_dir(documents_root: &Path, dir: &Path, year: &str, month: &
 
 /// Startup janitor: remove crash-orphaned import staging dirs under a vault's
 /// Documents folder — directly at its root (the flat layout `document_date_folders`
-/// produces when off) AND across its `YYYY/MM` subtree (the dated layout, the
-/// default) — since a vault can accumulate orphans from either shape depending
+/// produces when off, now the default) AND across its `YYYY/MM` subtree (the
+/// dated layout) — since a vault can accumulate orphans from either shape depending
 /// on what the toggle was set to when a conversion crashed. Staleness-gated
 /// with an injected `now` so a clock jump giving a live dir a future mtime
 /// can't make it look stale (mirrors capture's `is_stale_at`). Returns what

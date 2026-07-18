@@ -92,8 +92,8 @@ pub struct VaultCaptureConfig {
     /// Frontmatter property the generated task ID is written under.
     /// None → the default "task-id".
     pub task_id_property: Option<String>,
-    /// Whether NEW recordings land in a dated `YYYY/MM` subfolder (true, the
-    /// long-standing default) or flat in the recording root (false).
+    /// Whether NEW recordings land in a dated `YYYY/MM` subfolder (true) or
+    /// flat in the recording root (false, the default).
     /// Existing files in either layout are still found — flipping this only
     /// changes where new captures land.
     pub recording_date_folders: bool,
