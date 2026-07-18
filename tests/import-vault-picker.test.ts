@@ -75,6 +75,22 @@ describe("ImportVaultPicker", () => {
     expect(wrapper.text()).toContain("Work");
   });
 
+  it("sorts favorites to the top of the vault list (Task 5)", async () => {
+    // sampleVaults is Personal (d4e5f6), Work (a1b2c3) — Work favorited
+    // should lift above Personal despite the store's alphabetical order.
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.favorites = new Set(["a1b2c3"]);
+    store.enqueueImports(["C:/x/Report.docx"]);
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    const rows = wrapper.findAll('[data-testid="import-picker-vault"]');
+    expect(rows.map((r) => r.text())).toEqual(["Work", "Personal"]);
+  });
+
   it("picking a vault converts the document, offers to open it, and returns to the list", async () => {
     const convertArgs: unknown[] = [];
     const calls: Array<{ cmd: string; args: unknown }> = [];

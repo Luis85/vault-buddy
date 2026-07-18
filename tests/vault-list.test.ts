@@ -1,7 +1,9 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import VaultList from "../src/components/VaultList.vue";
+import { useVaultsStore } from "../src/stores/vaults";
 
 type Busy = "open_vault" | "open_daily_note" | null;
 
@@ -32,6 +34,16 @@ const sample = [
 ];
 
 describe("VaultList", () => {
+  beforeEach(() => {
+    // VaultList now reads favorites straight from the vaults store (Task 5),
+    // so every mount needs an active Pinia — and a clean localStorage, since
+    // the store's `favorites` seeds itself from it at creation time and the
+    // row-star test below toggles for real (favoriteVaults.ts) rather than
+    // mocking the store.
+    setActivePinia(createPinia());
+    localStorage.clear();
+  });
+
   it("opens the vault when the row is clicked", async () => {
     const wrapper = mountList(sample);
     await wrapper.find('[aria-label="Open vault Personal"]').trigger("click");
@@ -91,7 +103,9 @@ describe("VaultList", () => {
     const wrapper = mountList(sample, "aaa111", "open_vault");
     expect(wrapper.find('[role="status"]').exists()).toBe(true);
     const buttons = wrapper.findAll("button");
-    expect(buttons.length).toBe(10);
+    // 6 per row (open, daily-note, tasks, capture, capture-settings, favorite
+    // star) x 2 rows — bumped from 10 with the Task 5 star button.
+    expect(buttons.length).toBe(12);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true,
     );
@@ -212,5 +226,57 @@ describe("VaultList", () => {
       {},
     );
     expect(wrapper.find('[data-testid="task-count"]').exists()).toBe(false);
+  });
+
+  // Task 5: favorites pin above Open now / Other vaults, a favorite renders
+  // once regardless of open state, and a per-row star toggles it. VaultList
+  // reads `store.favorites`/`store.toggleFavorite` straight from the vaults
+  // store rather than via props, so these tests seed/spy the store directly
+  // instead of the brief's illustrative `mountList({ ..., favorites })`
+  // shape (this file's mountList takes positional args — see above). The
+  // brief's snippet also queried "h3" for the group header; the component
+  // uses "h2" (matching every other panel section header — BuddySettings,
+  // Transcriptions, VaultFolderSetting, etc. — Tasks.vue's "h3" is a header
+  // nested one level deeper, under its own "h2" view sections, which does
+  // not apply here), so the query below matches the real markup.
+  it("pins favorites into a Favorites group above the others", async () => {
+    const store = useVaultsStore();
+    store.favorites = new Set(["c"]);
+    const wrapper = mountList([
+      { id: "a", name: "Apple", path: "Apple", open: true },
+      { id: "b", name: "Box", path: "Box", open: false },
+      { id: "c", name: "Cat", path: "Cat", open: false },
+    ]);
+    const headers = wrapper.findAll("h2").map((h) => h.text());
+    expect(headers[0]).toContain("Favorites");
+    // The favorite appears once, in the Favorites group.
+    const favSection = wrapper.get('[data-section="favorites"]');
+    expect(favSection.text()).toContain("Cat");
+    expect(wrapper.findAll('[data-section="favorites"] li')).toHaveLength(1);
+  });
+
+  it("toggles a favorite via the row star", async () => {
+    const store = useVaultsStore();
+    const spy = vi.spyOn(store, "toggleFavorite");
+    const wrapper = mountList([
+      { id: "a", name: "Apple", path: "Apple", open: false },
+    ]);
+    await wrapper.get('[data-testid="vault-favorite-a"]').trigger("click");
+    expect(spy).toHaveBeenCalledWith("a");
+  });
+
+  it("keeps the open dot on a favorited-and-open vault's row (in Favorites, not duplicated)", () => {
+    const store = useVaultsStore();
+    store.favorites = new Set(["a"]);
+    const wrapper = mountList([
+      { id: "a", name: "Apple", path: "Apple", open: true },
+      { id: "b", name: "Box", path: "Box", open: false },
+    ]);
+    // Apple is open AND favorited: it must not appear twice (once under
+    // Favorites, once under Open now) and must keep exactly one open dot.
+    expect(wrapper.text()).not.toContain("Open now");
+    const favSection = wrapper.get('[data-section="favorites"]');
+    expect(favSection.findAll('[title="Open in Obsidian"]')).toHaveLength(1);
+    expect(wrapper.findAll('[title="Open in Obsidian"]')).toHaveLength(1);
   });
 });

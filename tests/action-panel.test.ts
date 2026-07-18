@@ -42,9 +42,10 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Work");
     expect(wrapper.text()).toContain("2"); // count badge
     const buttons = wrapper.findAll(".panel-scroll button");
-    // 2 vaults × (row + daily note + tasks + capture + gear); the All-tasks
-    // button now lives in the header, not the scrolling list body.
-    expect(buttons).toHaveLength(10);
+    // 2 vaults × (favorite star + row + daily note + tasks + capture + gear);
+    // the All-tasks button now lives in the header, not the scrolling list
+    // body. Bumped from 10 with Task 5's per-row favorite star.
+    expect(buttons).toHaveLength(12);
     // the list scrolls inside the fixed-height panel with the themed scrollbar
     expect(wrapper.find(".panel-scroll.overflow-y-auto").exists()).toBe(true);
   });
@@ -284,9 +285,10 @@ describe("ActionPanel", () => {
     store.busyCommand = "open_vault";
     const wrapper = mount(ActionPanel);
     // vault action buttons only — the header's icons (all-tasks/search/gear)
-    // stay usable; 2 vaults × (row + daily note + tasks + capture + gear)
+    // stay usable; 2 vaults × (favorite star + row + daily note + tasks +
+    // capture + gear) — bumped from 10 with Task 5's per-row favorite star.
     const buttons = wrapper.findAll(".panel-scroll button");
-    expect(buttons).toHaveLength(10);
+    expect(buttons).toHaveLength(12);
     expect(buttons.every((b) => b.attributes("disabled") !== undefined)).toBe(
       true
     );

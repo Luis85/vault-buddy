@@ -8,6 +8,7 @@ import { useDocumentImportsStore } from "../stores/documentImports";
 import { useNotificationsStore } from "../stores/notifications";
 import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
+import type { Vault } from "../types";
 import { basename } from "../utils/basename";
 import { withDialogSuppressed } from "../utils/nativeDialog";
 import ImportProgress from "./ImportProgress.vue";
@@ -109,11 +110,22 @@ const FILTER_THRESHOLD = 5;
 const showFilter = computed(
   () => viewState.value === "list" && store.vaults.length > FILTER_THRESHOLD,
 );
+// Favorites (Task 5) sort to the top of this flat list, same signal as the
+// main VaultList's pinned Favorites section. The comparator only ever
+// returns -1/0/1 for the two favorite states, so Array.sort's stability
+// keeps the store's alphabetical order within each partition — this must
+// stay a pure re-order of the filter's own result, never a second filter.
+const ordered = (list: Vault[]) =>
+  [...list].sort(
+    (a, b) => Number(store.favorites.has(b.id)) - Number(store.favorites.has(a.id)),
+  );
 const filteredVaults = computed(() => {
   const query = filter.value.trim().toLowerCase();
-  if (!query) return store.vaults;
-  return store.vaults.filter(
-    (v) => v.name.toLowerCase().includes(query) || v.path.toLowerCase().includes(query),
+  if (!query) return ordered(store.vaults);
+  return ordered(
+    store.vaults.filter(
+      (v) => v.name.toLowerCase().includes(query) || v.path.toLowerCase().includes(query),
+    ),
   );
 });
 function onFilterEscape(event: KeyboardEvent) {

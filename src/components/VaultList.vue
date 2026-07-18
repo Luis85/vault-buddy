@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { useVaultsStore } from "../stores/vaults";
 import type { Vault } from "../types";
 import AppIcon from "./AppIcon.vue";
 
@@ -21,6 +22,23 @@ defineEmits<{
   (e: "capture-settings", id: string): void;
   (e: "open-tasks", id: string): void;
 }>();
+
+// Favorites (Task 5) are pure frontend state (localStorage-backed, panel-list
+// ordering only), so the row star reads/writes the store directly rather than
+// round-tripping through a prop — the same pattern RecordMode/Tasks/
+// TaskListSettings already use to read store state alongside ActionPanel's
+// props.
+const store = useVaultsStore();
+const isFav = (id: string) => store.favorites.has(id);
+
+// Pulled out of the template (rather than four inline ternaries on
+// isFav(vault.id)) to keep the row markup's branching down — the template's
+// own cognitive-complexity score counts each inline ternary, and the row
+// already carries several conditional badges (open/recording/transcribing).
+const favoriteTitle = (id: string) => (isFav(id) ? "Unfavorite" : "Favorite");
+const favoriteGlyph = (id: string) => (isFav(id) ? "★" : "☆");
+const favoriteButtonClass = (id: string) =>
+  isFav(id) ? "text-amber-300" : "text-slate-400 hover:text-amber-300";
 
 // Obsidian allows two registered vaults whose folders share a name; without a
 // disambiguator the rows would be identical while opening different vaults.
@@ -47,19 +65,46 @@ const isBusy = (vault: Vault, command: "open_vault" | "open_daily_note") =>
 const accessibleName = (vault: Vault) =>
   isAmbiguous(vault) ? `${vault.name} (${vault.path})` : vault.name;
 
-// Vaults currently open in Obsidian surface first, under their own header.
-// With nothing open the list stays flat (no headers). Alphabetical order
-// (from discovery) is preserved within each group.
+const favoriteAriaLabel = (vault: Vault) =>
+  `${favoriteTitle(vault.id)} ${accessibleName(vault)}`;
+
+// Favorites are pinned above Open now / Other vaults. A favorite appears once
+// (in Favorites), regardless of open state — its row keeps the ordinary
+// per-row "open" dot below, so the open signal isn't lost for a
+// favorited-and-open vault; that dot is keyed on `vault.open` alone, not on
+// which group renders the row, so it carries over with no extra markup.
+// Alphabetical order (from discovery) is preserved within each group; with
+// nothing favorited/open the remainder stays a flat, header-less list, same
+// as before Task 5.
 const groups = computed(() => {
-  const open = props.vaults.filter((v) => v.open);
-  const rest = props.vaults.filter((v) => !v.open);
-  if (open.length === 0) {
-    return [{ key: "all", label: null as string | null, vaults: rest }];
+  const favs = props.vaults.filter((v) => isFav(v.id));
+  const rest = props.vaults.filter((v) => !isFav(v.id));
+  const open = rest.filter((v) => v.open);
+  const other = rest.filter((v) => !v.open);
+  const out: {
+    key: string;
+    section: string;
+    label: string | null;
+    vaults: Vault[];
+  }[] = [];
+  if (favs.length) {
+    out.push({ key: "fav", section: "favorites", label: "Favorites", vaults: favs });
   }
-  return [
-    { key: "open", label: "Open now" as string | null, vaults: open },
-    { key: "rest", label: "Other vaults" as string | null, vaults: rest },
-  ].filter((group) => group.vaults.length > 0);
+  if (open.length) {
+    out.push({ key: "open", section: "open", label: "Open now", vaults: open });
+  }
+  if (other.length) {
+    // With favorites or open present, the remainder gets an "Other vaults"
+    // header; with nothing pinned/open it stays a flat, header-less list.
+    const flat = !favs.length && !open.length;
+    out.push({
+      key: "rest",
+      section: "other",
+      label: flat ? null : "Other vaults",
+      vaults: other,
+    });
+  }
+  return out;
 });
 </script>
 
@@ -67,6 +112,7 @@ const groups = computed(() => {
   <div
     v-for="group in groups"
     :key="group.key"
+    :data-section="group.section"
     class="mt-2 first:mt-0"
   >
     <h2
@@ -84,6 +130,19 @@ const groups = computed(() => {
         <div
           class="flex items-center gap-1 rounded-lg transition-colors hover:bg-white/10"
         >
+          <button
+            type="button"
+            :data-testid="`vault-favorite-${vault.id}`"
+            :aria-pressed="isFav(vault.id)"
+            :aria-label="favoriteAriaLabel(vault)"
+            :title="favoriteTitle(vault.id)"
+            :disabled="busyVaultId !== null"
+            class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+            :class="favoriteButtonClass(vault.id)"
+            @click.stop="store.toggleFavorite(vault.id)"
+          >
+            <span aria-hidden="true">{{ favoriteGlyph(vault.id) }}</span>
+          </button>
           <button
             type="button"
             class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
