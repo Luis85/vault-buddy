@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { logWarning } from "../logging";
 import { useDocumentImportsStore } from "../stores/documentImports";
@@ -97,6 +97,35 @@ const viewState = computed<
   if (store.vaults.length === 0) return "empty";
   return "list";
 });
+
+// Same filter idiom as the vault list (ActionPanel.vue): only offer it once
+// scanning stops working, match name+path, and let Escape clear-then-close.
+// Gated on viewState === "list" (ActionPanel's showFilter bakes in the same
+// check against its own `view`) — unlike the vault list, this component has
+// other live states (checking/blocked/empty/converting) with no `<ul>` under
+// them, and an ungated filter would float above those with nothing to filter.
+const filter = ref("");
+const FILTER_THRESHOLD = 5;
+const showFilter = computed(
+  () => viewState.value === "list" && store.vaults.length > FILTER_THRESHOLD,
+);
+const filteredVaults = computed(() => {
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return store.vaults;
+  return store.vaults.filter(
+    (v) => v.name.toLowerCase().includes(query) || v.path.toLowerCase().includes(query),
+  );
+});
+function onFilterEscape(event: KeyboardEvent) {
+  if (event.isComposing) return; // GAP-31: IME Escape must not clear
+  if (filter.value) {
+    filter.value = "";
+    event.stopPropagation();
+  }
+}
+// Reset the query whenever the panel is re-shown, so a stale filter can't
+// strand the picker (the ActionPanel precedent).
+watch(() => store.shownNonce, () => (filter.value = ""));
 
 // Vault-first mode's file prompt, shown only after the vault choice. Wrapped
 // in withDialogSuppressed so the OS dialog stealing focus can't trip the
@@ -213,12 +242,22 @@ async function pick(vaultId: string) {
     >
       No vaults found.
     </p>
+    <input
+      v-if="showFilter"
+      v-model="filter"
+      type="search"
+      placeholder="Filter vaults…"
+      aria-label="Filter vaults"
+      data-testid="import-picker-filter"
+      class="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-white/20 focus:outline-none"
+      @keydown.escape="onFilterEscape"
+    >
     <ul
-      v-else-if="viewState === 'list'"
+      v-if="viewState === 'list'"
       class="space-y-1"
     >
       <li
-        v-for="vault in store.vaults"
+        v-for="vault in filteredVaults"
         :key="vault.id"
       >
         <button
