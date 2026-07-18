@@ -17,6 +17,8 @@ const value = {
   transcriptTimestamps: true,
   transcriptionVocabulary: "",
   transcriptionVad: true,
+  noteExtraFrontmatter: "",
+  noteBodyTemplate: "",
   recordingDateFolders: true,
 };
 const devices = { inputs: [{ name: "USB Mic", isDefault: false }], outputs: [{ name: "Speakers", isDefault: true }] };

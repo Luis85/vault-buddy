@@ -35,6 +35,20 @@ const sampleVaults = [
   { id: "a1b2c3", name: "Work", path: "C:\\vaults\\Work", open: false },
 ];
 
+// Seeds `useVaultsStore().vaults` with one entry per name (mirroring the
+// discovery DTO shape) and mounts a ready-to-use picker — Pandoc installed,
+// no queued document — for filter tests that only care about the vault list.
+async function mountPickerWithVaults(names: string[]) {
+  mockIPC((cmd) => {
+    if (cmd === "detect_pandoc") return installed();
+  });
+  const store = useVaultsStore();
+  store.vaults = names.map((name) => ({ id: name, name, path: name, open: false }));
+  const wrapper = mount(ImportVaultPicker);
+  await flushPromises();
+  return wrapper;
+}
+
 describe("ImportVaultPicker", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -59,6 +73,22 @@ describe("ImportVaultPicker", () => {
     expect(rows).toHaveLength(2);
     expect(wrapper.text()).toContain("Personal");
     expect(wrapper.text()).toContain("Work");
+  });
+
+  it("sorts favorites to the top of the vault list (Task 5)", async () => {
+    // sampleVaults is Personal (d4e5f6), Work (a1b2c3) — Work favorited
+    // should lift above Personal despite the store's alphabetical order.
+    mockIPC((cmd) => {
+      if (cmd === "detect_pandoc") return installed();
+    });
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.favorites = new Set(["a1b2c3"]);
+    store.enqueueImports(["C:/x/Report.docx"]);
+    const wrapper = mount(ImportVaultPicker);
+    await flushPromises();
+    const rows = wrapper.findAll('[data-testid="import-picker-vault"]');
+    expect(rows.map((r) => r.text())).toEqual(["Work", "Personal"]);
   });
 
   it("picking a vault converts the document, offers to open it, and returns to the list", async () => {
@@ -371,5 +401,21 @@ describe("ImportVaultPicker", () => {
     expect(convertSources).toEqual(["/a.docx", "/b.docx", "/c.docx"]);
     expect(store.view).toBe("list");
     expect(store.pendingImports).toEqual([]);
+  });
+
+  it("filters the vault list by name once above the threshold", async () => {
+    const wrapper = await mountPickerWithVaults([
+      "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta",
+    ]); // 6 vaults → filter shown
+    const input = wrapper.get('[data-testid="import-picker-filter"]');
+    await input.setValue("gam");
+    const rows = wrapper.findAll('[data-testid="import-picker-vault"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text()).toContain("Gamma");
+  });
+
+  it("hides the filter when 5 or fewer vaults", async () => {
+    const wrapper = await mountPickerWithVaults(["A", "B", "C"]);
+    expect(wrapper.find('[data-testid="import-picker-filter"]').exists()).toBe(false);
   });
 });

@@ -18,6 +18,7 @@ pub mod search_cache;
 pub mod services;
 pub mod sync_util;
 pub mod tasks;
+pub mod template;
 pub mod throttle;
 pub mod transcript;
 pub mod transcription_config;

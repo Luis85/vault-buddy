@@ -114,6 +114,12 @@ export interface CaptureConfig {
   /** Skip silence via Silero VAD before inference (default on). */
   transcriptionVad: boolean;
   followUpTemplate: boolean;
+  /** Additive companion-note templates (per-vault). null = no injection —
+   * today's rendered note is unchanged. Extra-frontmatter is appended after
+   * the managed identity keys; body-template composes the note body with
+   * `{{placeholders}}`. */
+  noteExtraFrontmatter: string | null;
+  noteBodyTemplate: string | null;
   /** Whether NEW recordings land in a dated `YYYY/MM` subfolder (true) or
    * flat in the recording root (false). Existing files in either layout are
    * still found — this only decides where new captures land. */
@@ -147,6 +153,8 @@ export interface RecordingSettingsValue {
   transcriptTimestamps: boolean;
   transcriptionVocabulary: string;
   transcriptionVad: boolean;
+  noteExtraFrontmatter: string;
+  noteBodyTemplate: string;
   recordingDateFolders: boolean;
 }
 
@@ -213,6 +221,10 @@ export interface TasksConfig {
   taskIdEnabled: boolean;
   /** The resolved id property name (default "task-id"). */
   taskIdProperty: string;
+  /** Additive per-vault task-document template. null/absent = today's exact
+   * create_task output (identity frontmatter only, no body). */
+  taskExtraFrontmatter?: string | null;
+  taskBodyTemplate?: string | null;
 }
 
 /** Per-vault imported-documents folder — get_documents_config/
@@ -226,6 +238,12 @@ export interface DocumentsConfig {
   /** Whether a document import extracts images into a media folder (true) or
    * produces a text-only note with images dropped (false). Default true. */
   documentExtractImages: boolean;
+  /** Additive imported-note templates (per-vault). null = no injection —
+   * today's rendered note is unchanged. Extra-frontmatter is appended after
+   * the managed identity keys; body-template composes the note body around
+   * the converted document via `{{content}}`. */
+  documentExtraFrontmatter?: string | null;
+  documentBodyTemplate?: string | null;
 }
 
 /** App-global Pandoc install status (detect_pandoc). configuredPath seeds

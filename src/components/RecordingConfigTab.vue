@@ -13,6 +13,8 @@ const TEXT_KEYS = new Set<keyof RecordingSettingsValue>([
   "meetingFolder",
   "voiceNoteFolder",
   "transcriptionVocabulary",
+  "noteExtraFrontmatter",
+  "noteBodyTemplate",
 ]);
 
 // The Recording tab of Vault settings. Owns the capture-config + devices load,
@@ -21,6 +23,15 @@ const TEXT_KEYS = new Set<keyof RecordingSettingsValue>([
 // (toggles/selects) saves immediately. `mode` is a pass-through — the UI can't
 // edit it, but the loaded value is sent back unchanged.
 const props = defineProps<{ vaultId: string }>();
+
+// The DTO's optional-string fields surface as null; every input/textarea in
+// the form binds a plain string ("" means "unset"). Centralizing the
+// null->"" fallback here (instead of a `??` at each of the form's eight
+// optional-string fields) keeps onMounted's load below the complexity
+// ratchet — each inline `??` is its own branch in the loading function.
+function orEmpty(v: string | null): string {
+  return v ?? "";
+}
 
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -40,7 +51,9 @@ const rec = ref<RecordingSettingsValue>({
   transcriptTimestamps: true,
   transcriptionVocabulary: "",
   transcriptionVad: true,
-  recordingDateFolders: true,
+  noteExtraFrontmatter: "",
+  noteBodyTemplate: "",
+  recordingDateFolders: false,
 });
 
 const autosave = useAutosave(
@@ -63,6 +76,8 @@ const autosave = useAutosave(
         transcriptTimestamps: r.transcriptTimestamps,
         transcriptionVocabulary: r.transcriptionVocabulary.trim() || null,
         transcriptionVad: r.transcriptionVad,
+        noteExtraFrontmatter: r.noteExtraFrontmatter.trim() || null,
+        noteBodyTemplate: r.noteBodyTemplate.trim() || null,
         recordingDateFolders: r.recordingDateFolders,
       },
     });
@@ -102,19 +117,21 @@ onMounted(async () => {
     ]);
     mode.value = cfg.mode;
     rec.value = {
-      meetingFolder: cfg.meetingFolder ?? "",
-      voiceNoteFolder: cfg.voiceNoteFolder ?? "",
+      meetingFolder: orEmpty(cfg.meetingFolder),
+      voiceNoteFolder: orEmpty(cfg.voiceNoteFolder),
       bitrateKbps: cfg.bitrateKbps,
       createNote: cfg.createNote,
       followUpTemplate: cfg.followUpTemplate,
-      inputDevice: cfg.inputDevice ?? "",
-      outputDevice: cfg.outputDevice ?? "",
+      inputDevice: orEmpty(cfg.inputDevice),
+      outputDevice: orEmpty(cfg.outputDevice),
       transcribe: cfg.transcribe,
       transcriptionModel: cfg.transcriptionModel,
-      transcriptionLanguage: cfg.transcriptionLanguage ?? "",
+      transcriptionLanguage: orEmpty(cfg.transcriptionLanguage),
       transcriptTimestamps: cfg.transcriptTimestamps,
-      transcriptionVocabulary: cfg.transcriptionVocabulary ?? "",
+      transcriptionVocabulary: orEmpty(cfg.transcriptionVocabulary),
       transcriptionVad: cfg.transcriptionVad,
+      noteExtraFrontmatter: orEmpty(cfg.noteExtraFrontmatter),
+      noteBodyTemplate: orEmpty(cfg.noteBodyTemplate),
       recordingDateFolders: cfg.recordingDateFolders,
     };
     devices.value = devs;

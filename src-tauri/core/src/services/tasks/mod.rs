@@ -213,8 +213,20 @@ pub fn add_task(
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
     let generated_id = id_property.is_some().then(tasks::new_task_id);
     let task_id = id_property.zip(generated_id.as_deref());
-    let path = tasks::create_task(&target_root, title, today, due, priority, tags, task_id)
-        .map_err(|e| format!("Could not create task: {e}"))?;
+    // The vault's additive task template (None/empty → today's exact output,
+    // unchanged — see render_task's byte-identical-with-no-template test).
+    let path = tasks::create_task(
+        &target_root,
+        title,
+        today,
+        due,
+        priority,
+        tags,
+        task_id,
+        cfg.task_extra_frontmatter.as_deref(),
+        cfg.task_body_template.as_deref(),
+    )
+    .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
         title: title.to_string(),

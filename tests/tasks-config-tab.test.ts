@@ -28,6 +28,7 @@ function mountTab(
     onListLists?: () => unknown;
     onSetLists?: (a: unknown) => unknown;
     onSetId?: (a: unknown) => unknown;
+    onSetTemplate?: (a: unknown) => unknown;
   } = {},
 ) {
   const calls: Array<{ cmd: string; args: unknown }> = [];
@@ -41,6 +42,7 @@ function mountTab(
     if (cmd === "set_tasks_config") return opts.onSet?.(args) ?? null;
     if (cmd === "set_task_lists_config") return opts.onSetLists?.(args) ?? null;
     if (cmd === "set_task_id_config") return opts.onSetId?.(args) ?? null;
+    if (cmd === "set_task_template_config") return opts.onSetTemplate?.(args) ?? null;
   });
   active = mount(TasksConfigTab, { props: { vaultId: "v1" }, attachTo: document.body });
   return { wrapper: active, calls };
@@ -299,5 +301,90 @@ describe("TasksConfigTab", () => {
     const disableCall = calls[calls.length - 1];
     expect(disableCall).toEqual({ id: "v1", enabled: false, property: "bad prop" });
     expect(status.state).not.toBe("error"); // disabling persisted, not rejected
+  });
+
+  it("loads the task template from disk", async () => {
+    const { wrapper } = mountTab({
+      onGet: () => ({
+        tasksFolder: null,
+        defaultList: null,
+        listOrder: [],
+        taskIdEnabled: false,
+        taskIdProperty: "task-id",
+        taskExtraFrontmatter: "project: Alpha",
+        taskBodyTemplate: "- [ ] {{title}}",
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.get<HTMLTextAreaElement>('[data-testid="task-extra-frontmatter"]').element.value).toBe(
+      "project: Alpha",
+    );
+    expect(wrapper.get<HTMLTextAreaElement>('[data-testid="task-body-template"]').element.value).toBe(
+      "- [ ] {{title}}",
+    );
+  });
+
+  it("does not save the task template on mount", async () => {
+    const { calls } = mountTab({
+      onGet: () => ({
+        tasksFolder: null,
+        defaultList: null,
+        listOrder: [],
+        taskIdEnabled: false,
+        taskIdProperty: "task-id",
+        taskExtraFrontmatter: "project: Alpha",
+        taskBodyTemplate: "- [ ] {{title}}",
+      }),
+    });
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "set_task_template_config")).toBe(false);
+  });
+
+  it("debounces a task-template edit and saves via set_task_template_config", async () => {
+    const saved: unknown[] = [];
+    const { wrapper } = mountTab({ onSetTemplate: (a) => (saved.push(a), null) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-extra-frontmatter"]').setValue("project: Alpha");
+    await wrapper.get('[data-testid="task-body-template"]').setValue("- [ ] Follow up");
+    expect(saved).toHaveLength(0); // still debouncing
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    expect(saved).toContainEqual({
+      id: "v1",
+      extraFrontmatter: "project: Alpha",
+      bodyTemplate: "- [ ] Follow up",
+    });
+  });
+
+  it("flushes a pending task-template save on blur", async () => {
+    const saved: unknown[] = [];
+    const { wrapper } = mountTab({ onSetTemplate: (a) => (saved.push(a), null) });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-body-template"]').setValue("- [ ] Follow up");
+    await wrapper.get('[data-testid="task-body-template"]').trigger("blur");
+    await flushPromises();
+    expect(saved).toContainEqual({ id: "v1", extraFrontmatter: null, bodyTemplate: "- [ ] Follow up" });
+  });
+
+  it("empties the task template to null on save", async () => {
+    const saved: unknown[] = [];
+    const { wrapper } = mountTab({
+      onGet: () => ({
+        tasksFolder: null,
+        defaultList: null,
+        listOrder: [],
+        taskIdEnabled: false,
+        taskIdProperty: "task-id",
+        taskExtraFrontmatter: "project: Alpha",
+        taskBodyTemplate: "- [ ] {{title}}",
+      }),
+      onSetTemplate: (a) => (saved.push(a), null),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-extra-frontmatter"]').setValue("");
+    await wrapper.get('[data-testid="task-body-template"]').setValue("");
+    await wrapper.get('[data-testid="task-body-template"]').trigger("blur");
+    await flushPromises();
+    expect(saved).toContainEqual({ id: "v1", extraFrontmatter: null, bodyTemplate: null });
   });
 });

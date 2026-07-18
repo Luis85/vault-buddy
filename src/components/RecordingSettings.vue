@@ -41,6 +41,14 @@ const followUpTemplate = computed({
   get: () => props.modelValue.followUpTemplate,
   set: (v: boolean) => patch({ followUpTemplate: v }),
 });
+const noteExtraFrontmatter = computed({
+  get: () => props.modelValue.noteExtraFrontmatter,
+  set: (v: string) => patch({ noteExtraFrontmatter: v }),
+});
+const noteBodyTemplate = computed({
+  get: () => props.modelValue.noteBodyTemplate,
+  set: (v: string) => patch({ noteBodyTemplate: v }),
+});
 const inputDevice = computed({
   get: () => props.modelValue.inputDevice,
   set: (v: string) => patch({ inputDevice: v }),
@@ -53,6 +61,14 @@ const recordingDateFolders = computed({
   get: () => props.modelValue.recordingDateFolders,
   set: (v: boolean) => patch({ recordingDateFolders: v }),
 });
+
+// Shown under both template textareas below. The literal `{{...}}`
+// placeholder syntax must live in a script string, never typed directly into
+// template text: Vue's mustache tokenizer finds the FIRST `}}` textually (no
+// brace-depth awareness), so writing it inline in the template would
+// terminate the interpolation early and corrupt the markup.
+const TEMPLATE_PLACEHOLDER_HINT =
+  "Placeholders: {{date}}, {{recordedAt}}, {{duration}}, {{vault}}, {{type}}. Identity fields and the audio/transcript embeds are always added. A non-empty body template replaces the follow-up scaffold.";
 
 // Bundles the six transcription fields for TranscriptionSettings' v-model —
 // same adapter idiom CaptureSettings.vue used before this extraction.
@@ -255,6 +271,50 @@ const outputMenuOptions = computed(() => [
           type="checkbox"
           class="h-4 w-4 accent-violet-500"
         >
+      </div>
+      <div
+        v-if="createNote"
+        class="flex flex-col gap-1 border-l border-white/10 pl-3"
+      >
+        <label
+          class="text-sm text-slate-200"
+          for="capture-note-extra-frontmatter"
+        >
+          Extra frontmatter
+        </label>
+        <textarea
+          id="capture-note-extra-frontmatter"
+          v-model="noteExtraFrontmatter"
+          data-testid="note-extra-frontmatter"
+          rows="3"
+          placeholder="attendees: [Alex, Sam]"
+          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        />
+        <p class="text-xs text-slate-500">
+          {{ TEMPLATE_PLACEHOLDER_HINT }}
+        </p>
+      </div>
+      <div
+        v-if="createNote"
+        class="flex flex-col gap-1 border-l border-white/10 pl-3"
+      >
+        <label
+          class="text-sm text-slate-200"
+          for="capture-note-body-template"
+        >
+          Body template
+        </label>
+        <textarea
+          id="capture-note-body-template"
+          v-model="noteBodyTemplate"
+          data-testid="note-body-template"
+          rows="3"
+          placeholder="## Summary"
+          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        />
+        <p class="text-xs text-slate-500">
+          {{ TEMPLATE_PLACEHOLDER_HINT }}
+        </p>
       </div>
     </div>
   </section>

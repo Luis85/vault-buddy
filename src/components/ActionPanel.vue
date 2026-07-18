@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { storeToRefs } from "pinia";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, watch } from "vue";
 
+import { useVaultFilter } from "../composables/useVaultFilter";
 import { useCaptureStore } from "../stores/capture";
 import { useDocumentImportsStore } from "../stores/documentImports";
 import { useSettingsStatusStore } from "../stores/settingsStatus";
@@ -97,13 +98,12 @@ function onPanelKeydown(event: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onPanelKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onPanelKeydown));
 
-const filter = ref("");
-// A short list is scannable at a glance; only offer filtering when the
-// list is long enough that scanning stops working.
-const FILTER_THRESHOLD = 5;
-const showFilter = computed(
-  () => view.value === "list" && store.vaults.length > FILTER_THRESHOLD,
+// Shared with ImportVaultPicker's filter (useVaultFilter) — this view's
+// showFilter additionally gates on the list view being active.
+const { filter, aboveThreshold, filtered, onFilterEscape } = useVaultFilter(
+  () => store.vaults,
 );
+const showFilter = computed(() => view.value === "list" && aboveThreshold.value);
 const totalOpenTasks = computed(() =>
   Object.values(store.taskCounts).reduce((a, b) => a + b, 0),
 );
@@ -113,25 +113,6 @@ const taskBadge = computed(() =>
   totalOpenTasks.value > 99 ? "99+" : String(totalOpenTasks.value),
 );
 const tasksKey = computed(() => store.tasksVaultId ?? "all");
-const filtered = computed(() => {
-  const query = filter.value.trim().toLowerCase();
-  if (!query) return store.vaults;
-  return store.vaults.filter(
-    (v) =>
-      v.name.toLowerCase().includes(query) ||
-      v.path.toLowerCase().includes(query),
-  );
-});
-
-function onFilterEscape(event: KeyboardEvent) {
-  // GAP-31: IME composition can emit Escape; that must dismiss the IME, not clear the filter
-  if (event.isComposing) return;
-  if (filter.value) {
-    // first Escape clears the filter; a second one bubbles up and closes
-    filter.value = "";
-    event.stopPropagation();
-  }
-}
 
 // The panel window is only hidden/shown, not unmounted, so onUnmounted no
 // longer fires on close and transient UI used to survive a close-and-reopen.

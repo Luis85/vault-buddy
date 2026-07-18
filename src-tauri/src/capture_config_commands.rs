@@ -39,6 +39,10 @@ pub struct CaptureConfigDto {
     /// Skip silence via Silero VAD before inference (default on).
     pub transcription_vad: bool,
     pub follow_up_template: bool,
+    /// Additive companion-note templates (per-vault). None/blank = no
+    /// injection — today's rendered note is unchanged.
+    pub note_extra_frontmatter: Option<String>,
+    pub note_body_template: Option<String>,
     /// Whether NEW recordings land in a dated `YYYY/MM` subfolder — the
     /// Recording settings surface for `VaultCaptureConfig::recording_date_folders`.
     pub recording_date_folders: bool,
@@ -61,6 +65,8 @@ impl CaptureConfigDto {
             transcription_vocabulary: v.transcription_vocabulary.clone(),
             transcription_vad: v.transcription_vad,
             follow_up_template: v.follow_up_template,
+            note_extra_frontmatter: v.note_extra_frontmatter.clone(),
+            note_body_template: v.note_body_template.clone(),
             recording_date_folders: v.recording_date_folders,
         }
     }
@@ -144,6 +150,20 @@ pub fn set_capture_config(
             .map(str::to_string),
         transcription_vad: cfg.transcription_vad,
         follow_up_template: cfg.follow_up_template,
+        // Blank/whitespace template fields collapse to None (no injection),
+        // the same treatment transcription_vocabulary gets above.
+        note_extra_frontmatter: cfg
+            .note_extra_frontmatter
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        note_body_template: cfg
+            .note_body_template
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         recording_date_folders: cfg.recording_date_folders,
         ..capture_config::VaultCaptureConfig::default()
     };

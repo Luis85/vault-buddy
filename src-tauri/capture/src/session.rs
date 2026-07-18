@@ -44,6 +44,10 @@ pub struct SessionParams {
     pub create_note: bool,
     pub transcribe: bool,
     pub follow_up: bool,
+    /// Additive per-vault companion-note templates threaded from
+    /// `VaultCaptureConfig`. None → today's exact (template-free) output.
+    pub note_extra_frontmatter: Option<String>,
+    pub note_body_template: Option<String>,
     pub recorded_at: String,
     pub flush_every: Duration,
     pub fsync_every: Duration,
@@ -497,6 +501,8 @@ fn run_worker(
             event: warning.clone(),
             transcribe: params.transcribe,
             follow_up: params.follow_up,
+            extra_frontmatter: params.note_extra_frontmatter.clone(),
+            body_template: params.note_body_template.clone(),
         };
         let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
         let note_content = render_note(&meta, &mp3_name);
@@ -577,6 +583,8 @@ mod tests {
             create_note: true,
             transcribe: false,
             follow_up: false,
+            note_extra_frontmatter: None,
+            note_body_template: None,
             recorded_at: "2026-07-04T14:05:00+02:00".into(),
             flush_every: Duration::from_millis(100),
             fsync_every: Duration::from_secs(30),

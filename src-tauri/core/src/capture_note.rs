@@ -21,6 +21,9 @@ pub struct NoteMeta {
     /// Append a `## Follow-up` scaffold (Action items / Decisions / Notes)
     /// above the transcript embed. Per-vault opt-out; recovery leaves it off.
     pub follow_up: bool,
+    /// Additive template content (per-vault). None → today's exact output.
+    pub extra_frontmatter: Option<String>,
+    pub body_template: Option<String>,
 }
 
 pub fn format_duration(secs: u64) -> String {
@@ -32,17 +35,11 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
-/// Double-quote a YAML scalar, escaping `\` and `"` and flattening
-/// newlines to spaces. Vault and device names are user/system input;
-/// unquoted they could break the frontmatter or inject fields — and an
-/// unquoted `1:02:03` duration even parses as YAML sexagesimal.
-pub fn yaml_quote(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace(['\n', '\r'], " ");
-    format!("\"{escaped}\"")
-}
+// yaml_quote now lives in `crate::template` (the frontmatter-primitives home)
+// so `template::substitute_yaml` can quote values without a template↔capture_note
+// module cycle; re-exported here to keep the `capture_note::yaml_quote` path for
+// callers (document_import, tasks::disk) and this module's own field quoting.
+pub use crate::template::yaml_quote;
 
 /// Read one top-level `key:` scalar from a note's leading `---` frontmatter
 /// block, undoing `yaml_quote`'s escaping. Returns None if the note has no
@@ -81,12 +78,10 @@ pub(crate) fn unquote_yaml(value: &str) -> String {
 }
 
 pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
+    let duration = format_duration(meta.duration_secs);
     let mut out = String::from("---\n");
     out.push_str(&format!("recorded: {}\n", yaml_quote(&meta.recorded_at)));
-    out.push_str(&format!(
-        "duration: {}\n",
-        yaml_quote(&format_duration(meta.duration_secs))
-    ));
+    out.push_str(&format!("duration: {}\n", yaml_quote(&duration)));
     if let Some(paused) = &meta.paused {
         out.push_str(&format!("paused: {}\n", yaml_quote(paused)));
     }
@@ -99,15 +94,57 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
     if let Some(event) = &meta.event {
         out.push_str(&format!("event: {}\n", yaml_quote(event)));
     }
-    out.push_str("created-by: Vault Buddy\n---\n\n");
+    out.push_str("created-by: Vault Buddy\n");
+    // Extra frontmatter: substituted then sanitized (reserved keys dropped,
+    // fence-safe) so a user field can never break the block or shadow a
+    // managed key. Injected right before the closing fence.
+    let date = meta.recorded_at.split(['T', ' ']).next().unwrap_or("");
+    let vars = [
+        ("recordedAt", meta.recorded_at.as_str()),
+        ("duration", duration.as_str()),
+        ("vault", meta.vault_name.as_str()),
+        ("type", meta.recording_type.as_str()),
+        ("date", date),
+    ];
+    if let Some(extra) = &meta.extra_frontmatter {
+        const NOTE_RESERVED: &[&str] = &[
+            "recorded",
+            "duration",
+            "paused",
+            "vault",
+            "type",
+            "inputs",
+            "event",
+            "created-by",
+        ];
+        out.push_str(&crate::template::sanitize_extra_frontmatter(
+            &crate::template::substitute(extra, &vars),
+            NOTE_RESERVED,
+        ));
+    }
+    out.push_str("---\n\n");
     out.push_str(&format!("![[{mp3_file_name}]]\n"));
-    if meta.follow_up {
-        // A follow-up scaffold above the (possibly long) transcript embed so
-        // the actionable part is visible without scrolling. Static text — the
-        // rename retarget only rewrites the ![[…]] embed line, never this.
-        out.push_str(
-            "\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n",
-        );
+    // Body: a non-empty body template replaces the scaffold; otherwise the
+    // legacy follow-up scaffold renders when opted in.
+    match meta.body_template.as_deref().map(str::trim) {
+        Some(body) if !body.is_empty() => {
+            out.push('\n');
+            let rendered = crate::template::substitute(body, &vars);
+            out.push_str(&rendered);
+            if !rendered.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        _ if meta.follow_up => {
+            // A follow-up scaffold above the (possibly long) transcript embed
+            // so the actionable part is visible without scrolling. Static
+            // text — the rename retarget only rewrites the ![[…]] embed
+            // line, never this.
+            out.push_str(
+                "\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n",
+            );
+        }
+        _ => {}
     }
     if meta.transcribe {
         // The transcript sidecar's name is derived from the mp3 stem and was
@@ -279,6 +316,8 @@ mod tests {
             event: None,
             transcribe: false,
             follow_up: false,
+            extra_frontmatter: None,
+            body_template: None,
         }
     }
 
@@ -447,6 +486,51 @@ mod tests {
             fu < tr,
             "follow-up must render above the transcript embed: {note}"
         );
+    }
+
+    #[test]
+    fn note_default_output_is_byte_identical_with_empty_templates() {
+        // A note with follow-up + transcript, no templates, must equal the exact
+        // legacy string (regression guard for the additive refactor).
+        let mut m = meta();
+        m.follow_up = true;
+        m.transcribe = true;
+        let note = render_note(&m, "R.mp3");
+        let expected = "---\nrecorded: \"2026-07-04T14:05:00+02:00\"\nduration: \"1:02:03\"\nvault: \"Work\"\ntype: \"Meeting\"\ninputs:\n  - \"Headset Mic\"\n  - \"Speakers (loopback)\"\ncreated-by: Vault Buddy\n---\n\n![[R.mp3]]\n\n## Follow-up\n\n### Action items\n\n- [ ] \n\n### Decisions\n\n### Notes\n\n## Transcript\n\n![[R.transcript]]\n";
+        assert_eq!(note, expected);
+    }
+
+    #[test]
+    fn note_extra_frontmatter_injected_and_reserved_dropped() {
+        let mut m = meta();
+        m.extra_frontmatter = Some("attendees: 3\ntype: HIJACK".into());
+        let note = render_note(&m, "R.mp3");
+        assert!(note.contains("attendees: 3"));
+        assert!(
+            !note.contains("type: HIJACK"),
+            "reserved key dropped: {note}"
+        );
+        // Managed type survives and the fence isn't broken.
+        assert!(note.contains("type: \"Meeting\""));
+    }
+
+    #[test]
+    fn note_body_template_replaces_the_scaffold_between_the_embeds() {
+        let mut m = meta();
+        m.follow_up = true; // would normally add the scaffold
+        m.transcribe = true;
+        m.body_template = Some("## Summary\n{{type}} in {{vault}}".into());
+        let note = render_note(&m, "R.mp3");
+        assert!(note.contains("## Summary\nMeeting in Work"));
+        assert!(
+            !note.contains("## Follow-up"),
+            "template replaces scaffold: {note}"
+        );
+        // Embeds still bracket the body.
+        let audio = note.find("![[R.mp3]]").unwrap();
+        let body = note.find("## Summary").unwrap();
+        let tr = note.find("## Transcript").unwrap();
+        assert!(audio < body && body < tr, "{note}");
     }
 
     #[test]

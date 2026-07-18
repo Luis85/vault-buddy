@@ -240,9 +240,18 @@ fn convert_blocking(
         imported: today.to_string(),
         format,
     };
-    let frontmatter = document_import::render_frontmatter(&meta);
-    let note = document_import::publish(&plan, &dir, &frontmatter)
-        .map_err(|e| format!("Could not save the imported note: {e}"))?;
+    // `cfg` was already loaded above (for the date-folder toggle) — the same
+    // per-vault config carries the two additive document-template fields, so
+    // there is no second config read here.
+    let frontmatter =
+        document_import::render_frontmatter(&meta, cfg.document_extra_frontmatter.as_deref());
+    let note = document_import::publish(
+        &plan,
+        &dir,
+        &frontmatter,
+        cfg.document_body_template.as_deref(),
+    )
+    .map_err(|e| format!("Could not save the imported note: {e}"))?;
 
     // Vault-relative path for the caller (best-effort; absolute on failure).
     let rel = note
@@ -301,6 +310,11 @@ pub struct DocumentsConfigDto {
     /// produces a text-only note with images dropped (false) — the Documents
     /// settings surface for `VaultCaptureConfig::document_extract_images`.
     pub document_extract_images: bool,
+    /// Additive imported-note templates (per-vault). None → today's rendered
+    /// note is unchanged. Extra-frontmatter is appended after the managed
+    /// identity keys; body-template composes the note body via `{{content}}`.
+    pub document_extra_frontmatter: Option<String>,
+    pub document_body_template: Option<String>,
 }
 
 /// Per-vault documents folder (or None → the frontend shows the "Documents"
@@ -312,15 +326,19 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
         documents_folder: vault.documents_folder,
         document_date_folders: vault.document_date_folders,
         document_extract_images: vault.document_extract_images,
+        document_extra_frontmatter: vault.document_extra_frontmatter,
+        document_body_template: vault.document_body_template,
     }
 }
 
-/// Persist the vault's documents folder + layout toggle. Validates containment
-/// BEFORE writing (the effective folder — explicit or the "Documents"
-/// default — must stay in the vault), serialized behind ConfigWriteLock.
-/// Read-modify-write preserves the vault's other config (recording_date_folders
-/// included — that field belongs to set_capture_config). Mirrors
-/// set_tasks_config exactly, plus the one extra bool field.
+/// Persist the vault's documents folder + layout toggle + the two additive
+/// note templates. Validates containment BEFORE writing (the effective
+/// folder — explicit or the "Documents" default — must stay in the vault),
+/// serialized behind ConfigWriteLock. Read-modify-write preserves the
+/// vault's other config (recording_date_folders included — that field
+/// belongs to set_capture_config). Mirrors set_tasks_config, plus the extra
+/// fields; blank/whitespace-only template text normalizes to None, the same
+/// "unset" posture as every other template field.
 #[tauri::command]
 pub fn set_documents_config(
     lock: tauri::State<ConfigWriteLock>,
@@ -328,6 +346,8 @@ pub fn set_documents_config(
     documents_folder: Option<String>,
     document_date_folders: bool,
     document_extract_images: bool,
+    document_extra_frontmatter: Option<String>,
+    document_body_template: Option<String>,
 ) -> Result<(), String> {
     let vault = discovery::discover_vaults()
         .into_iter()
@@ -341,16 +361,30 @@ pub fn set_documents_config(
     let effective = folder.as_deref().unwrap_or("Documents");
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
     capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
+    let extra_frontmatter = document_extra_frontmatter
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
+    let body_template = document_body_template
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string);
     let _guard = lock_ignoring_poison(&lock.0);
-    // merge_documents_owned writes only the three documents-owned fields and
+    // merge_documents_owned writes only the documents-owned fields and
     // preserves everything else (recording settings, tasks, lists) — the
-    // preserve-vs-write split is unit-tested in core now (GAP-60).
+    // preserve-vs-write split is unit-tested in core now (GAP-60). This
+    // command now OWNS the two template fields (via the DTO above), so they
+    // come from the caller's params, not a straight existing->existing pass.
     let existing = capture_config::vault_config(&capture_config::load_config(), &id);
     let value = capture_config::merge_documents_owned(
         &existing,
         folder,
         document_date_folders,
         document_extract_images,
+        extra_frontmatter,
+        body_template,
     );
     capture_config::update_vault_config(&id, value)
 }

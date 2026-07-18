@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 
+import { useVaultFilter } from "../composables/useVaultFilter";
 import { logWarning } from "../logging";
 import { useDocumentImportsStore } from "../stores/documentImports";
 import { useNotificationsStore } from "../stores/notifications";
 import { usePandocStore } from "../stores/pandoc";
 import { useVaultsStore } from "../stores/vaults";
+import type { Vault } from "../types";
 import { basename } from "../utils/basename";
 import { withDialogSuppressed } from "../utils/nativeDialog";
 import ImportProgress from "./ImportProgress.vue";
+import ImportVaultPickerList from "./ImportVaultPickerList.vue";
 
 // Two ways in, one mode split on the queue. (1) A buddy drag-drop: Rust
 // stashes the dropped path (begin_document_import) and shows the panel; the
@@ -97,6 +100,33 @@ const viewState = computed<
   if (store.vaults.length === 0) return "empty";
   return "list";
 });
+
+// Same filter idiom as the vault list (useVaultFilter, shared with
+// ActionPanel.vue): only offer it once scanning stops working, match
+// name+path, and let Escape clear-then-close. Gated on viewState === "list"
+// (ActionPanel's showFilter bakes in the same check against its own `view`)
+// — unlike the vault list, this component has other live states
+// (checking/blocked/empty/converting) with no `<ul>` under them, and an
+// ungated filter would float above those with nothing to filter.
+const { filter, aboveThreshold, filtered, onFilterEscape } = useVaultFilter(
+  () => store.vaults,
+);
+const showFilter = computed(
+  () => viewState.value === "list" && aboveThreshold.value,
+);
+// Favorites (Task 5) sort to the top of this flat list, same signal as the
+// main VaultList's pinned Favorites section. The comparator only ever
+// returns -1/0/1 for the two favorite states, so Array.sort's stability
+// keeps the store's alphabetical order within each partition — this must
+// stay a pure re-order of the filter's own result, never a second filter.
+const ordered = (list: Vault[]) =>
+  [...list].sort(
+    (a, b) => Number(store.favorites.has(b.id)) - Number(store.favorites.has(a.id)),
+  );
+const filteredVaults = computed(() => ordered(filtered.value));
+// Reset the query whenever the panel is re-shown, so a stale filter can't
+// strand the picker (the ActionPanel precedent).
+watch(() => store.shownNonce, () => (filter.value = ""));
 
 // Vault-first mode's file prompt, shown only after the vault choice. Wrapped
 // in withDialogSuppressed so the OS dialog stealing focus can't trip the
@@ -213,25 +243,20 @@ async function pick(vaultId: string) {
     >
       No vaults found.
     </p>
-    <ul
-      v-else-if="viewState === 'list'"
-      class="space-y-1"
+    <input
+      v-if="showFilter"
+      v-model="filter"
+      type="search"
+      placeholder="Filter vaults…"
+      aria-label="Filter vaults"
+      data-testid="import-picker-filter"
+      class="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-white/20 focus:outline-none"
+      @keydown.escape="onFilterEscape"
     >
-      <li
-        v-for="vault in store.vaults"
-        :key="vault.id"
-      >
-        <button
-          type="button"
-          data-testid="import-picker-vault"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          @click="pick(vault.id)"
-        >
-          <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">
-            {{ vault.name }}
-          </span>
-        </button>
-      </li>
-    </ul>
+    <ImportVaultPickerList
+      v-if="viewState === 'list'"
+      :vaults="filteredVaults"
+      @pick="pick"
+    />
   </div>
 </template>
