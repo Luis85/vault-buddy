@@ -3,9 +3,11 @@ import { computed, onMounted } from "vue";
 
 import { useSettingsStore } from "../stores/settings";
 import { useUpdatesStore } from "../stores/updates";
+import { useVaultsStore } from "../stores/vaults";
 
 const updates = useUpdatesStore();
 const settings = useSettingsStore();
+const vaults = useVaultsStore();
 
 // a failed download/install keeps `available` for retry — the install
 // button must stay visible alongside the error, not vanish behind it
@@ -58,23 +60,11 @@ onMounted(() => {
         </span>
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-violet-400 bg-violet-500/20 px-2 py-0.5 text-xs text-slate-100 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-          :disabled="updates.phase === 'installing'"
-          data-testid="install-update"
-          @click="updates.installUpdate()"
+          class="cursor-pointer rounded-lg border border-violet-400 bg-violet-500/20 px-2 py-0.5 text-xs text-slate-100 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          data-testid="view-update"
+          @click="vaults.openUpdate()"
         >
-          <span
-            v-if="updates.phase === 'installing'"
-            class="flex items-center gap-1.5"
-          >
-            <span
-              class="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white"
-              role="status"
-              aria-label="Installing update…"
-            />
-            Installing…
-          </span>
-          <span v-else>Install &amp; restart</span>
+          View update →
         </button>
       </div>
       <p
