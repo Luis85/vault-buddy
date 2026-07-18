@@ -93,6 +93,12 @@ mod tests {
             task_body_template: Some("- [ ] {{title}}".into()),
             document_extra_frontmatter: Some("area: X".into()),
             document_body_template: Some("{{content}}".into()),
+            // STALE note-template values: a capture save must OVERWRITE these
+            // from `incoming`, never preserve them (note templates are
+            // capture-owned). Distinct from incoming's so the assertion below
+            // can tell "flowed from incoming" apart from "accidentally kept".
+            note_extra_frontmatter: Some("stale-fm: 1".into()),
+            note_body_template: Some("stale note body".into()),
             ..VaultCaptureConfig::default()
         };
         // incoming carries the capture-owned fields (non-owned left at defaults).
@@ -100,6 +106,8 @@ mod tests {
             mode: RecordingMode::VoiceNote,
             bitrate_kbps: 192,
             recording_date_folders: false,
+            note_extra_frontmatter: Some("attendees: 3".into()),
+            note_body_template: Some("## Notes\n{{type}}".into()),
             ..VaultCaptureConfig::default()
         };
         let merged = merge_capture_owned(&existing, incoming);
@@ -130,6 +138,20 @@ mod tests {
         assert_eq!(
             merged.document_extra_frontmatter.as_deref(),
             Some("area: X")
+        );
+        // Note template fields are CAPTURE-owned: they must come from `incoming`
+        // (a capture save sets them), NOT be preserved from `existing`. This
+        // fails if a regression adds them to merge_capture_owned's explicit
+        // preserve list — freezing a user's note template on the next save.
+        assert_eq!(
+            merged.note_extra_frontmatter.as_deref(),
+            Some("attendees: 3"),
+            "note_extra_frontmatter must flow from incoming, not existing"
+        );
+        assert_eq!(
+            merged.note_body_template.as_deref(),
+            Some("## Notes\n{{type}}"),
+            "note_body_template must flow from incoming, not existing"
         );
     }
 

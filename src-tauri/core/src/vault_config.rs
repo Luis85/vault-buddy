@@ -1068,6 +1068,28 @@ mod tests {
     }
 
     #[test]
+    fn template_fields_blank_or_whitespace_parse_to_none() {
+        // Blank/whitespace collapses to None on parse (the transcriptionVocabulary
+        // treatment), so a hand-edited empty value reads back as "unset" rather
+        // than a literal blank template.
+        let entry = serde_json::json!({
+            "noteExtraFrontmatter": "",
+            "noteBodyTemplate": "   ",
+            "taskExtraFrontmatter": "\n\t",
+            "taskBodyTemplate": "  ",
+            "documentExtraFrontmatter": "",
+            "documentBodyTemplate": " "
+        });
+        let cfg = vault_entry(&entry);
+        assert_eq!(cfg.note_extra_frontmatter, None);
+        assert_eq!(cfg.note_body_template, None);
+        assert_eq!(cfg.task_extra_frontmatter, None);
+        assert_eq!(cfg.task_body_template, None);
+        assert_eq!(cfg.document_extra_frontmatter, None);
+        assert_eq!(cfg.document_body_template, None);
+    }
+
+    #[test]
     fn transcription_vocabulary_and_vad_round_trip_and_stay_minimal() {
         let mut cfg = AppConfig::default();
         cfg.vaults.insert(
