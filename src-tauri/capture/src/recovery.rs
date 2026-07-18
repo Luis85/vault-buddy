@@ -133,6 +133,8 @@ pub fn recover_root(
                 // Recovered notes are intentionally minimal (no recorded_at,
                 // devices, or duration); skip the follow-up scaffold too.
                 follow_up: false,
+                extra_frontmatter: None,
+                body_template: None,
             };
             let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
             let _ = write_note_collision_safe(&note, &render_note(&meta, &mp3_name));

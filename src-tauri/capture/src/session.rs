@@ -497,6 +497,11 @@ fn run_worker(
             event: warning.clone(),
             transcribe: params.transcribe,
             follow_up: params.follow_up,
+            // A later task threads these through SessionParams from the
+            // vault's configured templates; until then every recording
+            // renders with today's exact (template-free) output.
+            extra_frontmatter: None,
+            body_template: None,
         };
         let mp3_name = mp3.file_name().unwrap_or_default().to_string_lossy();
         let note_content = render_note(&meta, &mp3_name);

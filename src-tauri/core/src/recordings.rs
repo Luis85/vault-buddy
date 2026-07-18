@@ -111,6 +111,8 @@ mod tests {
                 event: None,
                 transcribe: false,
                 follow_up: false,
+                extra_frontmatter: None,
+                body_template: None,
             };
             std::fs::write(
                 dir.join(format!("{base}.md")),
