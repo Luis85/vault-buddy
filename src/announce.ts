@@ -9,8 +9,12 @@ import { useSettingsStore } from "./stores/settings";
  * Best-effort: the bubble is a nicety, so a failed IPC (or no Tauri under
  * tests) is swallowed. Call sites live in the single announcer per event — the
  * buddy window for capture progress, the panel window's vaults store for opens.
+ *
+ * A present `action` (e.g. "openUpdate") reaches BubbleRoot via the
+ * `bubble-message` event and makes the bubble clickable; it is included only
+ * when set so every existing caller's payload stays exactly `{ text }`.
  */
-export function announce(text: string): void {
+export function announce(text: string, action?: string): void {
   if (!useSettingsStore().buddyMessagesEnabled) return;
-  void invoke("announce", { text }).catch(() => {});
+  void invoke("announce", action ? { text, action } : { text }).catch(() => {});
 }

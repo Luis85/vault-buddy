@@ -424,7 +424,7 @@ pub(crate) fn show_bubble(app: &tauri::AppHandle) -> bool {
 /// (`close_bubble`). Best-effort throughout — a missing window just means no
 /// bubble, never an error to the caller.
 #[tauri::command]
-pub fn announce(app: tauri::AppHandle, text: String) {
+pub fn announce(app: tauri::AppHandle, text: String, action: Option<String>) {
     use tauri::Emitter;
     // Same placement/reveal path as the launch greeting. A suppressed show
     // (buddy hidden to tray) also skips the text emit: delivering it would
@@ -432,8 +432,13 @@ pub fn announce(app: tauri::AppHandle, text: String) {
     if !show_bubble(&app) {
         return;
     }
-    // Deliver the text; BubbleRoot renders it and (re)starts its dismiss timer.
-    let _ = app.emit("bubble-message", serde_json::json!({ "text": text }));
+    // Deliver the text and the optional click action (which makes the bubble
+    // clickable in BubbleRoot); BubbleRoot renders it and (re)starts its
+    // dismiss timer.
+    let _ = app.emit(
+        "bubble-message",
+        serde_json::json!({ "text": text, "action": action }),
+    );
 }
 
 /// Keep the greeting bubble beside the buddy as the buddy moves — called from
