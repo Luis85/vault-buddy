@@ -57,15 +57,56 @@ pub struct DocMeta {
 }
 
 /// The `type: Document` frontmatter block (no body — Pandoc's markdown is
-/// prepended by the shell after this). Every string value quoted via
+/// prepended by the shell after this). Every managed string value quoted via
 /// `yaml_quote`, so a Windows source path can't emit an invalid YAML escape.
-pub fn render_frontmatter(meta: &DocMeta) -> String {
-    format!(
-        "---\ntype: Document\ntags: [vault-buddy-import]\nsource: {}\nimported: {}\nformat: {}\ncreated-by: Vault Buddy\n---\n\n",
+/// `extra_frontmatter` is the per-vault additive template (None → today's
+/// exact output, byte-identical): substituted against `{{source}}`,
+/// `{{format}}`, `{{date}}` then sanitized (fence-safe, reserved managed keys
+/// dropped) and injected right before the closing fence — same
+/// substitute-then-sanitize discipline as the capture note and task
+/// renderers.
+pub fn render_frontmatter(meta: &DocMeta, extra_frontmatter: Option<&str>) -> String {
+    let mut fm = format!(
+        "---\ntype: Document\ntags: [vault-buddy-import]\nsource: {}\nimported: {}\nformat: {}\ncreated-by: Vault Buddy\n",
         yaml_quote(&meta.source_path),
         yaml_quote(&meta.imported),
         yaml_quote(meta.format.label()),
-    )
+    );
+    if let Some(ef) = extra_frontmatter {
+        const DOC_RESERVED: &[&str] =
+            &["type", "tags", "source", "imported", "format", "created-by"];
+        let vars = [
+            ("source", meta.source_path.as_str()),
+            ("format", meta.format.label()),
+            ("date", meta.imported.as_str()),
+        ];
+        fm.push_str(&crate::template::sanitize_extra_frontmatter(
+            &crate::template::substitute(ef, &vars),
+            DOC_RESERVED,
+        ));
+    }
+    fm.push_str("---\n\n");
+    fm
+}
+
+/// Compose the published note's body: substitute the pandoc-converted
+/// `content` into a per-vault `body_template` via `{{content}}`. A template
+/// that omits the placeholder gets `content` APPENDED (never dropped) rather
+/// than silently discarding the converted document. `None` (or a
+/// blank/whitespace-only template, the same "unset" posture as every other
+/// template field) → `content` alone, today's exact output.
+pub fn assemble_body(body_template: Option<&str>, content: &str) -> String {
+    match body_template.map(str::trim) {
+        Some(t) if !t.is_empty() => {
+            if t.contains("{{content}}") {
+                crate::template::substitute(t, &[("content", content)])
+            } else {
+                let rendered = crate::template::substitute(t, &[("content", content)]);
+                format!("{}\n{content}", rendered.trim_end_matches('\n'))
+            }
+        }
+        _ => content.to_string(),
+    }
 }
 
 /// `<vault>/<documents_folder>/<YYYY>/<MM>`.
@@ -302,14 +343,21 @@ pub fn clean_stale_staging_at(
     sweep
 }
 
-/// Publish a completed staging dir into `target_dir`. Prepends `frontmatter`
-/// to the staged note, then moves the media dir (if non-empty) then the note,
-/// both at the EXACT names reserved up front (no re-suffixing — the suffix was
-/// already resolved by `reserve_basename` and Pandoc pinned the links to it).
-/// The note write is non-replacing; on failure the already-published media dir
-/// is rolled back. Always cleans the work dir before returning.
-pub fn publish(plan: &StagePlan, target_dir: &Path, frontmatter: &str) -> std::io::Result<PathBuf> {
-    let result = publish_inner(plan, target_dir, frontmatter);
+/// Publish a completed staging dir into `target_dir`. Composes the note as
+/// `frontmatter` + `assemble_body(body_template, pandoc_content)` (None →
+/// the pandoc content alone, today's output), then moves the media dir (if
+/// non-empty) then the note, both at the EXACT names reserved up front (no
+/// re-suffixing — the suffix was already resolved by `reserve_basename` and
+/// Pandoc pinned the links to it). The note write is non-replacing; on
+/// failure the already-published media dir is rolled back. Always cleans the
+/// work dir before returning.
+pub fn publish(
+    plan: &StagePlan,
+    target_dir: &Path,
+    frontmatter: &str,
+    body_template: Option<&str>,
+) -> std::io::Result<PathBuf> {
+    let result = publish_inner(plan, target_dir, frontmatter, body_template);
     cleanup_staging(&plan.work_dir);
     result
 }
@@ -344,11 +392,12 @@ fn publish_inner(
     plan: &StagePlan,
     target_dir: &Path,
     frontmatter: &str,
+    body_template: Option<&str>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(target_dir)?;
     let staged_note = plan.work_dir.join(&plan.note_name);
     let body = std::fs::read_to_string(&staged_note)?;
-    let full = format!("{frontmatter}{body}");
+    let full = format!("{frontmatter}{}", assemble_body(body_template, &body));
 
     // Media first, so the note never resolves to missing images. Only when
     // Pandoc actually extracted something.
@@ -429,7 +478,7 @@ mod tests {
             imported: "2026-07-10".into(),
             format: DocFormat::Docx,
         };
-        let fm = render_frontmatter(&meta);
+        let fm = render_frontmatter(&meta, None);
         assert!(fm.starts_with("---\n"));
         assert!(fm.contains("type: Document\n"));
         assert!(fm.contains("tags: [vault-buddy-import]\n"));
@@ -440,6 +489,63 @@ mod tests {
         assert!(fm.contains(r#"imported: "2026-07-10""#));
         assert!(fm.contains(r#"format: "docx""#));
         assert!(fm.trim_end().ends_with("---"));
+    }
+
+    // Locks the exact byte shape of the default (no extra-frontmatter) render —
+    // any accidental whitespace/field-order change in render_frontmatter would
+    // fail this, not just the looser `.contains` checks above.
+    #[test]
+    fn document_frontmatter_default_is_byte_identical() {
+        let meta = DocMeta {
+            source_path: "/x/a.docx".into(),
+            imported: "2026-07-10".into(),
+            format: DocFormat::Docx,
+        };
+        let fm = render_frontmatter(&meta, None);
+        assert_eq!(fm, "---\ntype: Document\ntags: [vault-buddy-import]\nsource: \"/x/a.docx\"\nimported: \"2026-07-10\"\nformat: \"docx\"\ncreated-by: Vault Buddy\n---\n\n");
+    }
+
+    #[test]
+    fn document_extra_frontmatter_injected_reserved_dropped_and_substituted() {
+        let meta = DocMeta {
+            source_path: "/x/a.docx".into(),
+            imported: "2026-07-10".into(),
+            format: DocFormat::Docx,
+        };
+        // `ref` exercises substitution; `type` is reserved and must be dropped
+        // rather than let a hostile/careless extra block shadow the managed key.
+        let fm = render_frontmatter(
+            &meta,
+            Some("area: Legal\ntype: HIJACK\nref: {{source}} ({{format}}, {{date}})"),
+        );
+        assert!(fm.contains("area: Legal"));
+        assert!(fm.contains("ref: /x/a.docx (docx, 2026-07-10)"));
+        assert!(!fm.contains("HIJACK"), "reserved key dropped: {fm}");
+        // The managed type survives verbatim and the fence isn't broken.
+        assert!(fm.contains("type: Document\n"));
+        assert!(fm.trim_end().ends_with("---"));
+        // Extra frontmatter lands BEFORE the closing fence, after every managed key.
+        let created_by = fm.find("created-by: Vault Buddy\n").unwrap();
+        let area = fm.find("area: Legal").unwrap();
+        let closing_fence = fm.rfind("---").unwrap();
+        assert!(created_by < area && area < closing_fence, "{fm}");
+    }
+
+    #[test]
+    fn assemble_body_wraps_via_placeholder_appends_when_absent_and_defaults_to_content() {
+        // {{content}} present → substituted in place.
+        assert_eq!(
+            assemble_body(Some("> imported\n\n{{content}}"), "BODY"),
+            "> imported\n\nBODY"
+        );
+        // {{content}} absent → appended, so the converted text is never dropped.
+        assert_eq!(assemble_body(Some("> note"), "BODY"), "> note\nBODY");
+        // None → today's exact output, content only.
+        assert_eq!(assemble_body(None, "BODY"), "BODY");
+        // Blank/whitespace-only template degrades to content-only too (same
+        // "blank means unset" posture as every other per-vault template field).
+        assert_eq!(assemble_body(Some("   "), "BODY"), "BODY");
+        assert_eq!(assemble_body(Some(""), "BODY"), "BODY");
     }
 
     #[test]
@@ -541,13 +647,39 @@ mod tests {
         std::fs::create_dir_all(&media).unwrap();
         std::fs::write(media.join("image1.png"), b"PNG").unwrap();
 
-        let note = publish(&plan, &target, "---\ntype: Document\n---\n\n").unwrap();
+        let note = publish(&plan, &target, "---\ntype: Document\n---\n\n", None).unwrap();
         let published = std::fs::read_to_string(&note).unwrap();
         assert!(published.starts_with("---\ntype: Document\n---\n\n# Body"));
         // media dir landed beside the note, same name → link still resolves
         assert!(target.join("2026-07-10 Report/image1.png").exists());
         // work dir cleaned up
         assert!(!plan.work_dir.exists());
+    }
+
+    #[test]
+    fn publish_wraps_pandoc_content_with_the_body_template() {
+        // End-to-end: a configured body_template composes the published note's
+        // body via {{content}}, same as assemble_body's unit test proves in
+        // isolation — this locks the wiring through publish/publish_inner.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("Documents/2026/07");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_staging(&target, "2026-07-10 Report", "u");
+        std::fs::create_dir_all(&plan.work_dir).unwrap();
+        std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
+
+        let note = publish(
+            &plan,
+            &target,
+            "---\ntype: Document\n---\n\n",
+            Some("> Imported via Pandoc\n\n{{content}}"),
+        )
+        .unwrap();
+        let published = std::fs::read_to_string(&note).unwrap();
+        assert_eq!(
+            published,
+            "---\ntype: Document\n---\n\n> Imported via Pandoc\n\n# Body\n"
+        );
     }
 
     #[test]
@@ -559,7 +691,7 @@ mod tests {
         std::fs::create_dir_all(&plan.work_dir).unwrap();
         std::fs::write(plan.work_dir.join(&plan.note_name), "# Body\n").unwrap();
 
-        let note = publish(&plan, &target, "---\ntype: Document\n---\n\n").unwrap();
+        let note = publish(&plan, &target, "---\ntype: Document\n---\n\n", None).unwrap();
         assert!(note.exists());
         // no media subfolder created when there were no images
         assert!(!target.join("2026-07-10 Note").exists());
@@ -582,7 +714,7 @@ mod tests {
         // Claim the exact reserved note name so the non-replacing write fails.
         std::fs::write(target.join("2026-07-10 Doc.md"), "SOMEONE ELSE").unwrap();
 
-        let result = publish(&plan, &target, "---\n---\n\n");
+        let result = publish(&plan, &target, "---\n---\n\n", None);
         assert!(result.is_err());
         // original untouched (never clobbered)
         assert_eq!(
@@ -612,7 +744,7 @@ mod tests {
         std::fs::create_dir_all(&dest).unwrap();
         std::fs::write(dest.join("theirs.txt"), b"raced").unwrap();
 
-        let result = publish(&plan, &target, "---\n---\n\n");
+        let result = publish(&plan, &target, "---\n---\n\n", None);
         assert!(result.is_err());
         assert_eq!(
             std::fs::read_to_string(dest.join("theirs.txt")).unwrap(),
@@ -810,7 +942,7 @@ mod tests {
         std::fs::create_dir_all(&plan.work_dir).unwrap();
         std::fs::write(plan.work_dir.join(&plan.note_name), "NEW\n").unwrap();
 
-        let note = publish(&plan, &target, "---\n---\n\n").unwrap();
+        let note = publish(&plan, &target, "---\n---\n\n", None).unwrap();
         assert_eq!(note, target.join("2026-07-10 Note.md"));
         assert!(std::fs::read_to_string(&note).unwrap().contains("NEW"));
     }

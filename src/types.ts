@@ -234,6 +234,12 @@ export interface DocumentsConfig {
   /** Whether a document import extracts images into a media folder (true) or
    * produces a text-only note with images dropped (false). Default true. */
   documentExtractImages: boolean;
+  /** Additive imported-note templates (per-vault). null = no injection —
+   * today's rendered note is unchanged. Extra-frontmatter is appended after
+   * the managed identity keys; body-template composes the note body around
+   * the converted document via `{{content}}`. */
+  documentExtraFrontmatter?: string | null;
+  documentBodyTemplate?: string | null;
 }
 
 /** App-global Pandoc install status (detect_pandoc). configuredPath seeds
