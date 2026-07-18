@@ -42,7 +42,10 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            skipping = false;
+            // Do NOT reset `skipping` here: a blank line inside a dropped
+            // block's continuation must not resurrect the rest of that block
+            // (a following TOP-LEVEL line already clears the skip below). YAML
+            // block sequences legitimately contain a blank line between items.
             continue;
         }
         if line.starts_with([' ', '\t']) {
@@ -108,5 +111,38 @@ mod tests {
     fn sanitize_empty_in_empty_out() {
         assert_eq!(sanitize_extra_frontmatter("", &["type"]), "");
         assert_eq!(sanitize_extra_frontmatter("\n\n", &["type"]), "");
+    }
+
+    #[test]
+    fn sanitize_blank_line_inside_a_dropped_block_does_not_leak_it() {
+        // A blank line between items of a reserved key's block must NOT end the
+        // skip — otherwise the trailing list items leak in as a dangling
+        // fragment with no owning key, which could attach to an unrelated key
+        // when reinjected. Regression for the Task 6 review finding.
+        let text = "tags:\n  - x\n\n  - y\nnote: keep";
+        let out = sanitize_extra_frontmatter(text, &["tags"]);
+        assert!(!out.contains("- x"), "first item dropped: {out}");
+        assert!(
+            !out.contains("- y"),
+            "item after the blank must NOT leak: {out}"
+        );
+        assert_eq!(out, "note: keep\n");
+    }
+
+    #[test]
+    fn sanitize_reserved_is_case_insensitive_and_dotdotdot_fence_drops() {
+        // Reserved-key match ignores casing; the `...` document-end fence is
+        // dropped like `---`, along with its indented block.
+        let text = "Type: Evil\n...\n  leaked: 1\nkeep: yes";
+        let out = sanitize_extra_frontmatter(text, &["type"]);
+        assert!(
+            !out.contains("Type: Evil"),
+            "case-insensitive reserved drop: {out}"
+        );
+        assert!(
+            !out.contains("leaked"),
+            "... fence + its indented block dropped: {out}"
+        );
+        assert_eq!(out, "keep: yes\n");
     }
 }
