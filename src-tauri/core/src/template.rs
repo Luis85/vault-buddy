@@ -34,9 +34,9 @@ pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
 ///   (case-insensitive, surrounding quotes stripped so `"type":` can't evade
 ///   it) is dropped along with its indented continuation lines, so a managed
 ///   key can't be redefined;
-/// - a top-level line that is not a `key: value` mapping (no colon — a bare
-///   scalar or a `- list` item) is dropped: injected into a mapping block it
-///   would be invalid YAML;
+/// - a top-level line that is not a `key: value` mapping — a bare scalar, or a
+///   `- list` sequence entry (even one with an inline `- key: value` mapping) —
+///   is dropped: injected into a mapping block it would be invalid YAML;
 /// - blank lines are dropped.
 ///
 /// Everything else is kept verbatim, newline-terminated.
@@ -63,9 +63,16 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
             skipping = true;
             continue;
         }
+        // A top-level YAML block-sequence entry (`- item`, or `- key: val` with
+        // an inline mapping) is invalid inside the managed mapping block — reject
+        // it even when it carries a colon, which would otherwise pass the mapping
+        // gate below with a bogus `- key`. Codex P2 follow-up.
+        if trimmed == "-" || trimmed.starts_with("- ") || trimmed.starts_with("-\t") {
+            skipping = true;
+            continue;
+        }
         // A top-level line must be a `key: value` mapping. A line with no colon
-        // (a bare scalar, or a `- list` item that is invalid at the top of a
-        // mapping block) would inject malformed YAML — drop it and its block.
+        // (a bare scalar) would inject malformed YAML — drop it and its block.
         let Some((raw_key, _)) = line.split_once(':') else {
             skipping = true;
             continue;
@@ -173,14 +180,19 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_drops_top_level_lines_without_a_key_mapping() {
-        // A bare scalar or a top-level `- list` item is not a valid mapping
-        // entry — injected into the block it would be malformed YAML (Codex P2).
-        let text = "- personal\njust some text\nvalid: yes";
+    fn sanitize_drops_top_level_sequence_entries_and_bare_scalars() {
+        // A bare scalar and a top-level `- list` entry are invalid in a mapping
+        // block. `- project: Alpha` is the Codex follow-up case: it carries a
+        // colon but is still a sequence entry, not a `key: value` mapping.
+        let text = "- personal\n- project: Alpha\n-\njust some text\nvalid: yes";
         let out = sanitize_extra_frontmatter(text, &[]);
         assert!(
             !out.contains("- personal"),
-            "top-level list item dropped: {out}"
+            "no-colon list item dropped: {out}"
+        );
+        assert!(
+            !out.contains("- project"),
+            "colon-bearing list item dropped: {out}"
         );
         assert!(
             !out.contains("just some text"),
