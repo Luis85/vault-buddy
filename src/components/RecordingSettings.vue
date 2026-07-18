@@ -68,7 +68,7 @@ const recordingDateFolders = computed({
 // brace-depth awareness), so writing it inline in the template would
 // terminate the interpolation early and corrupt the markup.
 const TEMPLATE_PLACEHOLDER_HINT =
-  "Placeholders: {{date}}, {{recordedAt}}, {{duration}}, {{vault}}, {{type}}. Identity fields and the audio/transcript embeds are always added.";
+  "Placeholders: {{date}}, {{recordedAt}}, {{duration}}, {{vault}}, {{type}}. Identity fields and the audio/transcript embeds are always added. A non-empty body template replaces the follow-up scaffold.";
 
 // Bundles the six transcription fields for TranscriptionSettings' v-model —
 // same adapter idiom CaptureSettings.vue used before this extraction.

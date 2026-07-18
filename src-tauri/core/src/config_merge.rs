@@ -16,8 +16,8 @@ use crate::vault_config::VaultCaptureConfig;
 /// document_extract_images/document_extra_frontmatter/document_body_template;
 /// `set_tasks_config`: tasks_folder; `set_task_lists_config`:
 /// default_list/list_order/archived_lists; `set_task_id_config`:
-/// task_id_enabled/task_id_property; and the future task-template-editing
-/// surface: task_extra_frontmatter/task_body_template). The preserved fields
+/// task_id_enabled/task_id_property; and set_task_template_config:
+/// task_extra_frontmatter/task_body_template). The preserved fields
 /// are listed explicitly and everything else comes from `incoming` via `..`
 /// (which is how the capture-owned note_extra_frontmatter/note_body_template
 /// pair flows through), so a capture save can never transpose an owned field
@@ -38,9 +38,9 @@ pub fn merge_capture_owned(
         // must never reset them, same as the lists/documents fields above.
         task_id_enabled: existing.task_id_enabled,
         task_id_property: existing.task_id_property.clone(),
-        // The task/document template fields are owned by their own future
-        // template-editing surfaces, not by capture. The note_* pair is
-        // capture-owned and stays in `..incoming` below.
+        // The task/document template fields are owned by set_task_template_config
+        // and set_documents_config respectively, not by capture. The note_*
+        // pair is capture-owned and stays in `..incoming` below.
         task_extra_frontmatter: existing.task_extra_frontmatter.clone(),
         task_body_template: existing.task_body_template.clone(),
         document_extra_frontmatter: existing.document_extra_frontmatter.clone(),
