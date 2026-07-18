@@ -213,8 +213,20 @@ pub fn add_task(
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
     let generated_id = id_property.is_some().then(tasks::new_task_id);
     let task_id = id_property.zip(generated_id.as_deref());
-    let path = tasks::create_task(&target_root, title, today, due, priority, tags, task_id)
-        .map_err(|e| format!("Could not create task: {e}"))?;
+    // extra_frontmatter/body_template: None for now — a later task threads
+    // cfg.task_extra_frontmatter/cfg.task_body_template here.
+    let path = tasks::create_task(
+        &target_root,
+        title,
+        today,
+        due,
+        priority,
+        tags,
+        task_id,
+        None,
+        None,
+    )
+    .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
         path: path.to_string_lossy().into_owned(),
         title: title.to_string(),
