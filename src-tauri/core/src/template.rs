@@ -86,6 +86,11 @@ fn tokenize(template: &str, vars: &[(&str, &str)]) -> (String, Vec<String>) {
 fn resolve_value(v: &mut Value, values: &[String]) {
     match v {
         Value::String(s) => {
+            // Splice each recorded value in place of its sentinel, in index order.
+            // A recorded value that itself contained a later index's sentinel text
+            // could cross-substitute, but values are app/user text where a literal
+            // U+E000 delimiter is effectively impossible and the worst case is one
+            // value replacing another — never a structure breakout. Bounded, not guarded.
             for (i, val) in values.iter().enumerate() {
                 let token = sentinel(i);
                 if s.contains(&token) {
@@ -102,6 +107,18 @@ fn resolve_value(v: &mut Value, values: &[String]) {
                 resolve_value(&mut k, values);
                 resolve_value(&mut val, values);
                 map.insert(k, val);
+            }
+        }
+        Value::Tagged(_) => {
+            // A custom YAML tag (`!x …`) parses into Tagged without error, but
+            // Obsidian's js-yaml throws on an unknown tag — injected inside the
+            // managed fence, that invalidates the whole block. Resolve the inner
+            // value and STRIP the tag (unwrap to inner) so output stays
+            // Obsidian-parseable and no sentinel leaks. (Standard tags like `!!str`
+            // are already resolved to String/Number by serde before we get here.)
+            if let Value::Tagged(mut t) = std::mem::take(v) {
+                resolve_value(&mut t.value, values);
+                *v = t.value;
             }
         }
         _ => {}
@@ -139,11 +156,18 @@ pub fn render_extra_frontmatter(
     let kept: Mapping = map
         .into_iter()
         .filter(|(k, _)| match k {
-            Value::String(s) => !reserved.iter().any(|r| r.eq_ignore_ascii_case(s)),
+            Value::String(s) => {
+                // Drop a YAML merge key (`<<`) unconditionally. serde_yaml_ng keeps
+                // it literal (no merge expansion), but Obsidian's js-yaml honors it,
+                // which would promote a nested reserved key to the top level and
+                // evade this filter. Merge anchors have no use in additive frontmatter.
+                s != "<<" && !reserved.iter().any(|r| r.eq_ignore_ascii_case(s))
+            }
             _ => true,
         })
         .collect();
     if kept.is_empty() {
+        log::warn!("extra frontmatter dropped: all keys reserved");
         return String::new();
     }
     let emitted = match serde_yaml_ng::to_string(&Value::Mapping(kept)) {
@@ -159,8 +183,10 @@ pub fn render_extra_frontmatter(
     let mut lines: Vec<&str> = emitted
         .lines()
         .filter(|l| {
-            let t = l.trim();
-            t != "---" && t != "..."
+            // Exact column-0 match only: serde emits document markers at column 0,
+            // while a value's block-scalar content is always indented, so an
+            // indented `---` inside a multiline value is preserved, not stripped.
+            *l != "---" && *l != "..."
         })
         .collect();
     while lines.last().is_some_and(|l| l.trim().is_empty()) {
@@ -556,5 +582,44 @@ mod tests {
                 "no markers: {out}"
             );
         }
+    }
+
+    #[test]
+    fn render_drops_a_merge_key_to_block_reserved_evasion() {
+        // serde_yaml_ng keeps `<<` literal; Obsidian's js-yaml would honor it and
+        // promote the nested reserved key. The filter drops a top-level `<<` outright.
+        let out = render_extra_frontmatter("<<: {type: evil}\nkeep: kept", &[], &["type"]);
+        assert!(
+            !out.contains("type"),
+            "merge-key reserved evasion blocked: {out}"
+        );
+        assert!(out.contains("keep: kept"), "{out}");
+    }
+
+    #[test]
+    fn render_strips_a_custom_tag_and_resolves_its_placeholder() {
+        // A custom tag would break Obsidian's js-yaml and hide a sentinel; the tag is
+        // stripped and the inner placeholder resolved.
+        let out = render_extra_frontmatter("foo: !x {{title}}", &[("title", "hi")], &[]);
+        assert_eq!(out, "foo: hi\n");
+        assert!(!out.contains('\u{E000}'), "no sentinel leaks: {out}");
+    }
+
+    #[test]
+    fn render_drops_a_placeholder_key_that_resolves_to_a_reserved_name() {
+        // Resolve-before-filter: a placeholder in KEY position resolving to a reserved
+        // name is still dropped.
+        assert_eq!(
+            render_extra_frontmatter("{{k}}: evil\nkeep: kept", &[("k", "type")], &["type"]),
+            "keep: kept\n"
+        );
+    }
+
+    #[test]
+    fn render_keeps_a_value_with_quotes_and_backslash_as_one_scalar() {
+        // Arbitrary substituted metacharacters stay inside one scalar.
+        let out = render_extra_frontmatter("note: {{t}}", &[("t", "a \"q\" \\ b")], &[]);
+        assert_eq!(out.lines().count(), 1, "one scalar line: {out}");
+        assert!(out.starts_with("note:"), "{out}");
     }
 }
