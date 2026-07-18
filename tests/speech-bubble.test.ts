@@ -30,4 +30,33 @@ describe("SpeechBubble", () => {
       "valign-middle",
     );
   });
+
+  it("is inert by default — no interactive class, no activate emit", async () => {
+    const wrapper = mount(SpeechBubble, {
+      props: { text: "Hi", side: "right", valign: "middle" },
+    });
+    const bubble = wrapper.get('[data-testid="speech-bubble"]');
+    expect(bubble.classes()).not.toContain("clickable");
+    // A plain greeting/ack must not fire the action, even if clicked.
+    await bubble.trigger("click");
+    expect(wrapper.emitted("activate")).toBeUndefined();
+  });
+
+  it("shows an interactive affordance and emits activate when clickable", async () => {
+    const wrapper = mount(SpeechBubble, {
+      props: { text: "Update ready", side: "right", valign: "middle", clickable: true },
+    });
+    const bubble = wrapper.get('[data-testid="speech-bubble"]');
+    expect(bubble.classes()).toContain("clickable");
+    await bubble.trigger("click");
+    expect(wrapper.emitted("activate")).toHaveLength(1);
+  });
+
+  it("activates from the keyboard when clickable", async () => {
+    const wrapper = mount(SpeechBubble, {
+      props: { text: "Update ready", side: "right", valign: "middle", clickable: true },
+    });
+    await wrapper.get('[data-testid="speech-bubble"]').trigger("keydown.enter");
+    expect(wrapper.emitted("activate")).toHaveLength(1);
+  });
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{
+const props = defineProps<{
   text: string;
   // The tail points back at the buddy: `side` puts it on the buddy-facing
   // face; `valign` sets its vertical position — `middle` (level with the
@@ -7,16 +7,32 @@ defineProps<{
   // the bubble above or below the buddy's center.
   side: "left" | "right";
   valign: "top" | "middle" | "bottom";
+  // When set, this bubble carries a click action (e.g. an update
+  // announcement): it renders an interactive affordance and emits `activate`.
+  // A custom event name (not `click`) so a plain native click on the card
+  // can never be mistaken for the action.
+  clickable?: boolean;
 }>();
+const emit = defineEmits<{ (e: "activate"): void }>();
+
+// Only an actionable bubble reacts — a plain greeting/ack stays inert.
+function activate() {
+  if (props.clickable) emit("activate");
+}
 </script>
 
 <template>
   <div
     data-testid="speech-bubble"
     class="bubble"
-    :class="[`side-${side}`, `valign-${valign}`]"
+    :class="[`side-${side}`, `valign-${valign}`, { clickable }]"
     role="status"
     aria-live="polite"
+    :tabindex="clickable ? 0 : undefined"
+    :title="clickable ? 'Open' : undefined"
+    @click="activate"
+    @keydown.enter.prevent="activate"
+    @keydown.space.prevent="activate"
   >
     {{ text }}
   </div>
@@ -64,5 +80,31 @@ defineProps<{
 }
 .bubble.side-left::after {
   right: -4px;
+}
+
+/* An actionable bubble reads as interactive. The bubble auto-dismisses in a
+   few seconds, so a hover-only hint could be missed — carry a PERSISTENT
+   violet ring (the app accent, layered onto the existing shadow) at rest,
+   with a pointer cursor and a hover lift on top. */
+.bubble.clickable {
+  cursor: pointer;
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.22),
+    0 0 0 1.5px rgba(139, 92, 246, 0.55);
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+.bubble.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.3),
+    0 0 0 1.5px rgba(139, 92, 246, 0.9);
+}
+.bubble.clickable:focus-visible {
+  outline: none;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.3),
+    0 0 0 2px rgba(139, 92, 246, 1);
 }
 </style>
