@@ -381,6 +381,38 @@ describe("vaults store", () => {
     expect(store.view).toBe("list");
   });
 
+  it("openUpdate switches to the update view, back returns to the list", () => {
+    const store = useVaultsStore();
+    store.openUpdate();
+    expect(store.view).toBe("update");
+    store.back();
+    expect(store.view).toBe("list");
+  });
+
+  it("requestView('update') survives the next-open refresh, then reverts to list", async () => {
+    // a failed update install requests the focused update view before
+    // reopening the panel; the panel-shown refresh honors it once.
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestView("update");
+    expect(store.view).toBe("update"); // reflected immediately
+    await store.refresh();
+    expect(store.view).toBe("update"); // honored once
+    await store.refresh();
+    expect(store.view).toBe("list"); // one-shot
+  });
+
+  it("requestViewOnNextOpen('update') arms the next open without flipping the live view", async () => {
+    // the startup update check arms the NEXT open; an already-open panel must
+    // not be yanked mid-task.
+    mockIPC((cmd) => (cmd === "list_vaults" ? [] : undefined));
+    const store = useVaultsStore();
+    store.requestViewOnNextOpen("update");
+    expect(store.view).toBe("list"); // live view untouched
+    await store.refresh();
+    expect(store.view).toBe("update"); // consumed once
+  });
+
   it("refreshTaskCount updates one vault and keeps the previous count on failure (GAP-32)", async () => {
     const store = useVaultsStore();
     store.taskCounts = { a: 2, b: 5 };
