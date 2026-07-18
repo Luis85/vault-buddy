@@ -3,6 +3,8 @@
 //! makes a user's extra-frontmatter text safe to inject before a closing
 //! `---` — it can never break the fence or redefine a managed key.
 
+use serde_yaml_ng::{Mapping, Value};
+
 /// Double-quote a YAML scalar, escaping `\` and `"` and flattening newlines to
 /// spaces. The home for the app's frontmatter quoting: `render_note`/
 /// `render_task`/`render_frontmatter`'s managed fields and this module's
@@ -17,24 +19,26 @@ pub fn yaml_quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Replace every `{{key}}` (whitespace inside the braces tolerated) with its
-/// value from `vars`. An unknown key renders empty (the available keys are
-/// documented in the UI). Unclosed `{{` is emitted literally. UTF-8 safe.
-/// Values are inserted RAW; for frontmatter templates,
-/// `sanitize_extra_frontmatter` quotes any resulting value that would be an
-/// unsafe YAML scalar, so callers substitute the same way for body and
-/// frontmatter.
-pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
+/// A sentinel wrapping a Private-Use-Area delimiter (U+E000) — a valid YAML
+/// plain-scalar character (YAML c-printable includes U+E000–U+FFFD) that cannot
+/// occur in real input, so a `{{placeholder}}` parses as opaque structure and
+/// its value is spliced back after parsing.
+fn sentinel(i: usize) -> String {
+    format!("\u{E000}{i}\u{E000}")
+}
+
+/// Walk `{{key}}` placeholders (whitespace inside the braces tolerated),
+/// pushing `resolve(key)` for each. An unclosed `{{` is emitted literally.
+/// UTF-8 safe. Shared by `substitute` (body templates) and `tokenize`
+/// (frontmatter), so the two can never disagree on placeholder syntax.
+fn expand_placeholders(template: &str, mut resolve: impl FnMut(&str) -> String) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
         if let Some(end) = after.find("}}") {
-            let key = after[..end].trim();
-            if let Some((_, val)) = vars.iter().find(|(k, _)| *k == key) {
-                out.push_str(val);
-            }
+            out.push_str(&resolve(after[..end].trim()));
             rest = &after[end + 2..];
         } else {
             out.push_str("{{");
@@ -43,6 +47,131 @@ pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Replace every `{{key}}` (whitespace inside the braces tolerated) with its
+/// value from `vars`. An unknown key renders empty. Unclosed `{{` is emitted
+/// literally. UTF-8 safe. Used for BODY templates (raw markdown); frontmatter
+/// templates go through `render_extra_frontmatter`, which parses the result.
+pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
+    expand_placeholders(template, |key| {
+        vars.iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| (*v).to_string())
+            .unwrap_or_default()
+    })
+}
+
+/// Replace each KNOWN `{{key}}` with a sentinel scalar (recording its value at
+/// that index) so the text parses as the structure the user intended; an
+/// unknown key renders empty (matching `substitute`). Returns the tokenized
+/// text and the values indexed by sentinel number.
+fn tokenize(template: &str, vars: &[(&str, &str)]) -> (String, Vec<String>) {
+    let mut values: Vec<String> = Vec::new();
+    let text = expand_placeholders(template, |key| match vars.iter().find(|(k, _)| *k == key) {
+        Some((_, v)) => {
+            let idx = values.len();
+            values.push((*v).to_string());
+            sentinel(idx)
+        }
+        None => String::new(),
+    });
+    (text, values)
+}
+
+/// Splice recorded values back in place of their sentinels in every scalar
+/// (mapping keys and values, recursively). A value lands as an opaque string,
+/// so it can never inject YAML structure and a numeric-looking value stays a
+/// string.
+fn resolve_value(v: &mut Value, values: &[String]) {
+    match v {
+        Value::String(s) => {
+            for (i, val) in values.iter().enumerate() {
+                let token = sentinel(i);
+                if s.contains(&token) {
+                    *s = s.replace(&token, val);
+                }
+            }
+        }
+        Value::Sequence(seq) => seq.iter_mut().for_each(|e| resolve_value(e, values)),
+        Value::Mapping(map) => {
+            // Rebuild so KEYS are resolved too; the IndexMap-backed Mapping
+            // preserves insertion order across the rebuild.
+            let taken = std::mem::take(map);
+            for (mut k, mut val) in taken {
+                resolve_value(&mut k, values);
+                resolve_value(&mut val, values);
+                map.insert(k, val);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Render a per-vault extra-frontmatter template into mapping lines safe to
+/// inject before a closing `---`. `{{placeholders}}` are resolved via a
+/// sentinel round-trip, reserved top-level keys dropped, and the result
+/// re-emitted as standard, Obsidian-compatible YAML (no document markers).
+/// Malformed input, a non-mapping root, or an all-reserved block yields `""`
+/// (logged) — never a broken fence or a `{}` literal. Replaces the former
+/// substitute-then-sanitize pair.
+pub fn render_extra_frontmatter(
+    template: &str,
+    vars: &[(&str, &str)],
+    reserved: &[&str],
+) -> String {
+    let (tokenized, values) = tokenize(template, vars);
+    if tokenized.trim().is_empty() {
+        return String::new();
+    }
+    let mut root: Value = match serde_yaml_ng::from_str(&tokenized) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("extra frontmatter dropped: invalid YAML ({e})");
+            return String::new();
+        }
+    };
+    resolve_value(&mut root, &values);
+    let Value::Mapping(map) = root else {
+        log::warn!("extra frontmatter dropped: root is not a mapping");
+        return String::new();
+    };
+    let kept: Mapping = map
+        .into_iter()
+        .filter(|(k, _)| match k {
+            Value::String(s) => !reserved.iter().any(|r| r.eq_ignore_ascii_case(s)),
+            _ => true,
+        })
+        .collect();
+    if kept.is_empty() {
+        return String::new();
+    }
+    let emitted = match serde_yaml_ng::to_string(&Value::Mapping(kept)) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("extra frontmatter dropped: emit failed ({e})");
+            return String::new();
+        }
+    };
+    // The serializer emits no document markers for a root mapping; strip any
+    // bare ---/... line defensively (we inject INSIDE our own fence) and
+    // normalize to exactly one trailing newline.
+    let mut lines: Vec<&str> = emitted
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            t != "---" && t != "..."
+        })
+        .collect();
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut body = lines.join("\n");
+    body.push('\n');
+    body
 }
 
 /// Return the lines of `text` safe to inject into a frontmatter block:
@@ -315,5 +444,117 @@ mod tests {
             sanitize_extra_frontmatter("\"project\": Alpha", &["type"]),
             "\"project\": Alpha\n"
         );
+    }
+
+    #[test]
+    fn render_resolves_placeholders_and_preserves_key_order() {
+        let vars = [("title", "Buy milk"), ("date", "2026-07-18")];
+        assert_eq!(
+            render_extra_frontmatter("name: {{title}}\nwhen: {{date}}", &vars, &[]),
+            "name: Buy milk\nwhen: 2026-07-18\n"
+        );
+    }
+
+    #[test]
+    fn render_keeps_a_colon_value_as_one_safe_scalar() {
+        // A substituted value with a colon-space would read as a nested mapping if
+        // injected raw; via the parsed tree it is one quoted scalar.
+        assert_eq!(
+            render_extra_frontmatter("summary: {{t}}", &[("t", "Ship: v1")], &[]),
+            "summary: 'Ship: v1'\n"
+        );
+    }
+
+    #[test]
+    fn render_keeps_bracket_and_numeric_values_as_strings() {
+        // `[draft]` stays a string (not a flow sequence); a numeric placeholder
+        // value stays a string so Obsidian reads it as text, not a number.
+        assert_eq!(
+            render_extra_frontmatter("label: {{t}}", &[("t", "[draft]")], &[]),
+            "label: '[draft]'\n"
+        );
+        assert_eq!(
+            render_extra_frontmatter("year: {{t}}", &[("t", "2026")], &[]),
+            "year: '2026'\n"
+        );
+    }
+
+    #[test]
+    fn render_keeps_a_literal_number_as_a_number() {
+        assert_eq!(render_extra_frontmatter("count: 5", &[], &[]), "count: 5\n");
+    }
+
+    #[test]
+    fn render_drops_reserved_keys_plain_quoted_and_case_insensitive() {
+        assert_eq!(
+            render_extra_frontmatter("type: Evil\nkeep: kept", &[], &["type"]),
+            "keep: kept\n"
+        );
+        assert_eq!(
+            render_extra_frontmatter("\"type\": Evil\nkeep: kept", &[], &["type"]),
+            "keep: kept\n"
+        );
+        assert_eq!(
+            render_extra_frontmatter("Type: Evil\nkeep: kept", &[], &["type"]),
+            "keep: kept\n"
+        );
+        // A non-reserved key is kept.
+        assert_eq!(
+            render_extra_frontmatter("project: Alpha", &[], &["type"]),
+            "project: Alpha\n"
+        );
+    }
+
+    #[test]
+    fn render_resolves_a_placeholder_inside_a_sequence() {
+        // Capability the line heuristic never had: placeholders inside collections.
+        assert_eq!(
+            render_extra_frontmatter(
+                "people: [{{a}}, {{b}}]",
+                &[("a", "Alex"), ("b", "Sam")],
+                &[]
+            ),
+            "people:\n- Alex\n- Sam\n"
+        );
+    }
+
+    #[test]
+    fn render_drops_injected_markers_sequences_and_bare_scalars() {
+        // A stray fence makes it multi-document → dropped; a sequence or scalar
+        // root is not a mapping → dropped.
+        assert_eq!(
+            render_extra_frontmatter("owner: me\n---\nsneaky: 1", &[], &[]),
+            ""
+        );
+        assert_eq!(render_extra_frontmatter("- a\n- b", &[], &[]), "");
+        assert_eq!(render_extra_frontmatter("just text", &[], &[]), "");
+    }
+
+    #[test]
+    fn render_empty_and_all_reserved_yield_empty_never_brace() {
+        assert_eq!(render_extra_frontmatter("", &[], &["type"]), "");
+        assert_eq!(render_extra_frontmatter("   \n  ", &[], &["type"]), "");
+        // Every key reserved → empty mapping → "" (never the serializer's `{}`).
+        assert_eq!(
+            render_extra_frontmatter("type: a\ntags: b", &[], &["type", "tags"]),
+            ""
+        );
+    }
+
+    #[test]
+    fn render_malformed_yaml_drops_the_block() {
+        assert_eq!(render_extra_frontmatter("key: [unclosed", &[], &[]), "");
+    }
+
+    #[test]
+    fn render_output_is_obsidian_safe_no_markers_no_tabs() {
+        let out = render_extra_frontmatter("a: 1\nb: {{t}}", &[("t", "x")], &["z"]);
+        assert!(!out.contains('\t'), "no tabs: {out}");
+        for line in out.lines() {
+            assert!(
+                line.trim() != "---" && line.trim() != "...",
+                "no markers: {out}"
+            );
+        }
     }
 }
