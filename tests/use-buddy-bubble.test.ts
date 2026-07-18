@@ -65,6 +65,22 @@ describe("useBuddyBubble", () => {
     expect(() => vi.advanceTimersByTime(BUBBLE_MS.normal.greeting)).not.toThrow();
   });
 
+  it("tracks a per-message action and clears it latest-wins", () => {
+    const wrapper = mount(Host);
+    expect(wrapper.vm.action).toBeNull(); // the greeting carries no action
+    wrapper.vm.show("Update ready", BUBBLE_MS.normal.ack, "openUpdate");
+    expect(wrapper.vm.action).toBe("openUpdate");
+    wrapper.vm.show("Transcript ready! ✨", BUBBLE_MS.normal.ack); // no action
+    expect(wrapper.vm.action).toBeNull();
+  });
+
+  it("dismiss clears the action", () => {
+    const wrapper = mount(Host);
+    wrapper.vm.show("Update ready", BUBBLE_MS.normal.ack, "openUpdate");
+    wrapper.vm.dismiss();
+    expect(wrapper.vm.action).toBeNull();
+  });
+
   it("normal preserves today's exact timings", () => {
     // the setting must be a no-op until the user touches it
     expect(BUBBLE_MS.normal).toEqual({ ack: 3200, greeting: 5000 });

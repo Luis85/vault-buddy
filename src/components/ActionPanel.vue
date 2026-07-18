@@ -21,6 +21,7 @@ import Search from "./Search.vue";
 import Tasks from "./Tasks.vue";
 import Transcriptions from "./Transcriptions.vue";
 import TranscriptionSummary from "./TranscriptionSummary.vue";
+import UpdateView from "./UpdateView.vue";
 import VaultList from "./VaultList.vue";
 
 const store = useVaultsStore();
@@ -60,6 +61,7 @@ const VIEW_TITLES: Record<string, string> = {
   search: "Search",
   importPicker: "Import document",
   documentImport: "Document import",
+  update: "Update",
 };
 // The tasks view is dual-mode: a null vault id is the cross-vault aggregate.
 const title = computed(() =>
@@ -373,6 +375,12 @@ watch(
         set it up here, then import from a vault's Capture knowledge screen.
       </p>
       <DocumentImportSettings />
+    </div>
+    <div
+      v-else-if="view === 'update'"
+      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    >
+      <UpdateView />
     </div>
     <div
       v-else

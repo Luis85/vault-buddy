@@ -410,6 +410,7 @@ pub fn run() {
             commands::prepare_update_install,
             commands::toggle_panel,
             commands::close_panel,
+            commands::open_panel,
             commands::close_bubble,
             commands::announce,
             commands::get_buddy_facing,

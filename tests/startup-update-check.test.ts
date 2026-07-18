@@ -36,17 +36,19 @@ describe("useStartupUpdateCheck", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("asks via bubble + next-open settings when an update is found", async () => {
+  it("asks via a clickable bubble + next-open update view when an update is found", async () => {
     mocks.check.mockResolvedValue({ version: "0.9.0" });
     mount(Host);
     expect(mocks.check).not.toHaveBeenCalled(); // waits out the settle delay
     await vi.advanceTimersByTimeAsync(STARTUP_CHECK_DELAY_MS);
     expect(mocks.check).toHaveBeenCalledTimes(1);
+    // the bubble carries the openUpdate action so it is clickable
     expect(mocks.announce).toHaveBeenCalledWith(
       expect.stringContaining("0.9.0"),
+      "openUpdate",
     );
-    // the ask lands on the settings view at the NEXT panel open
-    expect(useVaultsStore().pendingView).toBe("settings");
+    // the ask lands on the dedicated update view at the NEXT panel open
+    expect(useVaultsStore().pendingView).toBe("update");
   });
 
   it("stays silent when the app is current", async () => {

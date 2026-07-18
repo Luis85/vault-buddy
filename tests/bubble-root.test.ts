@@ -88,6 +88,45 @@ describe("BubbleRoot", () => {
     );
   });
 
+  it("makes an update announcement clickable and reveals the panel on click", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+    });
+    const wrapper = mount(BubbleRoot);
+    await flushPromises();
+    // Rust's announce emitted the openUpdate action alongside the text.
+    listeners["bubble-message"]?.({
+      payload: {
+        text: "Update v0.9.0 is ready — click me! ⬆️",
+        action: "openUpdate",
+      },
+    });
+    await flushPromises();
+    const bubble = wrapper.get('[data-testid="speech-bubble"]');
+    expect(bubble.classes()).toContain("clickable");
+    await bubble.trigger("click");
+    await flushPromises();
+    expect(calls).toContain("open_panel"); // routed the action to Rust
+    expect(calls).toContain("close_bubble"); // dismiss closed the window
+  });
+
+  it("leaves an action-less acknowledgement inert", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+    });
+    const wrapper = mount(BubbleRoot);
+    await flushPromises();
+    listeners["bubble-message"]?.({ payload: { text: "Opening Personal ✨" } });
+    await flushPromises();
+    const bubble = wrapper.get('[data-testid="speech-bubble"]');
+    expect(bubble.classes()).not.toContain("clickable");
+    await bubble.trigger("click");
+    await flushPromises();
+    expect(calls).not.toContain("open_panel");
+  });
+
   it("dismisses the bubble (closing the window) when the panel opens", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

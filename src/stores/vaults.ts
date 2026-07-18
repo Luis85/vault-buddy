@@ -24,7 +24,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "tasks"
       | "search"
       | "importPicker"
-      | "documentImport",
+      | "documentImport"
+      | "update",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -50,7 +51,7 @@ export const useVaultsStore = defineStore("vaults", {
     // defaults to the vault list on every open (`refresh`); a caller that must
     // reopen elsewhere (a failed update install → settings) sets this so the
     // open can't clobber it back to the list.
-    pendingView: null as "list" | "settings" | "captureSettings" | null,
+    pendingView: null as "list" | "settings" | "captureSettings" | "update" | null,
     pendingCaptureVaultId: null as string | null,
     // Bumped on every panel-shown refresh. The panel window is only
     // hidden/shown (never unmounted), so components watch this to reset
@@ -166,7 +167,7 @@ export const useVaultsStore = defineStore("vaults", {
     // pending so the panel-shown `refresh` re-applies it rather than resetting
     // to the list.
     requestView(
-      view: "list" | "settings" | "captureSettings",
+      view: "list" | "settings" | "captureSettings" | "update",
       captureVaultId: string | null = null,
     ) {
       this.pendingView = view;
@@ -178,7 +179,7 @@ export const useVaultsStore = defineStore("vaults", {
     // view — the startup update check must not yank an already-open panel to
     // settings mid-task (requestView's immediate flip exists for the
     // failed-install reopen, where the panel is known hidden).
-    requestViewOnNextOpen(view: "list" | "settings" | "captureSettings") {
+    requestViewOnNextOpen(view: "list" | "settings" | "captureSettings" | "update") {
       this.pendingView = view;
       this.pendingCaptureVaultId = null;
     },
@@ -221,6 +222,9 @@ export const useVaultsStore = defineStore("vaults", {
     },
     openSettings() {
       this.view = "settings";
+    },
+    openUpdate() {
+      this.view = "update";
     },
     openCaptureSettings(vaultId: string) {
       this.view = "captureSettings";
