@@ -130,8 +130,8 @@ impl Default for VaultCaptureConfig {
             archived_lists: Vec::new(),
             task_id_enabled: false,
             task_id_property: None,
-            recording_date_folders: true,
-            document_date_folders: true,
+            recording_date_folders: false,
+            document_date_folders: false,
             document_extract_images: true,
         }
     }
@@ -323,11 +323,11 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
         recording_date_folders: entry
             .get("recordingDateFolders")
             .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+            .unwrap_or(false),
         document_date_folders: entry
             .get("documentDateFolders")
             .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+            .unwrap_or(false),
         document_extract_images: entry
             .get("documentExtractImages")
             .and_then(|v| v.as_bool())
@@ -395,11 +395,11 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     if let Some(prop) = &v.task_id_property {
         entry.insert("taskIdProperty".to_string(), json!(prop));
     }
-    if !v.recording_date_folders {
-        entry.insert("recordingDateFolders".to_string(), json!(false));
+    if v.recording_date_folders {
+        entry.insert("recordingDateFolders".to_string(), json!(true));
     }
-    if !v.document_date_folders {
-        entry.insert("documentDateFolders".to_string(), json!(false));
+    if v.document_date_folders {
+        entry.insert("documentDateFolders".to_string(), json!(true));
     }
     if !v.document_extract_images {
         entry.insert("documentExtractImages".to_string(), json!(false));
@@ -785,37 +785,32 @@ mod tests {
     }
 
     #[test]
-    fn date_folder_toggles_default_true_and_round_trip() {
+    fn date_folder_toggles_default_false_and_round_trip() {
         let d = VaultCaptureConfig::default();
-        assert!(d.recording_date_folders);
-        assert!(d.document_date_folders);
-        // Absent → true; present false parses.
-        let cfg = crate::capture_config::parse_config(
-            r#"{ "vaults": { "a": { "recordingDateFolders": false, "documentDateFolders": false } } }"#,
+        assert!(!d.recording_date_folders, "recordings default to flat");
+        assert!(!d.document_date_folders, "documents default to flat");
+
+        // Serialize omits when false (the default), writes when true.
+        let jf = serde_json::Value::Object(serialize_vault_entry(&d)).to_string();
+        assert!(
+            !jf.contains("recordingDateFolders"),
+            "omit at default: {jf}"
         );
-        let a = crate::capture_config::vault_config(&cfg, "a");
-        assert!(!a.recording_date_folders);
-        assert!(!a.document_date_folders);
-        // Serialize omits when true, writes when false.
-        let mut only_true = crate::capture_config::AppConfig::default();
-        only_true
-            .vaults
-            .insert("t".into(), VaultCaptureConfig::default());
-        let jt = crate::capture_config::serialize_config(&only_true);
-        assert!(!jt.contains("recordingDateFolders"));
-        assert!(!jt.contains("documentDateFolders"));
-        let mut has_false = crate::capture_config::AppConfig::default();
-        has_false.vaults.insert(
-            "f".into(),
-            VaultCaptureConfig {
-                recording_date_folders: false,
-                document_date_folders: false,
-                ..VaultCaptureConfig::default()
-            },
-        );
-        let jf = crate::capture_config::serialize_config(&has_false);
-        assert!(jf.contains("\"recordingDateFolders\": false"));
-        assert!(jf.contains("\"documentDateFolders\": false"));
+        assert!(!jf.contains("documentDateFolders"), "omit at default: {jf}");
+
+        let on = VaultCaptureConfig {
+            recording_date_folders: true,
+            document_date_folders: true,
+            ..VaultCaptureConfig::default()
+        };
+        let jt = serde_json::Value::Object(serialize_vault_entry(&on)).to_string();
+        assert!(jt.contains("\"recordingDateFolders\":true"), "{jt}");
+        assert!(jt.contains("\"documentDateFolders\":true"), "{jt}");
+
+        // Absent keys parse back to the new default (false).
+        let parsed = vault_entry(&serde_json::json!({}));
+        assert!(!parsed.recording_date_folders);
+        assert!(!parsed.document_date_folders);
     }
 
     #[test]

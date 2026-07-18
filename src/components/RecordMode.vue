@@ -60,7 +60,7 @@ const config = ref<CaptureConfig>({
   transcriptTimestamps: true,
   transcriptionVocabulary: null,
   transcriptionVad: true,
-  recordingDateFolders: true,
+  recordingDateFolders: false,
 });
 
 // How many recordings the vault already holds, for the Browse card's pill.

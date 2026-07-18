@@ -36,7 +36,7 @@ function mountTab(
         ? opts.onGet()
         : {
             documentsFolder: opts.documentsFolder ?? null,
-            documentDateFolders: opts.documentDateFolders ?? true,
+            documentDateFolders: opts.documentDateFolders ?? false,
             documentExtractImages: opts.documentExtractImages ?? true,
           };
     if (cmd === "set_documents_config") return opts.onSet?.(args) ?? null;
@@ -96,7 +96,11 @@ describe("DocumentsConfigTab", () => {
   });
 
   it("saves the images toggle immediately when turned off", async () => {
-    const { wrapper, calls } = mountTab({ documentsFolder: "Docs", documentExtractImages: true });
+    const { wrapper, calls } = mountTab({
+      documentsFolder: "Docs",
+      documentDateFolders: true,
+      documentExtractImages: true,
+    });
     await flushPromises();
     await wrapper.get('[data-testid="document-extract-images-toggle"]').setValue(false);
     await flushPromises();
@@ -132,6 +136,7 @@ describe("DocumentsConfigTab", () => {
   it("shows a save error inline and keeps the value", async () => {
     const { wrapper } = mountTab({
       documentsFolder: "Docs",
+      documentDateFolders: true,
       onSet: () => {
         throw "Configured documents folder must stay inside the vault";
       },

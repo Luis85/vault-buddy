@@ -40,7 +40,7 @@ const rec = ref<RecordingSettingsValue>({
   transcriptTimestamps: true,
   transcriptionVocabulary: "",
   transcriptionVad: true,
-  recordingDateFolders: true,
+  recordingDateFolders: false,
 });
 
 const autosave = useAutosave(

@@ -16,7 +16,7 @@ const props = defineProps<{ vaultId: string }>();
 
 const { loading, loadError, load } = useSettingsLoad();
 const documentsFolder = ref("");
-const documentDateFolders = ref(true);
+const documentDateFolders = ref(false);
 const documentExtractImages = ref(true);
 
 const autosave = useAutosave(
