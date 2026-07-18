@@ -1,4 +1,5 @@
 import { logWarning } from "../logging";
+import { loadStringArray } from "./localStorageStringArray";
 
 /**
  * localStorage key; a JSON string array of favorited vault ids. Pure
@@ -13,16 +14,7 @@ const KEY = "vault-buddy:favorite-vaults";
  * swallowed errors), same defensive posture as recentSearches.ts.
  */
 export function loadFavorites(): string[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((v): v is string => typeof v === "string");
-  } catch (e) {
-    logWarning(`favoriteVaults: load failed: ${String(e)}`);
-    return [];
-  }
+  return loadStringArray(KEY, "favoriteVaults: load failed");
 }
 
 function save(ids: string[]): void {

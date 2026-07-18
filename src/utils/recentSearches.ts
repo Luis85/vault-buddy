@@ -1,4 +1,5 @@
 import { logWarning } from "../logging";
+import { loadStringArray } from "./localStorageStringArray";
 
 /** localStorage key; a JSON string array, most recent first. */
 const KEY = "vault-buddy:recent-searches";
@@ -10,18 +11,10 @@ export const MAX_RECENT_SEARCHES = 5;
  * into the component (no swallowed errors).
  */
 export function loadRecentSearches(): string[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((q): q is string => typeof q === "string")
-      .slice(0, MAX_RECENT_SEARCHES);
-  } catch (e) {
-    logWarning(`recent searches: load failed: ${String(e)}`);
-    return [];
-  }
+  return loadStringArray(KEY, "recent searches: load failed").slice(
+    0,
+    MAX_RECENT_SEARCHES,
+  );
 }
 
 /**
