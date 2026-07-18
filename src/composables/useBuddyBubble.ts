@@ -24,22 +24,27 @@ export const BUBBLE_MS: Record<MessageDuration, { ack: number; greeting: number 
 export function useBuddyBubble(): {
   visible: Ref<boolean>;
   text: Ref<string>;
-  show: (message: string, durationMs: number) => void;
+  action: Ref<string | null>;
+  show: (message: string, durationMs: number, action?: string | null) => void;
   dismiss: () => void;
 } {
   const settings = useSettingsStore();
   const visible = ref(false);
   const text = ref("");
+  // The current message's click action, or null for a plain greeting/ack.
+  const action = ref<string | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   function dismiss() {
     clearTimeout(timer);
     timer = undefined;
     visible.value = false;
+    action.value = null;
   }
 
-  function show(message: string, durationMs: number) {
+  function show(message: string, durationMs: number, act: string | null = null) {
     text.value = message;
+    action.value = act;
     visible.value = true;
     clearTimeout(timer);
     timer = setTimeout(dismiss, durationMs);
@@ -50,5 +55,5 @@ export function useBuddyBubble(): {
   );
   onUnmounted(() => clearTimeout(timer));
 
-  return { visible, text, show, dismiss };
+  return { visible, text, action, show, dismiss };
 }
