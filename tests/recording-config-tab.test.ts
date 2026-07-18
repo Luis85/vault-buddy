@@ -19,6 +19,8 @@ const config = {
   transcriptionLanguage: null as string | null,
   transcriptTimestamps: true,
   followUpTemplate: true,
+  noteExtraFrontmatter: null as string | null,
+  noteBodyTemplate: null as string | null,
   recordingDateFolders: true,
 };
 const devices = {
@@ -81,6 +83,26 @@ describe("RecordingConfigTab", () => {
     expect(set?.args).toMatchObject({
       id: "v1",
       cfg: { mode: "meeting", meetingFolder: "Inbox/Audio", voiceNoteFolder: "Voice Notes", recordingDateFolders: true },
+    });
+  });
+
+  it("loads a note body template and debounces an edit before saving", async () => {
+    const { wrapper, calls } = mountTab({
+      config: { noteBodyTemplate: "## Summary\n{{type}}" },
+    });
+    await flushPromises();
+    expect(
+      wrapper.get<HTMLTextAreaElement>('[data-testid="note-body-template"]').element.value,
+    ).toBe("## Summary\n{{type}}");
+
+    await wrapper.get('[data-testid="note-body-template"]').setValue("## Notes\n{{vault}}");
+    expect(calls.some((c) => c.cmd === "set_capture_config")).toBe(false);
+    vi.advanceTimersByTime(600);
+    await flushPromises();
+    const set = calls.find((c) => c.cmd === "set_capture_config");
+    expect(set?.args).toMatchObject({
+      id: "v1",
+      cfg: { noteBodyTemplate: "## Notes\n{{vault}}" },
     });
   });
 

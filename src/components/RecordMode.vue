@@ -60,6 +60,8 @@ const config = ref<CaptureConfig>({
   transcriptTimestamps: true,
   transcriptionVocabulary: null,
   transcriptionVad: true,
+  noteExtraFrontmatter: null,
+  noteBodyTemplate: null,
   recordingDateFolders: false,
 });
 

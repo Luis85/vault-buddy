@@ -346,6 +346,8 @@ fn start_capture_blocking(
                 create_note: cfg.create_note,
                 transcribe: cfg.transcribe,
                 follow_up: cfg.follow_up_template,
+                note_extra_frontmatter: cfg.note_extra_frontmatter.clone(),
+                note_body_template: cfg.note_body_template.clone(),
                 recorded_at: now.to_rfc3339(),
                 flush_every: Duration::from_secs(1),
                 fsync_every: Duration::from_secs(30),

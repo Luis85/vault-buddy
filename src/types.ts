@@ -114,6 +114,12 @@ export interface CaptureConfig {
   /** Skip silence via Silero VAD before inference (default on). */
   transcriptionVad: boolean;
   followUpTemplate: boolean;
+  /** Additive companion-note templates (per-vault). null = no injection —
+   * today's rendered note is unchanged. Extra-frontmatter is appended after
+   * the managed identity keys; body-template composes the note body with
+   * `{{placeholders}}`. */
+  noteExtraFrontmatter: string | null;
+  noteBodyTemplate: string | null;
   /** Whether NEW recordings land in a dated `YYYY/MM` subfolder (true) or
    * flat in the recording root (false). Existing files in either layout are
    * still found — this only decides where new captures land. */
@@ -147,6 +153,8 @@ export interface RecordingSettingsValue {
   transcriptTimestamps: boolean;
   transcriptionVocabulary: string;
   transcriptionVad: boolean;
+  noteExtraFrontmatter: string;
+  noteBodyTemplate: string;
   recordingDateFolders: boolean;
 }
 
