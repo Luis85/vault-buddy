@@ -32,6 +32,43 @@ fn add_list_and_toggle_tasks_through_the_service() {
 }
 
 #[test]
+fn add_task_applies_the_vaults_configured_template() {
+    // Task 11: add_task must thread the vault's task_extra_frontmatter/
+    // task_body_template into create_task — a prior task left this as a
+    // `None, None` placeholder pending this wiring.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, _vault) = fixture(dir.path(), "MyVault");
+    std::fs::write(
+        paths.config_json.as_ref().unwrap(),
+        r#"{ "vaults": { "deadbeef01234567": {
+            "taskExtraFrontmatter": "project: Alpha",
+            "taskBodyTemplate": "- [ ] {{title}} by {{date}}"
+        } } }"#,
+    )
+    .unwrap();
+    let created = add_task(
+        &paths,
+        "deadbeef01234567",
+        "Buy milk",
+        "2026-07-09",
+        None,
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
+    let body = std::fs::read_to_string(&created.path).unwrap();
+    assert!(
+        body.contains("project: Alpha"),
+        "configured extra frontmatter applied, got: {body}"
+    );
+    assert!(
+        body.ends_with("- [ ] Buy milk by 2026-07-09\n"),
+        "configured body template substituted, got: {body}"
+    );
+}
+
+#[test]
 fn add_task_writes_a_generated_id_when_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let (paths, _vault) = fixture(dir.path(), "MyVault");

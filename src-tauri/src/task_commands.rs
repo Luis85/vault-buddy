@@ -21,6 +21,10 @@ pub struct TasksConfigDto {
     /// The RESOLVED id property name (default "task-id" when unset) — the UI
     /// shows it as the placeholder/current value.
     pub task_id_property: String,
+    /// Additive per-vault task-document template. None → today's exact
+    /// create_task output (identity frontmatter only, no body).
+    pub task_extra_frontmatter: Option<String>,
+    pub task_body_template: Option<String>,
 }
 
 /// The vault's configured tasks folder (or None → the frontend shows the
@@ -37,6 +41,8 @@ pub fn get_tasks_config(id: String) -> TasksConfigDto {
         default_list: cfg.default_list,
         list_order: cfg.list_order,
         archived_lists: cfg.archived_lists,
+        task_extra_frontmatter: cfg.task_extra_frontmatter,
+        task_body_template: cfg.task_body_template,
     }
 }
 
@@ -187,6 +193,31 @@ pub async fn set_task_id_config(
     if let Some(prop) = property_to_set {
         value.task_id_property = prop;
     }
+    capture_config::update_vault_config(&id, value)
+}
+
+/// Persist the vault's per-vault task template (extra frontmatter + body).
+/// Independent field-save (the set_task_id_config pattern): a template save
+/// can't block the folder/lists/id saves and vice versa. Blank→None. ASYNC —
+/// fsync'd config write.
+#[tauri::command]
+pub async fn set_task_template_config(
+    lock: tauri::State<'_, ConfigWriteLock>,
+    id: String,
+    extra_frontmatter: Option<String>,
+    body_template: Option<String>,
+) -> Result<(), String> {
+    crate::commands::find_vault(&id)?;
+    let clean = |s: Option<String>| {
+        s.as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let _guard = lock_ignoring_poison(&lock.0);
+    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
+    value.task_extra_frontmatter = clean(extra_frontmatter);
+    value.task_body_template = clean(body_template);
     capture_config::update_vault_config(&id, value)
 }
 

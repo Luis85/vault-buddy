@@ -446,6 +446,7 @@ pub fn run() {
             task_commands::rename_task_list,
             task_commands::delete_task_list,
             task_commands::set_task_id_config,
+            task_commands::set_task_template_config,
             task_commands::list_tasks,
             task_commands::add_task,
             task_commands::set_task_status,

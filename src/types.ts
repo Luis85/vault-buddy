@@ -221,6 +221,10 @@ export interface TasksConfig {
   taskIdEnabled: boolean;
   /** The resolved id property name (default "task-id"). */
   taskIdProperty: string;
+  /** Additive per-vault task-document template. null/absent = today's exact
+   * create_task output (identity frontmatter only, no body). */
+  taskExtraFrontmatter?: string | null;
+  taskBodyTemplate?: string | null;
 }
 
 /** Per-vault imported-documents folder — get_documents_config/

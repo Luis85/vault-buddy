@@ -7,6 +7,7 @@ import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { TasksConfig } from "../types";
 import TaskIdSettings from "./TaskIdSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
+import TaskTemplateSettings from "./TaskTemplateSettings.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 // The Tasks tab of Vault settings: the per-vault tasks folder (auto-saved via
@@ -62,6 +63,24 @@ const idAutosave = useAutosave(
   { label: "task ids" },
 );
 
+// The additive task-document template (extra frontmatter + body), applied to
+// every NEW task add_task creates. Its own independent field-save (the
+// set_task_id_config pattern above) — a template save can't block the
+// folder/lists/id saves and vice versa.
+const taskExtraFrontmatter = ref("");
+const taskBodyTemplate = ref("");
+
+const templateAutosave = useAutosave(
+  async () => {
+    await invoke("set_task_template_config", {
+      id: props.vaultId,
+      extraFrontmatter: taskExtraFrontmatter.value.trim() || null,
+      bodyTemplate: taskBodyTemplate.value.trim() || null,
+    });
+  },
+  { label: "task template" },
+);
+
 onMounted(() =>
   load<TasksConfig>("get_tasks_config", props.vaultId, (cfg) => {
     tasksFolder.value = cfg.tasksFolder ?? "";
@@ -71,6 +90,8 @@ onMounted(() =>
     // placeholder communicates the default without pre-filling it.
     taskIdProperty.value =
       cfg.taskIdProperty && cfg.taskIdProperty !== DEFAULT_TASK_ID_PROPERTY ? cfg.taskIdProperty : "";
+    taskExtraFrontmatter.value = cfg.taskExtraFrontmatter ?? "";
+    taskBodyTemplate.value = cfg.taskBodyTemplate ?? "";
   }),
 );
 
@@ -86,6 +107,15 @@ function onIdEnabledChange(value: boolean) {
 function onIdPropertyInput(value: string) {
   taskIdProperty.value = value;
   idAutosave.schedule();
+}
+
+function onExtraFrontmatterInput(value: string) {
+  taskExtraFrontmatter.value = value;
+  templateAutosave.schedule();
+}
+function onBodyTemplateInput(value: string) {
+  taskBodyTemplate.value = value;
+  templateAutosave.schedule();
 }
 
 // True while the typed folder differs from what's persisted (a folder save is
@@ -158,6 +188,16 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
       >
         List settings reload once the tasks folder is saved…
       </p>
+      <!-- Presentational (mirrors TaskIdSettings.vue above) — state/autosave/
+           load stay up here; the card only renders and emits raw input back. -->
+      <TaskTemplateSettings
+        v-if="!loadError"
+        :extra-frontmatter="taskExtraFrontmatter"
+        :body-template="taskBodyTemplate"
+        @update:extra-frontmatter="onExtraFrontmatterInput"
+        @update:body-template="onBodyTemplateInput"
+        @blur="templateAutosave.flush()"
+      />
     </template>
   </div>
 </template>
