@@ -31,8 +31,12 @@ pub fn substitute(template: &str, vars: &[(&str, &str)]) -> String {
 /// - a `---`/`...` line (a fence) is dropped, and so is any indented block
 ///   under it — user frontmatter can never break out of the block;
 /// - a top-level line whose key (before the first `:`) is in `reserved`
-///   (case-insensitive) is dropped along with its indented continuation
-///   lines, so a managed key can't be redefined;
+///   (case-insensitive, surrounding quotes stripped so `"type":` can't evade
+///   it) is dropped along with its indented continuation lines, so a managed
+///   key can't be redefined;
+/// - a top-level line that is not a `key: value` mapping (no colon — a bare
+///   scalar or a `- list` item) is dropped: injected into a mapping block it
+///   would be invalid YAML;
 /// - blank lines are dropped.
 ///
 /// Everything else is kept verbatim, newline-terminated.
@@ -59,8 +63,18 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
             skipping = true;
             continue;
         }
-        let key = line.split(':').next().unwrap_or("").trim();
-        if reserved.iter().any(|r| r.eq_ignore_ascii_case(key)) {
+        // A top-level line must be a `key: value` mapping. A line with no colon
+        // (a bare scalar, or a `- list` item that is invalid at the top of a
+        // mapping block) would inject malformed YAML — drop it and its block.
+        let Some((raw_key, _)) = line.split_once(':') else {
+            skipping = true;
+            continue;
+        };
+        // Unquote the key before the reserved check so a QUOTED reserved key
+        // (`"type": Note`, which YAML/Obsidian still read as `type`) can't evade
+        // it and redefine a managed field. An empty key is invalid YAML too.
+        let key = unquote_key(raw_key.trim());
+        if key.is_empty() || reserved.iter().any(|r| r.eq_ignore_ascii_case(key)) {
             skipping = true;
             continue;
         }
@@ -69,6 +83,18 @@ pub fn sanitize_extra_frontmatter(text: &str, reserved: &[&str]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Strip a single matched pair of surrounding ASCII quotes (`"` or `'`) from a
+/// frontmatter key, so a quoted key compares equal to its bare form. The quote
+/// chars are ASCII, so the byte-index slice stays on char boundaries.
+fn unquote_key(key: &str) -> &str {
+    for q in ['"', '\''] {
+        if key.len() >= 2 && key.starts_with(q) && key.ends_with(q) {
+            return key[1..key.len() - 1].trim();
+        }
+    }
+    key
 }
 
 #[cfg(test)]
@@ -144,5 +170,35 @@ mod tests {
             "... fence + its indented block dropped: {out}"
         );
         assert_eq!(out, "keep: yes\n");
+    }
+
+    #[test]
+    fn sanitize_drops_top_level_lines_without_a_key_mapping() {
+        // A bare scalar or a top-level `- list` item is not a valid mapping
+        // entry — injected into the block it would be malformed YAML (Codex P2).
+        let text = "- personal\njust some text\nvalid: yes";
+        let out = sanitize_extra_frontmatter(text, &[]);
+        assert!(
+            !out.contains("- personal"),
+            "top-level list item dropped: {out}"
+        );
+        assert!(
+            !out.contains("just some text"),
+            "bare scalar dropped: {out}"
+        );
+        assert_eq!(out, "valid: yes\n");
+    }
+
+    #[test]
+    fn sanitize_drops_a_quoted_reserved_key() {
+        // A QUOTED reserved key must not evade the reserved check — YAML/Obsidian
+        // still read `"type": Note` as `type`, redefining the managed field.
+        assert_eq!(sanitize_extra_frontmatter("\"type\": Note", &["type"]), "");
+        assert_eq!(sanitize_extra_frontmatter("'type': Note", &["type"]), "");
+        // A quoted NON-reserved key stays (valid YAML, kept verbatim).
+        assert_eq!(
+            sanitize_extra_frontmatter("\"project\": Alpha", &["type"]),
+            "\"project\": Alpha\n"
+        );
     }
 }
