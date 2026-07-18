@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
+import UpdateView from "../src/components/UpdateView.vue";
 import Tasks from "../src/components/Tasks.vue";
 import { useCaptureStore } from "../src/stores/capture";
 import { useDocumentImportsStore } from "../src/stores/documentImports";
@@ -31,6 +32,20 @@ describe("ActionPanel", () => {
 
   afterEach(() => {
     clearMocks();
+  });
+
+  it("renders the dedicated update view and a back button", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openUpdate();
+    // stub UpdateView so the panel test needn't mock the updater plugins
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { UpdateView: true } },
+    });
+    expect(wrapper.text()).toContain("Update"); // the view title
+    expect(wrapper.findComponent(UpdateView).exists()).toBe(true);
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
   });
 
   it("lists each vault with both actions and a count badge", () => {
