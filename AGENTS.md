@@ -255,12 +255,12 @@ Keep this table in sync when adding/removing commands.
 | --- | --- |
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `close_bubble`, `announce`, `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
-| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config`, `get_transcription_config`, `set_transcription_config` |
+| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle and the `document_extract_images` images/text-only toggle), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
@@ -318,7 +318,7 @@ actually subscribe.
 | State | Location |
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
-| Per-vault capture/tasks/`documents_folder` settings + app-global `mcp` and `document_import` (user-set `pandoc_path` override) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
+| Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp` and `document_import` (user-set `pandoc_path` override) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
@@ -519,7 +519,8 @@ directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-09-task-tags-design.md`,
 `docs/superpowers/specs/2026-07-10-task-aggregation-design.md`,
 `docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`,
-`docs/superpowers/specs/2026-07-15-tasks-lists-first-drag-default-and-task-ids-design.md`.
+`docs/superpowers/specs/2026-07-15-tasks-lists-first-drag-default-and-task-ids-design.md`,
+`docs/superpowers/specs/2026-07-18-vault-ux-and-configurable-templates-design.md`.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
 `list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
@@ -553,10 +554,29 @@ Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
   a user who just launched Obsidian must not stay stuck on a cached empty
   list) but keeps the previous list when a refresh fails transiently, so a
   working panel never blanks. Launching a vault closes the panel; a failed
-  launch keeps it open with the error banner.
-- **`VaultList.vue`** surfaces `open: true` vaults first under an "Open
-  now" header (flat list when nothing is open); the name/path filter only
-  appears above 5 vaults.
+  launch keeps it open with the error banner. It also hydrates a reactive
+  `favorites: Set<string>` from `localStorage` at init and exposes a
+  `toggleFavorite(id)` action that updates the set and persists it.
+- **Favorite vaults** (vault-UX-polish increment) are pure frontend
+  panel-list-ordering state — recording/MCP/import all address vaults by id
+  regardless of favorite status, so favorites never touch `config.json`.
+  `src/utils/favoriteVaults.ts` (`loadFavorites`/`toggleFavorite`) persists a
+  JSON id array under the localStorage key `vault-buddy:favorite-vaults`,
+  built on a new shared defensive-load helper,
+  `src/utils/localStorageStringArray.ts`, that `recentSearches.ts` also
+  adopted (deduping what had been two independently grown copies of the
+  same load logic).
+- **`VaultList.vue`** groups a favorited vault into a `★ Favorites` section
+  pinned **above** "Open now"/"Other vaults" — it renders exactly once
+  (never duplicated into "Open now"), keeping its ordinary open-dot when
+  it's also currently open; the remainder keeps today's exact "Open
+  now"/"Other vaults" split, staying a flat header-less list when neither
+  group has members (byte-for-byte unchanged with no favorites). A per-row
+  star button (`aria-pressed`) toggles membership through the store. The
+  name/path filter (still shown only above 5 vaults) now lives in a shared
+  composable, `src/composables/useVaultFilter.ts` (extracted out of
+  `ActionPanel.vue`, which adopted it too), that `ImportVaultPicker.vue`'s
+  vault-first picker also uses — see the document-import domain section.
 
 ## The capture domain (`src-tauri/capture/` + `capture_commands.rs` + `capture` store)
 
@@ -589,9 +609,10 @@ found the failure it prevents:
   never re-writes `recordingFolder`, so it retires on the vault's next
   config save.
 - **Flat vs. dated layout, per domain, per vault.** `recording_date_folders`
-  (bool, default `true`) picks whether NEW recordings land under the dated
-  `<folder>/YYYY/MM` (the long-standing default) or flat, directly in
-  `<folder>`; `capture_paths::capture_dir(root, date, dated)` is the one
+  (bool, default `false` as of the vault-UX-polish increment — flat is now
+  the default; it shipped `true` before) picks whether NEW recordings land
+  under the dated `<folder>/YYYY/MM` or flat, directly in `<folder>` (now
+  the default); `capture_paths::capture_dir(root, date, dated)` is the one
   branch point the recording write path (`start_capture`'s dated-folder call
   site) uses, so the companion note and transcript sidecar — which share the
   same `dir` — follow automatically. Every READ/recovery path is
@@ -645,7 +666,30 @@ found the failure it prevents:
   and carries recording metadata; with the per-vault `follow_up_template` on
   (default), `render_note` (core) also appends a `## Follow-up` scaffold (action
   items / decisions / notes). Threaded through the capture crate, same atomic
-  temp write, still never clobbering an existing note.
+  temp write, still never clobbering an existing note. **Additive per-vault
+  template** (vault-UX-polish increment; the same mechanism backs the
+  document-import and task renderers documented further below). Two optional
+  `VaultCaptureConfig` fields, `note_extra_frontmatter` / `note_body_template`
+  (blank → `None`, saved via `set_capture_config`), let a vault add
+  free-text frontmatter and body content around `render_note`'s managed
+  output — the identity keys
+  (`recorded`/`duration`/`paused`/`vault`/`type`/`inputs`/`event`/
+  `created-by`) and both embeds are ALWAYS emitted and never
+  user-removable. A shared `core::template` module backs all three template
+  surfaces: `substitute(template, vars)` fills `{{placeholder}}` tokens
+  (whitespace-tolerant, e.g. `{{ title }}`; an unknown token renders empty
+  rather than leaking a literal `{{typo}}`), and
+  `sanitize_extra_frontmatter(text, reserved)` makes substituted
+  extra-frontmatter text safe to inject right before the closing `---` — it
+  drops blank lines, any `---`/`...` fence line (can't break out of the
+  block), and any line whose key is in the caller's `reserved` set
+  (case-insensitive, list-continuation lines included), so user content can
+  never redefine a managed key. `render_note` injects the extra frontmatter
+  after `created-by`, and a non-empty `note_body_template` REPLACES the
+  `follow_up_template` scaffold between the two embeds (the scaffold still
+  renders when the body template is empty and `follow_up_template` is on).
+  **An empty/unset template reproduces today's exact byte-for-byte output**
+  (regression-tested), so nothing changes for a vault that doesn't opt in.
 - Per-vault settings live app-side in `%APPDATA%\vault-buddy\config.json`
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
@@ -701,9 +745,11 @@ because a review found the failure it prevents:
   symptom was opening Buddy settings (its Integrations tab mounts
   `DocumentImportSettings`, which probes Pandoc on mount) flashing a terminal
   then closing the settings panel. Piped stdout/stderr are unaffected.
-- **Flat vs. dated layout (`document_date_folders`).** The same per-vault
-  toggle and `capture_paths::capture_dir` precedent as the capture domain:
-  `convert_blocking` targets the documents root directly (flat) instead of
+- **Flat vs. dated layout (`document_date_folders`, default `false` as of
+  the vault-UX-polish increment — flat is now the default, like
+  `recording_date_folders`; both shipped `true` before).** The same
+  per-vault toggle and `capture_paths::capture_dir` precedent as the capture
+  domain: `convert_blocking` targets the documents root directly (flat) instead of
   `<root>/YYYY/MM` when the vault's `document_date_folders` is off; the
   staging dir and the publish target both land in whichever dir was chosen.
   Recovery is layout-agnostic (see Owned-temp recovery below), so flipping
@@ -734,7 +780,25 @@ because a review found the failure it prevents:
   the note commit fails. The ~two-rename window between media publish and the
   note write is the accepted `GAP-54` crash gap (worst case: a stray folder of
   our own extracted files, no user data). The original file stays at its
-  source — import copies, never moves.
+  source — import copies, never moves. **Additive per-vault template**
+  (vault-UX-polish increment; one of the three sanctioned-writer template
+  surfaces alongside the capture note above and the task renderer in the
+  tasks domain further below — same `core::template` substitute-then-sanitize
+  machinery throughout). Two optional `VaultCaptureConfig` fields,
+  `document_extra_frontmatter` / `document_body_template` (blank → `None`,
+  saved via `set_documents_config` — the same command that owns the
+  folder/layout/images toggles), let a vault add free-text frontmatter
+  (substituted against `{{source}}`/`{{format}}`/`{{date}}`, then sanitized
+  against the managed keys above — `type`/`tags`/`source`/`imported`/
+  `format`/`created-by`) and wrap the Pandoc body. `assemble_body(body_template,
+  content)` composes the note body: a `{{content}}` token
+  (whitespace-tolerant, so `{{ content }}` counts) is substituted with the
+  Pandoc-converted GFM in place; a template that omits the token gets the
+  content APPENDED rather than dropped, so a conversion is never silently
+  lost (a naive `.contains("{{content}}")` check missed the spaced spelling
+  AND duplicated the content — fixed via a sentinel-probe substitution
+  instead). `None`/blank templates reproduce today's exact output (content
+  alone) byte-for-byte.
 - **Containment, lexical + canonical, at every level.** `safe_recording_root`
   + `assert_path_inside_vault` gate the documents root; the **fully dated
   dir is asserted before AND after `create_dir_all`** (the pre-create check
@@ -754,11 +818,18 @@ because a review found the failure it prevents:
 - **Frontend**: app-global Pandoc status/path lives in
   `DocumentImportSettings.vue`, shown both as a Buddy-settings section AND as
   the dedicated `documentImport` panel view (`detect_pandoc` /
-  `set_pandoc_path` with a Browse picker), the per-vault Documents Folder in
-  `CaptureSettings.vue` via the shared `VaultFolderSetting.vue`, the OS
+  `set_pandoc_path` with a Browse picker), the per-vault Documents Folder,
+  layout/images toggles, and (vault-UX-polish increment) the additive
+  extra-frontmatter/body-template textareas, all in `DocumentsConfigTab.vue`
+  (a `CaptureSettings.vue` tab; the folder field is the shared
+  `VaultFolderSetting.vue`), the OS
   drag-drop handled in `BuddyRoot.vue` (filters `docx/odt/rtf`, highlights the
   buddy via `CompanionCharacter`'s `dropTarget` while a droppable doc hovers)
-  landing on the Pandoc-gated vault chooser `ImportVaultPicker.vue`, and the
+  landing on the Pandoc-gated vault chooser `ImportVaultPicker.vue` — which
+  (vault-UX-polish increment) now filters via the shared `useVaultFilter`
+  composable (see the vault domain section) and orders favorited vaults
+  first via the new `ImportVaultPickerList.vue` presentational row list
+  (ordering only; no star toggle in the picker) — and the
   record-chooser action in `RecordMode.vue`. A blocked Import (Pandoc
   missing/too old) routes to the focused `documentImport` view
   (`store.openDocumentImport()`), **not** the buried Buddy-settings card. A
@@ -1357,7 +1428,34 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   (toggle + property-name input + inline error, no invoke of its own) in
   the Vault settings Tasks tab; `TasksConfigTab.vue` owns the load,
   autosave scheduling, and the `set_task_id_config` call, mirroring how it
-  already drives the sibling `VaultFolderSetting.vue` card.
+  already drives the sibling `VaultFolderSetting.vue` card. Its card is now
+  SECOND in the tab (vault-UX-polish increment): the per-vault Tasks
+  settings tab order is Tasks folder → **Task IDs** → Task lists → Task
+  template (see below) — a pure template reorder, no behavior change.
+- **Task templates (opt-in per vault, additive — vault-UX-polish
+  increment).** Two more optional `VaultCaptureConfig` fields,
+  `task_extra_frontmatter` / `task_body_template` (blank → `None`), owned by
+  their own independent field-save command, `set_task_template_config`
+  (async, the `set_task_id_config` read-modify-write pattern under
+  `ConfigWriteLock`) — not `set_capture_config`/`set_tasks_config`, so a
+  template save can't reset the folder/lists/id fields, or vice versa.
+  `render_task` (now taking both fields) reuses the capture-note's
+  `core::template` substitute-then-sanitize machinery (see the capture domain): extra
+  frontmatter is substituted (`{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`)
+  and sanitized against the reserved task keys (`type`/`status`/`title`/
+  `created`/`due`/`priority`/`tags`/`tag`/`order`, plus the vault's
+  configured task-id property when one is set) before injection, so a user
+  key can never confuse the surgical field writer (`set_fields`); a
+  non-empty `task_body_template` becomes the task's body — tasks have none
+  today, so this is new content, not a scaffold replacement. Empty/unset
+  templates reproduce the exact historical (bodyless) task output
+  byte-for-byte. `is_task`/`set_fields` are unchanged: a templated task
+  still round-trips status toggles and inline edits unaffected outside the
+  templated region. **Frontend**: a presentational `TaskTemplateSettings.vue`
+  card (own free-text extra-frontmatter + body textareas,
+  `TaskIdSettings.vue`'s prop/emit shape, `TasksConfigTab.vue` owns
+  load/autosave) is the LAST card in the Tasks settings tab (see the
+  reordered layout above).
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 
