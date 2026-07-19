@@ -359,7 +359,13 @@ pub fn render_extra_frontmatter(
                 // evade this filter. Merge anchors have no use in additive frontmatter.
                 s != "<<" && !reserved.iter().any(|r| r.eq_ignore_ascii_case(s))
             }
-            _ => true,
+            // Drop any NON-string top-level key. A YAML complex key (`? [type]`)
+            // parses as a Sequence/Mapping, not a String, so it would slip past the
+            // reserved check above — but Obsidian's js-yaml stringifies such a key
+            // when building its object (`[type]` -> `type`), which could then
+            // shadow or duplicate a managed field. Extra frontmatter has no
+            // legitimate non-string key, so reject them outright (like `<<`).
+            _ => false,
         })
         .collect();
     if kept.is_empty() {
@@ -693,6 +699,20 @@ mod tests {
             "merge-key reserved evasion blocked: {out}"
         );
         assert!(out.contains("keep: kept"), "{out}");
+    }
+
+    #[test]
+    fn render_drops_a_complex_key_that_stringifies_to_a_reserved_name() {
+        // A YAML complex key `? [type]` parses as a Sequence key (not a String),
+        // so it would slip past the string-only reserved check — but Obsidian's
+        // js-yaml stringifies `[type]` -> `type`, shadowing the managed field.
+        // Non-string top-level keys are rejected outright.
+        let out = render_extra_frontmatter("? [type]\n: Evil\nkeep: kept", &[], &["type"]);
+        assert!(
+            !out.contains("Evil"),
+            "complex reserved-key evasion blocked: {out}"
+        );
+        assert!(!out.contains("type"), "no `type` key emitted: {out}");
     }
 
     #[test]
