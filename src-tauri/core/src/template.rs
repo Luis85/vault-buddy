@@ -126,6 +126,172 @@ fn resolve_value(v: &mut Value, values: &[String]) {
     }
 }
 
+/// Count up to `max` consecutive ASCII digits at `start`.
+fn count_digits(b: &[u8], start: usize, max: usize) -> usize {
+    let mut c = 0;
+    while c < max && matches!(b.get(start + c), Some(d) if d.is_ascii_digit()) {
+        c += 1;
+    }
+    c
+}
+
+/// `^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$` — js-yaml's date-only
+/// timestamp regex (whole string, 4-2-2 digits with literal dashes).
+fn is_date_only(b: &[u8]) -> bool {
+    b.len() == 10
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5].is_ascii_digit()
+        && b[6].is_ascii_digit()
+        && b[7] == b'-'
+        && b[8].is_ascii_digit()
+        && b[9].is_ascii_digit()
+}
+
+/// js-yaml's date-time timestamp regex, whole-string:
+/// `[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?(?:[Tt]|[ \t]+)`
+/// `[0-9][0-9]?:[0-9][0-9]:[0-9][0-9](?:\.[0-9]*)?`
+/// `(?:[ \t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?`.
+/// Hand-rolled (no regex dependency); each field width mirrors the pattern
+/// exactly so it neither under- nor over-matches js-yaml.
+fn is_date_time(b: &[u8]) -> bool {
+    let n = b.len();
+    let mut i = 0usize;
+    // 4-digit year, then '-'
+    if count_digits(b, i, 4) != 4 {
+        return false;
+    }
+    i += 4;
+    if b.get(i) != Some(&b'-') {
+        return false;
+    }
+    i += 1;
+    // 1-2 digit month, then '-'
+    let m = count_digits(b, i, 2);
+    if m == 0 {
+        return false;
+    }
+    i += m;
+    if b.get(i) != Some(&b'-') {
+        return false;
+    }
+    i += 1;
+    // 1-2 digit day
+    let d = count_digits(b, i, 2);
+    if d == 0 {
+        return false;
+    }
+    i += d;
+    // separator: a single T/t, or one-or-more space/tab
+    match b.get(i) {
+        Some(&c) if c == b'T' || c == b't' => i += 1,
+        Some(&c) if c == b' ' || c == b'\t' => {
+            i += 1;
+            while matches!(b.get(i), Some(&c) if c == b' ' || c == b'\t') {
+                i += 1;
+            }
+        }
+        _ => return false,
+    }
+    // 1-2 digit hour, ':', 2-digit minute, ':', 2-digit second
+    let h = count_digits(b, i, 2);
+    if h == 0 {
+        return false;
+    }
+    i += h;
+    if b.get(i) != Some(&b':') {
+        return false;
+    }
+    i += 1;
+    if count_digits(b, i, 2) != 2 {
+        return false;
+    }
+    i += 2;
+    if b.get(i) != Some(&b':') {
+        return false;
+    }
+    i += 1;
+    if count_digits(b, i, 2) != 2 {
+        return false;
+    }
+    i += 2;
+    // optional fraction: '.' then zero-or-more digits
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        i += count_digits(b, i, usize::MAX - i);
+    }
+    // optional timezone group `[ \t]*(Z|[-+][0-9][0-9]?(:[0-9][0-9])?)`, whole
+    // group optional — so trailing whitespace with no Z/offset must NOT be
+    // consumed (it would then fail the end anchor). Snapshot before the
+    // whitespace and restore if no zone follows.
+    let before_ws = i;
+    while matches!(b.get(i), Some(&c) if c == b' ' || c == b'\t') {
+        i += 1;
+    }
+    match b.get(i) {
+        Some(&b'Z') => i += 1,
+        Some(&c) if c == b'+' || c == b'-' => {
+            i += 1;
+            let oh = count_digits(b, i, 2);
+            if oh == 0 {
+                return false;
+            }
+            i += oh;
+            if b.get(i) == Some(&b':') {
+                i += 1;
+                if count_digits(b, i, 2) != 2 {
+                    return false;
+                }
+                i += 2;
+            }
+        }
+        _ => i = before_ws,
+    }
+    i == n
+}
+
+/// Whether `s` would be implicitly resolved to a timestamp by js-yaml's DEFAULT
+/// schema (the one implicit type serde_yaml_ng — YAML 1.2 core — does NOT guard,
+/// so serde emits such a string BARE and Obsidian then reads it as a Date).
+/// Matches js-yaml's two timestamp regexes on the WHOLE string; a string that
+/// merely contains a date substring is not a timestamp.
+fn is_timestamp(s: &str) -> bool {
+    let b = s.as_bytes();
+    is_date_only(b) || is_date_time(b)
+}
+
+/// A timestamp value's stand-in in the emitted YAML: the same collision-proof
+/// private-use sentinel scheme `sentinel` uses, which serde emits as a bare
+/// plain scalar (verified), so it can be swapped for the force-quoted form
+/// after serialization. Distinct `ts` body from the placeholder sentinels
+/// (already resolved away by this point) for clarity.
+fn ts_sentinel(i: usize) -> String {
+    format!("\u{E000}ts{i}\u{E000}")
+}
+
+/// Replace every timestamp-shaped string in a VALUE position (mapping values,
+/// sequence items, and their nested descendants — never keys) with a unique
+/// sentinel, recording the original. The recorded originals are re-emitted
+/// force-quoted after serialization so Obsidian keeps them as text, closing the
+/// one implicit-type gap serde leaves open. Non-timestamp scalars are untouched,
+/// so their bytes stay exactly as serde emits them.
+fn extract_timestamp_values(v: &mut Value, out: &mut Vec<String>) {
+    match v {
+        Value::String(s) if is_timestamp(s) => {
+            let idx = out.len();
+            out.push(std::mem::take(s));
+            *v = Value::String(ts_sentinel(idx));
+        }
+        Value::Sequence(seq) => seq
+            .iter_mut()
+            .for_each(|e| extract_timestamp_values(e, out)),
+        Value::Mapping(map) => map
+            .values_mut()
+            .for_each(|val| extract_timestamp_values(val, out)),
+        _ => {}
+    }
+}
+
 /// Render a per-vault extra-frontmatter template into mapping lines safe to
 /// inject before a closing `---`. `{{placeholders}}` are resolved via a
 /// sentinel round-trip, reserved top-level keys dropped, and the result
@@ -171,13 +337,26 @@ pub fn render_extra_frontmatter(
         log::warn!("extra frontmatter dropped: all keys reserved");
         return String::new();
     }
-    let emitted = match serde_yaml_ng::to_string(&Value::Mapping(kept)) {
+    // serde_yaml_ng (YAML 1.2 core) has no timestamp type, so an ISO-date-shaped
+    // string is emitted BARE — but Obsidian's js-yaml resolves a bare date to a
+    // Date, turning a text value into a Date property (and dropping an
+    // explicitly-quoted value's quotes). Swap each timestamp-shaped value for a
+    // sentinel, then re-emit it force-quoted after serialization so it stays
+    // text. serde already quotes every other implicit type (int/float/bool/null);
+    // timestamp is the one remaining gap.
+    let mut root = Value::Mapping(kept);
+    let mut ts_values: Vec<String> = Vec::new();
+    extract_timestamp_values(&mut root, &mut ts_values);
+    let mut emitted = match serde_yaml_ng::to_string(&root) {
         Ok(s) => s,
         Err(e) => {
             log::warn!("extra frontmatter dropped: emit failed ({e})");
             return String::new();
         }
     };
+    for (i, val) in ts_values.iter().enumerate() {
+        emitted = emitted.replace(&ts_sentinel(i), &yaml_quote(val));
+    }
     // The serializer emits no document markers for a root mapping; strip any
     // bare ---/... line defensively (we inject INSIDE our own fence) and
     // normalize to exactly one trailing newline.
@@ -237,7 +416,66 @@ mod tests {
         let vars = [("title", "Buy milk"), ("date", "2026-07-18")];
         assert_eq!(
             render_extra_frontmatter("name: {{title}}\nwhen: {{date}}", &vars, &[]),
-            "name: Buy milk\nwhen: 2026-07-18\n"
+            // `when` is force-quoted: a bare ISO date would be a Date in Obsidian.
+            "name: Buy milk\nwhen: \"2026-07-18\"\n"
+        );
+    }
+
+    #[test]
+    fn render_quotes_a_date_only_value_so_obsidian_keeps_it_text() {
+        // serde (YAML 1.2 core) emits a bare `2026-07-18`, which Obsidian's
+        // js-yaml resolves to a Date; force-quote it so it stays text.
+        let out = render_extra_frontmatter("label: {{t}}", &[("t", "2026-07-18")], &[]);
+        assert_eq!(out, "label: \"2026-07-18\"\n");
+        assert!(
+            !out.contains("label: 2026-07-18"),
+            "must not be bare: {out}"
+        );
+    }
+
+    #[test]
+    fn render_quotes_a_full_datetime_value() {
+        assert_eq!(
+            render_extra_frontmatter("when: {{t}}", &[("t", "2026-07-18T12:00:00Z")], &[]),
+            "when: \"2026-07-18T12:00:00Z\"\n"
+        );
+    }
+
+    #[test]
+    fn render_does_not_over_quote_non_timestamp_strings() {
+        // A plain word stays bare exactly as serde emits it.
+        assert_eq!(
+            render_extra_frontmatter("project: {{t}}", &[("t", "Alpha")], &[]),
+            "project: Alpha\n"
+        );
+        // A string that merely CONTAINS a date substring is not a pure
+        // timestamp (whole-string match), so it stays unchanged/bare.
+        assert_eq!(
+            render_extra_frontmatter("ref: {{t}}", &[("t", "/x/a.docx (docx, 2026-07-10)")], &[]),
+            "ref: /x/a.docx (docx, 2026-07-10)\n"
+        );
+        // Single-digit fields don't match js-yaml's strict date-only 4-2-2 regex.
+        assert_eq!(
+            render_extra_frontmatter("d: {{t}}", &[("t", "2026-7-8")], &[]),
+            "d: 2026-7-8\n"
+        );
+    }
+
+    #[test]
+    fn render_quotes_timestamps_in_nested_and_sequence_positions() {
+        // Nested mapping value.
+        assert_eq!(
+            render_extra_frontmatter("meta:\n  when: {{d}}", &[("d", "2026-07-18")], &[]),
+            "meta:\n  when: \"2026-07-18\"\n"
+        );
+        // Block-sequence items, date-only and full datetime.
+        assert_eq!(
+            render_extra_frontmatter(
+                "dates: [{{a}}, {{b}}]",
+                &[("a", "2026-07-18"), ("b", "2026-01-01T00:00:00Z")],
+                &[]
+            ),
+            "dates:\n- \"2026-07-18\"\n- \"2026-01-01T00:00:00Z\"\n"
         );
     }
 
