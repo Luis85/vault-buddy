@@ -275,6 +275,13 @@ fn ts_sentinel(i: usize) -> String {
 /// force-quoted after serialization so Obsidian keeps them as text, closing the
 /// one implicit-type gap serde leaves open. Non-timestamp scalars are untouched,
 /// so their bytes stay exactly as serde emits them.
+/// Pull every timestamp-shaped string VALUE out into `out`, leaving a
+/// `ts_sentinel(i)` marker in its place so the post-serialization pass can
+/// re-emit it double-quoted (serde emits it bare, which Obsidian's js-yaml
+/// resolves to a Date). Mapping values, sequence items, and nested structures
+/// are covered; mapping KEYS are intentionally excluded — the Obsidian
+/// date-property concern (and the Codex finding) is about value positions, and
+/// a date used as a property NAME is not a real case.
 fn extract_timestamp_values(v: &mut Value, out: &mut Vec<String>) {
     match v {
         Value::String(s) if is_timestamp(s) => {
@@ -458,6 +465,19 @@ mod tests {
         assert_eq!(
             render_extra_frontmatter("d: {{t}}", &[("t", "2026-7-8")], &[]),
             "d: 2026-7-8\n"
+        );
+    }
+
+    #[test]
+    fn render_quotes_a_single_digit_datetime_value() {
+        // js-yaml's date-TIME resolver allows single-digit month/day/hour
+        // (`[0-9]{1,2}`), unlike the strict 4-2-2 date-only form — so a
+        // single-digit datetime IS a timestamp and must be force-quoted, even
+        // though the bare single-digit DATE above is not. Locks the delicate
+        // `{1,2}`-field branch of the hand-ported matcher.
+        assert_eq!(
+            render_extra_frontmatter("d: {{t}}", &[("t", "2026-7-8 12:00:00")], &[]),
+            "d: \"2026-7-8 12:00:00\"\n"
         );
     }
 
