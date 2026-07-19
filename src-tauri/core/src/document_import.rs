@@ -60,11 +60,12 @@ pub struct DocMeta {
 /// prepended by the shell after this). Every managed string value quoted via
 /// `yaml_quote`, so a Windows source path can't emit an invalid YAML escape.
 /// `extra_frontmatter` is the per-vault additive template (None → today's
-/// exact output, byte-identical): substituted against `{{source}}`,
-/// `{{format}}`, `{{date}}` then sanitized (fence-safe, reserved managed keys
-/// dropped) and injected right before the closing fence — same
-/// substitute-then-sanitize discipline as the capture note and task
-/// renderers.
+/// exact output, byte-identical): rendered via `render_extra_frontmatter`,
+/// which resolves `{{source}}`/`{{format}}`/`{{date}}` placeholders, parses
+/// the result as YAML, drops reserved managed keys, and re-emits
+/// Obsidian-compatible mapping lines injected right before the closing
+/// fence — same `render_extra_frontmatter` pipeline as the capture note and
+/// task renderers.
 pub fn render_frontmatter(meta: &DocMeta, extra_frontmatter: Option<&str>) -> String {
     let mut fm = format!(
         "---\ntype: Document\ntags: [vault-buddy-import]\nsource: {}\nimported: {}\nformat: {}\ncreated-by: Vault Buddy\n",
@@ -80,8 +81,9 @@ pub fn render_frontmatter(meta: &DocMeta, extra_frontmatter: Option<&str>) -> St
             ("format", meta.format.label()),
             ("date", meta.imported.as_str()),
         ];
-        fm.push_str(&crate::template::sanitize_extra_frontmatter(
-            &crate::template::substitute(ef, &vars),
+        fm.push_str(&crate::template::render_extra_frontmatter(
+            ef,
+            &vars,
             DOC_RESERVED,
         ));
     }
