@@ -6,6 +6,7 @@
 //! extra frontmatter can never break the fence or redefine a managed key.
 
 use serde_yaml_ng::{Mapping, Value};
+use std::collections::HashMap;
 
 /// Double-quote a YAML scalar, escaping `\` and `"` and flattening newlines to
 /// spaces. The home for the app's frontmatter quoting: `render_note`/
@@ -84,29 +85,58 @@ fn tokenize(template: &str, vars: &[(&str, &str)]) -> (String, Vec<String>) {
 /// (mapping keys and values, recursively). A value lands as an opaque string,
 /// so it can never inject YAML structure and a numeric-looking value stays a
 /// string.
-fn resolve_value(v: &mut Value, values: &[String]) {
+///
+/// `quoted_ts` maps the sentinel of each placeholder that was written wrapped in
+/// quotes in the SOURCE *and* resolves to a timestamp-shaped value
+/// (`sentinel(i) -> i`); such a scalar is diverted to a `ts_sentinel` (recording
+/// its value in `ts_values`) so the post-emit pass force-quotes it. This
+/// preserves the user's source quote-style intent: a QUOTED timestamp
+/// placeholder (`"{{date}}"`) means "keep it text", while a bare placeholder or
+/// a bare/quoted literal rides serde's default bare emission — which Obsidian
+/// then reads as a Date. serde discards the bare-vs-quoted distinction, so it
+/// must be carried from the pre-parse tokenized text down to here.
+fn resolve_value(
+    v: &mut Value,
+    values: &[String],
+    quoted_ts: &HashMap<String, usize>,
+    ts_values: &mut Vec<String>,
+) {
     match v {
         Value::String(s) => {
-            // Splice each recorded value in place of its sentinel, in index order.
-            // A recorded value that itself contained a later index's sentinel text
-            // could cross-substitute, but values are app/user text where a literal
-            // U+E000 delimiter is effectively impossible and the worst case is one
-            // value replacing another — never a structure breakout. Bounded, not guarded.
-            for (i, val) in values.iter().enumerate() {
-                let token = sentinel(i);
-                if s.contains(&token) {
-                    *s = s.replace(&token, val);
+            if let Some(&i) = quoted_ts.get(s.as_str()) {
+                // The whole scalar is exactly one quoted timestamp placeholder:
+                // `"{{date}}"` tokenizes to `"<sentinel>"`, and the parser
+                // consumes the quotes, so the parsed scalar equals `sentinel(i)`
+                // verbatim. Stand in a ts_sentinel the post-emit pass force-quotes
+                // instead of splicing the raw value that serde would emit bare
+                // (→ an Obsidian Date), honouring the source quotes.
+                let k = ts_values.len();
+                ts_values.push(values[i].clone());
+                *s = ts_sentinel(k);
+            } else {
+                // Splice each recorded value in place of its sentinel, in index order.
+                // A recorded value that itself contained a later index's sentinel text
+                // could cross-substitute, but values are app/user text where a literal
+                // U+E000 delimiter is effectively impossible and the worst case is one
+                // value replacing another — never a structure breakout. Bounded, not guarded.
+                for (i, val) in values.iter().enumerate() {
+                    let token = sentinel(i);
+                    if s.contains(&token) {
+                        *s = s.replace(&token, val);
+                    }
                 }
             }
         }
-        Value::Sequence(seq) => seq.iter_mut().for_each(|e| resolve_value(e, values)),
+        Value::Sequence(seq) => seq
+            .iter_mut()
+            .for_each(|e| resolve_value(e, values, quoted_ts, ts_values)),
         Value::Mapping(map) => {
             // Rebuild so KEYS are resolved too; the IndexMap-backed Mapping
             // preserves insertion order across the rebuild.
             let taken = std::mem::take(map);
             for (mut k, mut val) in taken {
-                resolve_value(&mut k, values);
-                resolve_value(&mut val, values);
+                resolve_value(&mut k, values, quoted_ts, ts_values);
+                resolve_value(&mut val, values, quoted_ts, ts_values);
                 map.insert(k, val);
             }
         }
@@ -118,7 +148,7 @@ fn resolve_value(v: &mut Value, values: &[String]) {
             // Obsidian-parseable and no sentinel leaks. (Standard tags like `!!str`
             // are already resolved to String/Number by serde before we get here.)
             if let Value::Tagged(mut t) = std::mem::take(v) {
-                resolve_value(&mut t.value, values);
+                resolve_value(&mut t.value, values, quoted_ts, ts_values);
                 *v = t.value;
             }
         }
@@ -254,7 +284,8 @@ fn is_date_time(b: &[u8]) -> bool {
 /// schema (the one implicit type serde_yaml_ng — YAML 1.2 core — does NOT guard,
 /// so serde emits such a string BARE and Obsidian then reads it as a Date).
 /// Matches js-yaml's two timestamp regexes on the WHOLE string; a string that
-/// merely contains a date substring is not a timestamp.
+/// merely contains a date substring is not a timestamp. Used to classify a
+/// QUOTED placeholder value as one whose source quote-style must be preserved.
 fn is_timestamp(s: &str) -> bool {
     let b = s.as_bytes();
     is_date_only(b) || is_date_time(b)
@@ -263,40 +294,10 @@ fn is_timestamp(s: &str) -> bool {
 /// A timestamp value's stand-in in the emitted YAML: the same collision-proof
 /// private-use sentinel scheme `sentinel` uses, which serde emits as a bare
 /// plain scalar (verified), so it can be swapped for the force-quoted form
-/// after serialization. Distinct `ts` body from the placeholder sentinels
-/// (already resolved away by this point) for clarity.
+/// after serialization. Distinct `ts` body from the placeholder sentinels it
+/// replaces during resolve, for clarity.
 fn ts_sentinel(i: usize) -> String {
     format!("\u{E000}ts{i}\u{E000}")
-}
-
-/// Replace every timestamp-shaped string in a VALUE position (mapping values,
-/// sequence items, and their nested descendants — never keys) with a unique
-/// sentinel, recording the original. The recorded originals are re-emitted
-/// force-quoted after serialization so Obsidian keeps them as text, closing the
-/// one implicit-type gap serde leaves open. Non-timestamp scalars are untouched,
-/// so their bytes stay exactly as serde emits them.
-/// Pull every timestamp-shaped string VALUE out into `out`, leaving a
-/// `ts_sentinel(i)` marker in its place so the post-serialization pass can
-/// re-emit it double-quoted (serde emits it bare, which Obsidian's js-yaml
-/// resolves to a Date). Mapping values, sequence items, and nested structures
-/// are covered; mapping KEYS are intentionally excluded — the Obsidian
-/// date-property concern (and the Codex finding) is about value positions, and
-/// a date used as a property NAME is not a real case.
-fn extract_timestamp_values(v: &mut Value, out: &mut Vec<String>) {
-    match v {
-        Value::String(s) if is_timestamp(s) => {
-            let idx = out.len();
-            out.push(std::mem::take(s));
-            *v = Value::String(ts_sentinel(idx));
-        }
-        Value::Sequence(seq) => seq
-            .iter_mut()
-            .for_each(|e| extract_timestamp_values(e, out)),
-        Value::Mapping(map) => map
-            .values_mut()
-            .for_each(|val| extract_timestamp_values(val, out)),
-        _ => {}
-    }
 }
 
 /// Render a per-vault extra-frontmatter template into mapping lines safe to
@@ -315,6 +316,24 @@ pub fn render_extra_frontmatter(
     if tokenized.trim().is_empty() {
         return String::new();
     }
+    // Classify each placeholder occurrence as a "quoted timestamp placeholder":
+    // its value is timestamp-shaped AND its sentinel appears wrapped in matching
+    // quotes in the TOKENIZED text (i.e. the source wrote `"{{date}}"`/`'{{date}}'`).
+    // Only these are force-quoted later, preserving the user's source quote-style:
+    // a bare `{{date}}` or a bare/quoted literal rides serde's default emission
+    // (bare for a timestamp → an Obsidian Date), which is the bare-source intent.
+    // The parser discards bare-vs-quoted, so the distinction is detected here,
+    // before parsing, while the quotes still exist. Sentinels are unique per
+    // occurrence, so each appears exactly once and the `contains` check is exact.
+    let quoted_ts: HashMap<String, usize> = (0..values.len())
+        .filter(|&i| {
+            is_timestamp(&values[i]) && {
+                let s = sentinel(i);
+                tokenized.contains(&format!("\"{s}\"")) || tokenized.contains(&format!("'{s}'"))
+            }
+        })
+        .map(|i| (sentinel(i), i))
+        .collect();
     let mut root: Value = match serde_yaml_ng::from_str(&tokenized) {
         Ok(v) => v,
         Err(e) => {
@@ -322,7 +341,10 @@ pub fn render_extra_frontmatter(
             return String::new();
         }
     };
-    resolve_value(&mut root, &values);
+    // `ts_values` collects the originals of the diverted quoted-timestamp values;
+    // resolve replaces each with a `ts_sentinel` the post-emit pass force-quotes.
+    let mut ts_values: Vec<String> = Vec::new();
+    resolve_value(&mut root, &values, &quoted_ts, &mut ts_values);
     let Value::Mapping(map) = root else {
         log::warn!("extra frontmatter dropped: root is not a mapping");
         return String::new();
@@ -344,16 +366,7 @@ pub fn render_extra_frontmatter(
         log::warn!("extra frontmatter dropped: all keys reserved");
         return String::new();
     }
-    // serde_yaml_ng (YAML 1.2 core) has no timestamp type, so an ISO-date-shaped
-    // string is emitted BARE — but Obsidian's js-yaml resolves a bare date to a
-    // Date, turning a text value into a Date property (and dropping an
-    // explicitly-quoted value's quotes). Swap each timestamp-shaped value for a
-    // sentinel, then re-emit it force-quoted after serialization so it stays
-    // text. serde already quotes every other implicit type (int/float/bool/null);
-    // timestamp is the one remaining gap.
-    let mut root = Value::Mapping(kept);
-    let mut ts_values: Vec<String> = Vec::new();
-    extract_timestamp_values(&mut root, &mut ts_values);
+    let root = Value::Mapping(kept);
     let mut emitted = match serde_yaml_ng::to_string(&root) {
         Ok(s) => s,
         Err(e) => {
@@ -361,6 +374,14 @@ pub fn render_extra_frontmatter(
             return String::new();
         }
     };
+    // serde_yaml_ng (YAML 1.2 core) has no timestamp type, so an ISO-date-shaped
+    // string is emitted BARE — which Obsidian's js-yaml would resolve to a Date.
+    // resolve() already diverted every value that came from an explicitly QUOTED
+    // timestamp placeholder to a ts_sentinel (serde emits it bare too); re-emit
+    // those force-quoted so a `"{{date}}"`-sourced value stays text. A bare
+    // placeholder or a literal was left untouched, so it emits per serde's
+    // default (bare) — the correct bare-source intent. serde already quotes every
+    // other implicit type (int/float/bool/null).
     for (i, val) in ts_values.iter().enumerate() {
         emitted = emitted.replace(&ts_sentinel(i), &yaml_quote(val));
     }
@@ -423,16 +444,19 @@ mod tests {
         let vars = [("title", "Buy milk"), ("date", "2026-07-18")];
         assert_eq!(
             render_extra_frontmatter("name: {{title}}\nwhen: {{date}}", &vars, &[]),
-            // `when` is force-quoted: a bare ISO date would be a Date in Obsidian.
-            "name: Buy milk\nwhen: \"2026-07-18\"\n"
+            // A BARE `{{date}}` placeholder emits bare, so Obsidian reads it as a
+            // Date property — the intended shape for an unquoted date.
+            "name: Buy milk\nwhen: 2026-07-18\n"
         );
     }
 
     #[test]
     fn render_quotes_a_date_only_value_so_obsidian_keeps_it_text() {
-        // serde (YAML 1.2 core) emits a bare `2026-07-18`, which Obsidian's
-        // js-yaml resolves to a Date; force-quote it so it stays text.
-        let out = render_extra_frontmatter("label: {{t}}", &[("t", "2026-07-18")], &[]);
+        // A QUOTED placeholder signals the user wants TEXT: serde (YAML 1.2 core)
+        // would emit `2026-07-18` bare (which Obsidian's js-yaml resolves to a
+        // Date), so force-quote the value that came from `"{{t}}"` to preserve the
+        // source quote-style.
+        let out = render_extra_frontmatter("label: \"{{t}}\"", &[("t", "2026-07-18")], &[]);
         assert_eq!(out, "label: \"2026-07-18\"\n");
         assert!(
             !out.contains("label: 2026-07-18"),
@@ -442,8 +466,9 @@ mod tests {
 
     #[test]
     fn render_quotes_a_full_datetime_value() {
+        // Quoted placeholder → the full datetime stays quoted text.
         assert_eq!(
-            render_extra_frontmatter("when: {{t}}", &[("t", "2026-07-18T12:00:00Z")], &[]),
+            render_extra_frontmatter("when: \"{{t}}\"", &[("t", "2026-07-18T12:00:00Z")], &[]),
             "when: \"2026-07-18T12:00:00Z\"\n"
         );
     }
@@ -472,30 +497,75 @@ mod tests {
     fn render_quotes_a_single_digit_datetime_value() {
         // js-yaml's date-TIME resolver allows single-digit month/day/hour
         // (`[0-9]{1,2}`), unlike the strict 4-2-2 date-only form — so a
-        // single-digit datetime IS a timestamp and must be force-quoted, even
-        // though the bare single-digit DATE above is not. Locks the delicate
-        // `{1,2}`-field branch of the hand-ported matcher.
+        // single-digit datetime IS a timestamp and, from a QUOTED placeholder,
+        // must be force-quoted, even though the bare single-digit DATE in
+        // `render_does_not_over_quote_non_timestamp_strings` is not. Locks the
+        // delicate `{1,2}`-field branch of the hand-ported matcher.
         assert_eq!(
-            render_extra_frontmatter("d: {{t}}", &[("t", "2026-7-8 12:00:00")], &[]),
+            render_extra_frontmatter("d: \"{{t}}\"", &[("t", "2026-7-8 12:00:00")], &[]),
             "d: \"2026-7-8 12:00:00\"\n"
         );
     }
 
     #[test]
     fn render_quotes_timestamps_in_nested_and_sequence_positions() {
-        // Nested mapping value.
+        // Nested mapping value, from a QUOTED placeholder.
         assert_eq!(
-            render_extra_frontmatter("meta:\n  when: {{d}}", &[("d", "2026-07-18")], &[]),
+            render_extra_frontmatter("meta:\n  when: \"{{d}}\"", &[("d", "2026-07-18")], &[]),
             "meta:\n  when: \"2026-07-18\"\n"
         );
-        // Block-sequence items, date-only and full datetime.
+        // Block-sequence items, date-only and full datetime, both quoted.
         assert_eq!(
             render_extra_frontmatter(
-                "dates: [{{a}}, {{b}}]",
+                "dates: [\"{{a}}\", \"{{b}}\"]",
                 &[("a", "2026-07-18"), ("b", "2026-01-01T00:00:00Z")],
                 &[]
             ),
             "dates:\n- \"2026-07-18\"\n- \"2026-01-01T00:00:00Z\"\n"
+        );
+    }
+
+    // The four acceptance cases pinning Option A — preserve the SOURCE
+    // quote-style for a date-shaped value.
+
+    #[test]
+    fn acceptance_1_bare_literal_timestamp_stays_bare_for_obsidian_date() {
+        // (#1) A bare literal date the user typed to get an Obsidian Date property
+        // must NOT be force-quoted into text.
+        assert_eq!(
+            render_extra_frontmatter("deadline: 2026-07-18", &[], &[]),
+            "deadline: 2026-07-18\n"
+        );
+    }
+
+    #[test]
+    fn acceptance_2_bare_placeholder_timestamp_stays_bare_for_obsidian_date() {
+        // (#2) A bare placeholder carries the same bare-source intent → bare/Date.
+        assert_eq!(
+            render_extra_frontmatter("when: {{t}}", &[("t", "2026-07-18")], &[]),
+            "when: 2026-07-18\n"
+        );
+    }
+
+    #[test]
+    fn acceptance_3_quoted_placeholder_timestamp_stays_quoted_text() {
+        // (#3) A QUOTED placeholder is the one case that force-quotes: the user
+        // explicitly asked for text, so the date survives as text.
+        assert_eq!(
+            render_extra_frontmatter("label: \"{{t}}\"", &[("t", "2026-07-18")], &[]),
+            "label: \"2026-07-18\"\n"
+        );
+    }
+
+    #[test]
+    fn acceptance_4_quoted_literal_timestamp_normalizes_to_bare_accepted_edge() {
+        // (#4) DOCUMENTED accepted edge: serde discards a literal's quote style
+        // (there is no placeholder round-trip to carry it), so a quoted LITERAL
+        // date normalizes to bare. Preserving it would require a style-aware YAML
+        // parser, which is out of scope (no new crate).
+        assert_eq!(
+            render_extra_frontmatter("label: \"2026-07-18\"", &[], &[]),
+            "label: 2026-07-18\n"
         );
     }
 
