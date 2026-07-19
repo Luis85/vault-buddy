@@ -465,6 +465,17 @@ mod tests {
     }
 
     #[test]
+    fn render_quotes_a_single_quoted_placeholder_timestamp() {
+        // The classifier accepts BOTH quote styles: a single-quoted placeholder
+        // `'{{t}}'` signals text just like the double-quoted form, so the value
+        // is force-quoted (emitted double-quoted). Locks the single-quote branch.
+        assert_eq!(
+            render_extra_frontmatter("label: '{{t}}'", &[("t", "2026-07-18")], &[]),
+            "label: \"2026-07-18\"\n"
+        );
+    }
+
+    #[test]
     fn render_quotes_a_full_datetime_value() {
         // Quoted placeholder → the full datetime stays quoted text.
         assert_eq!(
