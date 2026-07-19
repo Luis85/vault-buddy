@@ -325,6 +325,14 @@ pub fn render_extra_frontmatter(
     // The parser discards bare-vs-quoted, so the distinction is detected here,
     // before parsing, while the quotes still exist. Sentinels are unique per
     // occurrence, so each appears exactly once and the `contains` check is exact.
+    //
+    // Scope / accepted edge (Codex #4): only a scalar that is EXACTLY one quoted
+    // placeholder (`"{{date}}"`) is classified. A quoted scalar that COMPOSES a
+    // timestamp from a placeholder plus literal text (`"{{date}}T00:00:00Z"`), or
+    // from several placeholders, is not exactly a sentinel, so it is not force-
+    // quoted and normalizes to bare (an Obsidian Date) despite the quotes.
+    // Recovering that would need a style-preserving parser; the pure `"{{var}}"`
+    // form is the sanctioned way to keep a date-shaped value as text.
     let quoted_ts: HashMap<String, usize> = (0..values.len())
         .filter(|&i| {
             is_timestamp(&values[i]) && {
@@ -583,6 +591,19 @@ mod tests {
         assert_eq!(
             render_extra_frontmatter("label: \"2026-07-18\"", &[], &[]),
             "label: 2026-07-18\n"
+        );
+    }
+
+    #[test]
+    fn render_composed_quoted_timestamp_normalizes_to_bare_accepted_edge() {
+        // (#4, DOCUMENTED accepted edge) A quoted scalar that COMPOSES a timestamp
+        // from a placeholder + literal text is not exactly one sentinel, so the
+        // source quote-style can't be carried through and it normalizes to bare
+        // (an Obsidian Date). The pure `"{{var}}"` placeholder form is the
+        // sanctioned way to keep a date-shaped value as text.
+        assert_eq!(
+            render_extra_frontmatter("when: \"{{t}}T00:00:00Z\"", &[("t", "2026-07-18")], &[]),
+            "when: 2026-07-18T00:00:00Z\n"
         );
     }
 
