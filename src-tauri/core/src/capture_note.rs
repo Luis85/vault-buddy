@@ -95,8 +95,9 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
         out.push_str(&format!("event: {}\n", yaml_quote(event)));
     }
     out.push_str("created-by: Vault Buddy\n");
-    // Extra frontmatter: substituted then sanitized (reserved keys dropped,
-    // fence-safe) so a user field can never break the block or shadow a
+    // Extra frontmatter: rendered via render_extra_frontmatter, which
+    // resolves placeholders, parses as YAML, and drops reserved keys
+    // (fence-safe) so a user field can never break the block or shadow a
     // managed key. Injected right before the closing fence.
     let date = meta.recorded_at.split(['T', ' ']).next().unwrap_or("");
     let vars = [
@@ -117,8 +118,9 @@ pub fn render_note(meta: &NoteMeta, mp3_file_name: &str) -> String {
             "event",
             "created-by",
         ];
-        out.push_str(&crate::template::sanitize_extra_frontmatter(
-            &crate::template::substitute(extra, &vars),
+        out.push_str(&crate::template::render_extra_frontmatter(
+            extra,
+            &vars,
             NOTE_RESERVED,
         ));
     }

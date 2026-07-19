@@ -676,15 +676,19 @@ found the failure it prevents:
   (`recorded`/`duration`/`paused`/`vault`/`type`/`inputs`/`event`/
   `created-by`) and both embeds are ALWAYS emitted and never
   user-removable. A shared `core::template` module backs all three template
-  surfaces: `substitute(template, vars)` fills `{{placeholder}}` tokens
-  (whitespace-tolerant, e.g. `{{ title }}`; an unknown token renders empty
-  rather than leaking a literal `{{typo}}`), and
-  `sanitize_extra_frontmatter(text, reserved)` makes substituted
-  extra-frontmatter text safe to inject right before the closing `---` — it
-  drops blank lines, any `---`/`...` fence line (can't break out of the
-  block), and any line whose key is in the caller's `reserved` set
-  (case-insensitive, list-continuation lines included), so user content can
-  never redefine a managed key. `render_note` injects the extra frontmatter
+  surfaces: `substitute(template, vars)` fills `{{placeholder}}` tokens in
+  BODY templates (whitespace-tolerant, e.g. `{{ title }}`; an unknown token
+  renders empty rather than leaking a literal `{{typo}}`), and
+  `render_extra_frontmatter(template, vars, reserved)` renders a FRONTMATTER
+  template safely — it resolves `{{placeholder}}`s via a sentinel
+  round-trip, parses the result with a real YAML library (`serde_yaml_ng`),
+  drops any top-level key in the caller's `reserved` set (case-insensitive)
+  or a YAML merge key (`<<`, which Obsidian's js-yaml would otherwise honor
+  to smuggle a reserved key back in), and re-emits the survivors as
+  standard Obsidian-compatible mapping lines — malformed YAML, a
+  non-mapping root, or an all-reserved block yields `""` (never a broken
+  fence or a `{}` literal), so user content can never break the block or
+  redefine a managed key. `render_note` injects the extra frontmatter
   after `created-by`, and a non-empty `note_body_template` REPLACES the
   `follow_up_template` scaffold between the two embeds (the scaffold still
   renders when the body template is empty and `follow_up_template` is on).
@@ -783,14 +787,15 @@ because a review found the failure it prevents:
   source — import copies, never moves. **Additive per-vault template**
   (vault-UX-polish increment; one of the three sanctioned-writer template
   surfaces alongside the capture note above and the task renderer in the
-  tasks domain further below — same `core::template` substitute-then-sanitize
+  tasks domain further below — same `core::template::render_extra_frontmatter`
   machinery throughout). Two optional `VaultCaptureConfig` fields,
   `document_extra_frontmatter` / `document_body_template` (blank → `None`,
   saved via `set_documents_config` — the same command that owns the
   folder/layout/images toggles), let a vault add free-text frontmatter
-  (substituted against `{{source}}`/`{{format}}`/`{{date}}`, then sanitized
-  against the managed keys above — `type`/`tags`/`source`/`imported`/
-  `format`/`created-by`) and wrap the Pandoc body. `assemble_body(body_template,
+  (`{{source}}`/`{{format}}`/`{{date}}` placeholders resolved, the result
+  parsed as YAML and filtered against the managed keys above — `type`/
+  `tags`/`source`/`imported`/`format`/`created-by`) and wrap the Pandoc
+  body. `assemble_body(body_template,
   content)` composes the note body: a `{{content}}` token
   (whitespace-tolerant, so `{{ content }}` counts) is substituted with the
   Pandoc-converted GFM in place; a template that omits the token gets the
@@ -1440,12 +1445,13 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `ConfigWriteLock`) — not `set_capture_config`/`set_tasks_config`, so a
   template save can't reset the folder/lists/id fields, or vice versa.
   `render_task` (now taking both fields) reuses the capture-note's
-  `core::template` substitute-then-sanitize machinery (see the capture domain): extra
-  frontmatter is substituted (`{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`)
-  and sanitized against the reserved task keys (`type`/`status`/`title`/
-  `created`/`due`/`priority`/`tags`/`tag`/`order`, plus the vault's
-  configured task-id property when one is set) before injection, so a user
-  key can never confuse the surgical field writer (`set_fields`); a
+  `core::template::render_extra_frontmatter` (see the capture domain): extra
+  frontmatter placeholders (`{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`)
+  are resolved, the result parsed as YAML, and filtered against the
+  reserved task keys (`type`/`status`/`title`/`created`/`due`/`priority`/
+  `tags`/`tag`/`order`, plus the vault's configured task-id property when
+  one is set) before injection, so a user key can never confuse the
+  surgical field writer (`set_fields`); a
   non-empty `task_body_template` becomes the task's body — tasks have none
   today, so this is new content, not a scaffold replacement. Empty/unset
   templates reproduce the exact historical (bodyless) task output

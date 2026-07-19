@@ -40,7 +40,7 @@ pub fn task_basename(title: &str, today: &str) -> String {
 }
 
 /// The reserved task frontmatter keys: user extra frontmatter can never
-/// redefine one of these (`sanitize_extra_frontmatter` drops the line), so
+/// redefine one of these (`render_extra_frontmatter` drops the key), so
 /// the surgical field writer (`set_fields`) is never confused about which key
 /// it owns. The task-id property (when present) is appended to this set at
 /// call time — it's per-vault configurable, so it can't be a `const`.
@@ -58,9 +58,10 @@ const RESERVED_TASK_KEYS: &[&str] = &[
 /// immediately after `created:`.
 ///
 /// `extra_frontmatter` is `{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`
-/// substituted, then sanitized against the reserved keys above (plus the
-/// task-id property, when present) and injected right before the closing
-/// fence — same discipline as the capture-note renderer. `body_template`
+/// rendered via `render_extra_frontmatter`, which resolves the placeholders,
+/// parses the result as YAML, and drops the reserved keys above (plus the
+/// task-id property, when present) before injecting right before the closing
+/// fence — same pipeline as the capture-note renderer. `body_template`
 /// (same placeholders), when non-empty after trimming, becomes the task
 /// body — tasks have none today, so any non-empty template is new content,
 /// not a scaffold replacement. Both default to a no-op with `None`/empty, so
@@ -106,9 +107,8 @@ pub fn render_task(
         if let Some((prop, _)) = task_id {
             reserved.push(prop);
         }
-        extra.push_str(&crate::template::sanitize_extra_frontmatter(
-            &crate::template::substitute(ef, &vars),
-            &reserved,
+        extra.push_str(&crate::template::render_extra_frontmatter(
+            ef, &vars, &reserved,
         ));
     }
     let body = match body_template.map(str::trim) {
@@ -135,7 +135,7 @@ pub fn render_task(
 /// `render_task` verbatim. When `task_id` is `Some((property, id))`, a
 /// `<property>: <id>` line is written immediately after `created:`.
 /// `extra_frontmatter`/`body_template` pass straight through to `render_task`
-/// (see there for the substitution/sanitize contract).
+/// (see there for the placeholder-rendering contract).
 #[allow(clippy::too_many_arguments)]
 pub fn create_task(
     root: &Path,
