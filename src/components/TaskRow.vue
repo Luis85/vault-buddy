@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import type { AggTask } from "../types";
 import { dueOf, localToday } from "../utils/taskFields";
+import AppIcon from "./AppIcon.vue";
 import TaskDragHandle from "./TaskDragHandle.vue";
+import Avatar from "./ui/Avatar.vue";
+import Chip from "./ui/Chip.vue";
+import IconButton from "./ui/IconButton.vue";
+import StatusDot from "./ui/StatusDot.vue";
 
 // Presentational task row: the container owns all state and side effects; this
 // component only renders and reports intent up. When `editing`, it yields its
@@ -89,19 +94,18 @@ const isOverdue = (t: AggTask): boolean => {
           :title="`Open ${task.title} in Obsidian`"
           @click="$emit('open')"
         >
-          <span
+          <Avatar
             v-if="isAggregate"
-            data-testid="task-vault"
-            class="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-violet-600/80 text-[9px] font-bold text-white"
+            :name="task.vaultName"
+            size="sm"
             :title="task.vaultName"
-          >{{ task.vaultName.charAt(0).toUpperCase() }}</span>
-          <span
+            data-testid="task-vault"
+          />
+          <StatusDot
             v-if="task.priority === 'high' || task.priority === 'low'"
-            data-testid="task-priority"
-            class="h-1.5 w-1.5 shrink-0 rounded-full"
-            :class="task.priority === 'high' ? 'bg-red-400' : 'bg-slate-500'"
+            :tone="task.priority === 'high' ? 'priority-high' : 'priority-low'"
             :title="task.priority === 'high' ? 'High priority' : 'Low priority'"
-            aria-hidden="true"
+            data-testid="task-priority"
           />
           <span
             class="min-w-0 flex-1 truncate text-sm"
@@ -110,17 +114,16 @@ const isOverdue = (t: AggTask): boolean => {
             {{ task.title }}
           </span>
         </button>
-        <button
+        <Chip
           v-for="tag in task.tags"
           :key="tag"
-          type="button"
+          variant="interactive"
+          :label="`Filter by tag ${tag}`"
           data-testid="task-tag"
-          :aria-label="`Filter by tag ${tag}`"
-          class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-[10px] text-violet-200 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
           @click="$emit('tagClick', tag)"
         >
           #{{ tag }}
-        </button>
+        </Chip>
         <span
           v-if="dueOf(task)"
           data-testid="task-due"
@@ -128,49 +131,27 @@ const isOverdue = (t: AggTask): boolean => {
           :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
         >{{ dueLabel(dueOf(task)!) }}</span>
       </div>
-      <button
-        type="button"
+      <IconButton
+        size="sm"
         data-testid="task-edit"
         :disabled="busy"
-        :aria-label="`Edit ${task.title}`"
+        :label="`Edit ${task.title}`"
         title="Edit"
-        class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
         @click="$emit('edit')"
       >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
+        <AppIcon :size="14">
           <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-        </svg>
-      </button>
-      <button
-        type="button"
+        </AppIcon>
+      </IconButton>
+      <IconButton
+        size="sm"
         data-testid="task-archive"
         :disabled="busy"
-        :aria-label="`Archive ${task.title}`"
+        :label="`Archive ${task.title}`"
         title="Archive"
-        class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
         @click="$emit('archive')"
       >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
+        <AppIcon :size="14">
           <rect
             x="3"
             y="4"
@@ -179,8 +160,8 @@ const isOverdue = (t: AggTask): boolean => {
             rx="1"
           />
           <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
-        </svg>
-      </button>
+        </AppIcon>
+      </IconButton>
     </template>
   </li>
 </template>
