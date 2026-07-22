@@ -4,6 +4,11 @@ import { computed } from "vue";
 import { useVaultsStore } from "../stores/vaults";
 import type { Vault } from "../types";
 import AppIcon from "./AppIcon.vue";
+import Avatar from "./ui/Avatar.vue";
+import CountBadge from "./ui/CountBadge.vue";
+import IconButton from "./ui/IconButton.vue";
+import SectionHeader from "./ui/SectionHeader.vue";
+import StatusDot from "./ui/StatusDot.vue";
 
 const props = defineProps<{
   vaults: Vault[];
@@ -115,12 +120,9 @@ const groups = computed(() => {
     :data-section="group.section"
     class="mt-2 first:mt-0"
   >
-    <h2
-      v-if="group.label"
-      class="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500"
-    >
+    <SectionHeader v-if="group.label">
       {{ group.label }}
-    </h2>
+    </SectionHeader>
     <ul class="space-y-1">
       <li
         v-for="vault in group.vaults"
@@ -137,7 +139,7 @@ const groups = computed(() => {
             :aria-label="favoriteAriaLabel(vault)"
             :title="favoriteTitle(vault.id)"
             :disabled="busyVaultId !== null"
-            class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+            class="mr-1 shrink-0 cursor-pointer rounded-control p-1.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
             :class="favoriteButtonClass(vault.id)"
             @click.stop="store.toggleFavorite(vault.id)"
           >
@@ -150,34 +152,31 @@ const groups = computed(() => {
             :aria-label="`Open vault ${accessibleName(vault)}`"
             @click="$emit('open-vault', vault.id)"
           >
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-600/80 text-xs font-bold text-white"
-              aria-hidden="true"
-            >
-              {{ vault.name.charAt(0).toUpperCase() }}
-            </span>
+            <Avatar
+              :name="vault.name"
+              size="md"
+            />
             <span class="min-w-0 flex-1">
               <span class="flex items-center gap-1.5">
                 <span class="truncate text-sm font-medium text-slate-100">
                   {{ vault.name }}
                 </span>
-                <span
+                <StatusDot
                   v-if="vault.open"
-                  class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400"
+                  tone="success"
                   title="Open in Obsidian"
-                  aria-hidden="true"
                 />
-                <span
+                <StatusDot
                   v-if="vault.id === recordingVaultId"
-                  class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-red-500"
+                  tone="recording"
+                  pulse
                   title="Recording…"
-                  aria-hidden="true"
                 />
-                <span
+                <StatusDot
                   v-if="vault.id === transcribingVaultId"
-                  class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-400"
+                  tone="transcribing"
+                  pulse
                   title="Transcribing…"
-                  aria-hidden="true"
                 />
               </span>
               <span
@@ -194,12 +193,10 @@ const groups = computed(() => {
               aria-label="Opening vault…"
             />
           </button>
-          <button
-            type="button"
-            class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-            :disabled="busyVaultId !== null"
-            :aria-label="`Open today's daily note in ${accessibleName(vault)}`"
+          <IconButton
+            :label="`Open today's daily note in ${accessibleName(vault)}`"
             title="Open today's daily note"
+            :disabled="busyVaultId !== null"
             @click="$emit('open-daily-note', vault.id)"
           >
             <span
@@ -208,17 +205,7 @@ const groups = computed(() => {
               role="status"
               aria-label="Opening daily note…"
             />
-            <svg
-              v-else
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              aria-hidden="true"
-            >
+            <AppIcon v-else>
               <rect
                 x="3"
                 y="5"
@@ -227,46 +214,33 @@ const groups = computed(() => {
                 rx="2"
               />
               <path d="M8 3v4M16 3v4M3 11h18" />
-            </svg>
-          </button>
-          <button
-            type="button"
+            </AppIcon>
+          </IconButton>
+          <IconButton
             data-testid="open-tasks"
-            class="relative mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+            class="relative"
             :disabled="busyVaultId !== null"
-            :aria-label="`Tasks in ${accessibleName(vault)}${(taskCounts?.[vault.id] ?? 0) > 0 ? ` (${taskCounts[vault.id]} open)` : ''}`"
+            :label="`Tasks in ${accessibleName(vault)}${(taskCounts?.[vault.id] ?? 0) > 0 ? ` (${taskCounts[vault.id]} open)` : ''}`"
             title="Tasks"
             @click="$emit('open-tasks', vault.id)"
           >
-            <span
-              v-if="(taskCounts?.[vault.id] ?? 0) > 0"
+            <CountBadge
+              :count="taskCounts?.[vault.id] ?? 0"
               data-testid="task-count"
-              class="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-violet-500 px-1 text-center text-[9px] font-semibold leading-[14px] text-white"
-            >{{ taskCounts[vault.id] }}</span>
+              class="absolute -right-0.5 -top-0.5"
+            />
             <AppIcon>
               <path d="M9 11l3 3 8-8" />
               <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
             </AppIcon>
-          </button>
-          <button
-            type="button"
-            class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-            :disabled="busyVaultId !== null || captureDisabled"
-            :aria-label="`Capture knowledge in ${accessibleName(vault)}`"
+          </IconButton>
+          <IconButton
+            :label="`Capture knowledge in ${accessibleName(vault)}`"
             title="Capture knowledge"
+            :disabled="busyVaultId !== null || captureDisabled"
             @click="$emit('capture', vault.id)"
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
+            <AppIcon>
               <rect
                 x="3"
                 y="3"
@@ -275,14 +249,12 @@ const groups = computed(() => {
                 rx="4"
               />
               <path d="M12 8v8M8 12h8" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="mr-1 shrink-0 cursor-pointer rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
-            :disabled="busyVaultId !== null"
-            :aria-label="`Capture settings for ${accessibleName(vault)}`"
+            </AppIcon>
+          </IconButton>
+          <IconButton
+            :label="`Capture settings for ${accessibleName(vault)}`"
             title="Capture settings"
+            :disabled="busyVaultId !== null"
             @click="$emit('capture-settings', vault.id)"
           >
             <AppIcon>
@@ -295,7 +267,7 @@ const groups = computed(() => {
                 d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
               />
             </AppIcon>
-          </button>
+          </IconButton>
         </div>
       </li>
     </ul>
