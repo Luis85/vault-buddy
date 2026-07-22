@@ -13,7 +13,7 @@ withDefaults(
     variant?: "ghost" | "danger";
     disabled?: boolean;
   }>(),
-  { size: "md", variant: "ghost", disabled: false },
+  { size: "md", variant: "ghost", disabled: false, title: undefined },
 );
 defineEmits<{ (e: "click", ev: MouseEvent): void }>();
 </script>

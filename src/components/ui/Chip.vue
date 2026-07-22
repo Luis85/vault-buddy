@@ -4,7 +4,7 @@
 // button (the clickable tag chip); neutral/accent render a static span.
 withDefaults(
   defineProps<{ variant?: "neutral" | "accent" | "interactive"; label?: string; title?: string }>(),
-  { variant: "neutral" },
+  { variant: "neutral", label: undefined, title: undefined },
 );
 defineEmits<{ (e: "click"): void }>();
 </script>

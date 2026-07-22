@@ -10,7 +10,7 @@ withDefaults(
     pulse?: boolean;
     title?: string;
   }>(),
-  { pulse: false },
+  { pulse: false, title: undefined },
 );
 const TONE: Record<string, string> = {
   success: "bg-emerald-400",

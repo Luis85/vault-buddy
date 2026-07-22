@@ -12,7 +12,10 @@ const TONE: Record<string, string> = {
 </script>
 
 <template>
-  <p class="rounded-control px-2 py-1 text-xs" :class="TONE[tone]">
+  <p
+    class="rounded-control px-2 py-1 text-xs"
+    :class="TONE[tone]"
+  >
     <slot />
   </p>
 </template>
