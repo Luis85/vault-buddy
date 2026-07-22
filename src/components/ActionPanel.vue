@@ -22,6 +22,11 @@ import Search from "./Search.vue";
 import Tasks from "./Tasks.vue";
 import Transcriptions from "./Transcriptions.vue";
 import TranscriptionSummary from "./TranscriptionSummary.vue";
+import Banner from "./ui/Banner.vue";
+import Chip from "./ui/Chip.vue";
+import CountBadge from "./ui/CountBadge.vue";
+import Field from "./ui/Field.vue";
+import IconButton from "./ui/IconButton.vue";
 import UpdateView from "./UpdateView.vue";
 import VaultList from "./VaultList.vue";
 
@@ -107,11 +112,6 @@ const showFilter = computed(() => view.value === "list" && aboveThreshold.value)
 const totalOpenTasks = computed(() =>
   Object.values(store.taskCounts).reduce((a, b) => a + b, 0),
 );
-// Cap the header badge so a large cross-vault total can't widen the icon out
-// of the compact top bar — three chars ("99+") is the most it ever renders.
-const taskBadge = computed(() =>
-  totalOpenTasks.value > 99 ? "99+" : String(totalOpenTasks.value),
-);
 const tasksKey = computed(() => store.tasksVaultId ?? "all");
 
 // The panel window is only hidden/shown, not unmounted, so onUnmounted no
@@ -157,19 +157,15 @@ watch(
         >{{ saveStatusLabel }}</span>
       </div>
       <div class="flex shrink-0 items-center gap-2">
-        <span
-          v-if="view === 'list' && store.vaults.length > 0"
-          class="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
-        >
+        <Chip v-if="view === 'list' && store.vaults.length > 0">
           {{ store.vaults.length }}
-        </span>
-        <button
+        </Chip>
+        <IconButton
           v-if="view === 'list' && store.vaults.length > 0"
-          type="button"
-          class="relative cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          :aria-label="`All tasks across every vault${totalOpenTasks > 0 ? ` — ${totalOpenTasks} open` : ''}`"
+          :label="`All tasks across every vault${totalOpenTasks > 0 ? ` — ${totalOpenTasks} open` : ''}`"
           title="All tasks"
           data-testid="all-tasks"
+          class="relative"
           @click="store.openAllTasks()"
         >
           <AppIcon>
@@ -178,17 +174,15 @@ watch(
           </AppIcon>
           <!-- Corner badge like VaultList's per-vault Tasks button — widens
                with digits (capped at 99+), never grows the header row. -->
-          <span
-            v-if="totalOpenTasks > 0"
+          <CountBadge
+            :count="totalOpenTasks"
             data-testid="all-tasks-count"
-            class="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-violet-500 px-1 text-center text-[9px] font-semibold leading-[14px] text-white"
-          >{{ taskBadge }}</span>
-        </button>
-        <button
+            class="absolute -right-0.5 -top-0.5"
+          />
+        </IconButton>
+        <IconButton
           v-if="view === 'list'"
-          type="button"
-          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          aria-label="Search vaults"
+          label="Search vaults"
           title="Search vaults"
           data-testid="search-toggle"
           @click="store.openSearch()"
@@ -201,12 +195,10 @@ watch(
             />
             <path d="m21 21-4.35-4.35" />
           </AppIcon>
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           v-if="view === 'list'"
-          type="button"
-          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          aria-label="Buddy settings"
+          label="Buddy settings"
           title="Buddy settings"
           data-testid="settings-toggle"
           @click="store.openSettings()"
@@ -221,12 +213,10 @@ watch(
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
           </AppIcon>
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           v-else
-          type="button"
-          class="cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-          aria-label="Back"
+          label="Back"
           title="Back"
           data-testid="back-button"
           @click="store.back()"
@@ -234,24 +224,25 @@ watch(
           <AppIcon>
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </AppIcon>
-        </button>
+        </IconButton>
       </div>
     </div>
-    <input
+    <Field
       v-if="showFilter"
       v-model="filter"
       type="search"
       placeholder="Filter vaults…"
       aria-label="Filter vaults"
-      class="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      class="mb-2"
       @keydown.escape="onFilterEscape"
-    >
-    <p
+    />
+    <Banner
       v-if="view === 'list' && store.error"
-      class="mb-2 rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
+      class="mb-2"
     >
       {{ store.error }}
-    </p>
+    </Banner>
     <RecordingBar
       v-if="view === 'list' && capture.status !== 'idle'"
       class="mb-2"
