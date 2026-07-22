@@ -1716,6 +1716,48 @@ bubble roots that read settings — the bubble resolves `messageDuration` at
 show time) so they re-read character/animation/duration without an IPC
 round-trip.
 
+### UI primitives & design tokens
+
+The frontend has a small shared design system under `src/components/ui/`,
+backed by a semantic Tailwind 4 `@theme` token layer in `src/style.css`.
+**New UI must consume these instead of re-growing raw utility strings** —
+the point is to stop the copy-paste that had the violet focus-ring string
+in 25 files (64×) and the icon-button hover pattern 59× before it landed.
+
+- **Tokens** are semantic and each maps to the palette value already in use,
+  so converted and unconverted components render identically. The text
+  ladder is `text-fg` (slate-100) / `text-fg-secondary` (slate-300) /
+  `text-fg-muted` (slate-400, captions/values) / `text-fg-subtle` (slate-500,
+  section labels/placeholders); the accent set `bg-accent` (violet-500) /
+  `bg-accent-strong` (violet-600) / `text-accent-fg` (violet-200) /
+  `ring-focus` (violet-400); status `success` / `danger` / `danger-fg` /
+  `recording`; `rounded-control` (= lg); and the `text-micro` caption size
+  (0.625rem) that folds the old ad-hoc `text-[10px]`. The names are
+  palette-independent, so a future light-mode/theming increment reassigns
+  them without touching call sites. The white-opacity glass surfaces
+  (`bg-white/5`, `bg-white/10`, `border-white/10`) stay literal — already
+  consistent, and tokenizing them risks `color-mix` drift.
+- **Primitives** are presentational and each unit-tested: `IconButton`
+  (icon-only; owns the focus/hover/disabled treatment; sizes `sm` = p-1,
+  `md` = p-1.5), `AppButton` (primary/secondary/ghost/danger text button),
+  `Chip` (neutral/accent/interactive pill), `CountBadge` (corner count,
+  caps at `max`, default 99), `StatusDot` (the 1.5px status dots — literal
+  tone colors on purpose, so existing dot assertions stay green), `Avatar`
+  (letter avatar), `SectionHeader` (uppercase group label), `Banner` (alert
+  strip), and `Field` (text input; the root IS the `<input>`, so
+  `type`/`placeholder`/`aria-label`/native listeners fall through). Consume
+  a primitive at its declared prop names; do not invent props (later screens
+  depend on the exact interfaces).
+- **Migration status:** the shell (`ActionPanel`), the home (`VaultList`),
+  and `TaskRow` are converted. The compact tasks-view controls
+  (`TaskComposer` / `TaskListPicker` / `TaskViewControls` / `TaskEditor` /
+  `TaskSectionMenu` / `TaskDragHandle`) and the ~18 other components still
+  carry raw utility strings and adopt the tokens/primitives opportunistically
+  on next touch (GAP-66). The compact controls are `text-xs`/`text-[10px]`
+  and do NOT fit the primitives' fixed `text-sm` size, so they take a 1:1
+  token-swap in place rather than a forced `Field`/`AppButton` conversion
+  (which would enlarge them).
+
 ## Testing conventions
 
 - Tests live in `tests/*.test.ts` (Vitest + happy-dom + @vue/test-utils).

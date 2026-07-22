@@ -834,6 +834,31 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 
 ## 8. Tech debt & duplication
 
+### GAP-66 · Frontend · Design-system migration is incomplete
+The UI token layer + nine `src/components/ui/` primitives (`IconButton`,
+`AppButton`, `Chip`, `CountBadge`, `StatusDot`, `Avatar`, `SectionHeader`,
+`Banner`, `Field`) landed in the design-system increment, and the three
+highest-traffic surfaces (`ActionPanel`, `VaultList`, `TaskRow`) were
+converted onto them. The rest of the frontend still uses raw utility
+strings: the compact tasks-view controls (`TaskComposer`,
+`TaskListPicker`, `TaskViewControls`, `TaskEditor`, `TaskSectionMenu`,
+`TaskDragHandle`) and the ~18 other components (settings tabs,
+`Recordings`, `Transcriptions`, `McpSettings`, `Search`, the import views,
+`UpdateView`). These render identically today (tokens = the current
+values), so this is source-consistency debt, not a visible defect —
+migrate opportunistically on next touch. **Constraint for the compact
+controls:** they are `text-xs`/`text-[10px]` with `py-0.5` and do NOT fit
+the primitives' fixed `text-sm`/`px-2 py-1` size, so they take a **1:1
+token-swap** in place (`slate-300`→`fg-secondary`, `slate-400`→`fg-muted`,
+`ring-violet-400`→`ring-focus`, `text-[10px]`→`text-micro`, …), never a
+forced `Field`/`AppButton` conversion (which would enlarge them). Also
+deferred from that increment: the empty-state polish (the bare `<p>`
+"Obsidian not found" / "no vaults match" states in `ActionPanel`), an
+optional reduced-motion-safe cross-view fade, and the light-touch
+panel-density opportunities — the list-view banner stack (up to six
+banners can stack above the vault list) and `VaultList`'s five-per-row row
+actions plus the still-bespoke favorite star.
+
 ### GAP-45 · Shell
 - `start_capture_blocking` (the async command's moved body, sub-pass B) is
   ~330 lines with four inline thread bodies (`capture_commands.rs:321-655`);
