@@ -24,7 +24,7 @@ defineEmits<{ (e: "click", ev: MouseEvent): void }>();
     :aria-label="label"
     :title="title ?? label"
     :disabled="disabled"
-    class="shrink-0 cursor-pointer rounded-control text-fg-muted transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+    class="shrink-0 cursor-pointer rounded-control text-fg-muted transition hover:bg-white/10 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
     :class="[
       size === 'sm' ? 'p-1' : 'p-1.5',
       variant === 'danger' ? 'hover:text-danger-fg' : 'hover:text-fg',

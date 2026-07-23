@@ -15,7 +15,7 @@ defineEmits<{ (e: "click"): void }>();
     type="button"
     :aria-label="label"
     :title="title"
-    class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-micro text-accent-fg transition-colors hover:bg-accent/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+    class="shrink-0 cursor-pointer rounded-full bg-white/10 px-1.5 text-micro text-accent-fg transition hover:bg-accent/30 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
     @click="$emit('click')"
   >
     <slot />
