@@ -318,20 +318,21 @@ async function add(payload: AddPayload) {
 <template>
   <div
     ref="rootRef"
-    class="flex flex-col gap-2"
+    class="flex flex-col gap-1.5 min-h-0 flex-1"
   >
     <div
       v-if="!loading && !loadError && progress.total > 0"
       data-testid="task-progress"
-      class="flex items-center gap-2"
+      class="flex items-center gap-1.5"
+      :title="`${progress.done} / ${progress.total} done`"
     >
-      <div class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+      <div class="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
         <div
           class="h-full rounded-full bg-accent transition-all"
           :style="{ width: `${progress.pct}%` }"
         />
       </div>
-      <span class="shrink-0 text-xs tabular-nums text-fg-muted">
+      <span class="shrink-0 text-micro tabular-nums text-fg-muted">
         {{ progress.done }} / {{ progress.total }}
       </span>
     </div>
@@ -389,98 +390,100 @@ async function add(payload: AddPayload) {
       @create-list="onControlsCreateList"
     />
 
-    <p
-      v-if="loading"
-      class="text-xs text-fg-muted"
-    >
-      Loading…
-    </p>
-    <Banner
-      v-else-if="loadError"
-      tone="danger"
-    >
-      {{ loadError }}
-    </Banner>
-    <EmptyState
-      v-else-if="tasks.length === 0 && buckets.length === 0"
-      title="No tasks yet."
-    >
-      <template #icon>
-        <AppIcon :size="28">
-          <path d="M9 11l3 3 8-8" />
-          <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
-        </AppIcon>
-      </template>
-    </EmptyState>
-    <EmptyState
-      v-else-if="buckets.length === 0"
-      :title="`No tasks match${tagFilter ? ` #${tagFilter}` : ''}${showFilter && filter ? ` &quot;${filter}&quot;` : ''}.`"
-    />
-    <template v-else>
-      <div
-        v-for="bucket in buckets"
-        :key="bucket.key"
-        :data-section-key="bucket.key"
-        class="mt-1 rounded-control first:mt-0"
-        :class="bucket.key === crossListDropTarget ? 'bg-accent/10 ring-2 ring-focus/60' : ''"
+    <div class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+      <p
+        v-if="loading"
+        class="text-xs text-fg-muted"
       >
+        Loading…
+      </p>
+      <Banner
+        v-else-if="loadError"
+        tone="danger"
+      >
+        {{ loadError }}
+      </Banner>
+      <EmptyState
+        v-else-if="tasks.length === 0 && buckets.length === 0"
+        title="No tasks yet."
+      >
+        <template #icon>
+          <AppIcon :size="28">
+            <path d="M9 11l3 3 8-8" />
+            <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+          </AppIcon>
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="buckets.length === 0"
+        :title="`No tasks match${tagFilter ? ` #${tagFilter}` : ''}${showFilter && filter ? ` &quot;${filter}&quot;` : ''}.`"
+      />
+      <template v-else>
         <div
-          v-if="bucket.label"
-          class="mb-1 flex items-center gap-1 px-1"
+          v-for="bucket in buckets"
+          :key="bucket.key"
+          :data-section-key="bucket.key"
+          class="mt-1 rounded-control first:mt-0"
+          :class="bucket.key === crossListDropTarget ? 'bg-accent/10 ring-2 ring-focus/60' : ''"
         >
-          <h3
-            data-testid="task-bucket-header"
-            class="text-micro font-semibold uppercase tracking-wider"
-            :class="bucket.key === 'overdue' ? 'text-danger-fg' : 'text-fg-subtle'"
+          <div
+            v-if="bucket.label"
+            class="mb-1 flex items-center gap-1 px-1"
           >
-            {{ bucket.label }}
-          </h3>
-          <TaskSectionMenu
-            v-if="bucket.list && grouping === 'lists' && !isAggregate"
-            :list="bucket.list!"
-            :busy="sectionBusy.has(bucket.list!)"
-            :reset-nonce="sectionMenuResetNonce"
-            @rename="onSectionRename(bucket.list!, $event)"
-            @archive="onSectionArchive(bucket.list!)"
-            @delete="onSectionDelete(bucket.list!)"
-          />
-        </div>
-        <ul class="flex flex-col gap-1">
-          <TaskRow
-            v-for="(task, i) in bucket.tasks"
-            :key="rowKey(bucket.key, task)"
-            :task="task"
-            :busy="isBusy(task.path)"
-            :is-aggregate="isAggregate"
-            :editing="editingKey === rowKey(bucket.key, task)"
-            :reorderable="reorderView"
-            :reorder-busy="reordering"
-            :dragging="dragState?.sectionKey === bucket.key && dragState.fromIndex === i"
-            :drop-target="
-              dragState?.sectionKey === bucket.key &&
-                dragState.toIndex === i &&
-                dragState.fromIndex !== i &&
-                dragState.overSectionKey === dragState.sectionKey
-            "
-            :data-reorder-section="bucket.key"
-            @toggle="toggle(task)"
-            @archive="archive(task)"
-            @edit="startEdit(task, bucket.key)"
-            @open="openInObsidian(task)"
-            @tag-click="tagFilter = $event"
-            @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
-            @reorder-keydown="onHandleKeydown($event, bucket.key, i)"
-          >
-            <TaskEditor
+            <h3
+              data-testid="task-bucket-header"
+              class="text-micro font-semibold uppercase tracking-wider"
+              :class="bucket.key === 'overdue' ? 'text-danger-fg' : 'text-fg-subtle'"
+            >
+              {{ bucket.label }}
+            </h3>
+            <TaskSectionMenu
+              v-if="bucket.list && grouping === 'lists' && !isAggregate"
+              :list="bucket.list!"
+              :busy="sectionBusy.has(bucket.list!)"
+              :reset-nonce="sectionMenuResetNonce"
+              @rename="onSectionRename(bucket.list!, $event)"
+              @archive="onSectionArchive(bucket.list!)"
+              @delete="onSectionDelete(bucket.list!)"
+            />
+          </div>
+          <ul class="flex flex-col gap-1">
+            <TaskRow
+              v-for="(task, i) in bucket.tasks"
+              :key="rowKey(bucket.key, task)"
               :task="task"
               :busy="isBusy(task.path)"
-              :lists="listsForEditor(task.vaultId, task.list)"
-              @save="onEditorSave(task, $event)"
-              @cancel="cancelEdit"
-            />
-          </TaskRow>
-        </ul>
-      </div>
-    </template>
+              :is-aggregate="isAggregate"
+              :editing="editingKey === rowKey(bucket.key, task)"
+              :reorderable="reorderView"
+              :reorder-busy="reordering"
+              :dragging="dragState?.sectionKey === bucket.key && dragState.fromIndex === i"
+              :drop-target="
+                dragState?.sectionKey === bucket.key &&
+                  dragState.toIndex === i &&
+                  dragState.fromIndex !== i &&
+                  dragState.overSectionKey === dragState.sectionKey
+              "
+              :data-reorder-section="bucket.key"
+              @toggle="toggle(task)"
+              @archive="archive(task)"
+              @edit="startEdit(task, bucket.key)"
+              @open="openInObsidian(task)"
+              @tag-click="tagFilter = $event"
+              @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
+              @reorder-keydown="onHandleKeydown($event, bucket.key, i)"
+            >
+              <TaskEditor
+                :task="task"
+                :busy="isBusy(task.path)"
+                :lists="listsForEditor(task.vaultId, task.list)"
+                @save="onEditorSave(task, $event)"
+                @cancel="cancelEdit"
+              />
+            </TaskRow>
+          </ul>
+        </div>
+      </template>
+    </div>
   </div>
 </template>

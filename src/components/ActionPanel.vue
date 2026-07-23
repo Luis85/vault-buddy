@@ -330,7 +330,7 @@ watch(
       <div
         v-else-if="view === 'tasks'"
         key="tasks"
-        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+        class="min-h-0 flex-1 flex flex-col"
       >
         <Tasks
           :key="tasksKey"
