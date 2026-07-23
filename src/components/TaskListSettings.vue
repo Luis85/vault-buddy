@@ -200,7 +200,7 @@ function unarchive(list: string) {
         <p
           v-if="autosave.error.value"
           data-testid="task-lists-error"
-          class="mt-1 text-xs text-red-300"
+          class="mt-1 text-xs text-danger-fg"
         >
           {{ autosave.error.value }}
         </p>

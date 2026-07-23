@@ -59,7 +59,7 @@ function onInput(event: Event) {
       <p
         v-if="error"
         :data-testid="errorTestid"
-        class="mt-1 text-xs text-red-300"
+        class="mt-1 text-xs text-danger-fg"
       >
         {{ error }}
       </p>

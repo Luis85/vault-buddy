@@ -7,6 +7,7 @@ import { logWarning } from "../logging";
 import { usePandocStore } from "../stores/pandoc";
 import type { PandocStatus } from "../types";
 import { withDialogSuppressed } from "../utils/nativeDialog";
+import Field from "./ui/Field.vue";
 
 const status = ref<PandocStatus | null>(null);
 const pathOverride = ref("");
@@ -195,17 +196,17 @@ const statusLabel = computed(() => {
           <span class="block text-xs text-fg-subtle">Only needed if Pandoc isn't on PATH</span>
         </label>
         <div class="flex items-center gap-1.5">
-          <input
+          <Field
             id="pandoc-path"
             v-model="pathOverride"
             data-testid="pandoc-path-input"
             type="text"
             placeholder="pandoc"
-            class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none disabled:cursor-default disabled:opacity-50"
+            class="disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
             @input="dirtied = true"
             @change="savePath"
-          >
+          />
           <button
             type="button"
             data-testid="pandoc-browse"

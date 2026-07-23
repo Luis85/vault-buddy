@@ -18,6 +18,7 @@ import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
 import TaskSectionMenu from "./TaskSectionMenu.vue";
 import TaskViewControls from "./TaskViewControls.vue";
+import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
@@ -326,7 +327,7 @@ async function add(payload: AddPayload) {
     >
       <div class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
         <div
-          class="h-full rounded-full bg-violet-500 transition-all"
+          class="h-full rounded-full bg-accent transition-all"
           :style="{ width: `${progress.pct}%` }"
         />
       </div>
@@ -348,7 +349,7 @@ async function add(payload: AddPayload) {
     <div
       v-if="tagFilter"
       data-testid="task-tag-filter"
-      class="flex items-center gap-1 self-start rounded-full bg-violet-500/20 py-0.5 pl-2 pr-1 text-xs text-accent-fg"
+      class="flex items-center gap-1 self-start rounded-full bg-accent/20 py-0.5 pl-2 pr-1 text-xs text-accent-fg"
     >
       <span>#{{ tagFilter }}</span>
       <button
@@ -394,12 +395,12 @@ async function add(payload: AddPayload) {
     >
       Loading…
     </p>
-    <p
+    <Banner
       v-else-if="loadError"
-      class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ loadError }}
-    </p>
+    </Banner>
     <EmptyState
       v-else-if="tasks.length === 0 && buckets.length === 0"
       title="No tasks yet."
@@ -421,7 +422,7 @@ async function add(payload: AddPayload) {
         :key="bucket.key"
         :data-section-key="bucket.key"
         class="mt-1 rounded-control first:mt-0"
-        :class="bucket.key === crossListDropTarget ? 'bg-violet-500/10 ring-2 ring-focus/60' : ''"
+        :class="bucket.key === crossListDropTarget ? 'bg-accent/10 ring-2 ring-focus/60' : ''"
       >
         <div
           v-if="bucket.label"
@@ -430,7 +431,7 @@ async function add(payload: AddPayload) {
           <h3
             data-testid="task-bucket-header"
             class="text-micro font-semibold uppercase tracking-wider"
-            :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-fg-subtle'"
+            :class="bucket.key === 'overdue' ? 'text-danger-fg' : 'text-fg-subtle'"
           >
             {{ bucket.label }}
           </h3>

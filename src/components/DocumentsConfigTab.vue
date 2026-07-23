@@ -5,6 +5,7 @@ import { onMounted, ref } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { DocumentsConfig } from "../types";
+import Banner from "./ui/Banner.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 // The Documents tab of Vault settings. Self-contained: loads its own config,
@@ -93,13 +94,13 @@ function onBodyTemplateInput(event: Event) {
     >
       Loading…
     </p>
-    <p
+    <Banner
       v-else-if="loadError"
+      tone="danger"
       data-testid="documents-load-error"
-      class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ loadError }}
-    </p>
+    </Banner>
     <template v-else>
       <VaultFolderSetting
         :model-value="documentsFolder"

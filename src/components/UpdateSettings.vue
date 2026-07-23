@@ -60,7 +60,7 @@ onMounted(() => {
         </span>
         <button
           type="button"
-          class="cursor-pointer rounded-control border border-violet-400 bg-violet-500/20 px-2 py-0.5 text-xs text-fg transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          class="cursor-pointer rounded-control border border-violet-400 bg-accent/20 px-2 py-0.5 text-xs text-fg transition-colors hover:bg-accent/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           data-testid="view-update"
           @click="vaults.openUpdate()"
         >
@@ -69,7 +69,7 @@ onMounted(() => {
       </div>
       <p
         v-if="updates.phase === 'error'"
-        class="mt-1.5 text-xs text-red-300"
+        class="mt-1.5 text-xs text-danger-fg"
       >
         {{ updates.error }}
       </p>

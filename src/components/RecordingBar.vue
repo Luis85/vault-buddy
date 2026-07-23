@@ -51,7 +51,7 @@ const meterWidth = computed(
     <div class="flex items-center gap-2">
       <span
         class="h-2.5 w-2.5 shrink-0 rounded-full"
-        :class="paused ? 'bg-amber-400' : 'animate-pulse bg-red-500'"
+        :class="paused ? 'bg-amber-400' : 'animate-pulse bg-recording'"
         aria-hidden="true"
       />
       <span

@@ -2,6 +2,7 @@
 import { computed, onMounted } from "vue";
 
 import { useUpdatesStore } from "../stores/updates";
+import Spinner from "./ui/Spinner.vue";
 
 const updates = useUpdatesStore();
 
@@ -75,7 +76,7 @@ onMounted(() => {
 
     <button
       type="button"
-      class="cursor-pointer rounded-control border border-violet-400 bg-violet-500/20 px-3 py-1.5 text-sm text-fg transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+      class="cursor-pointer rounded-control border border-violet-400 bg-accent/20 px-3 py-1.5 text-sm text-fg transition-colors hover:bg-accent/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
       :disabled="installing"
       data-testid="install-update"
       @click="updates.installUpdate()"
@@ -84,11 +85,7 @@ onMounted(() => {
         v-if="installing"
         class="flex items-center justify-center gap-1.5"
       >
-        <span
-          class="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white"
-          role="status"
-          aria-label="Installing update…"
-        />
+        <Spinner label="Installing update…" />
         Installing…
       </span>
       <span v-else>Install &amp; restart</span>
@@ -97,7 +94,7 @@ onMounted(() => {
     <p
       v-if="errored"
       data-testid="update-error"
-      class="text-xs text-red-300"
+      class="text-xs text-danger-fg"
     >
       {{ updates.error }}
     </p>

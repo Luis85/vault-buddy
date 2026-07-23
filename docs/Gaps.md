@@ -834,30 +834,32 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
 
 ## 8. Tech debt & duplication
 
-### GAP-66 · Frontend · Design-system migration is incomplete
-The UI token layer + nine `src/components/ui/` primitives (`IconButton`,
-`AppButton`, `Chip`, `CountBadge`, `StatusDot`, `Avatar`, `SectionHeader`,
-`Banner`, `Field`) landed in the design-system increment, and the three
-highest-traffic surfaces (`ActionPanel`, `VaultList`, `TaskRow`) were
-converted onto them. The rest of the frontend still uses raw utility
-strings: the compact tasks-view controls (`TaskComposer`,
-`TaskListPicker`, `TaskViewControls`, `TaskEditor`, `TaskSectionMenu`,
-`TaskDragHandle`) and the ~18 other components (settings tabs,
-`Recordings`, `Transcriptions`, `McpSettings`, `Search`, the import views,
-`UpdateView`). These render identically today (tokens = the current
-values), so this is source-consistency debt, not a visible defect —
-migrate opportunistically on next touch. **Constraint for the compact
-controls:** they are `text-xs`/`text-[10px]` with `py-0.5` and do NOT fit
-the primitives' fixed `text-sm`/`px-2 py-1` size, so they take a **1:1
-token-swap** in place (`slate-300`→`fg-secondary`, `slate-400`→`fg-muted`,
-`ring-violet-400`→`ring-focus`, `text-[10px]`→`text-micro`, …), never a
-forced `Field`/`AppButton` conversion (which would enlarge them). Also
-deferred from that increment: the empty-state polish (the bare `<p>`
-"Obsidian not found" / "no vaults match" states in `ActionPanel`), an
+### GAP-66 · Frontend · Design-system migration
+~~The rest of the frontend still uses raw utility strings (the compact
+tasks-view controls and the ~18 other components).~~ **The token/primitive
+migration is FIXED 2026-07-23.** Every panel component now speaks the
+semantic-token vocabulary, and each bespoke pattern that is a clean drop-in
+was converted to its primitive (`Banner` ×6 error strips, `Field` ×2
+inputs, `Spinner` in `UpdateView`, `IconButton` in `Transcriptions`,
+on top of the earlier `ActionPanel`/`VaultList`/`TaskRow`). The compact
+tasks-view controls took the documented 1:1 token-swap (not a
+size-changing primitive conversion). The raw utilities that deliberately
+remain (settings-card `<h2>` header idiom vs the `SectionHeader` primitive;
+segmented/mode-card/tab selectors with active `border-violet-400`; themed /
+dense buttons and custom-handler inputs that match no primitive; and colors
+with no token — `accent-violet-500`, `rose-*`, `amber-*`, toast variants,
+`violet-100`/`slate-200`, active-state `violet-400`) are NOT debt — see the
+"Raw utilities that deliberately REMAIN" note in AGENTS.md § Frontend state
+→ UI primitives. A justified +0.1 `averageMaintainability` baseline move
+(91.8→91.7) covers the shared-primitive import overhead.
+
+Still deferred from the design-system increment (separate polish, NOT the
+consistency migration): the empty-state polish (the bare `<p>` "Obsidian
+not found" / "no vaults match" states in `ActionPanel` → `EmptyState`), an
 optional reduced-motion-safe cross-view fade, and the light-touch
-panel-density opportunities — the list-view banner stack (up to six
-banners can stack above the vault list) and `VaultList`'s five-per-row row
-actions plus the still-bespoke favorite star.
+panel-density opportunities — the list-view banner stack (up to six banners
+can stack above the vault list) and `VaultList`'s five-per-row row actions
+plus the still-bespoke favorite star.
 
 ### GAP-45 · Shell
 - `start_capture_blocking` (the async command's moved body, sub-pass B) is

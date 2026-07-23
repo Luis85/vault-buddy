@@ -8,6 +8,7 @@ import type { TasksConfig } from "../types";
 import TaskIdSettings from "./TaskIdSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
 import TaskTemplateSettings from "./TaskTemplateSettings.vue";
+import Banner from "./ui/Banner.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 // The Tasks tab of Vault settings: the per-vault tasks folder (auto-saved via
@@ -140,13 +141,13 @@ const pendingFolderChange = computed(() => (tasksFolder.value.trim() || null) !=
       Loading…
     </p>
     <template v-else>
-      <p
+      <Banner
         v-if="loadError"
+        tone="danger"
         data-testid="tasks-load-error"
-        class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
       >
         {{ loadError }}
-      </p>
+      </Banner>
       <VaultFolderSetting
         v-else
         :model-value="tasksFolder"

@@ -8,6 +8,7 @@ import type { TranscriptionJob } from "../types";
 import { formatDuration } from "../utils/formatDuration";
 import AppIcon from "./AppIcon.vue";
 import EmptyState from "./ui/EmptyState.vue";
+import IconButton from "./ui/IconButton.vue";
 
 const capture = useCaptureStore();
 const vaults = useVaultsStore();
@@ -264,12 +265,11 @@ const isStuck = computed(() => {
             </button>
             <!-- Clear a finished row (and, for a failure, its error) from the
                  list. The row used to be undismissable — it just lingered. -->
-            <button
-              type="button"
+            <IconButton
               data-testid="transcription-dismiss"
-              :aria-label="`Dismiss ${j.name}`"
+              size="sm"
+              :label="`Dismiss ${j.name}`"
               :title="`Dismiss ${j.name}`"
-              class="shrink-0 cursor-pointer rounded-control p-1 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               @click="capture.dismissTranscription(j.mp3)"
             >
               <svg
@@ -284,11 +284,11 @@ const isStuck = computed(() => {
               >
                 <path d="M18 6 6 18M6 6l12 12" />
               </svg>
-            </button>
+            </IconButton>
           </div>
           <p
             v-if="j.phase === 'failed' && j.error"
-            class="text-xs text-red-300"
+            class="text-xs text-danger-fg"
           >
             {{ j.error }}
           </p>

@@ -6,6 +6,7 @@ import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import type { Phase, Recording } from "../types";
 import AppIcon from "./AppIcon.vue";
+import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -139,12 +140,12 @@ async function open(mp3: string) {
   >
     Loading…
   </p>
-  <p
+  <Banner
     v-else-if="loadError"
-    class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
+    tone="danger"
   >
     {{ loadError }}
-  </p>
+  </Banner>
   <EmptyState
     v-else-if="recordings.length === 0"
     title="No recordings yet."
@@ -166,12 +167,12 @@ async function open(mp3: string) {
     v-else
     class="flex flex-col gap-2"
   >
-    <p
+    <Banner
       v-if="openError"
-      class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ openError }}
-    </p>
+    </Banner>
     <div
       v-if="confirmMp3"
       data-testid="retranscribe-confirm-row"
@@ -249,7 +250,7 @@ async function open(mp3: string) {
               data-testid="recording-spinner"
               role="status"
               aria-label="Transcribing…"
-              class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500/40 border-t-slate-300 align-middle"
+              class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-fg-subtle/40 border-t-fg-secondary align-middle"
             />
             <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : effectiveStatus(r) === "cancelled" ? "⦸" : "…" }}</span>
           </span>

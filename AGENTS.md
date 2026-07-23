@@ -1752,15 +1752,44 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   `Spinner` (the shared `animate-spin` ring, `role="status"` + `aria-label`).
   Consume a primitive at its declared prop names; do not invent props (later
   screens depend on the exact interfaces).
-- **Migration status:** the shell (`ActionPanel`), the home (`VaultList`),
-  and `TaskRow` are converted. The compact tasks-view controls
+- **Migration status (GAP-66 complete):** every panel component now speaks
+  the semantic-token vocabulary (`fg` ladder, `accent`/`accent-strong`/
+  `accent-fg`, `focus`, `success`/`danger`/`danger-fg`/`recording`,
+  `rounded-control`, `text-micro`) and consumes a primitive wherever one is a
+  clean drop-in — `Banner` for the `bg-red-500/20 text-red-200` error strips
+  (Search, Recordings, Tasks, RecordingConfigTab, DocumentsConfigTab,
+  TasksConfigTab), `Field` for the full-width `text-sm` folder/path inputs
+  (RecordingSettings, DocumentImportSettings), `Spinner` (UpdateView),
+  `IconButton` (Transcriptions), alongside the earlier `ActionPanel`/
+  `VaultList`/`TaskRow` conversions. The compact tasks-view controls
   (`TaskComposer` / `TaskListPicker` / `TaskViewControls` / `TaskEditor` /
-  `TaskSectionMenu` / `TaskDragHandle`) and the ~18 other components still
-  carry raw utility strings and adopt the tokens/primitives opportunistically
-  on next touch (GAP-66). The compact controls are `text-xs`/`text-[10px]`
-  and do NOT fit the primitives' fixed `text-sm` size, so they take a 1:1
-  token-swap in place rather than a forced `Field`/`AppButton` conversion
-  (which would enlarge them).
+  `TaskSectionMenu` / `TaskDragHandle`) took the documented **1:1 token-swap**
+  only — they are `text-xs`/`text-[10px]`/`py-0.5` and the primitives' fixed
+  `text-sm`/`px-2 py-1` would enlarge the dense list, so a forced
+  `Field`/`AppButton` conversion is still the wrong move there.
+- **Raw utilities that deliberately REMAIN are not migration debt** — they
+  have no semantic token or no clean primitive, and forcing one would change
+  rendering (the "near-miss is worse" rule). Do not "re-migrate" them:
+  (a) the settings-card `<h2>` header idiom
+  (`text-xs font-semibold uppercase tracking-wide text-fg-muted`, shared by
+  ~15 cards) is intentionally DISTINCT from the `SectionHeader` primitive
+  (`text-micro tracking-wider text-fg-subtle`, the in-list group label);
+  converting card headers to `SectionHeader` would resize/recolor them and
+  desync the set. (b) segmented toggles / mode-cards / tabs with an
+  active-state `border-violet-400` (RecordMode mode buttons, TabGroup, the
+  priority radios) stay bespoke — `AppButton` has no active state and
+  different padding. (c) themed / dense buttons that match no `AppButton`
+  variant+size (RecordingBar Stop, model-card Delete/Cancel, dense
+  `py-0.5` secondaries), and inputs with a custom `@change`/`@input` handler
+  or that aren't full-width `text-sm` (McpSettings port, VaultFolderSetting,
+  the Search box needing a `.focus()` ref `Field` doesn't expose). (d) colors
+  with no token: `accent-violet-500` (checkbox accent-color), active-state
+  `border-violet-400`/`bg-violet-400` dots, `rose-*` (McpSettings/
+  transcription errors), `amber-*`, toast variants (NotificationHost
+  red/emerald/amber-900), and one-off `/15`,`/25`,`/30`,`/40` tints — the
+  `bg-violet-500/XX` ones DID become `bg-accent/XX` (accent has a token), but
+  `violet-100`/`slate-200` etc. did not. When in doubt, prefer the safe
+  token-swap over a rendering-changing primitive conversion.
 
 ## Testing conventions
 

@@ -153,7 +153,7 @@ watch(
           :class="{
             'text-fg-muted': saveStatus.state === 'saving',
             'text-emerald-300': saveStatus.state === 'saved',
-            'text-red-300': saveStatus.state === 'error',
+            'text-danger-fg': saveStatus.state === 'error',
           }"
         >{{ saveStatusLabel }}</span>
       </div>

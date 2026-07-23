@@ -14,6 +14,7 @@ import {
 } from "../utils/recentSearches";
 import AppIcon from "./AppIcon.vue";
 import HighlightText from "./HighlightText.vue";
+import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
 const notifications = useNotificationsStore();
@@ -277,12 +278,12 @@ onUnmounted(() => {
         aria-hidden="true"
       />
     </div>
-    <p
+    <Banner
       v-if="error"
-      class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ error }}
-    </p>
+    </Banner>
     <p
       v-if="tooShort"
       class="text-xs text-fg-muted"

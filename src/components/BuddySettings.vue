@@ -99,7 +99,7 @@ async function toggleAutostart(event: Event) {
               class="character-option relative flex cursor-pointer flex-col items-center rounded-xl border p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               :class="
                 settings.character === c.id
-                  ? 'border-violet-400 bg-violet-500/20'
+                  ? 'border-violet-400 bg-accent/20'
                   : 'border-white/10 bg-white/5 hover:bg-white/10'
               "
               :aria-checked="settings.character === c.id"
@@ -113,7 +113,7 @@ async function toggleAutostart(event: Event) {
               <span
                 v-if="settings.character === c.id"
                 data-testid="selected-badge"
-                class="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-500 text-[9px] font-bold text-white"
+                class="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent text-[9px] font-bold text-white"
                 aria-hidden="true"
               >✓</span>
               <BuddyAvatar
@@ -236,7 +236,7 @@ async function toggleAutostart(event: Event) {
             <p
               v-if="autostartError"
               data-testid="autostart-error"
-              class="mt-1.5 text-xs text-red-300"
+              class="mt-1.5 text-xs text-danger-fg"
             >
               {{ autostartError }}
             </p>

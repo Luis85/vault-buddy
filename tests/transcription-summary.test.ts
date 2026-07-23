@@ -201,7 +201,7 @@ describe("TranscriptionSummary", () => {
     const wrapper = mount(TranscriptionSummary);
     const classes = wrapper.get('[data-testid="transcription-summary"]').classes();
     expect(classes).toEqual(
-      expect.arrayContaining(["bg-violet-500/15", "text-violet-100"]),
+      expect.arrayContaining(["bg-accent/15", "text-violet-100"]),
     );
     expect(classes).not.toEqual(expect.arrayContaining(["bg-red-500/20"]));
   });
@@ -214,6 +214,6 @@ describe("TranscriptionSummary", () => {
     const wrapper = mount(TranscriptionSummary);
     const classes = wrapper.get('[data-testid="transcription-summary"]').classes();
     expect(classes).toEqual(expect.arrayContaining(["bg-red-500/20", "text-red-200"]));
-    expect(classes).not.toEqual(expect.arrayContaining(["bg-violet-500/15"]));
+    expect(classes).not.toEqual(expect.arrayContaining(["bg-accent/15"]));
   });
 });

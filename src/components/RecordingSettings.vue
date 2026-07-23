@@ -4,6 +4,7 @@ import { computed } from "vue";
 import type { AudioDevice, AudioDevices, RecordingSettingsValue } from "../types";
 import SelectMenu from "./SelectMenu.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
+import Field from "./ui/Field.vue";
 
 // Controlled component: no persistence of its own — same idiom as
 // TranscriptionSettings.vue. Every field is a computed get/set proxy onto
@@ -129,14 +130,13 @@ const outputMenuOptions = computed(() => [
           Meeting folder
           <span class="block text-xs text-fg-subtle">Inside the vault</span>
         </label>
-        <input
+        <Field
           id="capture-meeting-folder"
           v-model="meetingFolder"
           data-testid="meeting-folder-input"
           type="text"
           placeholder="Meetings"
-          class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
-        >
+        />
       </div>
       <div>
         <label
@@ -146,19 +146,18 @@ const outputMenuOptions = computed(() => [
           Voice Note folder
           <span class="block text-xs text-fg-subtle">Inside the vault</span>
         </label>
-        <input
+        <Field
           id="capture-voice-note-folder"
           v-model="voiceNoteFolder"
           data-testid="voice-note-folder-input"
           type="text"
           placeholder="Voice Notes"
-          class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
-        >
+        />
       </div>
       <p
         v-if="folderError"
         data-testid="folder-error"
-        class="mt-1 text-xs text-red-300"
+        class="mt-1 text-xs text-danger-fg"
       >
         {{ folderError }}
       </p>

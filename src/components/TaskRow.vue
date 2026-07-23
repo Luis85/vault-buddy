@@ -128,7 +128,7 @@ const isOverdue = (t: AggTask): boolean => {
           v-if="dueOf(task)"
           data-testid="task-due"
           class="shrink-0 text-micro tabular-nums"
-          :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-fg-muted'"
+          :class="isOverdue(task) ? 'font-semibold text-danger-fg' : 'text-fg-muted'"
         >{{ dueLabel(dueOf(task)!) }}</span>
       </div>
       <IconButton

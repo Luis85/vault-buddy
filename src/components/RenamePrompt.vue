@@ -45,7 +45,7 @@ watch(baseName, (value) => (title.value = value));
     </div>
     <p
       v-if="error"
-      class="mt-1 text-xs text-red-300"
+      class="mt-1 text-xs text-danger-fg"
     >
       {{ error }}
     </p>
