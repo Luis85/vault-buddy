@@ -12,11 +12,13 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskItem, Vault } from "../types";
 import { crossListDropTargetKey } from "../utils/taskSections";
+import AppIcon from "./AppIcon.vue";
 import TaskComposer from "./TaskComposer.vue";
 import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
 import TaskSectionMenu from "./TaskSectionMenu.vue";
 import TaskViewControls from "./TaskViewControls.vue";
+import EmptyState from "./ui/EmptyState.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
 // Aggregate mode: one merged view across every vault (vaultId === null).
@@ -398,18 +400,21 @@ async function add(payload: AddPayload) {
     >
       {{ loadError }}
     </p>
-    <p
+    <EmptyState
       v-else-if="tasks.length === 0 && buckets.length === 0"
-      class="text-xs text-slate-400"
+      title="No tasks yet."
     >
-      No tasks yet.
-    </p>
-    <p
+      <template #icon>
+        <AppIcon :size="28">
+          <path d="M9 11l3 3 8-8" />
+          <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+        </AppIcon>
+      </template>
+    </EmptyState>
+    <EmptyState
       v-else-if="buckets.length === 0"
-      class="text-xs text-slate-400"
-    >
-      No tasks match{{ tagFilter ? ` #${tagFilter}` : "" }}{{ showFilter && filter ? ` "${filter}"` : "" }}.
-    </p>
+      :title="`No tasks match${tagFilter ? ` #${tagFilter}` : ''}${showFilter && filter ? ` &quot;${filter}&quot;` : ''}.`"
+    />
     <template v-else>
       <div
         v-for="bucket in buckets"

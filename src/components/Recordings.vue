@@ -5,6 +5,8 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import type { Phase, Recording } from "../types";
+import AppIcon from "./AppIcon.vue";
+import EmptyState from "./ui/EmptyState.vue";
 
 const props = defineProps<{ vaultId: string }>();
 
@@ -143,12 +145,23 @@ async function open(mp3: string) {
   >
     {{ loadError }}
   </p>
-  <p
+  <EmptyState
     v-else-if="recordings.length === 0"
-    class="text-xs text-slate-400"
+    title="No recordings yet."
   >
-    No recordings yet.
-  </p>
+    <template #icon>
+      <AppIcon :size="28">
+        <rect
+          x="9"
+          y="3"
+          width="6"
+          height="11"
+          rx="3"
+        />
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+      </AppIcon>
+    </template>
+  </EmptyState>
   <div
     v-else
     class="flex flex-col gap-2"

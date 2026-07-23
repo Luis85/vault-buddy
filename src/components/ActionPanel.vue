@@ -25,6 +25,7 @@ import TranscriptionSummary from "./TranscriptionSummary.vue";
 import Banner from "./ui/Banner.vue";
 import Chip from "./ui/Chip.vue";
 import CountBadge from "./ui/CountBadge.vue";
+import EmptyState from "./ui/EmptyState.vue";
 import Field from "./ui/Field.vue";
 import IconButton from "./ui/IconButton.vue";
 import UpdateView from "./UpdateView.vue";
@@ -373,19 +374,20 @@ watch(
         @capture-settings="store.openCaptureSettings($event)"
         @open-tasks="store.openTasks($event)"
       />
-      <p
+      <EmptyState
         v-else-if="store.vaults.length > 0"
-        class="text-xs text-slate-400"
-      >
-        No vaults match "{{ filter }}".
-      </p>
-      <p
+        :title="`No vaults match &quot;${filter}&quot;.`"
+      />
+      <EmptyState
         v-else-if="store.loaded"
-        class="text-xs text-slate-400"
+        title="Obsidian not found — no vaults discovered. Is Obsidian installed and has it been opened at least once?"
       >
-        Obsidian not found — no vaults discovered. Is Obsidian installed and
-        has it been opened at least once?
-      </p>
+        <template #icon>
+          <AppIcon :size="28">
+            <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2Z" />
+          </AppIcon>
+        </template>
+      </EmptyState>
     </div>
     <NotificationHost />
   </div>
