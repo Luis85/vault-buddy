@@ -1,5 +1,37 @@
 @import "tailwindcss";
 
+/* Semantic design tokens. Each maps to the palette value already in use, so
+   converted and unconverted components render identically — the win is a
+   consistent vocabulary and the end of the slate-400/500 + error-color drift.
+   The white-opacity glass surfaces stay as literal utilities on purpose. */
+@theme {
+  /* Foreground text ladder — rule: muted = captions/values,
+     subtle = section labels / placeholders / disabled hints. */
+  --color-fg: var(--color-slate-100);
+  --color-fg-secondary: var(--color-slate-300);
+  --color-fg-muted: var(--color-slate-400);
+  --color-fg-subtle: var(--color-slate-500);
+
+  /* Accent (violet) */
+  --color-accent: var(--color-violet-500);
+  --color-accent-strong: var(--color-violet-600);
+  --color-accent-fg: var(--color-violet-200);
+  --color-focus: var(--color-violet-400);
+
+  /* Status */
+  --color-success: var(--color-emerald-400);
+  --color-danger: var(--color-red-400);
+  --color-danger-fg: var(--color-red-300);
+  --color-recording: var(--color-red-500);
+
+  /* Control radius = the lg the buttons/rows already use */
+  --radius-control: var(--radius-lg);
+
+  /* The one caption size that folds the ad-hoc text-[10px] usages
+     (fixed-geometry count badges keep their literal text-[9px]). */
+  --text-micro: 0.625rem;
+}
+
 html,
 body,
 #app {
