@@ -88,6 +88,37 @@ the housekeeping increment's C1 fix (final review, Minor). Remediation
 sketch if it ever bites: pre-check the decoded sample count and short-circuit
 to the no-speech transcript before invoking the engine.
 
+### GAP-67 · Low · Panel preset clamp uses the buddy monitor's scale but `set_size` uses the panel's, on mixed-DPI multi-monitor
+`src-tauri/src/commands.rs` (`position_panel` / `buddy_work_area_logical`, the
+`clamp_dims_to_work_area` call). The preset-size clamp added to stop an
+oversized non-resizable panel from stranding controls off-screen (Codex,
+PR #73) converts the buddy monitor's work area to logical units using the
+**buddy** monitor's scale factor, but the subsequent
+`panel.set_size(LogicalSize)` is interpreted at the **panel** window's current
+monitor scale. These agree in the common case — the panel opens beside the
+buddy on the SAME monitor — but diverge for exactly one transient: right after
+the buddy is dragged to a monitor with a DIFFERENT DPI, the hidden panel is
+still associated with (scaled for) its previous monitor, so on that FIRST open
+the clamp is computed in destination-monitor units while `set_size` applies in
+source-monitor units; `place_beside_buddy` then positions from the pre-move
+physical `outer_size()`, and when the panel is shown Windows runs the DPI
+transition and changes its physical dimensions, invalidating the clamp and
+leaving it mis-sized or partly off-screen. **Self-healing:** the next open (the
+panel now on the destination monitor) is correct. **Why not fixed now:** the
+correct fix — move the hidden panel onto the destination monitor BEFORE sizing
+and final placement, so size + clamp + position share one coordinate system —
+reorders the flicker-critical size-while-hidden → place → show sequence and
+hinges on whether a `set_position` while hidden triggers a synchronous Windows
+DPI rescale, which cannot be validated in the Linux/headless compile-gate
+environment; a blind change to this sequence risks the exact stale-frame flash
+the three-window split exists to prevent. **Remediation sketch:** on a Windows
+multi-monitor mixed-DPI rig, reorder `position_panel` to (1) `set_position` the
+hidden panel onto the buddy's monitor, (2) re-query its scale, (3) clamp +
+`set_size` in that scale, (4) final `place_beside_buddy`; verify no flash and
+correct first-open sizing across the DPI boundary. The clamp is still
+net-positive without this — it fixes the far commoner same-monitor
+oversized-preset case — so it stays.
+
 ### GAP-56 · Low · Search content cache: fill-to-cap tail and dead entries
 `core/src/search_cache.rs`. The cache fills to 256 MiB then stops inserting
 (no eviction — uniform per-search access makes LRU pointless), so once total

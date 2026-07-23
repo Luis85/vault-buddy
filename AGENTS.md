@@ -253,7 +253,7 @@ Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
-| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `open_panel` (idempotent show — the clickable bubble's reveal), `close_bubble`, `announce` (optional `action` → a clickable bubble), `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart`, `get_panel_config`, `set_panel_size` (the panel preset size — `position_panel` sizes the HIDDEN panel from it on the next open; never resizes a shown window) |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `open_panel` (idempotent show — the clickable bubble's reveal), `close_bubble`, `announce` (optional `action` → a clickable bubble), `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart`, `get_panel_config`, `set_panel_size` *(async — its fsync'd config write must not sit on the main thread, mirroring the other config setters)* (the panel preset size, `compact`/`comfortable`/`large`; read from a lock-free in-memory cache primed at startup so the show path never reads disk; `position_panel` sizes the HIDDEN panel from it on the next open — clamped to the monitor work area, since `place_beside` clamps position but not size — never resizes a shown window) |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
@@ -318,7 +318,7 @@ actually subscribe.
 | State | Location |
 | --- | --- |
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
-| Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp` and `document_import` (user-set `pandoc_path` override) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
+| Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp`, `document_import` (user-set `pandoc_path` override), and `panel` (the S/M/L preset size, `core::panel_config`) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
 | Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
@@ -342,8 +342,14 @@ resize entirely:
   `commands::position_panel` sizes it from config every time it's about to be
   shown, but only while it is still hidden — resizing a shown window is the
   exact stale-frame flash this section exists to avoid, so a size change
-  picked in settings applies on the next hide→show, not instantly), created
-  hidden.
+  picked in settings applies on the next hide→show, not instantly. The preset
+  is read from a lock-free in-memory cache (`commands::PANEL_SIZE`, primed once
+  from config in `setup`) so the main-thread show path never blocks on disk,
+  and its dims are clamped to the buddy monitor's work area before `set_size`
+  — `place_beside` clamps a window's position but not its size, so an oversized
+  preset on a small/display-scaled monitor would otherwise strand controls
+  off-screen; the mixed-DPI cross-monitor corner of that clamp is a tracked
+  gap), created hidden.
 - **`bubble`** — the greeting speech bubble (260×150), created hidden.
 
 `panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
