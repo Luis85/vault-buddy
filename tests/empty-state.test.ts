@@ -10,7 +10,11 @@ describe("EmptyState", () => {
     // .text() must equal the title exactly, so a `<p>`→EmptyState swap keeps
     // existing `.text()` assertions green.
     expect(w.text()).toBe("No tasks yet.");
-    expect(w.get("[data-testid='empty-state']").exists()).toBe(true);
+    // .find(...).exists() (not .get(...)) — this VTU version's .get() return
+    // type omits .exists() because .get() already throws when the selector
+    // doesn't match, making a chained .exists() a vue-tsc error, not a
+    // runtime one; .find() is the idiomatic existence check (used below too).
+    expect(w.find("[data-testid='empty-state']").exists()).toBe(true);
   });
 
   it("renders an aria-hidden icon slot without adding text", () => {
