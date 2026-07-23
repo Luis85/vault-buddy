@@ -136,7 +136,7 @@ const claudeDesktopSnippet = computed(() =>
 
 <template>
   <section v-if="cfg">
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       AI integrations — MCP server
     </h2>
     <div class="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -146,7 +146,7 @@ const claudeDesktopSnippet = computed(() =>
           class="text-sm text-slate-200"
         >
           Local MCP server
-          <span class="block text-xs text-slate-500">{{ statusLabel }}</span>
+          <span class="block text-xs text-fg-subtle">{{ statusLabel }}</span>
         </label>
         <input
           id="mcp-enabled"
@@ -169,7 +169,7 @@ const claudeDesktopSnippet = computed(() =>
           type="number"
           min="1024"
           max="65535"
-          class="w-24 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-right text-sm text-slate-200 disabled:cursor-default disabled:opacity-50"
+          class="w-24 rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-right text-sm text-slate-200 disabled:cursor-default disabled:opacity-50"
           :value="cfg.port"
           :disabled="saving"
           @change="save({ port: Number(($event.target as HTMLInputElement).value) })"
@@ -181,7 +181,7 @@ const claudeDesktopSnippet = computed(() =>
           class="text-sm text-slate-200"
         >
           Allow vault writes
-          <span class="block text-xs text-slate-500">
+          <span class="block text-xs text-fg-subtle">
             AI clients may add tasks, update task status, and create today's daily note
           </span>
         </label>
@@ -201,11 +201,11 @@ const claudeDesktopSnippet = computed(() =>
       >
         <span class="text-sm text-slate-200">Token</span>
         <span class="flex items-center gap-1">
-          <code class="max-w-40 truncate text-xs text-slate-400">{{ cfg.token }}</code>
+          <code class="max-w-40 truncate text-xs text-fg-muted">{{ cfg.token }}</code>
           <button
             type="button"
             data-testid="mcp-copy-token"
-            class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 hover:bg-white/10"
+            class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10"
             @click="copy(cfg.token)"
           >
             Copy
@@ -213,7 +213,7 @@ const claudeDesktopSnippet = computed(() =>
           <button
             type="button"
             data-testid="mcp-regenerate"
-            class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
+            class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
             @click="regenerate"
           >
@@ -223,9 +223,9 @@ const claudeDesktopSnippet = computed(() =>
       </div>
       <details
         v-if="cfg.enabled && cfg.token"
-        class="text-xs text-slate-400"
+        class="text-xs text-fg-muted"
       >
-        <summary class="cursor-pointer select-none text-slate-300">
+        <summary class="cursor-pointer select-none text-fg-secondary">
           Client setup
         </summary>
         <div class="mt-1.5 flex flex-col gap-2">
@@ -234,39 +234,39 @@ const claudeDesktopSnippet = computed(() =>
               <span>Claude Code</span>
               <button
                 type="button"
-                class="cursor-pointer text-slate-300 hover:text-slate-100"
+                class="cursor-pointer text-fg-secondary hover:text-fg"
                 @click="copy(claudeSnippet)"
               >
                 Copy
               </button>
             </div>
-            <pre class="overflow-x-auto rounded-lg bg-black/30 p-1.5">{{ claudeSnippet }}</pre>
+            <pre class="overflow-x-auto rounded-control bg-black/30 p-1.5">{{ claudeSnippet }}</pre>
           </div>
           <div>
             <div class="mb-0.5 flex items-center justify-between">
               <span>Cursor (.cursor/mcp.json)</span>
               <button
                 type="button"
-                class="cursor-pointer text-slate-300 hover:text-slate-100"
+                class="cursor-pointer text-fg-secondary hover:text-fg"
                 @click="copy(cursorSnippet)"
               >
                 Copy
               </button>
             </div>
-            <pre class="overflow-x-auto rounded-lg bg-black/30 p-1.5">{{ cursorSnippet }}</pre>
+            <pre class="overflow-x-auto rounded-control bg-black/30 p-1.5">{{ cursorSnippet }}</pre>
           </div>
           <div>
             <div class="mb-0.5 flex items-center justify-between">
               <span>Claude Desktop (via mcp-remote)</span>
               <button
                 type="button"
-                class="cursor-pointer text-slate-300 hover:text-slate-100"
+                class="cursor-pointer text-fg-secondary hover:text-fg"
                 @click="copy(claudeDesktopSnippet)"
               >
                 Copy
               </button>
             </div>
-            <pre class="overflow-x-auto rounded-lg bg-black/30 p-1.5">{{ claudeDesktopSnippet }}</pre>
+            <pre class="overflow-x-auto rounded-control bg-black/30 p-1.5">{{ claudeDesktopSnippet }}</pre>
           </div>
         </div>
       </details>

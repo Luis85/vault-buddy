@@ -60,7 +60,7 @@ async function confirmDelete(id: string) {
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Transcription models
     </h2>
     <div class="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -72,7 +72,7 @@ async function confirmDelete(id: string) {
       >
         <div class="text-sm text-slate-200">
           {{ LABELS[m.id] ?? m.id }}
-          <span class="block text-xs text-slate-500">
+          <span class="block text-xs text-fg-subtle">
             <template v-if="m.present">{{ formatSize(m.sizeBytes ?? 0) }}</template>
             <template v-else>not downloaded (~{{ formatSize(m.approxDownloadBytes) }})</template>
           </span>
@@ -81,7 +81,7 @@ async function confirmDelete(id: string) {
           v-if="confirmingId === m.id"
           class="flex items-center gap-1.5 text-right"
         >
-          <span class="text-xs text-slate-400">
+          <span class="text-xs text-fg-muted">
             Deleting frees the disk — downloading again costs
             ~{{ formatSize(m.approxDownloadBytes) }}.
           </span>
@@ -97,7 +97,7 @@ async function confirmDelete(id: string) {
           <button
             :data-testid="`model-cancel-${m.id}`"
             type="button"
-            class="rounded-md bg-white/5 px-2 py-1 text-xs text-slate-300 hover:bg-white/10"
+            class="rounded-md bg-white/5 px-2 py-1 text-xs text-fg-secondary hover:bg-white/10"
             @click="confirmingId = null"
           >
             Cancel
@@ -107,7 +107,7 @@ async function confirmDelete(id: string) {
           v-else-if="m.present"
           :data-testid="`model-delete-${m.id}`"
           type="button"
-          class="rounded-md bg-white/5 px-2 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
+          class="rounded-md bg-white/5 px-2 py-1 text-xs text-fg-secondary hover:bg-white/10 disabled:opacity-50"
           :disabled="busyId !== null"
           @click="confirmingId = m.id"
         >

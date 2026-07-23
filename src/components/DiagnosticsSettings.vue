@@ -13,7 +13,7 @@ function openLogs() {
 <template>
   <section>
     <h2
-      class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+      class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted"
     >
       Diagnostics
     </h2>
@@ -22,14 +22,14 @@ function openLogs() {
         <span class="text-sm text-slate-200">Logs</span>
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           data-testid="open-logs"
           @click="openLogs"
         >
           Open logs folder
         </button>
       </div>
-      <p class="mt-1.5 text-xs text-slate-500">
+      <p class="mt-1.5 text-xs text-fg-subtle">
         Share these if the buddy crashes.
       </p>
     </div>

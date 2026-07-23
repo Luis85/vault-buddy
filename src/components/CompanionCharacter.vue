@@ -151,7 +151,7 @@ function onContextMenu() {
   <div class="flex flex-col items-center">
     <button
       type="button"
-      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="[
         draggable ? 'cursor-grab' : 'cursor-pointer',
         { working, still: !animated, recording, paused, transcribing, 'drop-target': dropTarget },
@@ -183,7 +183,7 @@ function onContextMenu() {
         <span
           v-if="recording"
           class="rec-dot absolute left-1/2 top-1 h-3 w-3 -translate-x-1/2 rounded-full ring-2 ring-slate-900"
-          :class="paused ? 'bg-amber-400' : 'bg-red-500'"
+          :class="paused ? 'bg-amber-400' : 'bg-recording'"
           aria-hidden="true"
         />
         <span

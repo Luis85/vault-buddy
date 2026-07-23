@@ -26,7 +26,7 @@ onMounted(() => {
 <template>
   <section>
     <h2
-      class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+      class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted"
     >
       Updates
     </h2>
@@ -37,7 +37,7 @@ onMounted(() => {
         </span>
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
           :disabled="updates.phase === 'checking' || updates.phase === 'installing'"
           data-testid="check-updates"
           @click="updates.checkForUpdates()"
@@ -55,12 +55,12 @@ onMounted(() => {
         v-else-if="showInstall"
         class="mt-1.5 flex items-center justify-between gap-2"
       >
-        <span class="text-xs text-slate-300">
+        <span class="text-xs text-fg-secondary">
           Version {{ updates.available?.version }} is available
         </span>
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-violet-400 bg-violet-500/20 px-2 py-0.5 text-xs text-slate-100 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer rounded-control border border-violet-400 bg-accent/20 px-2 py-0.5 text-xs text-fg transition-colors hover:bg-accent/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           data-testid="view-update"
           @click="vaults.openUpdate()"
         >
@@ -69,7 +69,7 @@ onMounted(() => {
       </div>
       <p
         v-if="updates.phase === 'error'"
-        class="mt-1.5 text-xs text-red-300"
+        class="mt-1.5 text-xs text-danger-fg"
       >
         {{ updates.error }}
       </p>
@@ -79,7 +79,7 @@ onMounted(() => {
           class="text-sm text-slate-200"
         >
           Check on startup
-          <span class="block text-xs text-slate-500">
+          <span class="block text-xs text-fg-subtle">
             Asks before installing · silent when up to date
           </span>
         </label>

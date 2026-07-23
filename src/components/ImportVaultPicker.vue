@@ -193,7 +193,7 @@ async function pick(vaultId: string) {
     <ImportProgress v-if="viewState === 'converting'" />
     <p
       v-else
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Import
       <span
@@ -209,31 +209,31 @@ async function pick(vaultId: string) {
     <p
       v-if="queueLabel"
       data-testid="import-picker-queued"
-      class="text-xs text-slate-500"
+      class="text-xs text-fg-subtle"
     >
       {{ queueLabel }}
     </p>
     <p
       v-if="viewState === 'checking'"
       data-testid="import-picker-checking"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Checking Pandoc…
     </p>
     <div
       v-else-if="viewState === 'blocked'"
-      class="flex flex-col gap-2 rounded-lg border border-white/10 bg-white/5 p-2"
+      class="flex flex-col gap-2 rounded-control border border-white/10 bg-white/5 p-2"
     >
       <p
         data-testid="import-picker-gate-hint"
-        class="text-xs text-slate-300"
+        class="text-xs text-fg-secondary"
       >
         {{ gate.hint }}
       </p>
       <button
         type="button"
         data-testid="import-picker-settings"
-        class="w-fit cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300 hover:bg-white/10"
+        class="w-fit cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg-secondary hover:bg-white/10"
         @click="store.openDocumentImport()"
       >
         Set up Pandoc
@@ -256,7 +256,7 @@ async function pick(vaultId: string) {
       placeholder="Filter vaults…"
       aria-label="Filter vaults"
       data-testid="import-picker-filter"
-      class="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-white/20 focus:outline-none"
+      class="mb-2 w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-white/20 focus:outline-none"
       @keydown.escape="onFilterEscape"
     >
     <ImportVaultPickerList

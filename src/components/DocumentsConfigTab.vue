@@ -5,6 +5,7 @@ import { onMounted, ref } from "vue";
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
 import type { DocumentsConfig } from "../types";
+import Banner from "./ui/Banner.vue";
 import VaultFolderSetting from "./VaultFolderSetting.vue";
 
 // The Documents tab of Vault settings. Self-contained: loads its own config,
@@ -89,17 +90,17 @@ function onBodyTemplateInput(event: Event) {
   >
     <p
       v-if="loading"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Loading…
     </p>
-    <p
+    <Banner
       v-else-if="loadError"
+      tone="danger"
       data-testid="documents-load-error"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ loadError }}
-    </p>
+    </Banner>
     <template v-else>
       <VaultFolderSetting
         :model-value="documentsFolder"
@@ -118,7 +119,7 @@ function onBodyTemplateInput(event: Event) {
           class="text-sm text-slate-200"
         >
           Organize into year/month folders
-          <span class="block text-xs text-slate-500">Off = one flat folder</span>
+          <span class="block text-xs text-fg-subtle">Off = one flat folder</span>
         </label>
         <input
           id="document-date-folders"
@@ -135,7 +136,7 @@ function onBodyTemplateInput(event: Event) {
           class="text-sm text-slate-200"
         >
           Import images
-          <span class="block text-xs text-slate-500">Off = text only (no images, no media folder)</span>
+          <span class="block text-xs text-fg-subtle">Off = text only (no images, no media folder)</span>
         </label>
         <input
           id="document-extract-images"
@@ -159,10 +160,10 @@ function onBodyTemplateInput(event: Event) {
           :value="documentExtraFrontmatter"
           rows="3"
           placeholder="area: Legal"
-          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full resize-y rounded-control border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
           @input="onExtraFrontmatterInput"
         />
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-fg-subtle">
           {{ TEMPLATE_PLACEHOLDER_HINT }}
         </p>
       </div>
@@ -179,10 +180,10 @@ function onBodyTemplateInput(event: Event) {
           :value="documentBodyTemplate"
           rows="3"
           placeholder="> Imported via Pandoc"
-          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full resize-y rounded-control border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
           @input="onBodyTemplateInput"
         />
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-fg-subtle">
           {{ TEMPLATE_PLACEHOLDER_HINT }}
         </p>
       </div>

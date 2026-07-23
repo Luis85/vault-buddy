@@ -18,6 +18,7 @@ import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
 import TaskSectionMenu from "./TaskSectionMenu.vue";
 import TaskViewControls from "./TaskViewControls.vue";
+import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
 const props = defineProps<{ vaultId: string | null }>();
@@ -326,11 +327,11 @@ async function add(payload: AddPayload) {
     >
       <div class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
         <div
-          class="h-full rounded-full bg-violet-500 transition-all"
+          class="h-full rounded-full bg-accent transition-all"
           :style="{ width: `${progress.pct}%` }"
         />
       </div>
-      <span class="shrink-0 text-xs tabular-nums text-slate-400">
+      <span class="shrink-0 text-xs tabular-nums text-fg-muted">
         {{ progress.done }} / {{ progress.total }}
       </span>
     </div>
@@ -342,20 +343,20 @@ async function add(payload: AddPayload) {
       type="search"
       placeholder="Filter tasks…"
       aria-label="Filter tasks"
-      class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      class="rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
     >
 
     <div
       v-if="tagFilter"
       data-testid="task-tag-filter"
-      class="flex items-center gap-1 self-start rounded-full bg-violet-500/20 py-0.5 pl-2 pr-1 text-xs text-violet-200"
+      class="flex items-center gap-1 self-start rounded-full bg-accent/20 py-0.5 pl-2 pr-1 text-xs text-accent-fg"
     >
       <span>#{{ tagFilter }}</span>
       <button
         type="button"
         data-testid="task-tag-filter-clear"
         aria-label="Clear tag filter"
-        class="cursor-pointer rounded-full px-1 text-violet-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-full px-1 text-violet-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="tagFilter = null"
       >
         ✕
@@ -390,16 +391,16 @@ async function add(payload: AddPayload) {
 
     <p
       v-if="loading"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Loading…
     </p>
-    <p
+    <Banner
       v-else-if="loadError"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ loadError }}
-    </p>
+    </Banner>
     <EmptyState
       v-else-if="tasks.length === 0 && buckets.length === 0"
       title="No tasks yet."
@@ -420,8 +421,8 @@ async function add(payload: AddPayload) {
         v-for="bucket in buckets"
         :key="bucket.key"
         :data-section-key="bucket.key"
-        class="mt-1 rounded-lg first:mt-0"
-        :class="bucket.key === crossListDropTarget ? 'bg-violet-500/10 ring-2 ring-violet-400/60' : ''"
+        class="mt-1 rounded-control first:mt-0"
+        :class="bucket.key === crossListDropTarget ? 'bg-accent/10 ring-2 ring-focus/60' : ''"
       >
         <div
           v-if="bucket.label"
@@ -429,8 +430,8 @@ async function add(payload: AddPayload) {
         >
           <h3
             data-testid="task-bucket-header"
-            class="text-[10px] font-semibold uppercase tracking-wider"
-            :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-slate-500'"
+            class="text-micro font-semibold uppercase tracking-wider"
+            :class="bucket.key === 'overdue' ? 'text-danger-fg' : 'text-fg-subtle'"
           >
             {{ bucket.label }}
           </h3>

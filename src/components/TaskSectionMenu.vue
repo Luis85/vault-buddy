@@ -100,7 +100,7 @@ onMounted(() => window.addEventListener("pointerdown", onWindowPointerDown));
 onBeforeUnmount(() => window.removeEventListener("pointerdown", onWindowPointerDown));
 
 const itemClass =
-  "cursor-pointer rounded px-1.5 py-0.5 text-left text-[10px] text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40";
+  "cursor-pointer rounded px-1.5 py-0.5 text-left text-micro text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40";
 </script>
 
 <template>
@@ -114,7 +114,7 @@ const itemClass =
       :data-testid="`task-section-menu-${list}`"
       :aria-label="`List actions for ${list}`"
       title="List actions"
-      class="cursor-pointer rounded px-1 leading-none text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      class="cursor-pointer rounded px-1 leading-none text-fg-subtle transition-colors hover:bg-white/10 hover:text-fg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click.stop="toggle"
     >
       ⋯
@@ -124,7 +124,7 @@ const itemClass =
       ref="popover"
       :data-testid="`task-section-popover-${list}`"
       tabindex="-1"
-      class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-lg border border-white/10 bg-slate-800 p-1 shadow-lg focus:outline-none"
+      class="absolute right-0 top-full z-10 mt-1 flex min-w-36 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 shadow-lg focus:outline-none"
       @click.stop
     >
       <template v-if="mode === 'menu'">
@@ -161,7 +161,7 @@ const itemClass =
           :data-testid="`task-section-rename-input-${list}`"
           type="text"
           aria-label="New list name"
-          class="min-w-0 rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-100 focus:border-violet-400 focus:outline-none"
+          class="min-w-0 rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-micro text-fg focus:border-focus focus:outline-none"
           @keydown.enter="onRenameEnter"
           @keydown.esc="onRenameEscape"
         >
@@ -185,7 +185,7 @@ const itemClass =
         </div>
       </template>
       <template v-else>
-        <span class="px-1.5 py-0.5 text-[10px] text-slate-400">
+        <span class="px-1.5 py-0.5 text-micro text-fg-muted">
           Delete "{{ leaf }}"? Its tasks move to No list.
         </span>
         <div class="flex gap-0.5">
@@ -193,7 +193,7 @@ const itemClass =
             type="button"
             :data-testid="`task-section-delete-confirm-${list}`"
             :disabled="busy"
-            class="cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-red-300 transition-colors hover:bg-red-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+            class="cursor-pointer rounded px-1.5 py-0.5 text-micro text-danger-fg transition-colors hover:bg-red-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
             @click="confirmDelete"
           >
             Delete

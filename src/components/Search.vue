@@ -14,6 +14,7 @@ import {
 } from "../utils/recentSearches";
 import AppIcon from "./AppIcon.vue";
 import HighlightText from "./HighlightText.vue";
+import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
 const notifications = useNotificationsStore();
@@ -264,7 +265,7 @@ onUnmounted(() => {
         aria-autocomplete="list"
         aria-controls="search-results"
         :aria-activedescendant="visibleHits.length ? hitId(selected) : undefined"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
         @keydown.escape="onEscape"
         @keydown.down="onArrow($event, 1)"
         @keydown.up="onArrow($event, -1)"
@@ -277,15 +278,15 @@ onUnmounted(() => {
         aria-hidden="true"
       />
     </div>
-    <p
+    <Banner
       v-if="error"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ error }}
-    </p>
+    </Banner>
     <p
       v-if="tooShort"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Type at least {{ MIN_QUERY_CHARS }} characters to search.
     </p>
@@ -296,12 +297,12 @@ onUnmounted(() => {
     >
       <div class="flex items-center justify-between">
         <span
-          class="text-xs font-semibold uppercase tracking-wide text-slate-400"
+          class="text-xs font-semibold uppercase tracking-wide text-fg-muted"
         >Recent</span>
         <button
           type="button"
           data-testid="recent-clear"
-          class="cursor-pointer rounded px-1 text-[10px] text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer rounded px-1 text-micro text-fg-subtle transition-colors hover:bg-white/10 hover:text-fg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="onClearRecents"
         >
           Clear
@@ -313,7 +314,7 @@ onUnmounted(() => {
           :key="q"
           type="button"
           data-testid="recent-chip"
-          class="max-w-full cursor-pointer truncate rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="max-w-full cursor-pointer truncate rounded-full bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="useRecent(q)"
         >
           {{ q }}
@@ -322,7 +323,7 @@ onUnmounted(() => {
     </div>
     <p
       v-else-if="searching && hits.length === 0"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Searching…
     </p>
@@ -346,7 +347,7 @@ onUnmounted(() => {
       data-testid="search-summary"
       role="status"
       aria-live="polite"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       {{ summary }}
     </p>
@@ -362,11 +363,11 @@ onUnmounted(() => {
         type="button"
         :data-testid="`search-filter-${k}`"
         :aria-pressed="kindFilter === k"
-        class="cursor-pointer rounded-full px-2 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-full px-2 py-0.5 text-micro transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="
           kindFilter === k
-            ? 'bg-violet-500/30 text-slate-100'
-            : 'bg-white/5 text-slate-400 hover:bg-white/10'
+            ? 'bg-violet-500/30 text-fg'
+            : 'bg-white/5 text-fg-muted hover:bg-white/10'
         "
         @click="kindFilter = k"
       >
@@ -395,7 +396,7 @@ onUnmounted(() => {
             :aria-expanded="!group.collapsed"
             :aria-controls="`search-group-${group.vaultId}`"
             :aria-label="`${group.collapsed ? 'Expand' : 'Collapse'} ${group.vaultName}`"
-            class="cursor-pointer rounded p-0.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            class="cursor-pointer rounded p-0.5 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @click="toggleGroup(group.vaultId)"
           >
             <svg
@@ -415,12 +416,12 @@ onUnmounted(() => {
             </svg>
           </button>
           <h2
-            class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400"
+            class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-fg-muted"
           >
             {{ group.vaultName }}
             <span
               data-testid="group-count"
-              class="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-slate-400"
+              class="rounded-full bg-white/10 px-1.5 py-0.5 text-micro font-normal normal-case text-fg-muted"
             >{{ group.count }}</span>
           </h2>
         </div>
@@ -436,7 +437,7 @@ onUnmounted(() => {
             data-testid="search-hit"
             role="option"
             :aria-selected="row.i === selected"
-            class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-lg border px-2 py-1 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-control border px-2 py-1 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             :class="
               row.i === selected
                 ? 'border-violet-400/60 bg-white/10'
@@ -458,7 +459,7 @@ onUnmounted(() => {
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 aria-hidden="true"
-                class="shrink-0 text-slate-400"
+                class="shrink-0 text-fg-muted"
               >
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
@@ -475,14 +476,14 @@ onUnmounted(() => {
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 aria-hidden="true"
-                class="shrink-0 text-slate-400"
+                class="shrink-0 text-fg-muted"
               >
                 <path
                   d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
                 />
               </svg>
               <span
-                class="min-w-0 flex-1 truncate text-sm text-slate-100"
+                class="min-w-0 flex-1 truncate text-sm text-fg"
                 :title="row.hit.name"
               >
                 <HighlightText
@@ -493,13 +494,13 @@ onUnmounted(() => {
             </span>
             <span
               v-if="row.hit.folder"
-              class="w-full truncate text-xs text-slate-500"
+              class="w-full truncate text-xs text-fg-subtle"
             >
               {{ row.hit.folder }}
             </span>
             <span
               v-if="row.hit.snippet"
-              class="w-full truncate text-xs text-slate-400"
+              class="w-full truncate text-xs text-fg-muted"
             >
               <HighlightText
                 :text="row.hit.snippet"
@@ -513,7 +514,7 @@ onUnmounted(() => {
     <p
       v-if="truncated"
       data-testid="search-truncated"
-      class="text-xs text-slate-500"
+      class="text-xs text-fg-subtle"
     >
       Showing the first {{ hits.length }} matches — refine your query.
     </p>

@@ -22,10 +22,10 @@ defineEmits<{ (e: "pick", id: string): void }>();
       <button
         type="button"
         data-testid="import-picker-vault"
-        class="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="flex w-full cursor-pointer items-center gap-2 rounded-control border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="$emit('pick', vault.id)"
       >
-        <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">
+        <span class="min-w-0 flex-1 truncate text-sm font-medium text-fg">
           {{ vault.name }}
         </span>
       </button>

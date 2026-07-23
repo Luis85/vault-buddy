@@ -55,7 +55,7 @@ const isOverdue = (t: AggTask): boolean => {
 <template>
   <li
     data-testid="task-row"
-    class="flex items-center gap-2 rounded-lg border bg-white/5 px-2 py-1"
+    class="flex items-center gap-2 rounded-control border bg-white/5 px-2 py-1"
     :class="[
       dragging ? 'opacity-50' : '',
       dropTarget ? 'border-violet-400' : 'border-white/10',
@@ -89,7 +89,7 @@ const isOverdue = (t: AggTask): boolean => {
         <button
           type="button"
           data-testid="task-open"
-          class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :aria-label="`Open ${task.title} in Obsidian`"
           :title="`Open ${task.title} in Obsidian`"
           @click="$emit('open')"
@@ -109,7 +109,7 @@ const isOverdue = (t: AggTask): boolean => {
           />
           <span
             class="min-w-0 flex-1 truncate text-sm"
-            :class="task.done ? 'text-slate-500 line-through' : 'text-slate-100'"
+            :class="task.done ? 'text-fg-subtle line-through' : 'text-fg'"
           >
             {{ task.title }}
           </span>
@@ -127,8 +127,8 @@ const isOverdue = (t: AggTask): boolean => {
         <span
           v-if="dueOf(task)"
           data-testid="task-due"
-          class="shrink-0 text-[10px] tabular-nums"
-          :class="isOverdue(task) ? 'font-semibold text-red-300' : 'text-slate-400'"
+          class="shrink-0 text-micro tabular-nums"
+          :class="isOverdue(task) ? 'font-semibold text-danger-fg' : 'text-fg-muted'"
         >{{ dueLabel(dueOf(task)!) }}</span>
       </div>
       <IconButton

@@ -25,8 +25,8 @@ function onKeydown(ev: KeyboardEvent) {
     :aria-disabled="busy || undefined"
     :aria-label="`Reorder ${title} (arrow keys move it)`"
     title="Drag to reorder"
-    class="shrink-0 touch-none rounded p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-    :class="busy ? 'cursor-default text-slate-600 opacity-40' : 'cursor-grab text-slate-500 hover:text-slate-200'"
+    class="shrink-0 touch-none rounded p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+    :class="busy ? 'cursor-default text-slate-600 opacity-40' : 'cursor-grab text-fg-subtle hover:text-slate-200'"
     @pointerdown="onPointerDown"
     @keydown="onKeydown"
   >

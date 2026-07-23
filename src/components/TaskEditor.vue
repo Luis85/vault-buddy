@@ -103,7 +103,7 @@ function onEditorEsc(e: KeyboardEvent) {
       data-testid="task-edit-title"
       type="text"
       aria-label="Task title"
-      class="min-w-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none"
+      class="min-w-0 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg focus:border-focus focus:outline-none"
       @keydown.enter="onTitleEnter"
     >
     <div class="flex items-center gap-1">
@@ -112,7 +112,7 @@ function onEditorEsc(e: KeyboardEvent) {
         data-testid="task-edit-due"
         type="date"
         aria-label="Due date"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
       <div
         class="flex gap-0.5"
@@ -126,11 +126,11 @@ function onEditorEsc(e: KeyboardEvent) {
           role="radio"
           :data-testid="`task-edit-priority-${p}`"
           :aria-checked="editPriority === p"
-          class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer rounded-control border px-1.5 py-0.5 text-micro capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :class="
             editPriority === p
-              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+              ? 'border-violet-400 bg-accent/20 text-fg'
+              : 'border-white/10 bg-white/5 text-fg-secondary hover:bg-white/10'
           "
           @click="editPriority = p"
         >
@@ -144,10 +144,10 @@ function onEditorEsc(e: KeyboardEvent) {
       type="text"
       placeholder="#tags"
       aria-label="Tags"
-      class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
     >
     <div class="flex items-center gap-1">
-      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">List</span>
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">List</span>
       <TaskListPicker
         v-model="editList"
         :lists="lists"
@@ -160,17 +160,17 @@ function onEditorEsc(e: KeyboardEvent) {
       v-if="task.id"
       class="flex items-center gap-1"
     >
-      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">ID</span>
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">ID</span>
       <code
         data-testid="task-edit-id"
-        class="min-w-0 flex-1 truncate rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300"
+        class="min-w-0 flex-1 truncate rounded bg-white/5 px-1.5 py-0.5 text-micro text-fg-secondary"
       >{{ task.id }}</code>
       <button
         type="button"
         data-testid="task-edit-id-copy"
         aria-label="Copy task ID"
         title="Copy ID"
-        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-1.5 py-0.5 text-micro text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="copyId"
       >
         Copy
@@ -180,7 +180,7 @@ function onEditorEsc(e: KeyboardEvent) {
       <button
         type="button"
         data-testid="task-edit-cancel"
-        class="cursor-pointer rounded-lg px-2 py-0.5 text-xs text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-control px-2 py-0.5 text-xs text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="$emit('cancel')"
       >
         Cancel
@@ -189,7 +189,7 @@ function onEditorEsc(e: KeyboardEvent) {
         type="button"
         data-testid="task-edit-save"
         :disabled="busy || !titleValid"
-        class="cursor-pointer rounded-lg bg-violet-600/80 px-2 py-0.5 text-xs font-semibold text-white hover:bg-violet-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+        class="cursor-pointer rounded-control bg-accent-strong/80 px-2 py-0.5 text-xs font-semibold text-white hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="save"
       >
         Save

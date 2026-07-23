@@ -110,7 +110,7 @@ function onNameEscape(e: KeyboardEvent) {
       type="text"
       placeholder="List name"
       aria-label="New list name"
-      class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
       @keydown.enter="onNameEnter"
       @keydown.esc="onNameEscape"
     >
@@ -120,7 +120,7 @@ function onNameEscape(e: KeyboardEvent) {
       :disabled="busy || newName.trim() === ''"
       aria-label="Create list"
       title="Create list"
-      class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+      class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
       @click="confirmNew"
     >
       ✓
@@ -130,7 +130,7 @@ function onNameEscape(e: KeyboardEvent) {
       :data-testid="dataTestid ? `${dataTestid}-new-cancel` : undefined"
       aria-label="Cancel new list"
       title="Cancel"
-      class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       @click="newMode = false"
     >
       ✕

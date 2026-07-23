@@ -67,10 +67,10 @@ const hasSomethingToShow = computed(() => summaryLabel.value !== null);
     role="button"
     tabindex="0"
     :title="newestFailedReason ?? summaryLabel ?? undefined"
-    class="cursor-pointer truncate rounded-lg border px-2 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+    class="cursor-pointer truncate rounded-control border px-2 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
     :class="
       active
-        ? 'border-white/10 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25'
+        ? 'border-white/10 bg-accent/15 text-violet-100 hover:bg-accent/25'
         : 'border-white/10 bg-red-500/20 text-red-200 hover:bg-red-500/30'
     "
     @click="vaults.openTranscriptions()"

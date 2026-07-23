@@ -6,6 +6,7 @@ import { useAutosave } from "../composables/useAutosave";
 import { logWarning } from "../logging";
 import type { AudioDevices, CaptureConfig, RecordingSettingsValue } from "../types";
 import RecordingSettings from "./RecordingSettings.vue";
+import Banner from "./ui/Banner.vue";
 
 // Folders are the only free-text fields in the bundle → debounce; everything
 // else is a toggle/select → save immediately.
@@ -151,17 +152,17 @@ onMounted(async () => {
   >
     <p
       v-if="loading"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Loading…
     </p>
-    <p
+    <Banner
       v-else-if="loadError"
       data-testid="recording-load-error"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ loadError }}
-    </p>
+    </Banner>
     <template v-else>
       <RecordingSettings
         :model-value="rec"
@@ -169,13 +170,13 @@ onMounted(async () => {
         :folder-error="folderError"
         @update:model-value="onUpdate"
       />
-      <p
+      <Banner
         v-if="formError"
         data-testid="recording-form-error"
-        class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+        tone="danger"
       >
         {{ formError }}
-      </p>
+      </Banner>
     </template>
   </div>
 </template>

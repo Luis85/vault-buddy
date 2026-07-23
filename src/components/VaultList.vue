@@ -44,7 +44,7 @@ const isFav = (id: string) => store.favorites.has(id);
 const favoriteTitle = (id: string) => (isFav(id) ? "Unfavorite" : "Favorite");
 const favoriteGlyph = (id: string) => (isFav(id) ? "★" : "☆");
 const favoriteButtonClass = (id: string) =>
-  isFav(id) ? "text-amber-300" : "text-slate-400 hover:text-amber-300";
+  isFav(id) ? "text-amber-300" : "text-fg-muted hover:text-amber-300";
 
 // Obsidian allows two registered vaults whose folders share a name; without a
 // disambiguator the rows would be identical while opening different vaults.
@@ -131,7 +131,7 @@ const groups = computed(() => {
         :title="vault.path"
       >
         <div
-          class="flex items-center gap-1 rounded-lg transition-colors hover:bg-white/10"
+          class="flex items-center gap-1 rounded-control transition-colors hover:bg-white/10"
         >
           <button
             type="button"
@@ -140,7 +140,7 @@ const groups = computed(() => {
             :aria-label="favoriteAriaLabel(vault)"
             :title="favoriteTitle(vault.id)"
             :disabled="busyVaultId !== null"
-            class="mr-1 shrink-0 cursor-pointer rounded-control p-1.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+            class="mr-1 shrink-0 cursor-pointer rounded-control p-1.5 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
             :class="favoriteButtonClass(vault.id)"
             @click.stop="store.toggleFavorite(vault.id)"
           >
@@ -148,7 +148,7 @@ const groups = computed(() => {
           </button>
           <button
             type="button"
-            class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+            class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-control px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
             :disabled="busyVaultId !== null"
             :aria-label="`Open vault ${accessibleName(vault)}`"
             @click="$emit('open-vault', vault.id)"
@@ -159,7 +159,7 @@ const groups = computed(() => {
             />
             <span class="min-w-0 flex-1">
               <span class="flex items-center gap-1.5">
-                <span class="truncate text-sm font-medium text-slate-100">
+                <span class="truncate text-sm font-medium text-fg">
                   {{ vault.name }}
                 </span>
                 <StatusDot
@@ -182,7 +182,7 @@ const groups = computed(() => {
               </span>
               <span
                 v-if="isAmbiguous(vault)"
-                class="block truncate text-xs text-slate-400"
+                class="block truncate text-xs text-fg-muted"
               >
                 {{ vault.path }}
               </span>

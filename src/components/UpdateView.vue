@@ -2,6 +2,7 @@
 import { computed, onMounted } from "vue";
 
 import { useUpdatesStore } from "../stores/updates";
+import Spinner from "./ui/Spinner.vue";
 
 const updates = useUpdatesStore();
 
@@ -43,12 +44,12 @@ onMounted(() => {
     class="flex flex-col gap-3"
   >
     <div>
-      <p class="text-sm font-semibold text-slate-100">
+      <p class="text-sm font-semibold text-fg">
         Version {{ updates.available.version }} is available
       </p>
       <p
         v-if="subhead"
-        class="text-xs text-slate-400"
+        class="text-xs text-fg-muted"
       >
         {{ subhead }}
       </p>
@@ -56,7 +57,7 @@ onMounted(() => {
 
     <section>
       <h2
-        class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400"
+        class="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted"
       >
         What's new
       </h2>
@@ -67,7 +68,7 @@ onMounted(() => {
       >{{ releaseNotes }}</pre>
       <p
         v-else
-        class="rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-slate-400"
+        class="rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-fg-muted"
       >
         No release notes provided.
       </p>
@@ -75,7 +76,7 @@ onMounted(() => {
 
     <button
       type="button"
-      class="cursor-pointer rounded-lg border border-violet-400 bg-violet-500/20 px-3 py-1.5 text-sm text-slate-100 transition-colors hover:bg-violet-500/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+      class="cursor-pointer rounded-control border border-violet-400 bg-accent/20 px-3 py-1.5 text-sm text-fg transition-colors hover:bg-accent/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
       :disabled="installing"
       data-testid="install-update"
       @click="updates.installUpdate()"
@@ -84,11 +85,7 @@ onMounted(() => {
         v-if="installing"
         class="flex items-center justify-center gap-1.5"
       >
-        <span
-          class="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white"
-          role="status"
-          aria-label="Installing update…"
-        />
+        <Spinner label="Installing update…" />
         Installing…
       </span>
       <span v-else>Install &amp; restart</span>
@@ -97,7 +94,7 @@ onMounted(() => {
     <p
       v-if="errored"
       data-testid="update-error"
-      class="text-xs text-red-300"
+      class="text-xs text-danger-fg"
     >
       {{ updates.error }}
     </p>
@@ -105,7 +102,7 @@ onMounted(() => {
 
   <p
     v-else
-    class="text-xs text-slate-400"
+    class="text-xs text-fg-muted"
   >
     No update is available right now.
   </p>

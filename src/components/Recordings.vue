@@ -6,6 +6,7 @@ import { logWarning } from "../logging";
 import { useCaptureStore } from "../stores/capture";
 import type { Phase, Recording } from "../types";
 import AppIcon from "./AppIcon.vue";
+import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
 const props = defineProps<{ vaultId: string }>();
@@ -135,16 +136,16 @@ async function open(mp3: string) {
 <template>
   <p
     v-if="loading"
-    class="text-xs text-slate-400"
+    class="text-xs text-fg-muted"
   >
     Loading…
   </p>
-  <p
+  <Banner
     v-else-if="loadError"
-    class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+    tone="danger"
   >
     {{ loadError }}
-  </p>
+  </Banner>
   <EmptyState
     v-else-if="recordings.length === 0"
     title="No recordings yet."
@@ -166,16 +167,16 @@ async function open(mp3: string) {
     v-else
     class="flex flex-col gap-2"
   >
-    <p
+    <Banner
       v-if="openError"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      tone="danger"
     >
       {{ openError }}
-    </p>
+    </Banner>
     <div
       v-if="confirmMp3"
       data-testid="retranscribe-confirm-row"
-      class="flex items-center justify-between gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-100"
+      class="flex items-center justify-between gap-2 rounded-control border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-100"
     >
       <span>Replace the current transcript?</span>
       <span class="flex gap-1">
@@ -188,19 +189,19 @@ async function open(mp3: string) {
         <button
           type="button"
           data-testid="retranscribe-cancel"
-          class="cursor-pointer rounded bg-white/10 px-2 py-0.5 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer rounded bg-white/10 px-2 py-0.5 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="confirmMp3 = null"
         >Cancel</button>
       </span>
     </div>
     <div class="flex items-center justify-between">
-      <span class="text-xs text-slate-400">
+      <span class="text-xs text-fg-muted">
         {{ recordings.length }} recording{{ recordings.length === 1 ? "" : "s" }}
       </span>
       <button
         type="button"
         data-testid="group-toggle"
-        class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :aria-pressed="grouped"
         @click="grouped = !grouped"
       >
@@ -213,10 +214,10 @@ async function open(mp3: string) {
     >
       <h2
         v-if="section.type"
-        class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400"
+        class="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted"
       >
         {{ section.type }}
-        <span class="text-slate-500">· {{ section.items.length }}</span>
+        <span class="text-fg-subtle">· {{ section.items.length }}</span>
       </h2>
       <div class="flex flex-col gap-1">
         <div
@@ -227,21 +228,21 @@ async function open(mp3: string) {
           <button
             type="button"
             data-testid="recording-row"
-            class="flex min-w-0 flex-1 items-baseline justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            class="flex min-w-0 flex-1 items-baseline justify-between gap-2 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @click="open(r.mp3)"
           >
             <span
-              class="min-w-0 flex-1 truncate text-sm text-slate-100"
+              class="min-w-0 flex-1 truncate text-sm text-fg"
               :title="r.title"
             >
               {{ r.title }}
             </span>
-            <span class="shrink-0 text-xs text-slate-400">{{ r.recordedAt }}</span>
-            <span class="shrink-0 text-xs text-slate-500">{{ r.duration ?? "—" }}</span>
+            <span class="shrink-0 text-xs text-fg-muted">{{ r.recordedAt }}</span>
+            <span class="shrink-0 text-xs text-fg-subtle">{{ r.duration ?? "—" }}</span>
           </button>
           <span
             v-if="statusLabel(r)"
-            class="shrink-0 text-[10px] text-slate-500"
+            class="shrink-0 text-micro text-fg-subtle"
             :title="statusTitle(r)"
           >
             <span
@@ -249,7 +250,7 @@ async function open(mp3: string) {
               data-testid="recording-spinner"
               role="status"
               aria-label="Transcribing…"
-              class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-500/40 border-t-slate-300 align-middle"
+              class="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-fg-subtle/40 border-t-fg-secondary align-middle"
             />
             <span v-else>{{ effectiveStatus(r) === "failed" ? "⚠" : effectiveStatus(r) === "complete" ? "✓" : effectiveStatus(r) === "cancelled" ? "⦸" : "…" }}</span>
           </span>
@@ -259,7 +260,7 @@ async function open(mp3: string) {
             data-testid="recording-cancel"
             :aria-label="`Cancel transcribing ${r.title}`"
             title="Cancel"
-            class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 p-1 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @click="capture.cancelTranscription(r.mp3)"
           >
             <svg
@@ -282,7 +283,7 @@ async function open(mp3: string) {
             :disabled="isActive(r.mp3)"
             :aria-label="`Re-transcribe ${r.title}`"
             title="Re-transcribe"
-            class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+            class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 p-1 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
             @click="onRetranscribeClick(r)"
           >
             <svg

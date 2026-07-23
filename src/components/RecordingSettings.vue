@@ -4,6 +4,7 @@ import { computed } from "vue";
 import type { AudioDevice, AudioDevices, RecordingSettingsValue } from "../types";
 import SelectMenu from "./SelectMenu.vue";
 import TranscriptionSettings from "./TranscriptionSettings.vue";
+import Field from "./ui/Field.vue";
 
 // Controlled component: no persistence of its own — same idiom as
 // TranscriptionSettings.vue. Every field is a computed get/set proxy onto
@@ -117,7 +118,7 @@ const outputMenuOptions = computed(() => [
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Folders
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -127,16 +128,15 @@ const outputMenuOptions = computed(() => [
           for="capture-meeting-folder"
         >
           Meeting folder
-          <span class="block text-xs text-slate-500">Inside the vault</span>
+          <span class="block text-xs text-fg-subtle">Inside the vault</span>
         </label>
-        <input
+        <Field
           id="capture-meeting-folder"
           v-model="meetingFolder"
           data-testid="meeting-folder-input"
           type="text"
           placeholder="Meetings"
-          class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-        >
+        />
       </div>
       <div>
         <label
@@ -144,21 +144,20 @@ const outputMenuOptions = computed(() => [
           for="capture-voice-note-folder"
         >
           Voice Note folder
-          <span class="block text-xs text-slate-500">Inside the vault</span>
+          <span class="block text-xs text-fg-subtle">Inside the vault</span>
         </label>
-        <input
+        <Field
           id="capture-voice-note-folder"
           v-model="voiceNoteFolder"
           data-testid="voice-note-folder-input"
           type="text"
           placeholder="Voice Notes"
-          class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
-        >
+        />
       </div>
       <p
         v-if="folderError"
         data-testid="folder-error"
-        class="mt-1 text-xs text-red-300"
+        class="mt-1 text-xs text-danger-fg"
       >
         {{ folderError }}
       </p>
@@ -168,7 +167,7 @@ const outputMenuOptions = computed(() => [
           class="text-sm text-slate-200"
         >
           Organize into year/month folders
-          <span class="block text-xs text-slate-500">Off = one flat folder</span>
+          <span class="block text-xs text-fg-subtle">Off = one flat folder</span>
         </label>
         <input
           id="recording-date-folders"
@@ -181,7 +180,7 @@ const outputMenuOptions = computed(() => [
     </div>
   </section>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Audio
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -219,7 +218,7 @@ const outputMenuOptions = computed(() => [
           for="capture-output-device"
         >
           Desktop audio from
-          <span class="block text-xs text-slate-500">Loopback · used for meeting recordings</span>
+          <span class="block text-xs text-fg-subtle">Loopback · used for meeting recordings</span>
         </label>
         <SelectMenu
           id="capture-output-device"
@@ -233,7 +232,7 @@ const outputMenuOptions = computed(() => [
     </div>
   </section>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Companion note
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -243,7 +242,7 @@ const outputMenuOptions = computed(() => [
           class="text-sm text-slate-200"
         >
           Companion note
-          <span class="block text-xs text-slate-500">.md with metadata + embed</span>
+          <span class="block text-xs text-fg-subtle">.md with metadata + embed</span>
         </label>
         <input
           id="capture-note-toggle"
@@ -262,7 +261,7 @@ const outputMenuOptions = computed(() => [
           class="text-sm text-slate-200"
         >
           Follow-up template
-          <span class="block text-xs text-slate-500">Action items · Decisions · Notes</span>
+          <span class="block text-xs text-fg-subtle">Action items · Decisions · Notes</span>
         </label>
         <input
           id="capture-follow-up-toggle"
@@ -288,9 +287,9 @@ const outputMenuOptions = computed(() => [
           data-testid="note-extra-frontmatter"
           rows="3"
           placeholder="attendees: [Alex, Sam]"
-          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full resize-y rounded-control border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
         />
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-fg-subtle">
           {{ TEMPLATE_PLACEHOLDER_HINT }}
         </p>
       </div>
@@ -310,16 +309,16 @@ const outputMenuOptions = computed(() => [
           data-testid="note-body-template"
           rows="3"
           placeholder="## Summary"
-          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full resize-y rounded-control border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
         />
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-fg-subtle">
           {{ TEMPLATE_PLACEHOLDER_HINT }}
         </p>
       </div>
     </div>
   </section>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Transcription
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">

@@ -30,7 +30,7 @@ const elapsed = computed(() =>
   <div
     v-if="imports.active"
     data-testid="import-progress"
-    class="rounded-lg bg-sky-500/15 px-2 py-1.5"
+    class="rounded-control bg-sky-500/15 px-2 py-1.5"
   >
     <div class="flex items-center gap-2">
       <span
