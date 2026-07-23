@@ -63,3 +63,14 @@ body,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Panel view crossfade. Opacity-only (no transform → no layout thrash in the
+   fixed panel). The prefers-reduced-motion rule above zeroes this out. */
+.view-enter-active,
+.view-leave-active {
+  transition: opacity 120ms ease;
+}
+.view-enter-from,
+.view-leave-to {
+  opacity: 0;
+}

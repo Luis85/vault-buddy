@@ -1744,10 +1744,14 @@ in 25 files (64×) and the icon-button hover pattern 59× before it landed.
   caps at `max`, default 99), `StatusDot` (the 1.5px status dots — literal
   tone colors on purpose, so existing dot assertions stay green), `Avatar`
   (letter avatar), `SectionHeader` (uppercase group label), `Banner` (alert
-  strip), and `Field` (text input; the root IS the `<input>`, so
-  `type`/`placeholder`/`aria-label`/native listeners fall through). Consume
-  a primitive at its declared prop names; do not invent props (later screens
-  depend on the exact interfaces).
+  strip), `Field` (text input; the root IS the `<input>`, so
+  `type`/`placeholder`/`aria-label`/native listeners fall through),
+  `EmptyState` (centered icon + title + optional hint/action for the panel's
+  empty/degraded states — its `.text()` is just the title, so a
+  `<p>`→`EmptyState` swap keeps existing `.text()` assertions green), and
+  `Spinner` (the shared `animate-spin` ring, `role="status"` + `aria-label`).
+  Consume a primitive at its declared prop names; do not invent props (later
+  screens depend on the exact interfaces).
 - **Migration status:** the shell (`ActionPanel`), the home (`VaultList`),
   and `TaskRow` are converted. The compact tasks-view controls
   (`TaskComposer` / `TaskListPicker` / `TaskViewControls` / `TaskEditor` /

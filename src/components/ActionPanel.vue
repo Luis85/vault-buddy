@@ -25,6 +25,7 @@ import TranscriptionSummary from "./TranscriptionSummary.vue";
 import Banner from "./ui/Banner.vue";
 import Chip from "./ui/Chip.vue";
 import CountBadge from "./ui/CountBadge.vue";
+import EmptyState from "./ui/EmptyState.vue";
 import Field from "./ui/Field.vue";
 import IconButton from "./ui/IconButton.vue";
 import UpdateView from "./UpdateView.vue";
@@ -278,115 +279,132 @@ watch(
       :error="capture.renameError"
       @accept="capture.acceptRename($event)"
     />
-    <div
-      v-if="view === 'settings'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+    <Transition
+      name="view"
+      mode="out-in"
     >
-      <BuddySettings />
-    </div>
-    <div
-      v-else-if="view === 'captureSettings' && store.captureSettingsVaultId"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <CaptureSettings
-        :key="store.captureSettingsVaultId"
-        :vault-id="store.captureSettingsVaultId"
-      />
-    </div>
-    <div
-      v-else-if="view === 'recordings' && store.recordingsVaultId"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <Recordings
-        :key="store.recordingsVaultId"
-        :vault-id="store.recordingsVaultId"
-      />
-    </div>
-    <div
-      v-else-if="view === 'recordMode' && store.recordModeVaultId"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <RecordMode
-        :key="store.recordModeVaultId"
-        :vault-id="store.recordModeVaultId"
-      />
-    </div>
-    <div
-      v-else-if="view === 'transcriptions'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <Transcriptions />
-    </div>
-    <div
-      v-else-if="view === 'tasks'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <Tasks
-        :key="tasksKey"
-        :vault-id="store.tasksVaultId"
-      />
-    </div>
-    <div
-      v-else-if="view === 'search'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <Search />
-    </div>
-    <div
-      v-else-if="view === 'importPicker'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <ImportVaultPicker />
-    </div>
-    <div
-      v-else-if="view === 'documentImport'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <p class="mb-2 text-xs text-slate-400">
-        Vault Buddy converts Word, ODT, and RTF files into notes using Pandoc —
-        set it up here, then import from a vault's Capture knowledge screen.
-      </p>
-      <DocumentImportSettings />
-    </div>
-    <div
-      v-else-if="view === 'update'"
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <UpdateView />
-    </div>
-    <div
-      v-else
-      class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
-    >
-      <VaultList
-        v-if="filtered.length > 0"
-        :vaults="filtered"
-        :busy-vault-id="store.busyVaultId"
-        :busy-command="store.busyCommand"
-        :capture-disabled="capture.status !== 'idle'"
-        :recording-vault-id="capture.vaultId"
-        :transcribing-vault-id="capture.transcribingVaultId"
-        :task-counts="store.taskCounts"
-        @open-vault="store.runAction('open_vault', $event)"
-        @open-daily-note="store.runAction('open_daily_note', $event)"
-        @capture="store.openRecordMode($event)"
-        @capture-settings="store.openCaptureSettings($event)"
-        @open-tasks="store.openTasks($event)"
-      />
-      <p
-        v-else-if="store.vaults.length > 0"
-        class="text-xs text-slate-400"
+      <div
+        v-if="view === 'settings'"
+        key="settings"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
       >
-        No vaults match "{{ filter }}".
-      </p>
-      <p
-        v-else-if="store.loaded"
-        class="text-xs text-slate-400"
+        <BuddySettings />
+      </div>
+      <div
+        v-else-if="view === 'captureSettings' && store.captureSettingsVaultId"
+        key="captureSettings"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
       >
-        Obsidian not found — no vaults discovered. Is Obsidian installed and
-        has it been opened at least once?
-      </p>
-    </div>
+        <CaptureSettings
+          :key="store.captureSettingsVaultId"
+          :vault-id="store.captureSettingsVaultId"
+        />
+      </div>
+      <div
+        v-else-if="view === 'recordings' && store.recordingsVaultId"
+        key="recordings"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <Recordings
+          :key="store.recordingsVaultId"
+          :vault-id="store.recordingsVaultId"
+        />
+      </div>
+      <div
+        v-else-if="view === 'recordMode' && store.recordModeVaultId"
+        key="recordMode"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <RecordMode
+          :key="store.recordModeVaultId"
+          :vault-id="store.recordModeVaultId"
+        />
+      </div>
+      <div
+        v-else-if="view === 'transcriptions'"
+        key="transcriptions"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <Transcriptions />
+      </div>
+      <div
+        v-else-if="view === 'tasks'"
+        key="tasks"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <Tasks
+          :key="tasksKey"
+          :vault-id="store.tasksVaultId"
+        />
+      </div>
+      <div
+        v-else-if="view === 'search'"
+        key="search"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <Search />
+      </div>
+      <div
+        v-else-if="view === 'importPicker'"
+        key="importPicker"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <ImportVaultPicker />
+      </div>
+      <div
+        v-else-if="view === 'documentImport'"
+        key="documentImport"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <p class="mb-2 text-xs text-slate-400">
+          Vault Buddy converts Word, ODT, and RTF files into notes using Pandoc —
+          set it up here, then import from a vault's Capture knowledge screen.
+        </p>
+        <DocumentImportSettings />
+      </div>
+      <div
+        v-else-if="view === 'update'"
+        key="update"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <UpdateView />
+      </div>
+      <div
+        v-else
+        key="list"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <VaultList
+          v-if="filtered.length > 0"
+          :vaults="filtered"
+          :busy-vault-id="store.busyVaultId"
+          :busy-command="store.busyCommand"
+          :capture-disabled="capture.status !== 'idle'"
+          :recording-vault-id="capture.vaultId"
+          :transcribing-vault-id="capture.transcribingVaultId"
+          :task-counts="store.taskCounts"
+          @open-vault="store.runAction('open_vault', $event)"
+          @open-daily-note="store.runAction('open_daily_note', $event)"
+          @capture="store.openRecordMode($event)"
+          @capture-settings="store.openCaptureSettings($event)"
+          @open-tasks="store.openTasks($event)"
+        />
+        <EmptyState
+          v-else-if="store.vaults.length > 0"
+          :title="`No vaults match &quot;${filter}&quot;.`"
+        />
+        <EmptyState
+          v-else-if="store.loaded"
+          title="Obsidian not found — no vaults discovered. Is Obsidian installed and has it been opened at least once?"
+        >
+          <template #icon>
+            <AppIcon :size="28">
+              <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2Z" />
+            </AppIcon>
+          </template>
+        </EmptyState>
+      </div>
+    </Transition>
     <NotificationHost />
   </div>
 </template>

@@ -25,7 +25,7 @@ const VARIANT: Record<string, string> = {
   <button
     :type="type"
     :disabled="disabled"
-    class="cursor-pointer rounded-control font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+    class="cursor-pointer rounded-control font-medium transition active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
     :class="[size === 'sm' ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm', VARIANT[variant]]"
     @click="$emit('click', $event)"
   >

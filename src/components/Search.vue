@@ -12,7 +12,9 @@ import {
   loadRecentSearches,
   pushRecentSearch,
 } from "../utils/recentSearches";
+import AppIcon from "./AppIcon.vue";
 import HighlightText from "./HighlightText.vue";
+import EmptyState from "./ui/EmptyState.vue";
 
 const notifications = useNotificationsStore();
 
@@ -324,12 +326,21 @@ onUnmounted(() => {
     >
       Searching…
     </p>
-    <p
+    <EmptyState
       v-else-if="hits.length === 0 && resultsQuery"
-      class="text-xs text-slate-400"
+      :title="`No matches for &quot;${resultsQuery}&quot;.`"
     >
-      No matches for "{{ resultsQuery }}".
-    </p>
+      <template #icon>
+        <AppIcon :size="28">
+          <circle
+            cx="11"
+            cy="11"
+            r="8"
+          />
+          <path d="m21 21-4.35-4.35" />
+        </AppIcon>
+      </template>
+    </EmptyState>
     <p
       v-if="summary"
       data-testid="search-summary"
@@ -362,12 +373,10 @@ onUnmounted(() => {
         {{ k === "all" ? "All" : k === "notes" ? "Notes" : "Files" }}
       </button>
     </div>
-    <p
+    <EmptyState
       v-if="hits.length > 0 && kindFiltered.length === 0"
-      class="text-xs text-slate-400"
-    >
-      Nothing matches this filter.
-    </p>
+      title="Nothing matches this filter."
+    />
     <div
       id="search-results"
       role="listbox"

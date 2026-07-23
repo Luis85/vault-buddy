@@ -6,6 +6,8 @@ import { useCaptureStore } from "../stores/capture";
 import { useVaultsStore } from "../stores/vaults";
 import type { TranscriptionJob } from "../types";
 import { formatDuration } from "../utils/formatDuration";
+import AppIcon from "./AppIcon.vue";
+import EmptyState from "./ui/EmptyState.vue";
 
 const capture = useCaptureStore();
 const vaults = useVaultsStore();
@@ -103,12 +105,17 @@ const isStuck = computed(() => {
 
 <template>
   <div class="flex flex-col gap-3">
-    <p
+    <EmptyState
       v-if="isEmpty"
-      class="text-xs text-slate-400"
+      title="No transcriptions yet."
     >
-      No transcriptions yet.
-    </p>
+      <template #icon>
+        <AppIcon :size="28">
+          <path d="M4 4h16v16H4Z" />
+          <path d="M8 9h8M8 13h5" />
+        </AppIcon>
+      </template>
+    </EmptyState>
 
     <section
       v-if="active || capture.waitingForRecording"
