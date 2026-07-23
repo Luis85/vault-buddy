@@ -385,7 +385,12 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
     let Some(panel) = app.get_webview_window("panel") else {
         return;
     };
-    if !panel.is_visible().unwrap_or(false) {
+    // `unwrap_or(true)` inverts this file's usual "assume-absent" default on
+    // purpose: if `is_visible()` ever errors while the panel is actually shown,
+    // defaulting to "not visible" would resize a live surface — the exact
+    // WebView2 stale-frame flash this guard prevents. Fail toward "assume
+    // visible, skip the resize" instead; the reshow path re-runs this anyway.
+    if !panel.is_visible().unwrap_or(true) {
         let (w, h) = vault_buddy_core::capture_config::load_config()
             .panel
             .size
