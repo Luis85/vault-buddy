@@ -294,3 +294,132 @@ describe("BuddySettings tabs", () => {
     expect(wrapper.find('[data-testid="panel-integrations"]').exists()).toBe(true);
   });
 });
+
+describe("BuddySettings panel size", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setActivePinia(createPinia());
+  });
+
+  it("loads the current panel size and marks it selected, inside the Buddy tab", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_panel_config") return { size: "large" };
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    expect(
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-pressed"),
+    ).toBe("true");
+    // Lives in the Buddy tab (TabGroup's first/default tab) so it survives
+    // the re-show below, which remounts the panel back to its first tab.
+    expect(wrapper.get('[data-testid="panel-buddy"]').html()).toContain(
+      "panel-size-large",
+    );
+    clearMocks();
+  });
+
+  it("defaults to comfortable and saves nothing when the read fails", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") throw new Error("config unavailable");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    expect(
+      wrapper.get('[data-testid="panel-size-comfortable"]').attributes("aria-pressed"),
+    ).toBe("true");
+    // The mount-time read failing must never itself trigger a save/re-show.
+    expect(calls.some((c) => c.cmd === "set_panel_size")).toBe(false);
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
+    expect(calls.some((c) => c.cmd === "open_panel")).toBe(false);
+    clearMocks();
+  });
+
+  it("does not save or re-show the panel from the initial programmatic load", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") return { size: "large" };
+    });
+    mount(BuddySettings);
+    await flush();
+    // The full settings tree fires other cards' own onMounted reads
+    // (mcp/pandoc/transcription/autostart) too; only assert on the
+    // panel-size-relevant commands so this stays about the guard being
+    // tested, not an inventory of every sibling card's IPC traffic.
+    expect(calls.some((c) => c.cmd === "get_panel_config")).toBe(true);
+    expect(calls.some((c) => c.cmd === "set_panel_size")).toBe(false);
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
+    expect(calls.some((c) => c.cmd === "open_panel")).toBe(false);
+    clearMocks();
+  });
+
+  it("picking a size persists it via set_panel_size and re-shows the panel on Settings", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") return { size: "comfortable" };
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
+    await flush();
+    expect(calls.find((c) => c.cmd === "set_panel_size")?.args).toEqual({
+      size: "large",
+    });
+    // set_panel_size never touches a visible window; the re-show is what
+    // makes the new preset take effect (position_panel's hidden-only guard).
+    // The full settings tree interleaves other cards' own IPC traffic, so
+    // assert relative order among the panel-size commands rather than an
+    // exact/exclusive call list.
+    const idxSet = calls.findIndex((c) => c.cmd === "set_panel_size");
+    const idxClose = calls.findIndex((c) => c.cmd === "close_panel");
+    const idxOpen = calls.findIndex((c) => c.cmd === "open_panel");
+    expect(idxSet).toBeGreaterThanOrEqual(0);
+    expect(idxClose).toBeGreaterThan(idxSet);
+    expect(idxOpen).toBeGreaterThan(idxClose);
+    expect(useVaultsStore().view).toBe("settings");
+    expect(
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-pressed"),
+    ).toBe("true");
+    clearMocks();
+  });
+
+  it("reverts the selection and shows an error when the save fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_panel_config") return { size: "comfortable" };
+      if (cmd === "set_panel_size") throw new Error("disk full");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
+    await flush();
+    expect(
+      wrapper.get('[data-testid="panel-size-comfortable"]').attributes("aria-pressed"),
+    ).toBe("true");
+    expect(
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-pressed"),
+    ).toBe("false");
+    expect(wrapper.get('[data-testid="panel-size-error"]').text()).toContain(
+      "disk full",
+    );
+    clearMocks();
+  });
+
+  it("does not re-show the panel when the save fails", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") return { size: "comfortable" };
+      if (cmd === "set_panel_size") throw new Error("disk full");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
+    await flush();
+    expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
+    expect(calls.some((c) => c.cmd === "open_panel")).toBe(false);
+    clearMocks();
+  });
+});
