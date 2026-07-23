@@ -75,19 +75,24 @@ impl PanelSize {
 /// Leave this much logical margin between the panel and the work-area edges so
 /// a clamped panel isn't flush against the screen border.
 const WORK_AREA_MARGIN: f64 = 24.0;
-/// Never shrink a panel below this in either dimension — a floor for absurd
-/// (sub-monitor) work areas that keeps the window from collapsing to nothing.
-/// Real small/scaled monitors are far larger than this, so the floor never
-/// bites them; it only guards degenerate inputs.
+/// Floor for the margin subtraction so it can't yield a degenerate near-zero
+/// size in the common case. It is always further bounded by the actual work
+/// area (see `clamp_dims_to_work_area`), so a work area SMALLER than this still
+/// gets a window that fits rather than this floor overshooting the screen —
+/// real small/scaled monitors sit far above it, so it only shapes degenerate
+/// inputs.
 const MIN_PANEL_DIM: f64 = 320.0;
 
 /// Shrink a preset's logical dims to fit within the monitor's logical work
 /// area (minus a small margin), never growing them. `place_beside` positions
 /// but never resizes an oversized non-resizable window, so without this a tall
 /// preset can strand controls off-screen on a small or display-scaled monitor.
+/// The `.min(area_*)` is what keeps the `MIN_PANEL_DIM` floor from itself
+/// overshooting a sub-floor work area (extreme scaling / a tiny remote-desktop
+/// session): the result is never larger than the work area in either axis.
 pub fn clamp_dims_to_work_area(w: f64, h: f64, area_w: f64, area_h: f64) -> (f64, f64) {
-    let max_w = (area_w - WORK_AREA_MARGIN).max(MIN_PANEL_DIM);
-    let max_h = (area_h - WORK_AREA_MARGIN).max(MIN_PANEL_DIM);
+    let max_w = (area_w - WORK_AREA_MARGIN).max(MIN_PANEL_DIM).min(area_w);
+    let max_h = (area_h - WORK_AREA_MARGIN).max(MIN_PANEL_DIM).min(area_h);
     (w.min(max_w), h.min(max_h))
 }
 
@@ -156,12 +161,18 @@ mod tests {
     }
 
     #[test]
-    fn clamp_floors_on_a_degenerate_work_area() {
-        // An absurd sub-monitor work area can't fit anything; the floor keeps
-        // the window from collapsing rather than chasing the tiny area.
-        let (w, h) = clamp_dims_to_work_area(560.0, 720.0, 80.0, 80.0);
-        assert_eq!(w, MIN_PANEL_DIM);
-        assert_eq!(h, MIN_PANEL_DIM);
+    fn clamp_never_exceeds_a_sub_floor_work_area() {
+        // A work area SMALLER than MIN_PANEL_DIM (extreme display scaling or a
+        // tiny remote-desktop session) must still yield a window that FITS —
+        // the floor must never overshoot the actual screen (Codex, PR #73).
+        let (w, h) = clamp_dims_to_work_area(560.0, 720.0, 300.0, 280.0);
+        assert_eq!(w, 300.0); // capped at the work area, not floored up to 320
+        assert_eq!(h, 280.0);
+        // Even an absurdly tiny area fits (positive, never the 320 floor).
+        assert_eq!(
+            clamp_dims_to_work_area(560.0, 720.0, 80.0, 80.0),
+            (80.0, 80.0)
+        );
     }
 
     #[test]
