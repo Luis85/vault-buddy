@@ -164,7 +164,7 @@ onBeforeUnmount(() => {
     :aria-expanded="open"
     aria-haspopup="listbox"
     :class="{ 'w-full': wide }"
-    class="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 focus:border-violet-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+    class="flex items-center justify-between gap-2 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg focus:border-focus focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
     @click="toggle"
     @keydown="onTriggerKeydown"
   >
@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
       tabindex="-1"
       :style="popupStyle"
       :aria-activedescendant="activeIndex >= 0 ? optionId(activeIndex) : undefined"
-      class="panel-scroll overflow-y-auto rounded-lg border border-white/10 bg-slate-900/95 py-1 text-sm text-slate-100 shadow-xl focus:outline-none"
+      class="panel-scroll overflow-y-auto rounded-control border border-white/10 bg-slate-900/95 py-1 text-sm text-fg shadow-xl focus:outline-none"
       @keydown="onPopupKeydown"
     >
       <li

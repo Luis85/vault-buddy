@@ -121,23 +121,23 @@ const isStuck = computed(() => {
       v-if="active || capture.waitingForRecording"
       data-testid="transcription-active"
     >
-      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
         Active
       </h2>
       <div
         v-if="active"
-        class="flex flex-col gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5"
+        class="flex flex-col gap-1.5 rounded-control border border-white/10 bg-white/5 px-2 py-1.5"
       >
         <div class="flex items-baseline justify-between gap-2">
           <span
-            class="min-w-0 flex-1 truncate text-sm text-slate-100"
+            class="min-w-0 flex-1 truncate text-sm text-fg"
             :title="active.name"
           >{{ active.name }}</span>
-          <span class="shrink-0 text-xs text-slate-500">{{ vaultName(active.vaultId) }}</span>
+          <span class="shrink-0 text-xs text-fg-subtle">{{ vaultName(active.vaultId) }}</span>
         </div>
-        <div class="flex items-center justify-between gap-2 text-xs text-slate-300">
+        <div class="flex items-center justify-between gap-2 text-xs text-fg-secondary">
           <span role="status">{{ phaseLabel(active) }}</span>
-          <span class="shrink-0 text-slate-500">{{ elapsed(active.startedAtMs) }}</span>
+          <span class="shrink-0 text-fg-subtle">{{ elapsed(active.startedAtMs) }}</span>
         </div>
         <div
           v-if="active.progress !== null"
@@ -171,7 +171,7 @@ const isStuck = computed(() => {
           type="button"
           data-testid="transcription-cancel"
           :aria-label="`Cancel ${active.name}`"
-          class="cursor-pointer self-end rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer self-end rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="capture.cancelTranscription(active.mp3)"
         >
           Cancel
@@ -179,7 +179,7 @@ const isStuck = computed(() => {
       </div>
       <p
         v-else
-        class="text-xs text-slate-400"
+        class="text-xs text-fg-muted"
       >
         Waiting for the recording to finish…
       </p>
@@ -189,27 +189,27 @@ const isStuck = computed(() => {
       v-if="queued.length > 0"
       data-testid="transcription-queued"
     >
-      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Queued <span class="text-slate-500">· {{ queued.length }}</span>
+      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+        Queued <span class="text-fg-subtle">· {{ queued.length }}</span>
       </h2>
       <div class="flex flex-col gap-1">
         <div
           v-for="j in queued"
           :key="j.mp3"
-          class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
+          class="flex items-center gap-2 rounded-control border border-white/10 bg-white/5 px-2 py-1"
         >
           <span
-            class="min-w-0 flex-1 truncate text-sm text-slate-100"
+            class="min-w-0 flex-1 truncate text-sm text-fg"
             :title="j.name"
           >
             {{ j.name }}
           </span>
-          <span class="shrink-0 text-xs text-slate-500">{{ vaultName(j.vaultId) }} · Waiting</span>
+          <span class="shrink-0 text-xs text-fg-subtle">{{ vaultName(j.vaultId) }} · Waiting</span>
           <button
             type="button"
             data-testid="transcription-cancel"
             :aria-label="`Cancel ${j.name}`"
-            class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @click="capture.cancelTranscription(j.mp3)"
           >
             Cancel
@@ -222,22 +222,22 @@ const isStuck = computed(() => {
       v-if="finished.length > 0"
       data-testid="transcription-finished"
     >
-      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
         Finished this session
       </h2>
       <div class="flex flex-col gap-1">
         <div
           v-for="j in finished"
           :key="j.mp3"
-          class="flex flex-col gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1"
+          class="flex flex-col gap-1 rounded-control border border-white/10 bg-white/5 px-2 py-1"
         >
           <div class="flex items-center gap-2">
             <span
               aria-hidden="true"
-              class="shrink-0 text-slate-500"
+              class="shrink-0 text-fg-subtle"
             >{{ statusGlyph(j) }}</span>
             <span
-              class="min-w-0 flex-1 truncate text-sm text-slate-100"
+              class="min-w-0 flex-1 truncate text-sm text-fg"
               :title="j.name"
             >
               {{ j.name }}
@@ -247,7 +247,7 @@ const isStuck = computed(() => {
               type="button"
               data-testid="transcription-open"
               :aria-label="`Open ${j.name} in Obsidian`"
-              class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               @click="capture.openTranscript(j.mp3)"
             >
               Open in Obsidian
@@ -257,7 +257,7 @@ const isStuck = computed(() => {
               type="button"
               data-testid="transcription-retranscribe"
               :aria-label="`Re-transcribe ${j.name}`"
-              class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               @click="capture.retranscribe(j.mp3)"
             >
               Re-transcribe
@@ -269,7 +269,7 @@ const isStuck = computed(() => {
               data-testid="transcription-dismiss"
               :aria-label="`Dismiss ${j.name}`"
               :title="`Dismiss ${j.name}`"
-              class="shrink-0 cursor-pointer rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              class="shrink-0 cursor-pointer rounded-control p-1 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               @click="capture.dismissTranscription(j.mp3)"
             >
               <svg

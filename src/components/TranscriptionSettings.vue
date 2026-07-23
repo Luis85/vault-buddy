@@ -101,7 +101,7 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
       class="text-sm text-slate-200"
     >
       Transcribe recordings
-      <span class="block text-xs text-slate-500">Local speech-to-text · no cloud</span>
+      <span class="block text-xs text-fg-subtle">Local speech-to-text · no cloud</span>
     </label>
     <input
       :id="scopedId('capture-transcribe-toggle')"
@@ -145,7 +145,7 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
         class="mb-1 block text-sm text-slate-200"
       >
         Custom vocabulary
-        <span class="block text-xs text-slate-500">Names, acronyms, project terms — primes the model</span>
+        <span class="block text-xs text-fg-subtle">Names, acronyms, project terms — primes the model</span>
       </label>
       <textarea
         :id="scopedId('capture-transcription-vocabulary')"
@@ -153,7 +153,7 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
         data-testid="transcription-vocabulary-input"
         rows="2"
         placeholder="Anna Kowalska, Kubernetes, Vault Buddy…"
-        class="w-full resize-none rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        class="w-full resize-none rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
       />
     </section>
     <section class="flex items-center justify-between">
@@ -162,7 +162,7 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
         class="text-sm text-slate-200"
       >
         Skip silence
-        <span class="block text-xs text-slate-500">Faster meetings, fewer phantom phrases in silent stretches</span>
+        <span class="block text-xs text-fg-subtle">Faster meetings, fewer phantom phrases in silent stretches</span>
       </label>
       <input
         :id="scopedId('capture-transcription-vad-toggle')"
@@ -178,7 +178,7 @@ const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }))
         class="text-sm text-slate-200"
       >
         Timestamps
-        <span class="block text-xs text-slate-500">Insert time markers in the transcript</span>
+        <span class="block text-xs text-fg-subtle">Insert time markers in the transcript</span>
       </label>
       <input
         :id="scopedId('capture-transcript-timestamps-toggle')"

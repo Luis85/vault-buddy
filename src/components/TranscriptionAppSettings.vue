@@ -48,7 +48,7 @@ async function toggle(event: Event) {
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Transcription — GPU
     </h2>
     <div class="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -58,7 +58,7 @@ async function toggle(event: Event) {
           class="text-sm text-slate-200"
         >
           Use GPU (Vulkan)
-          <span class="block text-xs text-slate-500">
+          <span class="block text-xs text-fg-subtle">
             Applies from the next transcription. Falls back to CPU when no
             compatible GPU is found — turn off if you hit graphics-driver
             crashes.

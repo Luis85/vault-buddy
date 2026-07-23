@@ -82,7 +82,7 @@ async function toggleAutostart(event: Event) {
       <div class="flex flex-col gap-3">
         <section>
           <h2
-            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted"
           >
             Buddy character
           </h2>
@@ -96,7 +96,7 @@ async function toggleAutostart(event: Event) {
               :key="c.id"
               type="button"
               role="radio"
-              class="character-option relative flex cursor-pointer flex-col items-center rounded-xl border p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              class="character-option relative flex cursor-pointer flex-col items-center rounded-xl border p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               :class="
                 settings.character === c.id
                   ? 'border-violet-400 bg-violet-500/20'
@@ -127,7 +127,7 @@ async function toggleAutostart(event: Event) {
         </section>
         <section>
           <h2
-            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted"
           >
             Behavior
           </h2>
@@ -153,7 +153,7 @@ async function toggleAutostart(event: Event) {
                 class="text-sm text-slate-200"
               >
                 Dragging
-                <span class="block text-xs text-slate-500">
+                <span class="block text-xs text-fg-subtle">
                   Off pins the buddy in place
                 </span>
               </label>
@@ -171,7 +171,7 @@ async function toggleAutostart(event: Event) {
                 class="text-sm text-slate-200"
               >
                 Buddy messages
-                <span class="block text-xs text-slate-500">
+                <span class="block text-xs text-fg-subtle">
                   The buddy comments on what you do
                 </span>
               </label>
@@ -189,7 +189,7 @@ async function toggleAutostart(event: Event) {
                 class="text-sm text-slate-200"
               >
                 Message duration
-                <span class="block text-xs text-slate-500">
+                <span class="block text-xs text-fg-subtle">
                   How long the buddy's bubbles stay up
                 </span>
               </label>
@@ -208,7 +208,7 @@ async function toggleAutostart(event: Event) {
       <div class="flex flex-col gap-3">
         <section>
           <h2
-            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"
+            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted"
           >
             System
           </h2>
@@ -219,7 +219,7 @@ async function toggleAutostart(event: Event) {
                 class="text-sm text-slate-200"
               >
                 Start with Windows
-                <span class="block text-xs text-slate-500">
+                <span class="block text-xs text-fg-subtle">
                   Launch the buddy when you log in
                 </span>
               </label>

@@ -45,7 +45,7 @@ const meterWidth = computed(
 
 <template>
   <div
-    class="rounded-lg px-2 py-1.5"
+    class="rounded-control px-2 py-1.5"
     :class="paused ? 'bg-amber-500/15' : 'bg-red-500/15'"
   >
     <div class="flex items-center gap-2">
@@ -64,7 +64,7 @@ const meterWidth = computed(
       <button
         v-if="!paused"
         type="button"
-        class="cursor-pointer rounded-lg bg-white/10 px-2 py-1 text-xs font-semibold text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-default disabled:opacity-50"
+        class="cursor-pointer rounded-control bg-white/10 px-2 py-1 text-xs font-semibold text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-default disabled:opacity-50"
         aria-label="Pause recording"
         :disabled="saving || starting"
         @click="$emit('pause')"
@@ -74,7 +74,7 @@ const meterWidth = computed(
       <button
         v-else
         type="button"
-        class="cursor-pointer rounded-lg bg-white/10 px-2 py-1 text-xs font-semibold text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-default disabled:opacity-50"
+        class="cursor-pointer rounded-control bg-white/10 px-2 py-1 text-xs font-semibold text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-default disabled:opacity-50"
         aria-label="Resume recording"
         :disabled="saving || starting"
         @click="$emit('resume')"
@@ -83,7 +83,7 @@ const meterWidth = computed(
       </button>
       <button
         type="button"
-        class="cursor-pointer rounded-lg bg-red-500/80 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-default disabled:opacity-50"
+        class="cursor-pointer rounded-control bg-red-500/80 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-default disabled:opacity-50"
         aria-label="Stop recording"
         :disabled="saving || starting"
         @click="$emit('stop')"

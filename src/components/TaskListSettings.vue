@@ -128,20 +128,20 @@ function unarchive(list: string) {
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Task lists
     </h2>
     <div class="rounded-xl border border-white/10 bg-white/5 p-2">
       <p
         v-if="loading"
-        class="text-xs text-slate-400"
+        class="text-xs text-fg-muted"
       >
         Loading…
       </p>
       <template v-else>
         <label class="mb-1 block text-sm text-slate-200">
           Default list for new tasks
-          <span class="block text-xs text-slate-500">Where a task lands when you don't pick a list</span>
+          <span class="block text-xs text-fg-subtle">Where a task lands when you don't pick a list</span>
         </label>
         <TaskListPicker
           :model-value="defaultList"
@@ -154,22 +154,22 @@ function unarchive(list: string) {
         <template v-if="selectableLists.length > 1">
           <p class="mb-1 mt-2 text-sm text-slate-200">
             List order
-            <span class="block text-xs text-slate-500">How sections and pickers arrange the lists</span>
+            <span class="block text-xs text-fg-subtle">How sections and pickers arrange the lists</span>
           </p>
           <ul class="flex flex-col gap-1">
             <li
               v-for="(list, i) in selectableLists"
               :key="list"
               data-testid="list-order-row"
-              class="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5"
+              class="flex items-center gap-1 rounded-control border border-white/10 bg-white/5 px-2 py-0.5"
             >
-              <span class="min-w-0 flex-1 truncate text-sm text-slate-100">{{ list }}</span>
+              <span class="min-w-0 flex-1 truncate text-sm text-fg">{{ list }}</span>
               <button
                 type="button"
                 :data-testid="`list-order-up-${i}`"
                 :disabled="i === 0"
                 :aria-label="`Move ${list} up`"
-                class="cursor-pointer rounded px-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-30"
+                class="cursor-pointer rounded px-1 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-30"
                 @click="move(i, -1)"
               >
                 ↑
@@ -179,7 +179,7 @@ function unarchive(list: string) {
                 :data-testid="`list-order-down-${i}`"
                 :disabled="i === selectableLists.length - 1"
                 :aria-label="`Move ${list} down`"
-                class="cursor-pointer rounded px-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-30"
+                class="cursor-pointer rounded px-1 text-fg-muted transition-colors hover:bg-white/10 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-30"
                 @click="move(i, 1)"
               >
                 ↓
@@ -193,7 +193,7 @@ function unarchive(list: string) {
         />
         <p
           v-if="order.length === 0"
-          class="mt-1 text-xs text-slate-500"
+          class="mt-1 text-xs text-fg-subtle"
         >
           No lists yet — create one from the tasks view's Add options.
         </p>

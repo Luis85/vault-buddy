@@ -75,7 +75,7 @@ describe("RecordMode", () => {
   it("styles Browse recordings as a card like the recording options", async () => {
     const { wrapper } = await mountView();
     const browse = wrapper.get('[data-testid="mode-browse"]');
-    for (const cls of ["rounded-lg", "border-white/10", "bg-white/5", "px-3", "py-2"]) {
+    for (const cls of ["rounded-control", "border-white/10", "bg-white/5", "px-3", "py-2"]) {
       expect(browse.classes()).toContain(cls);
     }
   });

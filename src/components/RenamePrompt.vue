@@ -19,7 +19,7 @@ watch(baseName, (value) => (title.value = value));
 
 <template>
   <form
-    class="rounded-lg bg-emerald-500/10 px-2 py-1.5"
+    class="rounded-control bg-emerald-500/10 px-2 py-1.5"
     @submit.prevent="emit('accept', title)"
   >
     <label
@@ -34,11 +34,11 @@ watch(baseName, (value) => (title.value = value));
         v-model="title"
         type="text"
         aria-label="Recording name"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
       <button
         type="submit"
-        class="cursor-pointer rounded-lg bg-emerald-600/80 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+        class="cursor-pointer rounded-control bg-emerald-600/80 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
       >
         Accept
       </button>

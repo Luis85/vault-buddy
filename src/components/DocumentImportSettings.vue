@@ -158,7 +158,7 @@ const statusLabel = computed(() => {
        exact recovery affordances — hiding the whole card would strand a user
        whose Pandoc probe broke. -->
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Document import — Pandoc
     </h2>
     <div class="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -170,7 +170,7 @@ const statusLabel = computed(() => {
         <button
           type="button"
           data-testid="pandoc-recheck"
-          class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
           :disabled="saving"
           @click="recheck"
         >
@@ -181,7 +181,7 @@ const statusLabel = computed(() => {
         :href="INSTALL_URL"
         rel="noopener noreferrer"
         data-testid="pandoc-install-link"
-        class="text-xs text-violet-300 hover:text-violet-200"
+        class="text-xs text-violet-300 hover:text-accent-fg"
         @click.prevent="openInstall"
       >
         Install Pandoc
@@ -192,7 +192,7 @@ const statusLabel = computed(() => {
           class="mb-1 block text-sm text-slate-200"
         >
           Path override
-          <span class="block text-xs text-slate-500">Only needed if Pandoc isn't on PATH</span>
+          <span class="block text-xs text-fg-subtle">Only needed if Pandoc isn't on PATH</span>
         </label>
         <div class="flex items-center gap-1.5">
           <input
@@ -201,7 +201,7 @@ const statusLabel = computed(() => {
             data-testid="pandoc-path-input"
             type="text"
             placeholder="pandoc"
-            class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none disabled:cursor-default disabled:opacity-50"
+            class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
             @input="dirtied = true"
             @change="savePath"
@@ -209,7 +209,7 @@ const statusLabel = computed(() => {
           <button
             type="button"
             data-testid="pandoc-browse"
-            class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-slate-300 hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
+            class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
             :disabled="saving"
             @click="browse"
           >

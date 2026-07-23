@@ -29,7 +29,7 @@ const emit = defineEmits<{
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Task IDs
     </h2>
     <div class="rounded-xl border border-white/10 bg-white/5 p-2">
@@ -39,7 +39,7 @@ const emit = defineEmits<{
           class="text-sm text-slate-200"
         >
           Generate an ID for each task
-          <span class="block text-xs text-slate-500">Written to new tasks and stamped on the next edit</span>
+          <span class="block text-xs text-fg-subtle">Written to new tasks and stamped on the next edit</span>
         </label>
         <input
           id="task-id-enabled"
@@ -59,14 +59,14 @@ const emit = defineEmits<{
           class="mb-1 block text-sm text-slate-200"
         >
           Property name
-          <span class="block text-xs text-slate-500">Frontmatter key the ID is saved under</span>
+          <span class="block text-xs text-fg-subtle">Frontmatter key the ID is saved under</span>
         </label>
         <input
           id="task-id-property"
           data-testid="task-id-property"
           type="text"
           :placeholder="placeholder"
-          class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
           :value="property"
           @input="emit('update:property', ($event.target as HTMLInputElement).value)"
           @blur="emit('blur')"

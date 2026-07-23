@@ -28,7 +28,7 @@ const cls: Record<string, string> = {
   error: "bg-red-900 text-red-50 ring-1 ring-red-500/50",
   warning: "bg-amber-900 text-amber-50 ring-1 ring-amber-500/50",
   success: "bg-emerald-900 text-emerald-50 ring-1 ring-emerald-500/50",
-  info: "bg-slate-800 text-slate-100 ring-1 ring-white/15",
+  info: "bg-slate-800 text-fg ring-1 ring-white/15",
 };
 </script>
 <template>
@@ -43,7 +43,7 @@ const cls: Record<string, string> = {
       data-testid="notification"
       :role="item.kind === 'error' ? 'alert' : 'status'"
       :aria-live="item.kind === 'error' ? 'assertive' : 'polite'"
-      :class="['pointer-events-auto flex items-start justify-between gap-2 rounded-lg px-2 py-1 text-xs shadow-lg', cls[item.kind]]"
+      :class="['pointer-events-auto flex items-start justify-between gap-2 rounded-control px-2 py-1 text-xs shadow-lg', cls[item.kind]]"
     >
       <span class="min-w-0 break-words">{{ item.message }}</span>
       <button

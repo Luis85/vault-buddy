@@ -32,7 +32,7 @@ function onInput(event: Event) {
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       {{ heading }}
     </h2>
     <!-- Bordered card so this folder setting reads as one of the Buddy-settings
@@ -43,7 +43,7 @@ function onInput(event: Event) {
         class="mb-1 block text-sm text-slate-200"
       >
         {{ label }}
-        <span class="block text-xs text-slate-500">Inside the vault</span>
+        <span class="block text-xs text-fg-subtle">Inside the vault</span>
       </label>
       <input
         :id="inputId"
@@ -53,7 +53,7 @@ function onInput(event: Event) {
         :aria-label="label"
         :disabled="disabled"
         type="text"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none disabled:cursor-default disabled:opacity-50"
+        class="w-full rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none disabled:cursor-default disabled:opacity-50"
         @input="onInput"
       >
       <p

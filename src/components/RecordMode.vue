@@ -299,11 +299,11 @@ async function importDocument() {
         type="button"
         :data-testid="option.testId"
         :aria-label="`Start a ${option.title.toLowerCase()} recording`"
-        class="w-full cursor-pointer rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="w-full cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="start(option.key)"
       >
-        <span class="block text-sm font-medium text-slate-100">{{ option.title }}</span>
-        <span class="block text-xs text-slate-400">{{ option.hint }}</span>
+        <span class="block text-sm font-medium text-fg">{{ option.title }}</span>
+        <span class="block text-xs text-fg-muted">{{ option.hint }}</span>
       </button>
       <!-- While a conversion runs (this vault's or any other's — the Rust
            ImportLock allows only one process-wide) the button gives way to
@@ -315,12 +315,12 @@ async function importDocument() {
         type="button"
         data-testid="import-document"
         aria-label="Import a document into this vault"
-        class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-50"
+        class="w-full rounded-control border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         :disabled="pandocStore.checking"
         @click="onImportClick"
       >
-        <span class="block text-sm font-medium text-slate-100">Import Document</span>
-        <span class="block text-xs text-slate-400">{{
+        <span class="block text-sm font-medium text-fg">Import Document</span>
+        <span class="block text-xs text-fg-muted">{{
           pandocStore.checking ? "Checking Pandoc…" : importStatus.hint
         }}</span>
       </button>
@@ -330,17 +330,17 @@ async function importDocument() {
         type="button"
         data-testid="mode-browse"
         :aria-label="browseLabel"
-        class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-control border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="store.openRecordings(props.vaultId)"
       >
         <span class="min-w-0">
-          <span class="block text-sm font-medium text-slate-100">Browse recordings</span>
-          <span class="block text-xs text-slate-400">See past recordings in this vault</span>
+          <span class="block text-sm font-medium text-fg">Browse recordings</span>
+          <span class="block text-xs text-fg-muted">See past recordings in this vault</span>
         </span>
         <span
           v-if="recordingCount !== null"
           data-testid="recording-count"
-          class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300"
+          class="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs text-fg-secondary"
         >{{ recordingCount }}</span>
       </button>
     </div>

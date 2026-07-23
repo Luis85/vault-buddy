@@ -31,7 +31,7 @@ const TEMPLATE_PLACEHOLDER_HINT =
 
 <template>
   <section>
-    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <h2 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
       Task template
     </h2>
     <div class="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-2">
@@ -48,11 +48,11 @@ const TEMPLATE_PLACEHOLDER_HINT =
           :value="extraFrontmatter"
           rows="3"
           placeholder="project: Alpha"
-          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full resize-y rounded-control border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
           @input="emit('update:extraFrontmatter', ($event.target as HTMLTextAreaElement).value)"
           @blur="emit('blur')"
         />
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-fg-subtle">
           {{ TEMPLATE_PLACEHOLDER_HINT }}
         </p>
       </div>
@@ -69,11 +69,11 @@ const TEMPLATE_PLACEHOLDER_HINT =
           :value="bodyTemplate"
           rows="3"
           placeholder="- [ ] Follow up"
-          class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="w-full resize-y rounded-control border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
           @input="emit('update:bodyTemplate', ($event.target as HTMLTextAreaElement).value)"
           @blur="emit('blur')"
         />
-        <p class="text-xs text-slate-500">
+        <p class="text-xs text-fg-subtle">
           {{ TEMPLATE_PLACEHOLDER_HINT }}
         </p>
       </div>

@@ -141,7 +141,7 @@ watch(
   >
     <div class="mb-2 flex items-center justify-between gap-2">
       <div class="flex min-w-0 items-center gap-2">
-        <h1 class="truncate text-sm font-bold text-slate-100">
+        <h1 class="truncate text-sm font-bold text-fg">
           {{ title }}
         </h1>
         <span
@@ -151,7 +151,7 @@ watch(
           aria-live="polite"
           class="shrink-0 text-xs"
           :class="{
-            'text-slate-400': saveStatus.state === 'saving',
+            'text-fg-muted': saveStatus.state === 'saving',
             'text-emerald-300': saveStatus.state === 'saved',
             'text-red-300': saveStatus.state === 'error',
           }"
@@ -356,7 +356,7 @@ watch(
         key="documentImport"
         class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
       >
-        <p class="mb-2 text-xs text-slate-400">
+        <p class="mb-2 text-xs text-fg-muted">
           Vault Buddy converts Word, ODT, and RTF files into notes using Pandoc —
           set it up here, then import from a vault's Capture knowledge screen.
         </p>

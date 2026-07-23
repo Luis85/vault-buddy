@@ -151,7 +151,7 @@ function onContextMenu() {
   <div class="flex flex-col items-center">
     <button
       type="button"
-      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+      class="buddy block focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="[
         draggable ? 'cursor-grab' : 'cursor-pointer',
         { working, still: !animated, recording, paused, transcribing, 'drop-target': dropTarget },

@@ -330,7 +330,7 @@ async function add(payload: AddPayload) {
           :style="{ width: `${progress.pct}%` }"
         />
       </div>
-      <span class="shrink-0 text-xs tabular-nums text-slate-400">
+      <span class="shrink-0 text-xs tabular-nums text-fg-muted">
         {{ progress.done }} / {{ progress.total }}
       </span>
     </div>
@@ -342,20 +342,20 @@ async function add(payload: AddPayload) {
       type="search"
       placeholder="Filter tasks…"
       aria-label="Filter tasks"
-      class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+      class="rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
     >
 
     <div
       v-if="tagFilter"
       data-testid="task-tag-filter"
-      class="flex items-center gap-1 self-start rounded-full bg-violet-500/20 py-0.5 pl-2 pr-1 text-xs text-violet-200"
+      class="flex items-center gap-1 self-start rounded-full bg-violet-500/20 py-0.5 pl-2 pr-1 text-xs text-accent-fg"
     >
       <span>#{{ tagFilter }}</span>
       <button
         type="button"
         data-testid="task-tag-filter-clear"
         aria-label="Clear tag filter"
-        class="cursor-pointer rounded-full px-1 text-violet-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-full px-1 text-violet-300 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="tagFilter = null"
       >
         ✕
@@ -390,13 +390,13 @@ async function add(payload: AddPayload) {
 
     <p
       v-if="loading"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Loading…
     </p>
     <p
       v-else-if="loadError"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ loadError }}
     </p>
@@ -420,8 +420,8 @@ async function add(payload: AddPayload) {
         v-for="bucket in buckets"
         :key="bucket.key"
         :data-section-key="bucket.key"
-        class="mt-1 rounded-lg first:mt-0"
-        :class="bucket.key === crossListDropTarget ? 'bg-violet-500/10 ring-2 ring-violet-400/60' : ''"
+        class="mt-1 rounded-control first:mt-0"
+        :class="bucket.key === crossListDropTarget ? 'bg-violet-500/10 ring-2 ring-focus/60' : ''"
       >
         <div
           v-if="bucket.label"
@@ -429,8 +429,8 @@ async function add(payload: AddPayload) {
         >
           <h3
             data-testid="task-bucket-header"
-            class="text-[10px] font-semibold uppercase tracking-wider"
-            :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-slate-500'"
+            class="text-micro font-semibold uppercase tracking-wider"
+            :class="bucket.key === 'overdue' ? 'text-red-300' : 'text-fg-subtle'"
           >
             {{ bucket.label }}
           </h3>

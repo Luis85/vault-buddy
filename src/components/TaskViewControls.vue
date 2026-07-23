@@ -89,11 +89,11 @@ function onNewEscape(e: KeyboardEvent) {
         role="radio"
         :data-testid="`task-grouping-${g.key}`"
         :aria-checked="grouping === g.key"
-        class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-control border px-1.5 py-0.5 text-micro transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="
           grouping === g.key
-            ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-            : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+            ? 'border-violet-400 bg-accent/20 text-fg'
+            : 'border-white/10 bg-white/5 text-fg-secondary hover:bg-white/10'
         "
         @click="$emit('update:grouping', g.key)"
       >
@@ -110,7 +110,7 @@ function onNewEscape(e: KeyboardEvent) {
         data-testid="task-newlist"
         aria-label="New list"
         title="New list"
-        class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-1.5 py-0.5 text-micro text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="openNew"
       >
         ＋ List
@@ -122,7 +122,7 @@ function onNewEscape(e: KeyboardEvent) {
           type="text"
           placeholder="List name"
           aria-label="New list name"
-          class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+          class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-micro text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
           @keydown.enter="onNewEnter"
           @keydown.esc="onNewEscape"
         >
@@ -132,7 +132,7 @@ function onNewEscape(e: KeyboardEvent) {
           :disabled="creatingList || newName.trim() === ''"
           aria-label="Create list"
           title="Create list"
-          class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+          class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-1.5 py-0.5 text-micro text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
           @click="confirmNew"
         >
           ✓
@@ -142,7 +142,7 @@ function onNewEscape(e: KeyboardEvent) {
           data-testid="task-newlist-cancel"
           aria-label="Cancel new list"
           title="Cancel"
-          class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-1.5 py-0.5 text-micro text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="newMode = false"
         >
           ✕
@@ -163,7 +163,7 @@ function onNewEscape(e: KeyboardEvent) {
         :disabled="!directionApplies(sortPref.key)"
         :aria-label="`Sort direction: ${sortPref.dir === 'asc' ? 'ascending' : 'descending'}`"
         :title="sortPref.dir === 'asc' ? 'Ascending' : 'Descending'"
-        class="cursor-pointer rounded-lg border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
         @click="$emit('flipSortDir')"
       >
         {{ sortPref.dir === "asc" ? "↑" : "↓" }}

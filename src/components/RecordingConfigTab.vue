@@ -151,14 +151,14 @@ onMounted(async () => {
   >
     <p
       v-if="loading"
-      class="text-xs text-slate-400"
+      class="text-xs text-fg-muted"
     >
       Loading…
     </p>
     <p
       v-else-if="loadError"
       data-testid="recording-load-error"
-      class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+      class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
     >
       {{ loadError }}
     </p>
@@ -172,7 +172,7 @@ onMounted(async () => {
       <p
         v-if="formError"
         data-testid="recording-form-error"
-        class="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-200"
+        class="rounded-control bg-red-500/20 px-2 py-1 text-xs text-red-200"
       >
         {{ formError }}
       </p>

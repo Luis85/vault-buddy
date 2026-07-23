@@ -209,7 +209,7 @@ defineExpose({ reset, setList, remapPick });
         type="text"
         placeholder="Add a task…"
         aria-label="New task title"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
         @keydown.enter="onTitleEnter"
       >
       <button
@@ -218,8 +218,8 @@ defineExpose({ reset, setList, remapPick });
         :aria-label="showAddOptions ? 'Hide task options' : 'Set due date or priority'"
         :aria-expanded="showAddOptions"
         title="Due date / priority"
-        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-        :class="showAddOptions ? 'border-violet-400 text-slate-100' : ''"
+        class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :class="showAddOptions ? 'border-violet-400 text-fg' : ''"
         @click="showAddOptions = !showAddOptions"
       >
         ⋯
@@ -228,7 +228,7 @@ defineExpose({ reset, setList, remapPick });
         type="button"
         data-testid="task-add"
         :disabled="addDisabled"
-        class="shrink-0 cursor-pointer rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-300 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-default disabled:opacity-40"
+        class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
         @click="submit"
       >
         Add
@@ -244,7 +244,7 @@ defineExpose({ reset, setList, remapPick });
         data-testid="task-add-due"
         type="date"
         aria-label="Due date"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
       <div
         class="flex gap-0.5"
@@ -258,11 +258,11 @@ defineExpose({ reset, setList, remapPick });
           role="radio"
           :data-testid="`task-add-priority-${p}`"
           :aria-checked="addPriority === p"
-          class="cursor-pointer rounded-lg border px-1.5 py-0.5 text-[10px] capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          class="cursor-pointer rounded-control border px-1.5 py-0.5 text-micro capitalize transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :class="
             addPriority === p
-              ? 'border-violet-400 bg-violet-500/20 text-slate-100'
-              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+              ? 'border-violet-400 bg-accent/20 text-fg'
+              : 'border-white/10 bg-white/5 text-fg-secondary hover:bg-white/10'
           "
           @click="addPriority = p"
         >
@@ -275,7 +275,7 @@ defineExpose({ reset, setList, remapPick });
         type="text"
         placeholder="#tags"
         aria-label="Tags"
-        class="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-violet-400 focus:outline-none"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
       >
     </div>
 
@@ -283,7 +283,7 @@ defineExpose({ reset, setList, remapPick });
       v-if="showAddOptions"
       class="flex items-center gap-1"
     >
-      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-500">List</span>
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">List</span>
       <TaskListPicker
         :model-value="displayList"
         :lists="lists"

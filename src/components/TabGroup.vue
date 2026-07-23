@@ -52,11 +52,11 @@ async function onKeydown(event: KeyboardEvent, index: number) {
         :aria-selected="active === t.id"
         :aria-controls="`panel-${t.id}`"
         :tabindex="active === t.id ? 0 : -1"
-        class="-mb-px cursor-pointer border-b-2 px-2 py-1 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+        class="-mb-px cursor-pointer border-b-2 px-2 py-1 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="
           active === t.id
-            ? 'border-violet-400 text-slate-100'
-            : 'border-transparent text-slate-400 hover:text-slate-200'
+            ? 'border-violet-400 text-fg'
+            : 'border-transparent text-fg-muted hover:text-slate-200'
         "
         @click="select(t.id)"
         @keydown="onKeydown($event, i)"
