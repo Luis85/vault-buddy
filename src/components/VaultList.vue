@@ -8,6 +8,7 @@ import Avatar from "./ui/Avatar.vue";
 import CountBadge from "./ui/CountBadge.vue";
 import IconButton from "./ui/IconButton.vue";
 import SectionHeader from "./ui/SectionHeader.vue";
+import Spinner from "./ui/Spinner.vue";
 import StatusDot from "./ui/StatusDot.vue";
 
 const props = defineProps<{
@@ -186,11 +187,9 @@ const groups = computed(() => {
                 {{ vault.path }}
               </span>
             </span>
-            <span
+            <Spinner
               v-if="isBusy(vault, 'open_vault')"
-              class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white"
-              role="status"
-              aria-label="Opening vault…"
+              label="Opening vault…"
             />
           </button>
           <IconButton
