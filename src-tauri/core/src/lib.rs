@@ -11,6 +11,7 @@ pub mod discovery;
 pub mod document_import;
 pub mod document_import_config;
 pub mod mcp_config;
+pub mod panel_config;
 pub mod process;
 pub mod recordings;
 pub mod search;

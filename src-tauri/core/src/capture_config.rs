@@ -23,6 +23,8 @@ use crate::document_import_config::document_import_entry;
 pub use crate::document_import_config::DocumentImportConfig;
 use crate::mcp_config::mcp_entry;
 pub use crate::mcp_config::{McpConfig, DEFAULT_MCP_PORT};
+use crate::panel_config::panel_entry;
+pub use crate::panel_config::{PanelConfig, PanelSize};
 pub use crate::transcription_config::TranscriptionConfig;
 use crate::transcription_config::{parse_transcription_section, serialize_transcription_section};
 
@@ -32,6 +34,7 @@ pub struct AppConfig {
     pub mcp: McpConfig,
     pub document_import: DocumentImportConfig,
     pub transcription: TranscriptionConfig,
+    pub panel: crate::panel_config::PanelConfig,
 }
 
 /// Per-field parsing through serde_json::Value: the file is hand-edited,
@@ -54,11 +57,13 @@ pub fn parse_config(json: &str) -> AppConfig {
         .map(document_import_entry)
         .unwrap_or_default();
     let transcription = parse_transcription_section(value.get("transcription"));
+    let panel = value.get("panel").map(panel_entry).unwrap_or_default();
     AppConfig {
         vaults,
         mcp,
         document_import,
         transcription,
+        panel,
     }
 }
 
@@ -116,9 +121,9 @@ pub fn load_config() -> AppConfig {
 
 /// Serialize to the same schema `parse_config` reads. Vault ids are
 /// sorted and optional fields omitted so the hand-editable file stays
-/// stable and minimal across saves. The mcp/document-import/transcription
-/// sections are each included only when non-default, so a user who never
-/// touches them never sees the section.
+/// stable and minimal across saves. The mcp/document-import/transcription/
+/// panel sections are each included only when non-default, so a user who
+/// never touches them never sees the section.
 pub fn serialize_config(cfg: &AppConfig) -> String {
     use serde_json::{json, Map, Value};
     let mut root = Map::new();
@@ -139,6 +144,11 @@ pub fn serialize_config(cfg: &AppConfig) -> String {
     }
     if let Some(transcription) = serialize_transcription_section(&cfg.transcription) {
         root.insert("transcription".to_string(), transcription);
+    }
+    if cfg.panel != PanelConfig::default() {
+        let mut panel = Map::new();
+        panel.insert("size".to_string(), json!(cfg.panel.size.as_str()));
+        root.insert("panel".to_string(), Value::Object(panel));
     }
     let mut vaults = Map::new();
     let mut ids: Vec<&String> = cfg.vaults.keys().collect();
@@ -233,6 +243,16 @@ pub fn update_transcription_config_at(
 ) -> std::io::Result<()> {
     let mut cfg = load_config_for_update(path)?;
     cfg.transcription = transcription;
+    write_config(path, &cfg)
+}
+
+/// Read-modify-write for the app-global panel section, mirroring
+/// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
+/// behind ConfigWriteLock). This is the config-write helper `set_panel_size`
+/// calls — the shell must never invent its own writer.
+pub fn update_panel_config_at(path: &Path, panel: PanelConfig) -> std::io::Result<()> {
+    let mut cfg = load_config_for_update(path)?;
+    cfg.panel = panel;
     write_config(path, &cfg)
 }
 
@@ -425,6 +445,39 @@ mod tests {
         let cfg = load_config_from(&path);
         assert_eq!(cfg.transcription, transcription);
         assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    // Same sibling-preservation coverage as update_mcp_config_at /
+    // update_transcription_config_at, for the write side of the panel section.
+    #[test]
+    fn update_panel_config_at_preserves_vaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        update_vault_config_at(&path, "vault1", VaultCaptureConfig::default()).unwrap();
+        let panel = PanelConfig {
+            size: PanelSize::Large,
+        };
+        update_panel_config_at(&path, panel).unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(cfg.panel, panel);
+        assert!(cfg.vaults.contains_key("vault1"));
+    }
+
+    #[test]
+    fn panel_config_round_trips_and_defaults() {
+        // default is omitted from the serialized output (like mcp/document_import)
+        let mut cfg = parse_config("{}");
+        assert_eq!(cfg.panel, PanelConfig::default());
+        assert!(!serialize_config(&cfg).contains("\"panel\""));
+        // a non-default size round-trips
+        cfg.panel.size = PanelSize::Large;
+        let round = parse_config(&serialize_config(&cfg));
+        assert_eq!(round.panel.size, PanelSize::Large);
+        // malformed degrades to default without dropping other sections
+        assert_eq!(
+            parse_config(r#"{ "panel": { "size": true } }"#).panel,
+            PanelConfig::default()
+        );
     }
 
     #[test]
