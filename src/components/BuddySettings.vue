@@ -5,10 +5,12 @@ import { computed, onMounted, ref } from "vue";
 import { CHARACTERS } from "../characters";
 import { logWarning } from "../logging";
 import { type MessageDuration,useSettingsStore } from "../stores/settings";
+import { useVaultsStore } from "../stores/vaults";
 import BuddyAvatar from "./BuddyAvatar.vue";
 import DiagnosticsSettings from "./DiagnosticsSettings.vue";
 import DocumentImportSettings from "./DocumentImportSettings.vue";
 import McpSettings from "./McpSettings.vue";
+import PanelSizeSetting from "./PanelSizeSetting.vue";
 import SelectMenu from "./SelectMenu.vue";
 import TabGroup from "./TabGroup.vue";
 import TranscriptionAppSettings from "./TranscriptionAppSettings.vue";
@@ -16,6 +18,7 @@ import TranscriptionModelsCard from "./TranscriptionModelsCard.vue";
 import UpdateSettings from "./UpdateSettings.vue";
 
 const settings = useSettingsStore();
+const vaults = useVaultsStore();
 
 const DURATION_OPTIONS = [
   { value: "short", label: "Short" },
@@ -66,6 +69,72 @@ async function toggleAutostart(event: Event) {
     logWarning(`set_autostart failed: ${String(e)}`);
   } finally {
     autostartBusy.value = false;
+  }
+}
+
+// The panel's preset size (S/M/L). Read fresh on mount from config.json via
+// get_panel_config — never cached client-side, mirroring the autostart
+// onMounted try/catch pattern: a failed/mocked-out read must never throw,
+// it just degrades to the shipped default ("comfortable").
+type PanelSize = "compact" | "comfortable" | "large";
+const panelSize = ref<PanelSize>("comfortable");
+const panelSizeError = ref<string | null>(null);
+// True while the control must not accept a pick: the mount-time read is in
+// flight (a late read would otherwise clobber a selection the user made first),
+// OR a save+re-show round-trip is running (a second pick would race two writes
+// whose ConfigWriteLock acquisition order isn't guaranteed). One flag, the
+// autostartBusy pattern — starts true so the initial read is covered.
+const panelSizeBusy = ref(true);
+
+onMounted(async () => {
+  try {
+    const cfg = await invoke<{ size: PanelSize }>("get_panel_config");
+    panelSize.value = cfg.size;
+  } catch (e) {
+    logWarning(`get_panel_config failed: ${String(e)}`);
+  } finally {
+    panelSizeBusy.value = false;
+  }
+});
+
+// Only ever called from PanelSizeSetting's own click handler (never from the
+// onMounted load above, which assigns `panelSize.value` directly) — so a
+// mount-time read can never itself trigger a save/re-show.
+async function pickPanelSize(size: PanelSize) {
+  // Ignore a no-op re-pick (the persist below is a disk write plus a visible
+  // close/reopen) and any pick while a read or save is in flight (the busy
+  // guard, belt-and-suspenders with the control's own :disabled).
+  if (panelSizeBusy.value || size === panelSize.value) return;
+  const previous = panelSize.value;
+  panelSize.value = size;
+  panelSizeError.value = null;
+  panelSizeBusy.value = true;
+  try {
+    await invoke("set_panel_size", { size });
+  } catch (e) {
+    // Only a genuine persist failure reverts + reports — nothing was written.
+    panelSize.value = previous;
+    panelSizeError.value = String(e);
+    logWarning(`set_panel_size failed: ${String(e)}`);
+    panelSizeBusy.value = false;
+    return;
+  }
+  // Persisted. set_panel_size only writes config.json — position_panel resizes
+  // the panel from that config only while it's hidden (the exact stale-frame
+  // flash the window-system invariants exist to avoid), so a close+open re-show
+  // is what actually applies the new preset. Land the reopen back on Settings
+  // (view stays "settings" throughout, so this path never rebuilds TabGroup;
+  // the buddy-tab placement matters for a genuine list→settings navigation).
+  // A re-show fault must NOT revert the already-saved size (it applies on the
+  // next open regardless), so swallow it — the updates.ts close_panel precedent.
+  vaults.requestView("settings");
+  try {
+    await invoke("close_panel");
+    await invoke("open_panel");
+  } catch (e) {
+    logWarning(`panel re-show after size change failed: ${String(e)}`);
+  } finally {
+    panelSizeBusy.value = false;
   }
 }
 </script>
@@ -200,6 +269,30 @@ async function toggleAutostart(event: Event) {
                 data-testid="message-duration-select"
               />
             </div>
+          </div>
+        </section>
+        <section>
+          <h2
+            class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted"
+          >
+            Panel size
+          </h2>
+          <div class="rounded-xl border border-white/10 bg-white/5 p-2">
+            <PanelSizeSetting
+              :model-value="panelSize"
+              :disabled="panelSizeBusy"
+              @update:model-value="pickPanelSize"
+            />
+            <p class="mt-1.5 text-xs text-fg-subtle">
+              Resizes the panel; task lists get more room in larger sizes.
+            </p>
+            <p
+              v-if="panelSizeError"
+              data-testid="panel-size-error"
+              class="mt-1.5 text-xs text-danger-fg"
+            >
+              {{ panelSizeError }}
+            </p>
           </div>
         </section>
       </div>

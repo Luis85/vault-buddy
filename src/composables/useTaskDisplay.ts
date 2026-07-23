@@ -31,10 +31,9 @@ export function useTaskDisplay(opts: {
   // The tasks the CURRENT grouping actually shows, before the title/tag filter:
   // Lists grouping hides OPEN tasks in archived lists (done ones still show in
   // the Done bucket; No list always shows), mirroring listSections; Dates/Tags
-  // show everything. The progress bar and the >5 filter-row threshold count
-  // from THIS set, not the raw list, so a vault whose only open tasks sit in an
-  // archived list doesn't report phantom progress or a stray filter row (Codex,
-  // PR #59). Filter-independent, so showFilter → filteredTasks stays acyclic.
+  // show everything. The progress bar counts from THIS set, not the raw list,
+  // so a vault whose only open tasks sit in an archived list doesn't report
+  // phantom progress (Codex, PR #59).
   const visibleTasks = computed(() => {
     if (grouping.value !== "lists") return tasks.value;
     const isArchived = archivedMatcher(archivedLists.value);
@@ -42,13 +41,10 @@ export function useTaskDisplay(opts: {
   });
 
   const filter = ref("");
-  // Same threshold as the vault list: a filter only earns its row above 5.
-  const showFilter = computed(() => visibleTasks.value.length > 5);
   // One active tag filter at a time, set by clicking a row chip. Matching is
   // case-insensitive and exact per tag (nested tags are distinct strings).
-  // Independent of the >5 title-filter threshold: it can only be activated by
-  // clicking an existing chip, and its dismiss chip is always visible while
-  // active, so it can never strand the user.
+  // Its dismiss chip is always visible while active, so it can never strand
+  // the user.
   const tagFilter = ref<string | null>(null);
 
   const filteredTasks = computed(() => {
@@ -56,22 +52,19 @@ export function useTaskDisplay(opts: {
     const tag = tagFilter.value?.toLowerCase() ?? null;
     return tasks.value.filter((t) => {
       if (tag && !t.tags.some((x) => x.toLowerCase() === tag)) return false;
-      // Gate the title query on showFilter too: archiving below the threshold
-      // hides the INPUT, and a stale query with no visible control would
-      // strand the user on a narrowed/empty list until remount.
-      if (q && showFilter.value && !t.title.toLowerCase().includes(q)) return false;
+      if (q && !t.title.toLowerCase().includes(q)) return false;
       return true;
     });
   });
-  // Whether a filter is actually narrowing the list (matches filteredTasks'
-  // own gates — including the showFilter gate, so stale hidden filter text
-  // counts as INACTIVE): Lists grouping consults it to drop empty lists while
-  // filtering, and the view's reorderView gates the drag grips on it (a
-  // narrowed list must not rank against invisible neighbors; an unfiltered
-  // one may reorder freely).
-  const filterActive = computed(
-    () => tagFilter.value !== null || (filter.value.trim() !== "" && showFilter.value),
-  );
+  // Whether a filter is actually narrowing the list: Lists grouping consults
+  // it to drop empty lists while filtering, and the view's reorderView gates
+  // the drag grips on it (a narrowed list must not rank against invisible
+  // neighbors; an unfiltered one may reorder freely). `filter` can never hold
+  // a stale value while its input is hidden — the container (Tasks.vue)
+  // clears the query in the same step its toolbar toggle closes the input —
+  // so, unlike the old auto-show-above-5 input, no extra "is the input even
+  // visible" gate is needed here.
+  const filterActive = computed(() => tagFilter.value !== null || filter.value.trim() !== "");
 
   // The user's sort choice for this view, persisted per view key ("all" for
   // the aggregate). The comparator lives in utils/taskSort (mirroring
@@ -128,7 +121,6 @@ export function useTaskDisplay(opts: {
   return {
     filter,
     tagFilter,
-    showFilter,
     filterActive,
     sortPref,
     sortInPlace,

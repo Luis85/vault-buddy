@@ -605,9 +605,14 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "update_task")).toBeUndefined();
   });
 
-  it("shows the filter only above 5 tasks and narrows by title", async () => {
+  it("reveals the filter via the toolbar toggle and narrows by title", async () => {
     const { wrapper } = mountView({ list_tasks: () => many(6) });
     await flushPromises();
+    expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
+    const toggle = wrapper.get('[data-testid="task-filter-toggle"]');
+    expect(toggle.attributes("aria-pressed")).toBe("false");
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-pressed")).toBe("true");
     const input = wrapper.get('[data-testid="task-filter"]');
     await input.setValue("Task 3");
     expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
@@ -620,20 +625,21 @@ describe("Tasks", () => {
     expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
   });
 
-  it("ignores stale filter text once the task count drops to five or fewer", async () => {
-    // Archiving tasks below the threshold hides the filter INPUT; the stale
-    // query must stop applying too, or the user is stuck on a narrowed/empty
-    // list with no visible way to clear it.
+  it("clears the query when the filter toggle closes, leaving no stale hidden filter", async () => {
+    // Closing the toggle (Tasks.vue's onToggleFilter) clears the query in the
+    // same step it hides the input, so a closed toggle can never leave a
+    // stale query silently narrowing the list — the toggle-based replacement
+    // for the old auto-hide-below-threshold guard.
     const { wrapper } = mountView({ list_tasks: () => many(6) });
     await flushPromises();
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("Task 0");
     expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
-    // Archive the one visible row ("Task 0") — total drops to 5.
-    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    // Close the toggle — the stale "Task 0" must not linger and keep narrowing.
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
-    // All 5 remaining tasks render; the stale "Task 0" query is ignored.
-    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(5);
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(6);
     expect(wrapper.text()).not.toContain("No tasks match");
   });
 
@@ -645,6 +651,7 @@ describe("Tasks", () => {
       ],
     });
     await flushPromises();
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("Task 3");
     expect(wrapper.get('[data-testid="task-progress"]').text()).toContain("1 / 7");
   });
@@ -670,6 +677,7 @@ describe("Tasks", () => {
   it("shows the no-match empty state when the filter excludes everything", async () => {
     const { wrapper } = mountView({ list_tasks: () => many(6) });
     await flushPromises();
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("zzz");
     await flushPromises();
     expect(wrapper.text()).toContain('No tasks match "zzz"');
@@ -685,6 +693,7 @@ describe("Tasks", () => {
   it("filters case-insensitively by title substring", async () => {
     const { wrapper } = mountView({ list_tasks: () => many(6) });
     await flushPromises();
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("task 3");
     await flushPromises();
     const rows = wrapper.findAll('[data-testid="task-row"]');
@@ -761,6 +770,7 @@ describe("Tasks", () => {
     });
     await flushPromises();
     await wrapper.findAll('[data-testid="task-tag"]')[0].trigger("click"); // tag=work → 0,1
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("Task 1");
     expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(1);
     expect(wrapper.text()).toContain("Task 1");

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import type { Grouping } from "../utils/taskGrouping";
 import {
@@ -19,6 +19,10 @@ const props = defineProps<{
   sortPref: TaskSortPref;
   isAggregate: boolean;
   creatingList: boolean;
+  /** Whether the filter input is currently open — drives the toggle
+   * button's pressed visual, nothing else (the parent owns the input
+   * itself). */
+  filterActive: boolean;
   /** Bumped by the parent after a SUCCESSFUL create to close + clear the
    * inline form. A failed create doesn't bump, so the draft survives for a
    * retry (the TaskListPicker resetNonce precedent; Codex PR #59). */
@@ -29,6 +33,7 @@ const emit = defineEmits<{
   (e: "setSortKey", key: SortKey): void;
   (e: "flipSortDir"): void;
   (e: "createList", name: string): void;
+  (e: "toggleFilter"): void;
 }>();
 
 const GROUPINGS = [
@@ -36,6 +41,15 @@ const GROUPINGS = [
   { key: "dates", label: "Dates" },
   { key: "tags", label: "Tags" },
 ] as const;
+
+// Pulled out of the template (rather than an inline ternary, like the
+// grouping radios' active/idle classes) to keep this template's own
+// complexity under the fallow threshold.
+const filterToggleClass = computed(() =>
+  props.filterActive
+    ? "border-violet-400 bg-accent/20 text-fg"
+    : "border-white/10 bg-white/5 text-fg-secondary hover:bg-white/10",
+);
 
 // Inline "New list" create — shown only in per-vault Lists grouping (the
 // aggregate has no single target vault). Mirrors TaskListPicker's create UX:
@@ -150,6 +164,18 @@ function onNewEscape(e: KeyboardEvent) {
       </template>
     </div>
     <div class="ml-auto flex items-center gap-1">
+      <button
+        type="button"
+        data-testid="task-filter-toggle"
+        aria-label="Filter tasks"
+        :aria-pressed="filterActive"
+        title="Filter tasks"
+        class="cursor-pointer rounded-control border px-1.5 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :class="filterToggleClass"
+        @click="$emit('toggleFilter')"
+      >
+        🔍
+      </button>
       <SelectMenu
         :model-value="sortPref.key"
         :options="SORT_OPTIONS"

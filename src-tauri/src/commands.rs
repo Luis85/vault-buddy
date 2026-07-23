@@ -1,5 +1,5 @@
 use chrono::Local;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use vault_buddy_core::{services, uri};
 
 /// Last facing emitted to the buddy window, so `emit_buddy_facing` fires the
@@ -8,6 +8,48 @@ use vault_buddy_core::{services, uri};
 /// by `get_buddy_facing` (the buddy's mount-time read) so the first real flip
 /// still emits. Only touched on the main thread; a relaxed atomic is enough.
 static LAST_FACES_RIGHT: AtomicBool = AtomicBool::new(true);
+
+/// Lock-free mirror of the configured panel preset (`PanelSize::as_u8`). The
+/// panel-show path (`position_panel`) runs on the main thread, where the
+/// window-system invariant forbids blocking I/O — so it reads the size from
+/// this atomic instead of `load_config()`ing config.json off the disk on every
+/// open. Primed once from disk in `setup` (`prime_panel_size_cache`) before the
+/// first show, and updated by `set_panel_size` on every write, so it always
+/// matches what's persisted. Seeded to `Comfortable` (the on-disk + tauri.conf
+/// default) for the window between process start and priming. Relaxed is enough
+/// — writes and the main-thread read need no ordering against other state.
+static PANEL_SIZE: AtomicU8 = AtomicU8::new(1); // 1 == PanelSize::Comfortable
+
+/// The currently-cached panel preset (see `PANEL_SIZE`). Never touches disk.
+fn cached_panel_size() -> vault_buddy_core::capture_config::PanelSize {
+    vault_buddy_core::capture_config::PanelSize::from_u8(PANEL_SIZE.load(Ordering::Relaxed))
+}
+
+/// Prime the panel-size cache from config.json. Called once in `setup`, off the
+/// panel-show hot path, so the first open already reflects the saved preset
+/// without a disk read on the main thread.
+pub(crate) fn prime_panel_size_cache() {
+    PANEL_SIZE.store(
+        vault_buddy_core::capture_config::load_config()
+            .panel
+            .size
+            .as_u8(),
+        Ordering::Relaxed,
+    );
+}
+
+/// The buddy monitor's work area in LOGICAL units (physical work area / scale
+/// factor), used to clamp an oversized preset to the screen before `set_size`.
+/// `None` when the monitor/geometry isn't available yet (best-effort, like the
+/// rest of placement). The buddy's monitor is the one the panel opens onto.
+fn buddy_work_area_logical(app: &tauri::AppHandle) -> Option<(f64, f64)> {
+    use tauri::Manager;
+    let buddy = app.get_webview_window("main")?;
+    let monitor = buddy.current_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    let wa = monitor.work_area();
+    Some((wa.size.width as f64 / scale, wa.size.height as f64 / scale))
+}
 
 /// The buddy's facing, DERIVED from its position: it looks toward the center of
 /// the work area (and the bubble opens the same way), instead of a manual
@@ -365,12 +407,46 @@ pub fn get_bubble_anchor(app: tauri::AppHandle) -> serde_json::Value {
 /// Best-effort: any missing window/monitor info leaves the panel where it was.
 /// The panel prefers the right side, edge-aligns vertically, and ignores the
 /// anchor.
+///
+/// Also sizes the panel from the configured preset — but ONLY while the
+/// panel is hidden. `show_panel` calls this unconditionally, and `show_panel`
+/// is itself called on an already-VISIBLE panel from a few idempotent-reveal
+/// paths (`open_panel`'s bubble click, `begin_document_import`,
+/// `begin_add_document`) — so the visibility check has to live here, not just
+/// at those call sites, or one of them would resize a visible surface and
+/// reintroduce the WebView2 stale-frame flash this window system exists to
+/// avoid. When hidden, sizing first is safe (nothing is on screen to flash)
+/// and correct: `place_beside_buddy` below reads the panel's just-updated
+/// `outer_size()`, so the chosen preset is positioned correctly. A size
+/// change made while the panel is open simply doesn't apply until the panel
+/// is next hidden and reshown — the documented way to re-apply a size (see
+/// `set_panel_size`), never a `set_size` on a shown window.
 pub(crate) fn position_panel(app: &tauri::AppHandle) {
     use tauri::Manager;
     use vault_buddy_core::companion_placement::{Side, VMode};
     let Some(panel) = app.get_webview_window("panel") else {
         return;
     };
+    // `unwrap_or(true)` inverts this file's usual "assume-absent" default on
+    // purpose: if `is_visible()` ever errors while the panel is actually shown,
+    // defaulting to "not visible" would resize a live surface — the exact
+    // WebView2 stale-frame flash this guard prevents. Fail toward "assume
+    // visible, skip the resize" instead; the reshow path re-runs this anyway.
+    if !panel.is_visible().unwrap_or(true) {
+        // Read the preset from the in-memory cache, never config.json — this
+        // runs in the main-thread show sequence, which must not block on disk.
+        let (mut w, mut h) = cached_panel_size().dims();
+        // Shrink an oversized preset to the buddy monitor's work area: the panel
+        // is non-resizable, and place_beside clamps its position but never its
+        // size, so a preset taller/wider than the screen would otherwise strand
+        // controls off the bottom/right edge (worst on display-scaled laptops).
+        if let Some((area_w, area_h)) = buddy_work_area_logical(app) {
+            (w, h) = vault_buddy_core::panel_config::clamp_dims_to_work_area(w, h, area_w, area_h);
+        }
+        if let Err(e) = panel.set_size(tauri::LogicalSize::new(w, h)) {
+            log::warn!("position_panel: set_size failed: {e}");
+        }
+    }
     if let Some((pos, _anchor)) =
         place_beside_buddy(app, &panel, SidePref::Fixed(Side::Right), VMode::Edge, 0.0)
     {
@@ -378,6 +454,68 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
             log::warn!("position_panel: set_position failed: {e}");
         }
     }
+}
+
+/// The panel's configured preset size (`"compact"` | `"comfortable"` |
+/// `"large"`), as read by `get_panel_config` and written by `set_panel_size`.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelConfigDto {
+    pub size: String,
+}
+
+/// The panel's configured preset size, for the settings control.
+#[tauri::command]
+pub fn get_panel_config() -> PanelConfigDto {
+    // The cache mirrors config.json (primed at startup, updated on every
+    // set_panel_size), so the settings UI reads it here rather than the disk.
+    PanelConfigDto {
+        size: cached_panel_size().as_str().to_string(),
+    }
+}
+
+/// Persist the panel preset size (ASYNC — the fsync'd config write runs off the
+/// main thread; see the body). This never touches a visible window itself — it
+/// writes config.json and updates the in-memory show-path cache (`PANEL_SIZE`).
+/// The new size takes effect the next time the panel goes hidden → shown
+/// (`position_panel`'s guard above), which the frontend triggers by re-showing
+/// the panel after a successful save.
+/// Read-modify-write under `ConfigWriteLock`, mirroring the sibling
+/// app-global-section writers (`set_transcription_config`,
+/// `mcp_commands::set_mcp_config`'s `persist`): resolve `config_path`, then
+/// call `capture_config::update_panel_config_at` — the same config-write
+/// helper every other app-global section's setter calls, never a
+/// hand-rolled writer.
+///
+/// `size` is not pre-validated against a fixed list the way `set_capture_config`
+/// gates `mode`/`bitrate_kbps`/`transcription_model` (or `delete_transcription_model`
+/// gates its model id): those all name a real file/tier a wrong match would
+/// silently act on, so a typo must error, not default. A panel size has no
+/// such target — `PanelSize::from_str` is infallible by design specifically so
+/// an unrecognized value (impossible from the closed preset UI; only reachable
+/// via a stale/future client) safely lands on `Comfortable` instead of
+/// rejecting the save.
+#[tauri::command]
+pub async fn set_panel_size(
+    lock: tauri::State<'_, crate::capture_commands::ConfigWriteLock>,
+    size: String,
+) -> Result<(), String> {
+    use vault_buddy_core::capture_config;
+    use vault_buddy_core::sync_util::lock_ignoring_poison;
+    let new_size = capture_config::PanelSize::from_str(&size);
+    // The body is synchronous but the command is `async`, so Tauri runs it on
+    // the async runtime, not the main thread — a slow/contended fsync'd config
+    // write must not freeze window/drag handling (the sibling `set_task_id_config`
+    // / `set_mcp_config` posture). There is no `.await` after the lock, so the
+    // `std::sync` guard is never held across a suspension point.
+    let _guard = lock_ignoring_poison(&lock.0);
+    let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
+    capture_config::update_panel_config_at(&path, capture_config::PanelConfig { size: new_size })
+        .map_err(|e| format!("Could not save panel settings: {e}"))?;
+    // Mirror the write into the show-path cache so the next open reflects it
+    // without a disk read (see `PANEL_SIZE`). Only on a successful persist.
+    PANEL_SIZE.store(new_size.as_u8(), Ordering::Relaxed);
+    Ok(())
 }
 
 /// Position + show the greeting bubble beside the buddy on launch. Opens on the
