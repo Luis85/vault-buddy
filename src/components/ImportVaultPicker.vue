@@ -12,8 +12,10 @@ import { useVaultsStore } from "../stores/vaults";
 import type { Vault } from "../types";
 import { basename } from "../utils/basename";
 import { withDialogSuppressed } from "../utils/nativeDialog";
+import AppIcon from "./AppIcon.vue";
 import ImportProgress from "./ImportProgress.vue";
 import ImportVaultPickerList from "./ImportVaultPickerList.vue";
+import EmptyState from "./ui/EmptyState.vue";
 
 // Two ways in, one mode split on the queue. (1) A buddy drag-drop: Rust
 // stashes the dropped path (begin_document_import) and shows the panel; the
@@ -237,12 +239,16 @@ async function pick(vaultId: string) {
         Set up Pandoc
       </button>
     </div>
-    <p
+    <EmptyState
       v-else-if="viewState === 'empty'"
-      class="text-xs text-slate-400"
+      title="No vaults found."
     >
-      No vaults found.
-    </p>
+      <template #icon>
+        <AppIcon :size="28">
+          <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2Z" />
+        </AppIcon>
+      </template>
+    </EmptyState>
     <input
       v-if="showFilter"
       v-model="filter"
