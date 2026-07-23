@@ -462,6 +462,8 @@ pub fn run() {
             mcp_commands::get_mcp_config,
             mcp_commands::set_mcp_config,
             mcp_commands::regenerate_mcp_token,
+            commands::get_panel_config,
+            commands::set_panel_size,
             document_commands::detect_pandoc,
             document_commands::convert_document,
             document_commands::get_documents_config,

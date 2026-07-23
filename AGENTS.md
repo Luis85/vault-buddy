@@ -248,12 +248,12 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 69 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 71 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
 | --- | --- |
-| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `open_panel` (idempotent show — the clickable bubble's reveal), `close_bubble`, `announce` (optional `action` → a clickable bubble), `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart` |
+| `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `open_panel` (idempotent show — the clickable bubble's reveal), `close_bubble`, `announce` (optional `action` → a clickable bubble), `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart`, `get_panel_config`, `set_panel_size` (the panel preset size — `position_panel` sizes the HIDDEN panel from it on the next open; never resizes a shown window) |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
@@ -337,7 +337,13 @@ resize entirely:
 - **`main`** — the buddy, fixed 88×88, the only window the user drags and the
   only one whose position is persisted. It never changes size, so it is
   structurally flicker-proof.
-- **`panel`** — the vault/settings panel (400×420), created hidden.
+- **`panel`** — the vault/settings panel (448×580 default — one of three
+  configurable presets, `compact`/`comfortable`/`large`, `core::panel_config`;
+  `commands::position_panel` sizes it from config every time it's about to be
+  shown, but only while it is still hidden — resizing a shown window is the
+  exact stale-frame flash this section exists to avoid, so a size change
+  picked in settings applies on the next hide→show, not instantly), created
+  hidden.
 - **`bubble`** — the greeting speech bubble (260×150), created hidden.
 
 `panel` and `bubble` are *positioned while hidden, then shown* — a moved-only

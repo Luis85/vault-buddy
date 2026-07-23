@@ -365,12 +365,35 @@ pub fn get_bubble_anchor(app: tauri::AppHandle) -> serde_json::Value {
 /// Best-effort: any missing window/monitor info leaves the panel where it was.
 /// The panel prefers the right side, edge-aligns vertically, and ignores the
 /// anchor.
+///
+/// Also sizes the panel from the configured preset — but ONLY while the
+/// panel is hidden. `show_panel` calls this unconditionally, and `show_panel`
+/// is itself called on an already-VISIBLE panel from a few idempotent-reveal
+/// paths (`open_panel`'s bubble click, `begin_document_import`,
+/// `begin_add_document`) — so the visibility check has to live here, not just
+/// at those call sites, or one of them would resize a visible surface and
+/// reintroduce the WebView2 stale-frame flash this window system exists to
+/// avoid. When hidden, sizing first is safe (nothing is on screen to flash)
+/// and correct: `place_beside_buddy` below reads the panel's just-updated
+/// `outer_size()`, so the chosen preset is positioned correctly. A size
+/// change made while the panel is open simply doesn't apply until the panel
+/// is next hidden and reshown — the documented way to re-apply a size (see
+/// `set_panel_size`), never a `set_size` on a shown window.
 pub(crate) fn position_panel(app: &tauri::AppHandle) {
     use tauri::Manager;
     use vault_buddy_core::companion_placement::{Side, VMode};
     let Some(panel) = app.get_webview_window("panel") else {
         return;
     };
+    if !panel.is_visible().unwrap_or(false) {
+        let (w, h) = vault_buddy_core::capture_config::load_config()
+            .panel
+            .size
+            .dims();
+        if let Err(e) = panel.set_size(tauri::LogicalSize::new(w, h)) {
+            log::warn!("position_panel: set_size failed: {e}");
+        }
+    }
     if let Some((pos, _anchor)) =
         place_beside_buddy(app, &panel, SidePref::Fixed(Side::Right), VMode::Edge, 0.0)
     {
@@ -378,6 +401,59 @@ pub(crate) fn position_panel(app: &tauri::AppHandle) {
             log::warn!("position_panel: set_position failed: {e}");
         }
     }
+}
+
+/// The panel's configured preset size (`"compact"` | `"comfortable"` |
+/// `"large"`), as read by `get_panel_config` and written by `set_panel_size`.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelConfigDto {
+    pub size: String,
+}
+
+/// The panel's configured preset size, for the settings control.
+#[tauri::command]
+pub fn get_panel_config() -> PanelConfigDto {
+    PanelConfigDto {
+        size: vault_buddy_core::capture_config::load_config()
+            .panel
+            .size
+            .as_str()
+            .to_string(),
+    }
+}
+
+/// Persist the panel preset size. This never touches a visible window itself
+/// — it only writes config.json. The new size takes effect the next time the
+/// panel goes hidden → shown (`position_panel`'s guard above), which the
+/// frontend triggers by re-showing the panel after a successful save.
+/// Read-modify-write under `ConfigWriteLock`, mirroring the sibling
+/// app-global-section writers (`set_transcription_config`,
+/// `mcp_commands::set_mcp_config`'s `persist`): resolve `config_path`, then
+/// call `capture_config::update_panel_config_at` — the same config-write
+/// helper every other app-global section's setter calls, never a
+/// hand-rolled writer.
+///
+/// `size` is not pre-validated against a fixed list the way `set_capture_config`
+/// gates `mode`/`bitrate_kbps`/`transcription_model` (or `delete_transcription_model`
+/// gates its model id): those all name a real file/tier a wrong match would
+/// silently act on, so a typo must error, not default. A panel size has no
+/// such target — `PanelSize::from_str` is infallible by design specifically so
+/// an unrecognized value (impossible from the closed preset UI; only reachable
+/// via a stale/future client) safely lands on `Comfortable` instead of
+/// rejecting the save.
+#[tauri::command]
+pub fn set_panel_size(
+    lock: tauri::State<'_, crate::capture_commands::ConfigWriteLock>,
+    size: String,
+) -> Result<(), String> {
+    use vault_buddy_core::capture_config;
+    use vault_buddy_core::sync_util::lock_ignoring_poison;
+    let new_size = capture_config::PanelSize::from_str(&size);
+    let _guard = lock_ignoring_poison(&lock.0);
+    let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
+    capture_config::update_panel_config_at(&path, capture_config::PanelConfig { size: new_size })
+        .map_err(|e| format!("Could not save panel settings: {e}"))
 }
 
 /// Position + show the greeting bubble beside the buddy on launch. Opens on the
