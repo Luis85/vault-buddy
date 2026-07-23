@@ -423,7 +423,7 @@ async function add(payload: AddPayload) {
           v-for="bucket in buckets"
           :key="bucket.key"
           :data-section-key="bucket.key"
-          class="mt-1 rounded-control first:mt-0"
+          class="mt-1 rounded-control"
           :class="bucket.key === crossListDropTarget ? 'bg-accent/10 ring-2 ring-focus/60' : ''"
         >
           <div
