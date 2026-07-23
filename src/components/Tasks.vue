@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskDisplay } from "../composables/useTaskDisplay";
@@ -67,7 +67,6 @@ const sortViewKey = props.vaultId ?? "all";
 const {
   filter,
   tagFilter,
-  showFilter,
   filterActive,
   sortPref,
   sortInPlace,
@@ -78,6 +77,23 @@ const {
   hasDisplayableLists,
   progress,
 } = useTaskDisplay({ tasks, isAggregate, knownLists, listOrder, archivedLists, sortViewKey });
+
+// The filter input is shown only on demand via the toolbar's magnifier
+// toggle (TaskViewControls) — no more auto-show above a task-count
+// threshold. Closing it clears the query so a hidden input can never leave a
+// stale filter narrowing the list (the invariant `filterActive` below relies
+// on to gate reordering/empty-list display).
+const filterOpen = ref(false);
+const filterInputRef = ref<HTMLInputElement | null>(null);
+async function onToggleFilter() {
+  filterOpen.value = !filterOpen.value;
+  if (filterOpen.value) {
+    await nextTick();
+    filterInputRef.value?.focus();
+  } else {
+    filter.value = "";
+  }
+}
 // Write side: row actions (toggle/archive/open/editor save) + the busy guard.
 const {
   busy,
@@ -168,10 +184,10 @@ const onSectionDelete = (list: string) => runSectionAction(list, () => deleteLis
 // interaction machine (useTaskReorder) and the DOM hit-tests.
 const rootRef = ref<HTMLElement | null>(null);
 const { reordering, commitReorder } = useTaskReorderCommit({ busy, sortInPlace, buckets, grouping });
-// `filterActive` (not a hand-rolled empty-string check) is the gate: it
-// applies the same showFilter rule the list itself uses, so STALE filter text
-// left behind when archiving hid the input no longer blocks reordering — the
-// list is unfiltered then, every neighbor visible (review, PR #59).
+// `filterActive` (not a hand-rolled empty-string check) is the gate: it also
+// counts the tag filter, and it can never go stale — closing the filter
+// toggle (onToggleFilter above) clears `filter` in the same step, so there is
+// no scenario where a hidden input leaves a stale query blocking reordering.
 const reorderView = computed(
   () => !isAggregate.value && sortPref.value.key === "manual" && !filterActive.value,
 );
@@ -337,16 +353,6 @@ async function add(payload: AddPayload) {
       </span>
     </div>
 
-    <input
-      v-if="showFilter"
-      v-model="filter"
-      data-testid="task-filter"
-      type="search"
-      placeholder="Filter tasks…"
-      aria-label="Filter tasks"
-      class="rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
-    >
-
     <div
       v-if="tagFilter"
       data-testid="task-tag-filter"
@@ -383,12 +389,25 @@ async function add(payload: AddPayload) {
       :sort-pref="sortPref"
       :is-aggregate="isAggregate"
       :creating-list="creatingList"
+      :filter-active="filterOpen"
       :reset-nonce="controlsListResetNonce"
       @update:grouping="grouping = $event"
       @set-sort-key="setSortKey"
       @flip-sort-dir="flipSortDir"
       @create-list="onControlsCreateList"
+      @toggle-filter="onToggleFilter"
     />
+
+    <input
+      v-if="filterOpen"
+      ref="filterInputRef"
+      v-model="filter"
+      data-testid="task-filter"
+      type="search"
+      placeholder="Filter tasks…"
+      aria-label="Filter tasks"
+      class="rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none"
+    >
 
     <div class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1">
       <p
@@ -416,7 +435,7 @@ async function add(payload: AddPayload) {
       </EmptyState>
       <EmptyState
         v-else-if="buckets.length === 0"
-        :title="`No tasks match${tagFilter ? ` #${tagFilter}` : ''}${showFilter && filter ? ` &quot;${filter}&quot;` : ''}.`"
+        :title="`No tasks match${tagFilter ? ` #${tagFilter}` : ''}${filterOpen && filter ? ` &quot;${filter}&quot;` : ''}.`"
       />
       <template v-else>
         <div

@@ -94,31 +94,33 @@ describe("manual reordering", () => {
     const { wrapper } = mountManual(many);
     await flushPromises();
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(6);
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("t1");
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0);
   });
 
-  it("re-enables the handles when the filter input hides with stale text (review)", async () => {
-    // Archiving below the 5-task threshold hides the filter INPUT, and
-    // filteredTasks deliberately ignores the stale query then (the user has
-    // no control left to clear it) — the list is unfiltered, every neighbor
-    // visible, so reordering is safe. reorderView's hand-rolled
-    // `filter === ""` check lacked that showFilter gate and kept the grips
+  it("re-enables the handles when the filter toggle closes with stale text", async () => {
+    // Closing the filter toggle clears the query in the same step (Tasks.vue's
+    // onToggleFilter), so a Manual view narrowed by a filter never gets
+    // stranded with its grips hidden by a query the user can no longer see or
+    // clear — the toggle-based replacement for the old
+    // auto-hide-below-threshold guard. reorderView's hand-rolled
+    // `filter === ""` check lacked an equivalent guard and kept the grips
     // hidden forever; it must consult the same filterActive rule the list
     // itself uses.
     const six = Array.from({ length: 6 }, (_, i) => task(`t${i}`, (i + 1) * 1024));
-    const { wrapper } = mountManual(six, { set_task_status: () => null });
+    const { wrapper } = mountManual(six);
     await flushPromises();
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await wrapper.get('[data-testid="task-filter"]').setValue("t3");
     expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(0); // narrowed → no grips
-    // Archive the one matching row → 5 tasks remain → the input hides.
-    await wrapper.get('[data-testid="task-archive"]').trigger("click");
+    // Close the toggle — the stale "t3" must not linger and keep narrowing.
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="task-filter"]').exists()).toBe(false);
-    // The stale "t3" no longer narrows anything: all 5 rows render — and the
-    // grips must be back.
-    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(5);
-    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(5);
+    // All 6 rows render unfiltered — and the grips must be back.
+    expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(6);
+    expect(wrapper.findAll('[data-testid="task-drag"]')).toHaveLength(6);
   });
 
   it("ArrowDown on the handle moves the row one slot with a midpoint write", async () => {

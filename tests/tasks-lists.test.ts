@@ -91,6 +91,7 @@ describe("Tasks — lists & sorting", () => {
       });
       await flushPromises();
       await wrapper.get('[data-testid="task-grouping-lists"]').trigger("click");
+      await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
       await wrapper.get('[data-testid="task-filter"]').setValue("zzzznope");
       await flushPromises();
       expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
