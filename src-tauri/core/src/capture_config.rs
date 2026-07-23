@@ -415,6 +415,20 @@ mod tests {
         assert!(cfg.vaults.contains_key("vault1"));
     }
 
+    // Same regression class, for the app-global panel section: a vault-config
+    // save must never delete a non-default panel (preset size) section — the
+    // mirror of the mcp/transcription guards above.
+    #[test]
+    fn saving_a_vault_config_preserves_the_panel_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, r#"{ "panel": { "size": "large" }, "vaults": {} }"#).unwrap();
+        update_vault_config_at(&path, "vault1", VaultCaptureConfig::default()).unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(cfg.panel.size, PanelSize::Large);
+        assert!(cfg.vaults.contains_key("vault1"));
+    }
+
     #[test]
     fn update_mcp_config_at_preserves_vaults() {
         let dir = tempfile::tempdir().unwrap();

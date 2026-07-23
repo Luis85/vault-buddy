@@ -1175,9 +1175,12 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   **serialized per row** (a reactive in-flight Set disables the row's
   controls until its write resolves, so two concurrent writes for one task
   can't land out of order — the editor shares this guard with
-  toggle/archive). A title filter appears above 5 tasks, same threshold as
-  the vault list; its query applies only while the input is shown, so
-  archiving below the threshold can't strand a stale, invisible filter.
+  toggle/archive). A title filter is revealed on demand by a magnifier toggle
+  in the view toolbar (`TaskViewControls`), not auto-shown above a task count;
+  the input focuses on open and clears its query on close, so a closed toggle
+  can never strand a stale, invisible filter — which is precisely what lets
+  `filteredTasks`/`filterActive` drop the old "is the input visible" gate
+  (a hidden input can no longer hold a live query).
   `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
   camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
   task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
