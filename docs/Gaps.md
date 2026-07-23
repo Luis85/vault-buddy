@@ -850,7 +850,7 @@ dense buttons and custom-handler inputs that match no primitive; and colors
 with no token — `accent-violet-500`, `rose-*`, `amber-*`, toast variants,
 `violet-100`/`slate-200`, active-state `violet-400`) are NOT debt — see the
 "Raw utilities that deliberately REMAIN" note in AGENTS.md § Frontend state
-→ UI primitives. A justified +0.1 `averageMaintainability` baseline move
+→ UI primitives. A justified -0.1 `averageMaintainability` baseline move
 (91.8→91.7) covers the shared-primitive import overhead.
 
 Still deferred from the design-system increment (separate polish, NOT the

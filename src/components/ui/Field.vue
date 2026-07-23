@@ -3,6 +3,11 @@
 // Standard text input. Root IS the <input>, so type/placeholder/aria-label
 // and native listeners (@keydown.escape) fall through by default.
 defineProps<{ modelValue: string }>();
+// Only `update:modelValue` is declared on purpose. A consumer's @input/@change
+// stay native DOM listeners on the root <input> and merge with the handler
+// below — do NOT add them to `emits`, or Vue consumes them as component events
+// and the fall-through (e.g. RecordingSettings / DocumentImportSettings
+// dirtied/save wiring) silently breaks.
 defineEmits<{ (e: "update:modelValue", v: string): void }>();
 </script>
 
