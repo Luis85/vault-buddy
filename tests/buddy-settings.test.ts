@@ -308,7 +308,7 @@ describe("BuddySettings panel size", () => {
     const wrapper = mount(BuddySettings);
     await flush();
     expect(
-      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-pressed"),
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-checked"),
     ).toBe("true");
     // Lives in the Buddy tab (TabGroup's first/default tab) so it survives
     // the re-show below, which remounts the panel back to its first tab.
@@ -327,7 +327,7 @@ describe("BuddySettings panel size", () => {
     const wrapper = mount(BuddySettings);
     await flush();
     expect(
-      wrapper.get('[data-testid="panel-size-comfortable"]').attributes("aria-pressed"),
+      wrapper.get('[data-testid="panel-size-comfortable"]').attributes("aria-checked"),
     ).toBe("true");
     // The mount-time read failing must never itself trigger a save/re-show.
     expect(calls.some((c) => c.cmd === "set_panel_size")).toBe(false);
@@ -381,7 +381,7 @@ describe("BuddySettings panel size", () => {
     expect(idxOpen).toBeGreaterThan(idxClose);
     expect(useVaultsStore().view).toBe("settings");
     expect(
-      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-pressed"),
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-checked"),
     ).toBe("true");
     clearMocks();
   });
@@ -396,10 +396,10 @@ describe("BuddySettings panel size", () => {
     await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
     await flush();
     expect(
-      wrapper.get('[data-testid="panel-size-comfortable"]').attributes("aria-pressed"),
+      wrapper.get('[data-testid="panel-size-comfortable"]').attributes("aria-checked"),
     ).toBe("true");
     expect(
-      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-pressed"),
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-checked"),
     ).toBe("false");
     expect(wrapper.get('[data-testid="panel-size-error"]').text()).toContain(
       "disk full",
@@ -420,6 +420,90 @@ describe("BuddySettings panel size", () => {
     await flush();
     expect(calls.some((c) => c.cmd === "close_panel")).toBe(false);
     expect(calls.some((c) => c.cmd === "open_panel")).toBe(false);
+    clearMocks();
+  });
+
+  it("keeps the new size when the save succeeds but the re-show then fails", async () => {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") return { size: "comfortable" };
+      // The write lands; only the subsequent re-show faults.
+      if (cmd === "close_panel") throw new Error("window gone");
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
+    await flush();
+    // A re-show fault must NOT revert a size that is already persisted, nor
+    // surface an error — the preset applies on the next open regardless.
+    expect(calls.find((c) => c.cmd === "set_panel_size")?.args).toEqual({
+      size: "large",
+    });
+    expect(
+      wrapper.get('[data-testid="panel-size-large"]').attributes("aria-checked"),
+    ).toBe("true");
+    expect(wrapper.find('[data-testid="panel-size-error"]').exists()).toBe(false);
+    clearMocks();
+  });
+
+  it("ignores a second pick while the first save+re-show is in flight", async () => {
+    let releaseSave: () => void = () => {};
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") return { size: "comfortable" };
+      if (cmd === "set_panel_size") {
+        return new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        });
+      }
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    // First pick hangs on set_panel_size → the control is now busy/disabled.
+    await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
+    await flush();
+    expect(
+      wrapper.get('[data-testid="panel-size-large"]').attributes("disabled"),
+    ).toBeDefined();
+    // A second pick in that window is ignored — no two writes can race the
+    // ConfigWriteLock in an unguaranteed order.
+    await wrapper.get('[data-testid="panel-size-compact"]').trigger("click");
+    await flush();
+    expect(calls.filter((c) => c.cmd === "set_panel_size").length).toBe(1);
+    releaseSave();
+    await flush();
+    clearMocks();
+  });
+
+  it("ignores picks until the initial read resolves, so a late read can't clobber a selection", async () => {
+    let resolveRead: (v: { size: string }) => void = () => {};
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "get_panel_config") {
+        return new Promise((resolve) => {
+          resolveRead = resolve;
+        });
+      }
+    });
+    const wrapper = mount(BuddySettings);
+    await flush();
+    // Mount read still pending → the control is busy; a pick is ignored, so
+    // there is no optimistic selection for the late read to overwrite.
+    expect(
+      wrapper.get('[data-testid="panel-size-large"]').attributes("disabled"),
+    ).toBeDefined();
+    await wrapper.get('[data-testid="panel-size-large"]').trigger("click");
+    await flush();
+    expect(calls.some((c) => c.cmd === "set_panel_size")).toBe(false);
+    // The read lands last and wins.
+    resolveRead({ size: "compact" });
+    await flush();
+    expect(
+      wrapper.get('[data-testid="panel-size-compact"]').attributes("aria-checked"),
+    ).toBe("true");
     clearMocks();
   });
 });

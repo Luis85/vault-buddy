@@ -79,6 +79,12 @@ async function toggleAutostart(event: Event) {
 type PanelSize = "compact" | "comfortable" | "large";
 const panelSize = ref<PanelSize>("comfortable");
 const panelSizeError = ref<string | null>(null);
+// True while the control must not accept a pick: the mount-time read is in
+// flight (a late read would otherwise clobber a selection the user made first),
+// OR a save+re-show round-trip is running (a second pick would race two writes
+// whose ConfigWriteLock acquisition order isn't guaranteed). One flag, the
+// autostartBusy pattern — starts true so the initial read is covered.
+const panelSizeBusy = ref(true);
 
 onMounted(async () => {
   try {
@@ -86,6 +92,8 @@ onMounted(async () => {
     panelSize.value = cfg.size;
   } catch (e) {
     logWarning(`get_panel_config failed: ${String(e)}`);
+  } finally {
+    panelSizeBusy.value = false;
   }
 });
 
@@ -93,24 +101,40 @@ onMounted(async () => {
 // onMounted load above, which assigns `panelSize.value` directly) — so a
 // mount-time read can never itself trigger a save/re-show.
 async function pickPanelSize(size: PanelSize) {
+  // Ignore a no-op re-pick (the persist below is a disk write plus a visible
+  // close/reopen) and any pick while a read or save is in flight (the busy
+  // guard, belt-and-suspenders with the control's own :disabled).
+  if (panelSizeBusy.value || size === panelSize.value) return;
   const previous = panelSize.value;
   panelSize.value = size;
   panelSizeError.value = null;
+  panelSizeBusy.value = true;
   try {
     await invoke("set_panel_size", { size });
-    // set_panel_size only writes config.json — position_panel resizes the
-    // panel from that config only while it's hidden (the exact stale-frame
-    // flash the window-system invariants exist to avoid), so a close+open
-    // re-show is what actually applies the new preset. Land the reopen back
-    // on Settings; TabGroup always remounts to its first tab (Buddy), which
-    // is why this control lives there instead of System/Integrations.
-    vaults.requestView("settings");
-    await invoke("close_panel");
-    await invoke("open_panel");
   } catch (e) {
+    // Only a genuine persist failure reverts + reports — nothing was written.
     panelSize.value = previous;
     panelSizeError.value = String(e);
     logWarning(`set_panel_size failed: ${String(e)}`);
+    panelSizeBusy.value = false;
+    return;
+  }
+  // Persisted. set_panel_size only writes config.json — position_panel resizes
+  // the panel from that config only while it's hidden (the exact stale-frame
+  // flash the window-system invariants exist to avoid), so a close+open re-show
+  // is what actually applies the new preset. Land the reopen back on Settings
+  // (view stays "settings" throughout, so this path never rebuilds TabGroup;
+  // the buddy-tab placement matters for a genuine list→settings navigation).
+  // A re-show fault must NOT revert the already-saved size (it applies on the
+  // next open regardless), so swallow it — the updates.ts close_panel precedent.
+  vaults.requestView("settings");
+  try {
+    await invoke("close_panel");
+    await invoke("open_panel");
+  } catch (e) {
+    logWarning(`panel re-show after size change failed: ${String(e)}`);
+  } finally {
+    panelSizeBusy.value = false;
   }
 }
 </script>
@@ -256,6 +280,7 @@ async function pickPanelSize(size: PanelSize) {
           <div class="rounded-xl border border-white/10 bg-white/5 p-2">
             <PanelSizeSetting
               :model-value="panelSize"
+              :disabled="panelSizeBusy"
               @update:model-value="pickPanelSize"
             />
             <p class="mt-1.5 text-xs text-fg-subtle">
