@@ -561,6 +561,10 @@ pub fn run() {
                 }
             }
             tray::create_tray(app.handle())?;
+            // Prime the panel-size cache from config.json once, off the
+            // main-thread show path, so the first panel open sizes to the saved
+            // preset without a disk read (see commands::PANEL_SIZE).
+            commands::prime_panel_size_cache();
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
             document_commands::run_import_recovery(app.handle());
