@@ -161,12 +161,18 @@ plan date** = `scheduled ?? due`":
 
 ### 3. Cross-vault Plan-my-day (each vault = a project)
 
-- The **aggregate "All tasks" view is the hero**: it defaults to the **Plan**
-  grouping, so opening it lands you on Overdue / Today / Upcoming / Anytime
-  spanning every vault — "plan my day across projects" in one screen, no
-  Obsidian. (Per-vault mode offers the same Plan grouping; only the default
-  landing grouping differs — aggregate → Plan, per-vault keeps its remembered
-  choice.)
+- The **aggregate "All tasks" view is the hero**: its **default** grouping
+  becomes **Plan**, so a first-time aggregate visit lands on Overdue / Today /
+  Upcoming / Anytime spanning every vault — "plan my day across projects" in one
+  screen, no Obsidian. A user who has ALREADY chosen an aggregate grouping keeps
+  it: grouping is persisted per view (`vault-buddy:task-grouping`, key `"all"`),
+  and the default applies **only when nothing is persisted for that key** — we
+  never override a deliberate choice, which is exactly what keeps this
+  migration-free (no stored value is rewritten). Implementation: `loadGrouping`
+  gains an optional default argument, so the aggregate call passes `"dates"`
+  while per-vault keeps `"lists"`; a stored value still wins whenever one
+  exists. (Both modes still offer all three groupings; only the *unset* default
+  differs.)
 - Each aggregate row keeps its **vault-attribution chip** (already shipped) — the
   vault *is* the project, so oversight is "which project is this task in" at a
   glance. The existing per-vault filter (and future saved filters) narrow to one
@@ -186,12 +192,16 @@ plan date** = `scheduled ?? due`":
   without a full editor open.
 - **Reschedule all overdue → Today:** a section action on the Overdue header
   that stamps `scheduled = today` on every task in the bucket — the single
-  biggest anxiety-reliever the research found (Todoist's overdue-rebalance).
-  Implemented as a serialized batch of `update_task` writes with **batch
-  revert on failure** (the exact pattern `useTaskReorderCommit` already uses for
-  materializing ranks), optimistic in the UI, best-effort per task with a
-  summary toast naming any that failed. Per-vault it targets that vault; in the
-  aggregate it spans vaults, each write against its row's vault.
+  biggest anxiety-reliever the research found (Todoist's overdue-rebalance). It
+  is **genuinely best-effort per task**, following the aggregate load's posture
+  — explicitly NOT `useTaskReorderCommit.materializeRanks`' fail-fast batch
+  revert (that loop stops at the first rejection and reverts the unwritten
+  tail): every task's `update_task` write is attempted independently (the loop
+  does not stop on a rejection — each is caught), each success re-buckets to
+  Today, each failure reverts only its own optimistic move, and one summary
+  toast names the tasks that failed. Serialized through the shared per-row busy
+  guard like the other row writes. Per-vault it targets that vault; in the
+  aggregate it spans vaults, each write against its row's own vault.
 - **Schedule on create:** the composer's options row gains a "When / Do date"
   control (Today / Tomorrow / pick / none) beside the existing
   due/priority/tags/list, threaded into `add_task`.
@@ -263,9 +273,12 @@ is untouched.
 - **Frontend (Vitest):** `plannerBuckets` (effective `scheduled ?? due`;
   overdue/today/upcoming/anytime/done placement; a scheduled-future +
   overdue-deadline task lands in Upcoming with the red chip); quick-schedule
-  writes `scheduled` and re-buckets; reschedule-overdue batch stamps today +
-  reverts on a failed write; composer/editor send `scheduled`/`clearScheduled`;
-  the aggregate defaults to Plan grouping. **Behavior is preserved for
+  writes `scheduled` and re-buckets; reschedule-overdue is best-effort — it
+  stamps today on the whole bucket, and when one write fails ONLY that task
+  reverts while the rest still land, with the failure named in a toast;
+  composer/editor send `scheduled`/`clearScheduled`; the aggregate's default
+  grouping (unset `"all"` key) is Plan while an already-persisted aggregate
+  choice is respected. **Behavior is preserved for
   scheduled-less tasks** — one with no `scheduled` lands in the same bucket and
   renders the same as today (the `scheduled ?? due` fallback). The only
   deliberate assertion changes are the display-label renames (No date → Anytime,
@@ -297,7 +310,9 @@ only visible differences are the friendlier labels (Anytime, Plan) and the new,
 dormant affordances (schedule menu, reschedule-overdue, do-date chip) that have
 nothing to act on until the user starts scheduling. Existing per-vault and
 aggregate behavior is otherwise preserved; the one default change is the
-aggregate view opening on the (do-date-aware) Plan grouping.
+aggregate view's DEFAULT grouping becoming the (do-date-aware) Plan — applied
+only when no aggregate grouping is persisted, so a user who already picked one
+keeps it (no stored value is rewritten).
 
 ## Suggested phasing for the plan
 
