@@ -103,12 +103,21 @@ export function useTaskActions(opts: {
   // two tag sections opens its editor on only the clicked row. The draft
   // field state and its IME-guarded key handlers live in TaskEditor.
   const editingKey = ref<string | null>(null);
+  // The absolute path of the row currently open in the editor, if any — kept
+  // alongside editingKey (not derived by splitting it) because both bucketKey
+  // and an absolute path can themselves contain `:`. Exposed so
+  // rescheduleOverdue (GAP-73c) can hold this row out of a batch reschedule:
+  // it isn't in `busy` (drafting, not yet saving), so without this a batch
+  // could re-bucket the row out from under an in-progress, unsaved edit.
+  const editingPath = ref<string | null>(null);
   const rowKey = (bucketKey: string, task: AggTask) => `${bucketKey}:${task.path}`;
   const startEdit = (task: AggTask, bucketKey: string) => {
     editingKey.value = rowKey(bucketKey, task);
+    editingPath.value = task.path;
   };
   const cancelEdit = () => {
     editingKey.value = null;
+    editingPath.value = null;
   };
 
   // due and scheduled apply the identical set/clear shape — single-sourced
@@ -188,6 +197,7 @@ export function useTaskActions(opts: {
 
   async function onEditorSave(task: AggTask, editorPatch: TaskEditorPatch) {
     editingKey.value = null;
+    editingPath.value = null;
     // The list move is not a frontmatter write — strip it off the field patch
     // and run it as its own step AFTER the fields land (the fields write
     // targets the OLD path; the move changes it).
@@ -212,6 +222,7 @@ export function useTaskActions(opts: {
     archive,
     openInObsidian,
     editingKey,
+    editingPath,
     rowKey,
     startEdit,
     cancelEdit,

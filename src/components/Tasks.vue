@@ -104,6 +104,7 @@ const {
   archive,
   openInObsidian,
   editingKey,
+  editingPath,
   rowKey,
   startEdit,
   cancelEdit,
@@ -477,7 +478,7 @@ async function add(payload: AddPayload) {
               size="sm"
               data-testid="task-reschedule-overdue"
               :disabled="reschedulingOverdue"
-              @click="rescheduleOverdue(bucket.tasks)"
+              @click="rescheduleOverdue(bucket.tasks, editingPath)"
             >
               Reschedule → Today
             </AppButton>

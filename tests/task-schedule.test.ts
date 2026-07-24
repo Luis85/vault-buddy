@@ -66,6 +66,25 @@ describe("rescheduleOverdue", () => {
     expect(busyRow.scheduled).toBe("2026-07-02"); // …left untouched (still overdue) and named in the toast
   });
 
+  // GAP-73c: a row merely OPEN in the inline editor isn't in `busy` (drafting,
+  // not yet saving), so without this exclusion the batch would reschedule it
+  // out from under the user, re-bucketing the row to Today and unmounting the
+  // editor — silently discarding whatever the user had typed. Mirrors the
+  // busy-row hold-and-name test above exactly, but via the editingPath arg.
+  it("holds back the row open in the inline editor and never silently drops it (GAP-73c)", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push((args as { path: string }).path); return null; } });
+    const free = agg({ path: "free", title: "Free", scheduled: "2026-07-01" });
+    const editingRow = agg({ path: "editing", title: "Editing", scheduled: "2026-07-02" });
+    const { rescheduleOverdue } = useTaskSchedule({ tasks: ref([free, editingRow]), sortInPlace: () => {}, busy: ref(new Set()) });
+    await rescheduleOverdue([free, editingRow], "editing");
+    expect(calls).toEqual(["free"]); // the editing row is NOT written…
+    expect(free.scheduled).toBe(localToday());
+    expect(editingRow.scheduled).toBe("2026-07-02"); // …left untouched (still overdue)
+    const notifications = useNotificationsStore();
+    expect(notifications.items.some((n) => n.kind === "error" && n.message.includes("Editing"))).toBe(true); // …and named in the toast
+  });
+
   // Fold-in #3 (Codex P2, plan L1124): a batch-level in-flight guard. Without
   // it, re-clicking "Reschedule" before the first batch's writes land makes
   // the SECOND call see every first-batch target already in the per-row

@@ -734,19 +734,25 @@ review, tracked here rather than reactively patched onto the completed increment
   then finds `root` null → focus drops to `<body>` despite the restore logic. A
   real fix restores focus from the PARENT (`Tasks.vue`) onto the newly-mounted
   row's trigger, not from the unmounting child.
-- **(c) Reschedule-overdue discards an open editor's unsaved draft.**
-  `rescheduleOverdue` holds out rows whose write is in `busy`, but a row merely
-  OPEN in the inline editor (drafting, not yet saving) is NOT in `busy`, so the
-  batch reschedules it → it re-buckets to Today → the editor row unmounts →
-  unsaved draft fields are silently lost. The sharpest of the three (silent loss
-  of typed input, however narrow the trigger: overdue AND open-in-editor AND
-  reschedule-all clicked). Bounded fix: thread the currently-editing path into
-  `rescheduleOverdue` and exclude it (naming it in the summary toast, like the
-  busy-row skip), or block the batch while any row is being edited.
+- **(c) Reschedule-overdue discards an open editor's unsaved draft · ADDRESSED
+  by the polish pass.** `rescheduleOverdue` held out rows whose write was in
+  `busy`, but a row merely OPEN in the inline editor (drafting, not yet saving)
+  was NOT in `busy`, so the batch would reschedule it → it re-buckets to Today →
+  the editor row unmounts → unsaved draft fields silently lost. The sharpest of
+  the three (silent loss of typed input, however narrow the trigger: overdue AND
+  open-in-editor AND reschedule-all clicked). Fixed via the scoped bounded fix:
+  `useTaskActions` now tracks `editingPath` (the row's absolute path — kept
+  alongside `editingKey`, not derived by splitting it, since both bucketKey and
+  an absolute path can themselves contain `:`; set in `startEdit`, cleared in
+  `cancelEdit` and `onEditorSave`), and `Tasks.vue` threads it into
+  `rescheduleOverdue(bucket.tasks, editingPath)`. The composable excludes any
+  task whose `path === editingPath` from `targets` exactly like a busy row and
+  names it in the summary toast ("still overdue") — regression-tested in
+  `tests/task-schedule.test.ts`.
 
-None blocks the shipped do-date foundation (whole-branch review: merge-ready);
-(a)/(b) are architectural (portal / cross-component focus) and (c) is a bounded
-exclusion — the owner scopes whether any lands now or as a follow-up. Codex, PR #75.
+(c) landed in the do-date polish pass; (a)/(b) remain open and are both
+architectural (portal / cross-component focus) — none blocked the shipped
+do-date foundation (whole-branch review: merge-ready). Codex, PR #75.
 
 ### GAP-74 · Low · Fallow quality-baseline loosened for the do-date increment (documented)
 `scripts/quality-baseline.json`. The do-date/planner increment (PR #75) moved two

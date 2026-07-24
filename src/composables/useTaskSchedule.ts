@@ -62,13 +62,19 @@ export function useTaskSchedule(opts: {
   // is NOT dropped silently: it's named in the summary alongside any failures,
   // so the "reschedule all" action never reports success while quietly leaving a
   // task overdue (Codex, PR #75). The user can retry once its save lands.
-  async function rescheduleOverdue(overdue: AggTask[]): Promise<void> {
+  // `editingPath` (GAP-73c) is the row currently open in the inline editor, if
+  // any — it isn't in `busy` (drafting, not yet saving), so without this
+  // exclusion the batch would reschedule it out from under the user: the row
+  // re-buckets to Today and the editor unmounts, silently discarding whatever
+  // was typed. Held out and named exactly like a busy row.
+  async function rescheduleOverdue(overdue: AggTask[], editingPath?: string | null): Promise<void> {
     if (reschedulingOverdue.value) return; // a batch is already running — no-op, no toast
     reschedulingOverdue.value = true;
     try {
       const today = localToday();
-      const skipped = overdue.filter((t) => busy.value.has(t.path)).map((t) => t.title);
-      const targets = overdue.filter((t) => !busy.value.has(t.path));
+      const held = (t: AggTask) => busy.value.has(t.path) || t.path === editingPath;
+      const skipped = overdue.filter(held).map((t) => t.title);
+      const targets = overdue.filter((t) => !held(t));
       if (targets.length > 0) {
         const prev = new Map(targets.map((t) => [t.path, t.scheduled] as const));
         for (const t of targets) {
