@@ -748,6 +748,30 @@ None blocks the shipped do-date foundation (whole-branch review: merge-ready);
 (a)/(b) are architectural (portal / cross-component focus) and (c) is a bounded
 exclusion — the owner scopes whether any lands now or as a follow-up. Codex, PR #75.
 
+### GAP-74 · Low · Fallow quality-baseline loosened for the do-date increment (documented)
+`scripts/quality-baseline.json`. The do-date/planner increment (PR #75) moved two
+shrink-only fallow counters, each a reviewed, deliberate trade-off. Codex flagged
+(P1) that the reasons lived only in commit messages, not discoverably in-repo —
+this entry (linked from the baseline file's `description`) is the durable record:
+- **averageMaintainability 91.8 → 91.7** (commit 371a60f): the additive do-date
+  chip single-sourced `shortDate`/`relativeDateLabel` into `taskFields.ts`
+  (required to keep the duplicate-code/clone gate green — two `MONTHS` arrays
+  would trip it) and added one conditionally-rendered element to `TaskRow.vue`'s
+  template. The pre-change tree measured exactly 91.8 (zero slack), so any change
+  touching those files would trip the floor regardless of implementation.
+- **complexFunctions 13 → 15** (commit 64e876a): `TaskEditor.vue::buildPatch`
+  (CRAP 43.1) and `useTaskActions.ts::applyFieldPatch` (CRAP 31.6) crossed the
+  CRAP-30 gate when the do-date's set/clear branch was mirrored beside `due`'s —
+  "wide, not deep" complexity (parallel field blocks, no added nesting).
+  `criticalComplexity` stayed 4; every other fallow counter is unchanged.
+- **Follow-up to retire the complexFunctions bump:** extract a shared date-field
+  helper (e.g. `applyDateField(patch, draft, original, setKey, clearKey)`) used by
+  both `buildPatch` and `applyFieldPatch`, collapsing the duplicated
+  `due`/`scheduled` blocks so both drop back under the CRAP gate →
+  complexFunctions back to 13. Deferred (it touches the tested optimistic-edit
+  core); worth doing when a 3rd such field lands or as standalone cleanup. Codex,
+  PR #75.
+
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
 `closeMenu()`, matching Search's handler; a regression test opens the popup,
