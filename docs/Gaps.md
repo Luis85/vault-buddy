@@ -758,19 +758,19 @@ this entry (linked from the baseline file's `description`) is the durable record
   (required to keep the duplicate-code/clone gate green — two `MONTHS` arrays
   would trip it) and added one conditionally-rendered element to `TaskRow.vue`'s
   template. The pre-change tree measured exactly 91.8 (zero slack), so any change
-  touching those files would trip the floor regardless of implementation.
-- **complexFunctions 13 → 15** (commit 64e876a): `TaskEditor.vue::buildPatch`
-  (CRAP 43.1) and `useTaskActions.ts::applyFieldPatch` (CRAP 31.6) crossed the
-  CRAP-30 gate when the do-date's set/clear branch was mirrored beside `due`'s —
-  "wide, not deep" complexity (parallel field blocks, no added nesting).
-  `criticalComplexity` stayed 4; every other fallow counter is unchanged.
-- **Follow-up to retire the complexFunctions bump:** extract a shared date-field
-  helper (e.g. `applyDateField(patch, draft, original, setKey, clearKey)`) used by
-  both `buildPatch` and `applyFieldPatch`, collapsing the duplicated
-  `due`/`scheduled` blocks so both drop back under the CRAP gate →
-  complexFunctions back to 13. Deferred (it touches the tested optimistic-edit
-  core); worth doing when a 3rd such field lands or as standalone cleanup. Codex,
-  PR #75.
+  touching those files would trip the floor regardless of implementation. Still
+  the baseline today — this half of the loosening stands.
+- **complexFunctions 13 → 15 (commit 64e876a) · RETIRED by the polish pass.**
+  `TaskEditor.vue::buildPatch` (CRAP 43.1) and `useTaskActions.ts::applyFieldPatch`
+  (CRAP 31.6) had crossed the CRAP-30 gate when the do-date's set/clear branch was
+  mirrored beside `due`'s — "wide, not deep" complexity (parallel field blocks, no
+  added nesting); `criticalComplexity` stayed 4 and every other fallow counter was
+  unchanged. The deferred follow-up landed: both functions now call a shared pure
+  helper (`diffDateField` in `TaskEditor.vue`, `applyDateField` in
+  `useTaskActions.ts`) that collapses the duplicated `due`/`scheduled` blocks into
+  one call per field, dropping both back under the CRAP gate.
+  `complexFunctions` is back to 13 in the committed baseline; behavior is
+  byte-identical (task-editor.test.ts + tasks.test.ts unchanged and green).
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before

@@ -111,15 +111,27 @@ export function useTaskActions(opts: {
     editingKey.value = null;
   };
 
+  // due and scheduled apply the identical set/clear shape — single-sourced
+  // here instead of mirrored per field, which had tripped the
+  // complexFunctions CRAP gate (GAP-74).
+  function applyDateField(
+    task: AggTask,
+    patch: TaskPatch,
+    field: "due" | "scheduled",
+    setKey: "due" | "scheduled",
+    clearKey: "clearDue" | "clearScheduled",
+  ) {
+    if (patch[clearKey]) task[field] = null;
+    else if (patch[setKey]) task[field] = patch[setKey]!;
+  }
+
   // Optimistic field save: apply locally (re-sort/re-bucket live), revert +
   // toast on failure. Returns whether the write landed.
   async function applyFieldPatch(task: AggTask, patch: TaskPatch): Promise<boolean> {
     const before = { title: task.title, due: task.due, scheduled: task.scheduled, priority: task.priority, tags: task.tags };
     if (patch.title) task.title = patch.title;
-    if (patch.clearDue) task.due = null;
-    else if (patch.due) task.due = patch.due;
-    if (patch.clearScheduled) task.scheduled = null;
-    else if (patch.scheduled) task.scheduled = patch.scheduled;
+    applyDateField(task, patch, "due", "due", "clearDue");
+    applyDateField(task, patch, "scheduled", "scheduled", "clearScheduled");
     if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
     if (patch.tags !== undefined) task.tags = patch.tags;
     sortInPlace();

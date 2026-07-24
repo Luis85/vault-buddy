@@ -34,18 +34,27 @@ const editList = ref(props.task.list);
 // tags change (Codex, PR #46). Mirrors the add-task composer's disabled Add.
 const titleValid = computed(() => editTitle.value.trim().length > 0);
 
+// due and scheduled use the identical changed-fields shape (draft vs.
+// original, blank means clear) — single-sourced here instead of mirrored
+// per field, which had tripped the complexFunctions CRAP gate (GAP-74).
+function diffDateField(
+  patch: TaskEditorPatch,
+  draft: string,
+  original: string | null,
+  setKey: "due" | "scheduled",
+  clearKey: "clearDue" | "clearScheduled",
+) {
+  if (draft === (original ?? "")) return;
+  if (draft === "") patch[clearKey] = true;
+  else patch[setKey] = draft;
+}
+
 function buildPatch(): TaskEditorPatch {
   const patch: TaskEditorPatch = {};
   const title = editTitle.value.trim();
   if (title && title !== props.task.title) patch.title = title;
-  if (editDue.value !== (dueOf(props.task) ?? "")) {
-    if (editDue.value === "") patch.clearDue = true;
-    else patch.due = editDue.value;
-  }
-  if (editScheduled.value !== (scheduledOf(props.task) ?? "")) {
-    if (editScheduled.value === "") patch.clearScheduled = true;
-    else patch.scheduled = editScheduled.value;
-  }
+  diffDateField(patch, editDue.value, dueOf(props.task), "due", "clearDue");
+  diffDateField(patch, editScheduled.value, scheduledOf(props.task), "scheduled", "clearScheduled");
   if (editPriority.value !== normalizedPriority(props.task)) patch.priority = editPriority.value;
   const parsedTags = parseTagsInput(editTags.value);
   if (parsedTags.join(" ") !== props.task.tags.join(" ")) patch.tags = parsedTags;
