@@ -1291,9 +1291,10 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   the parsed array differs from the task's current tags, and an emptied input
   sends `tags: []` (clear) — same changed-fields/optimistic-revert discipline
   as the other fields. A `Lists | Plan | Tags` segmented toggle (the middle
-  tab's LABEL is "Plan"; its grouping KEY stays `dates`, no migration;
-  component-local state, resets to `lists` — the panel's default grouping —
-  on remount; see below) switches the SAME filtered, globally-sorted list
+  tab's LABEL is "Plan"; its grouping KEY stays `dates`, no migration; the
+  choice PERSISTS per view (`vault-buddy:task-grouping`) — a per-vault view
+  opens on `lists` and the aggregate view on Plan when nothing is stored; see
+  the grouping-persistence note below) switches the SAME filtered, globally-sorted list
   from planner buckets to tag sections when Tags is picked: one alphabetical
   section per distinct tag with the task repeated under EACH of its tags,
   then "No tags" (open, untagged), then "Done" (all done tasks) — headers

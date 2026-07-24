@@ -65,7 +65,7 @@ The task-view grouping — the middle tab of the `Lists | Plan | Tags` toggle �
 _Avoid_: Dates (the old label), Calendar, Schedule view
 
 **Focus**:
-The set of Tasks scheduled for today (Do Date = today) — a forward-looking term for what a future pinned Focus widget on the desktop will surface. Narrower than the Plan grouping's **Today** bucket, which also catches a Task whose only date is an already-past deadline; Focus is scoped to the Do Date specifically. Not yet its own surface — the term exists now so the eventual widget has a name to build toward.
+The set of Tasks scheduled for today (Do Date = today) — a forward-looking term for what a future pinned Focus widget on the desktop will surface. Narrower than the Plan grouping's **Today** bucket, which also catches a due-only Task whose deadline is today (Do Date unset) — a Task with an already-past deadline falls into Overdue, not Today. Focus is scoped to the Do Date specifically. Not yet its own surface — the term exists now so the eventual widget has a name to build toward.
 _Avoid_: Today (the broader Plan bucket), Dashboard, Agenda
 
 **Project**:
