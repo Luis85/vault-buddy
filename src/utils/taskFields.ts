@@ -28,6 +28,21 @@ export function localToday(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// N days from local today, as YYYY-MM-DD (local calendar — never UTC slicing,
+// matching localToday's rule so a near-midnight schedule doesn't slip a day).
+export function localDatePlus(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// The coming Saturday (today if today is Saturday), as YYYY-MM-DD.
+export function comingSaturday(): string {
+  const dow = new Date().getDay(); // 0=Sun … 6=Sat
+  return localDatePlus((6 - dow + 7) % 7);
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 

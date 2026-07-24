@@ -7,6 +7,7 @@ import { useTaskDisplay } from "../composables/useTaskDisplay";
 import { useTaskLists } from "../composables/useTaskLists";
 import { useTaskReorder } from "../composables/useTaskReorder";
 import { useTaskReorderCommit } from "../composables/useTaskReorderCommit";
+import { useTaskSchedule } from "../composables/useTaskSchedule";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
@@ -18,6 +19,7 @@ import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
 import TaskSectionMenu from "./TaskSectionMenu.vue";
 import TaskViewControls from "./TaskViewControls.vue";
+import AppButton from "./ui/AppButton.vue";
 import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
@@ -107,6 +109,11 @@ const {
   cancelEdit,
   onEditorSave,
 } = useTaskActions({ tasks, sortInPlace });
+// The plan-my-day verbs: the row popover's quick-schedule and the Overdue
+// header's reschedule-all-to-today. Shares the SAME busy guard as the row
+// actions above, so a schedule write can't race a toggle/edit on one task.
+const { quickSchedule, rescheduleOverdue, reschedulingOverdue } =
+  useTaskSchedule({ tasks, sortInPlace, busy });
 
 // New list flow: create + cache, then re-select here. `target` (the vault
 // createList used) blocks a mid-create composer vault switch from adopting the
@@ -456,6 +463,22 @@ async function add(payload: AddPayload) {
             >
               {{ bucket.label }}
             </h3>
+            <!-- Reschedule-all only when bucket.tasks is the COMPLETE overdue
+                 set — a title/tag filter narrows it to matching rows, and
+                 "reschedule all" must never silently leave the rest overdue
+                 (Codex P2). Same "no active filter" gate manual reorder
+                 already uses (a filtered subset can't rank/act against its
+                 invisible neighbors). -->
+            <AppButton
+              v-if="bucket.key === 'overdue' && !filterActive"
+              variant="secondary"
+              size="sm"
+              data-testid="task-reschedule-overdue"
+              :disabled="reschedulingOverdue"
+              @click="rescheduleOverdue(bucket.tasks)"
+            >
+              Reschedule → Today
+            </AppButton>
             <TaskSectionMenu
               v-if="bucket.list && grouping === 'lists' && !isAggregate"
               :list="bucket.list!"
@@ -489,6 +512,7 @@ async function add(payload: AddPayload) {
               @edit="startEdit(task, bucket.key)"
               @open="openInObsidian(task)"
               @tag-click="tagFilter = $event"
+              @schedule="quickSchedule(task, $event)"
               @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
               @reorder-keydown="onHandleKeydown($event, bucket.key, i)"
             >

@@ -3,6 +3,7 @@ import type { AggTask } from "../types";
 import { dueOf, localToday, relativeDateLabel, scheduledOf, shortDate } from "../utils/taskFields";
 import AppIcon from "./AppIcon.vue";
 import TaskDragHandle from "./TaskDragHandle.vue";
+import TaskScheduleMenu from "./TaskScheduleMenu.vue";
 import Avatar from "./ui/Avatar.vue";
 import Chip from "./ui/Chip.vue";
 import IconButton from "./ui/IconButton.vue";
@@ -35,6 +36,7 @@ defineEmits<{
   (e: "edit"): void;
   (e: "open"): void;
   (e: "tagClick", tag: string): void;
+  (e: "schedule", value: string | null): void;
   (e: "reorderPointerDown", ev: PointerEvent): void;
   (e: "reorderKeydown", ev: KeyboardEvent): void;
 }>();
@@ -141,6 +143,12 @@ function scheduledChip(t: AggTask): string | null {
           :class="isOverdue(task) ? 'font-semibold text-danger-fg' : 'text-fg-muted'"
         >{{ shortDate(dueOf(task)!) }}</span>
       </div>
+      <TaskScheduleMenu
+        :title="task.title"
+        :scheduled="task.scheduled"
+        :busy="busy"
+        @schedule="$emit('schedule', $event)"
+      />
       <IconButton
         size="sm"
         data-testid="task-edit"

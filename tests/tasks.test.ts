@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import type { TaskItem } from "../src/types";
+import { localToday } from "../src/utils/taskFields";
 import { aggTask, mountAggregate, mountAggregateAttached, mountView, sample } from "./helpers/taskMount";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
@@ -25,6 +26,13 @@ const many = (n: number): TaskItem[] =>
     order: null,
     id: null,
   }));
+
+// Two due-in-the-past tasks land in Overdue given a real localToday() — no
+// fake timers needed as long as the sandbox clock is after 2026-01-02.
+const overdueFixture = (): TaskItem[] => [
+  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+];
 
 describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -365,6 +373,99 @@ describe("Tasks", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("quick-schedules a task from its row popover, writing the do-date optimistically", async () => {
+    const { wrapper, calls } = mountView({ update_task: () => null });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-schedule-B open"]').trigger("click");
+    await wrapper.get('[data-testid="task-schedule-today"]').trigger("click");
+    await flushPromises();
+    const call = calls.find((c) => c.cmd === "update_task");
+    expect(call?.args).toMatchObject({
+      id: "v1",
+      path: "C:/v/Tasks/2026-07-08-b.md",
+      patch: { scheduled: localToday() },
+    });
+    expect(wrapper.get('[data-testid="task-scheduled"]').text()).toBe("Today"); // optimistic, re-rendered
+  });
+
+  it("reschedules all overdue to today from the Overdue header", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => overdueFixture(),
+      update_task: () => null,
+    });
+    await flushPromises();
+    // Lists is the default grouping — switch to Plan (grouping key "dates")
+    // to reach the Overdue bucket.
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    await wrapper.get('[data-testid="task-reschedule-overdue"]').trigger("click");
+    await flushPromises();
+    const paths = calls
+      .filter((c) => c.cmd === "update_task")
+      .map((c) => (c.args as { path: string }).path)
+      .sort();
+    expect(paths).toEqual(["C:/v/Tasks/a.md", "C:/v/Tasks/b.md"]);
+  });
+
+  it("hides the Overdue reschedule button while a filter is active (Codex, must act on the unfiltered set)", async () => {
+    // bucket.tasks holds only matching rows once a title/tag filter narrows
+    // the list — an advertised "reschedule all" acting on that subset would
+    // silently leave the rest overdue. The button must not even be
+    // clickable in that state (the same "no active filter" gate manual
+    // reorder already uses).
+    const { wrapper } = mountView({ list_tasks: () => overdueFixture() });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    expect(wrapper.find('[data-testid="task-reschedule-overdue"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
+    await wrapper.get('[data-testid="task-filter"]').setValue("A");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-reschedule-overdue"]').exists()).toBe(false);
+  });
+
+  it("disables the Overdue reschedule button while its batch write is in flight (Codex, batch re-entrancy)", async () => {
+    // A 2-task all-overdue fixture isn't enough to observe this: the batch's
+    // optimistic flip moves BOTH straight to today in one synchronous step,
+    // so the Overdue bucket — and its button — unmount instantly rather than
+    // staying present-but-disabled. Add a THIRD overdue task and put it
+    // genuinely mid-write via its own inline-editor save first (a real
+    // in-flight row action, not a poke at internals) — rescheduleOverdue
+    // holds a busy row out of its optimistic flip, so it stays overdue and
+    // keeps the bucket (and the button) mounted for the whole batch.
+    let updateCalls = 0;
+    let resolveReschedule: (() => void) | undefined;
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        ...overdueFixture(),
+        { path: "C:/v/Tasks/c.md", title: "C", status: "new", created: "2026-01-01", done: false, due: "2026-01-03", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+      update_task: () => {
+        updateCalls++;
+        if (updateCalls === 1) return new Promise<null>(() => {}); // C's own edit save — never resolves
+        if (updateCalls === 2) {
+          return new Promise<null>((r) => {
+            resolveReschedule = () => r(null);
+          });
+        }
+        return null;
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    const rowC = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("C"))!;
+    await rowC.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises(); // C is now busy; its save never resolves in this test
+
+    const button = () => wrapper.get('[data-testid="task-reschedule-overdue"]');
+    await button().trigger("click"); // reschedules A and B; C is held back, still overdue
+    await flushPromises();
+    expect((button().element as HTMLButtonElement).disabled).toBe(true);
+    resolveReschedule?.();
+    await flushPromises();
+    expect((button().element as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("adds a task with due and priority from the options row", async () => {
