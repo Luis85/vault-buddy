@@ -19,4 +19,16 @@ describe("TaskRow open emit", () => {
     const ev = wrapper.emitted("open")?.[0]?.[0];
     expect(ev).toBeInstanceOf(MouseEvent);
   });
+
+  it("labels the title button for its default action, not the Obsidian modifier", async () => {
+    // A plain click now opens Task Detail, so the accessible name must not claim
+    // "in Obsidian" (that's the Ctrl/⌘ shortcut, kept in the tooltip) — Codex P2, PR #76.
+    const wrapper = mount(TaskRow, {
+      props: { task: task(), busy: false, isAggregate: false, editing: false },
+    });
+    const btn = wrapper.find('[data-testid="task-open"]');
+    expect(btn.attributes("aria-label")).toBe("Open T");
+    expect(btn.attributes("aria-label")).not.toContain("Obsidian");
+    expect(btn.attributes("title")).toContain("Obsidian"); // the modifier hint stays in the tooltip
+  });
 });
