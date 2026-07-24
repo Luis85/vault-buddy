@@ -16,6 +16,10 @@ pub struct TaskItem {
     pub created: String,
     pub done: bool,
     pub due: Option<String>,
+    /// The do/plan date (`YYYY-MM-DD`) — when the user plans to WORK the task,
+    /// distinct from `due` (the deadline). Read then validator-filtered, so it is
+    /// `None` when absent OR unparseable (an honest DTO/MCP boundary).
+    pub scheduled: Option<String>,
     pub priority: Option<String>,
     pub tags: Vec<String>,
     /// The task's List = its parent folder relative to the tasks root, always
@@ -123,6 +127,10 @@ fn collect_task_file(
     }
     let created = scalar_field(&content, "created").unwrap_or_default();
     let due = scalar_field(&content, "due");
+    // Filter through the date validator so a malformed value (e.g. "next week")
+    // becomes None at the DTO/MCP boundary, honoring the "invalid → None"
+    // contract in CORE — not only in the frontend's scheduledOf (Codex, PR #75).
+    let scheduled = scalar_field(&content, "scheduled").filter(|s| is_valid_due(s));
     let priority = scalar_field(&content, "priority");
     let tags = note_tags(&content);
     let done = status == "done";
@@ -156,6 +164,7 @@ fn collect_task_file(
         created,
         done,
         due,
+        scheduled,
         priority,
         tags,
         list,
@@ -440,6 +449,41 @@ mod tests {
         let items = list_tasks(root, None);
         assert_eq!(items[0].due.as_deref(), Some("2026-07-15"));
         assert_eq!(items[0].priority.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn list_tasks_reads_scheduled() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "t.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\nscheduled: 2026-07-20\n---\n",
+        );
+        write(
+            root,
+            "u.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"U\"\ncreated: 2026-07-08\n---\n",
+        );
+        // A malformed value must degrade to None IN CORE (not just the
+        // frontend) so TaskDto/MCP never expose it (Codex, PR #75).
+        write(
+            root,
+            "m.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"M\"\ncreated: 2026-07-08\nscheduled: next week\n---\n",
+        );
+        let items = list_tasks(root, None);
+        let sched = |title: &str| {
+            items
+                .iter()
+                .find(|t| t.title == title)
+                .unwrap()
+                .scheduled
+                .clone()
+        };
+        assert_eq!(sched("T"), Some("2026-07-20".to_string()));
+        assert_eq!(sched("U"), None); // absent → None
+        assert_eq!(sched("M"), None); // malformed → None (filtered in core)
     }
 
     #[test]

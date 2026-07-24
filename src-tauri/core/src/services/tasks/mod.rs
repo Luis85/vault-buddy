@@ -18,6 +18,9 @@ pub struct TaskDto {
     pub created: String,
     pub done: bool,
     pub due: Option<String>,
+    /// The do/plan date, distinct from `due`. `None` when unset. Additive for
+    /// the frontend and MCP `list_tasks` alike.
+    pub scheduled: Option<String>,
     pub priority: Option<String>,
     pub tags: Vec<String>,
     /// The task's List: parent folder relative to the tasks root, `/`-joined,
@@ -39,6 +42,7 @@ impl TaskDto {
             created: t.created,
             done: t.done,
             due: t.due,
+            scheduled: t.scheduled,
             priority: t.priority,
             tags: t.tags,
             list: t.list,
@@ -225,6 +229,7 @@ pub fn add_task(
         task_id,
         cfg.task_extra_frontmatter.as_deref(),
         cfg.task_body_template.as_deref(),
+        None,
     )
     .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
@@ -234,6 +239,8 @@ pub fn add_task(
         created: today.to_string(),
         done: false,
         due: due.map(str::to_string),
+        // wired in Task 2 (schedule-on-create)
+        scheduled: None,
         priority: priority.map(str::to_string),
         tags: tags.to_vec(),
         list: effective_list,
