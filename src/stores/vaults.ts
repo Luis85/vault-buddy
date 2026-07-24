@@ -4,7 +4,7 @@ import { defineStore } from "pinia";
 import { announce } from "../announce";
 import { dailyNoteOpenedMessage, vaultOpenedMessage } from "../buddyMessages";
 import { logWarning } from "../logging";
-import type { Vault } from "../types";
+import type { AggTask, Vault } from "../types";
 import {
   loadFavorites,
   toggleFavorite as persistFavorite,
@@ -34,7 +34,8 @@ export const useVaultsStore = defineStore("vaults", {
       | "search"
       | "importPicker"
       | "documentImport"
-      | "update",
+      | "update"
+      | "taskDetail",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
@@ -43,6 +44,9 @@ export const useVaultsStore = defineStore("vaults", {
     recordModeVaultId: null as string | null,
     // Which vault the tasks view lists.
     tasksVaultId: null as string | null,
+    // The task whose detail surface is showing (its own vaultId decides which
+    // vault every detail-view write targets). Cleared by showList.
+    taskDetailTask: null as AggTask | null,
     // The dropped document's path, armed by a Rust-owned buddy drop
     // (`take_pending_import`, consumed in `refresh`) and read by
     // ImportVaultPicker to drive `convert_document`.
@@ -225,6 +229,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
       this.tasksVaultId = null;
+      this.taskDetailTask = null;
       this.pendingImports = [];
       // Invalidate any in-flight conversion's claim on the queue (see importEpoch).
       this.importEpoch++;
@@ -258,6 +263,12 @@ export const useVaultsStore = defineStore("vaults", {
     openAllTasks() {
       this.view = "tasks";
       this.tasksVaultId = null;
+    },
+    /** Open a task's detail surface. Deliberately does NOT clear tasksVaultId,
+     * so back() returns to the same list mode (aggregate null / a vault id). */
+    openTaskDetail(task: AggTask) {
+      this.view = "taskDetail";
+      this.taskDetailTask = task;
     },
     // Cross-vault, so no per-vault id to remember (unlike tasks/recordings).
     // back() needs no case: search falls through to the final else → showList.
@@ -317,6 +328,12 @@ export const useVaultsStore = defineStore("vaults", {
         // target with refreshTaskCount.
         void this.loadTaskCounts();
         return this.showList();
+      } else if (this.view === "taskDetail") {
+        // Return to the tasks list in the mode it came from — openTaskDetail
+        // left tasksVaultId intact, so just re-show tasks (showList would
+        // wrongly clear it). Tasks.vue remounts and re-fetches on the way in,
+        // so any edit/delete/duplicate is reflected.
+        this.view = "tasks";
       } else {
         this.showList();
       }
