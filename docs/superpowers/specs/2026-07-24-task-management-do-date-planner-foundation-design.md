@@ -269,12 +269,15 @@ plan date** = `scheduled ?? due`":
   no logic beyond formatting.
 - **The existing due element is UNCHANGED.** `TaskRow` already renders `due` as a
   short label (`dueLabel`) that turns `danger`-red once overdue (`isOverdue`) —
-  which *is* the calm deadline countdown; it is conceptually the "deadline chip"
-  and needs no code change. Consequently a task with a `due` and no `scheduled`
-  renders **byte-identically to today** — the do-date chip simply has nothing to
-  show. This is what keeps the compatibility promise honest at the *rendering*
-  level, not merely at bucket placement: the only rows that look different are
-  ones the user has explicitly scheduled.
+  the calm red-when-overdue deadline marker; it needs no code change.
+  Consequently a task with a `due` and no `scheduled` keeps its **existing
+  content rendered identically** (title / tags / `due` / priority). NOT literally
+  byte-identical, though: the row gains one new **always-present** control — the
+  schedule trigger (increment's row menu, Task 6) — because that is how you
+  schedule an unscheduled task. The compatibility guarantee is therefore
+  *existing content + the `due` presentation don't change* (assert on those),
+  not DOM equality; the do-date chip and the reddening due label are the only
+  content that differs, and only for tasks the user has explicitly scheduled.
 - **Empty-bucket behavior is unchanged from `dateBuckets`:** `plannerBuckets`
   keeps the existing `.filter(tasks.length > 0)`, so a zero-task Today (or any)
   bucket is simply not rendered — no bespoke "nothing planned today" hint this
@@ -344,14 +347,16 @@ is untouched.
   reverts while the rest still land, with the failure named in a toast;
   composer/editor send `scheduled`/`clearScheduled`; the aggregate's default
   grouping (unset `"all"` key) is Plan while an already-persisted aggregate
-  choice is respected. **Behavior AND rendering are preserved for scheduled-less
-  tasks** — one with no `scheduled` lands in the same bucket (the `scheduled ??
-  due` fallback) AND its row is byte-identical, because the do-date chip renders
-  only when a scheduled date is present and the existing `due` element is
-  untouched. The only deliberate assertion changes are the display-label renames
-  (No date → Anytime, the Dates → Plan control label); beyond those, a test that
-  must change a bucket-*placement* or row-render assertion for a scheduled-less
-  task signals a behavior slip, not a layout change.
+  choice is respected. **Behavior AND existing-content rendering are preserved
+  for scheduled-less tasks** — one with no `scheduled` lands in the same bucket
+  (the `scheduled ?? due` fallback) AND its existing content renders identically
+  (the do-date chip appears only when a scheduled date is present; the `due`
+  element is untouched). The row DOES gain one new always-present control (the
+  schedule trigger), so assert on existing content / `due`, not literal DOM
+  equality. The only deliberate assertion changes are the display-label renames
+  (No date → Anytime, the Dates → Plan control label); beyond those, a
+  bucket-*placement* or existing-content assertion that must change for a
+  scheduled-less task signals a behavior slip, not a layout change.
 - **Windows** remains where the end-to-end write + Obsidian round-trip are
   eyeballed — called out for the reviewer, not gating.
 

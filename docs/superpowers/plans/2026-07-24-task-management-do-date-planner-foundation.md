@@ -16,7 +16,7 @@
 - **DTO fields are camelCase across Rust↔TS** (`#[serde(rename_all = "camelCase")]` already on the structs); TS `scheduled: string | null`.
 - **The grouping localStorage key stays `dates`** — only its display *label* becomes "Plan" and the "No date" bucket label becomes "Anytime". No pref migration.
 - **Aggregate default grouping is Plan only when unset**: `loadGrouping("all", "dates")` — a persisted `"all"` value still wins. Per-vault default stays `"lists"`.
-- **Behavior AND rendering are preserved for scheduled-less tasks**: a task with no `scheduled` buckets and renders byte-identically (the do-date chip appears only when `scheduled` is present; the existing `due` element is untouched).
+- **Content rendering is preserved for scheduled-less tasks**: a task with no `scheduled` buckets exactly as today and its EXISTING content (title / tags / `due` / priority / vault chip) renders unchanged — the do-date chip appears only when `scheduled` is present, and the existing `due` element is untouched. NOT literally byte-identical: Task 6 adds one always-present affordance to every row (the schedule trigger), which is how you schedule an unscheduled task — the invariant is that existing *content* + the `due` presentation don't change, not that the row's DOM is unchanged.
 - **Vault writes never clobber** (the whole increment rides `set_fields` / `update_task_fields`) — with the ONE documented exception in Task 8's Gaps entry (d): a vault that hand-set its id property to the literal `scheduled` can have that on-disk id overwritten by a schedule write (accepted edge, remedy = re-point the id property first).
 - **Commits:** Conventional Commits (`feat(core)`, `feat(ui)`, `fix(shell)`, `docs`, `test`). Imperative subject; body explains the *why*. Do NOT put any model identifier in commits/PRs/code.
 - **CI gates that must stay green:** `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test` for core + shell; `npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage`.
@@ -745,13 +745,13 @@ In the template, add the chip **before** the existing `task-due` span (after the
 
 - [ ] **Step 4: Run — expect PASS:**
 
-Run: `npx vitest run tests/tasks.test.ts && npm test`
-Expected: PASS (the full suite confirms due-only rows are byte-identical — no existing row assertion should change).
+Run: `npx vitest run tests/tasks.test.ts tests/task-fields.test.ts && npm test`
+Expected: PASS (at this step the row gains only the do-date chip, so a due-only row's existing content/assertions don't change — the always-present schedule trigger arrives in Task 6, which updates those expectations there).
 
 - [ ] **Step 5: Commit:**
 
 ```bash
-git add src/components/TaskRow.vue tests/tasks.test.ts
+git add src/components/TaskRow.vue src/utils/taskFields.ts tests/task-fields.test.ts tests/tasks.test.ts
 git commit -m "feat(ui): additive do-date chip on task rows
 
 Shows the scheduled date (Today/short date) as a chip, only when set and
@@ -982,6 +982,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { comingSaturday, localDatePlus, localToday } from "../utils/taskFields";
 import AppIcon from "./AppIcon.vue";
+import IconButton from "./ui/IconButton.vue";
 
 // A per-row schedule popover: Today / Tomorrow / This weekend / a native date
 // pick / Clear. Presentational — it emits the chosen do-date (or null to
@@ -1028,20 +1029,25 @@ const itemClass =
 
 <template>
   <div ref="root" class="relative inline-flex" @keydown="onRootKeydown">
-    <button
-      type="button"
+    <!-- Reuse the shared IconButton (size sm) — it sits beside TaskRow's own
+         IconButtons and owns the hover/focus/disabled treatment (GAP-66). It
+         forwards the native click (TaskRow binds @click on it), so @click.stop
+         applies; if the built Chip/IconButton turns out to declare a `click`
+         emit instead, stop propagation inside toggle() rather than via the
+         modifier. `label` is IconButton's aria-label prop (the TaskRow usage). -->
+    <IconButton
+      size="sm"
       :data-testid="`task-schedule-${title}`"
-      :aria-label="`Schedule ${title}`"
       :disabled="busy"
+      :label="`Schedule ${title}`"
       title="Schedule"
-      class="cursor-pointer rounded px-1 leading-none text-fg-subtle transition-colors hover:bg-white/10 hover:text-fg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-40"
       @click.stop="toggle"
     >
       <AppIcon :size="14">
         <rect x="3" y="4" width="18" height="18" rx="2" />
         <path d="M16 2v4M8 2v4M3 10h18" />
       </AppIcon>
-    </button>
+    </IconButton>
     <div
       v-if="open"
       ref="popover"
