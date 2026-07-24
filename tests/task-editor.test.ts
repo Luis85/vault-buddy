@@ -11,6 +11,7 @@ const t = (extra: Partial<AggTask> = {}): AggTask => ({
   created: "2026-07-08",
   done: false,
   due: null,
+  scheduled: null,
   priority: null,
   tags: [],
   list: "",
@@ -46,5 +47,29 @@ describe("TaskEditor copy-id row", () => {
     const wrapper = mountEditor(t({ id: null }));
     expect(wrapper.find('[data-testid="task-edit-id"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="task-edit-id-copy"]').exists()).toBe(false);
+  });
+});
+
+describe("TaskEditor scheduled (do date)", () => {
+  it("sends scheduled when set and clearScheduled when emptied", async () => {
+    // Set a do-date on a task that had none.
+    const setW = mountEditor(t({ scheduled: null }));
+    await setW.get('[data-testid="task-edit-scheduled"]').setValue("2026-07-20");
+    await setW.get('[data-testid="task-edit-save"]').trigger("click");
+    expect(setW.emitted("save")![0][0]).toMatchObject({ scheduled: "2026-07-20" });
+
+    // Clear an existing do-date.
+    const clrW = mountEditor(t({ scheduled: "2026-07-20" }));
+    await clrW.get('[data-testid="task-edit-scheduled"]').setValue("");
+    await clrW.get('[data-testid="task-edit-save"]').trigger("click");
+    expect(clrW.emitted("save")![0][0]).toMatchObject({ clearScheduled: true });
+  });
+
+  it("shows distinct visible Due/Do labels beside the date inputs, not aria-label-only", () => {
+    const wrapper = mountEditor(t());
+    const due = wrapper.get('[data-testid="task-edit-due"]').element;
+    const scheduled = wrapper.get('[data-testid="task-edit-scheduled"]').element;
+    expect(due.previousElementSibling?.textContent).toBe("Due");
+    expect(scheduled.previousElementSibling?.textContent).toBe("Do");
   });
 });

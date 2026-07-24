@@ -18,6 +18,7 @@ fn add_list_and_toggle_tasks_through_the_service() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
     assert_eq!(created.title, "Buy milk");
@@ -55,6 +56,7 @@ fn add_task_applies_the_vaults_configured_template() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
     let body = std::fs::read_to_string(&created.path).unwrap();
@@ -86,6 +88,7 @@ fn add_task_writes_a_generated_id_when_enabled() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
     let body = std::fs::read_to_string(&created.path).unwrap();
@@ -112,6 +115,7 @@ fn add_task_writes_no_id_when_disabled() {
         None,
         None,
         &[],
+        None,
         None,
     )
     .unwrap();
@@ -143,6 +147,7 @@ fn add_task_skips_id_for_a_reserved_property() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
     let body = std::fs::read_to_string(&created.path).unwrap();
@@ -173,6 +178,7 @@ fn list_tasks_reads_the_generated_id_when_the_property_is_valid() {
         None,
         None,
         &[],
+        None,
         None,
     )
     .unwrap();
@@ -208,6 +214,7 @@ fn list_tasks_ignores_a_reserved_id_property_configured_by_hand() {
         None,
         None,
         &[],
+        None,
         None,
     )
     .unwrap();
@@ -249,6 +256,7 @@ fn count_open_tasks_excludes_open_tasks_in_archived_lists() {
             None,
             &[],
             Some(list),
+            None,
         )
         .unwrap()
     };
@@ -274,14 +282,25 @@ fn task_service_errors_mirror_the_command_layer() {
         None,
         &[],
         None,
+        None,
     )
     .is_err());
     // The spec requires MCP/IPC failures to carry the same user-facing
     // message the panel shows ("was it removed from Obsidian?"), not a
     // terse internal one that leaks only a raw hex id.
-    let err = add_task(&paths, "unknown", "x", "2026-07-09", None, None, &[], None)
-        .err()
-        .expect("unknown vault must fail");
+    let err = add_task(
+        &paths,
+        "unknown",
+        "x",
+        "2026-07-09",
+        None,
+        None,
+        &[],
+        None,
+        None,
+    )
+    .err()
+    .expect("unknown vault must fail");
     assert!(err.contains("was it removed from Obsidian?"), "got: {err}");
     assert!(
         set_task_status(&paths, "deadbeef01234567", "whatever.md", "bogus")
@@ -308,6 +327,7 @@ fn add_task_refuses_a_missing_vault_dir() {
         None,
         &[],
         None,
+        None,
     )
     .err()
     .expect("missing vault dir must fail");
@@ -331,6 +351,7 @@ fn add_task_lands_in_the_picked_list() {
         None,
         &[],
         Some("Inbox"),
+        None,
     )
     .unwrap();
     assert_eq!(created.list, "Inbox");
@@ -367,6 +388,7 @@ fn add_task_rejects_a_list_symlinked_outside_the_tasks_root() {
         None,
         &[],
         Some("Work"),
+        None,
     );
     assert!(
         res.is_err(),
@@ -405,6 +427,7 @@ fn add_task_rejects_a_nested_list_through_an_escaping_link_without_mkdir() {
         None,
         &[],
         Some("Link/Sub"),
+        None,
     );
     assert!(
         res.is_err(),
@@ -446,6 +469,7 @@ fn add_task_with_an_escaping_default_list_degrades_to_the_root() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
     assert_eq!(created.list, ""); // landed at the tasks root, not "Escape"
@@ -461,7 +485,8 @@ fn add_task_with_an_escaping_default_list_degrades_to_the_root() {
         None,
         None,
         &[],
-        Some("Escape")
+        Some("Escape"),
+        None
     )
     .is_err());
 }
@@ -487,6 +512,7 @@ fn add_task_honors_the_config_default_list_and_explicit_root_overrides() {
         None,
         &[],
         None,
+        None,
     )
     .unwrap();
     assert_eq!(defaulted.list, "Inbox");
@@ -500,6 +526,7 @@ fn add_task_honors_the_config_default_list_and_explicit_root_overrides() {
         None,
         &[],
         Some(""),
+        None,
     )
     .unwrap();
     assert_eq!(rooted.list, "");
@@ -529,6 +556,7 @@ fn add_task_rejects_an_escaping_list_but_degrades_a_bad_default() {
                 None,
                 &[],
                 Some(explicit),
+                None,
             )
             .is_err(),
             "explicit list {explicit:?} must error"
@@ -547,6 +575,7 @@ fn add_task_rejects_an_escaping_list_but_degrades_a_bad_default() {
         None,
         None,
         &[],
+        None,
         None,
     )
     .unwrap();

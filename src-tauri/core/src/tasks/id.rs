@@ -6,8 +6,18 @@
 /// Reserved frontmatter keys the ID property must never collide with — the
 /// structured task fields the surgical writer and reader own. Using one as
 /// the ID property would let the ID writer clobber a real field.
+// keep in sync with disk.rs::RESERVED_TASK_KEYS
 const RESERVED_TASK_KEYS: &[&str] = &[
-    "type", "status", "title", "created", "due", "priority", "tags", "tag", "order",
+    "type",
+    "status",
+    "title",
+    "created",
+    "due",
+    "scheduled",
+    "priority",
+    "tags",
+    "tag",
+    "order",
 ];
 
 /// A short random task ID: 8 base36 characters (`0-9a-z`) from the OS CSPRNG.
@@ -93,6 +103,7 @@ mod tests {
         assert_eq!(id_property_for_generation(true, "status"), None); // reserved
         assert_eq!(id_property_for_generation(true, "Status"), None); // case-folded reserved
         assert_eq!(id_property_for_generation(true, ""), None); // empty/invalid charset
+        assert_eq!(id_property_for_generation(true, "scheduled"), None); // reserved (do-date)
     }
 
     #[test]
@@ -103,7 +114,16 @@ mod tests {
         assert!(!is_valid_id_property("task id")); // space
         assert!(!is_valid_id_property("task:id")); // colon
         for reserved in [
-            "type", "status", "title", "created", "due", "priority", "tags", "tag", "order",
+            "type",
+            "status",
+            "title",
+            "created",
+            "due",
+            "scheduled",
+            "priority",
+            "tags",
+            "tag",
+            "order",
         ] {
             assert!(
                 !is_valid_id_property(reserved),

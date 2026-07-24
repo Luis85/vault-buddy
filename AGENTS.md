@@ -257,7 +257,7 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank; stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async — each row now also carries `scheduled`)*, `add_task` *(async — takes an optional `list` and an optional `scheduled` do-date, validated like `due`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank and the `scheduled`/`clearScheduled` do-date fields (validated like `due`/`clearDue`, `clearScheduled` winning); stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -1059,6 +1059,7 @@ status: new
 title: "Buy milk"
 created: 2026-07-08
 due: 2026-07-15
+scheduled: 2026-07-14
 priority: high
 ---
 ```
@@ -1073,7 +1074,22 @@ minimal and round-trip stable). Reads degrade gracefully: an unparseable `due`
 (anything not plain `YYYY-MM-DD`, checked by `is_valid_due` — no calendar
 validity, so `2026-02-31` is accepted like Obsidian's own date picker tolerates
 it) sorts/buckets as no-date, and an unknown `priority` value sorts/renders as
-normal — same defensive-read posture as the rest of the vault domain. Per-vault
+normal — same defensive-read posture as the rest of the vault domain.
+**`scheduled` — the do date (do-date/planner-foundation increment,
+docs/superpowers/specs/2026-07-24-task-management-do-date-planner-foundation-design.md).**
+`scheduled` (`YYYY-MM-DD`) is a fourth optional widened field: the *do date*
+(when you plan to work a task), deliberately distinct from the `due` deadline.
+It reads leniently through the same `is_valid_due` shape check (a malformed
+value reads as unscheduled — no calendar validity, so `2026-02-31` is
+tolerated like `due`), is emitted between `due` and `priority`, is written only
+when present (clearing it removes the line, `due`'s semantics), and is reserved
+in BOTH `RESERVED_TASK_KEYS` sets — the template-frontmatter filter (`disk.rs`)
+and the task-ID-property validator (`id.rs`, kept in sync via reciprocal
+comments) — so it can never be smuggled in as a template key nor configured as
+an id property (the formerly-settable `scheduled`-as-id-property edge — it was
+command-settable before this increment — is docs/Gaps.md GAP-68). The IPC write params (`scheduled`/`clearScheduled`)
+and the frontend planner/grouping that consume it are documented as those
+increments land. Per-vault
 config adds one field, `tasks_folder` (default `Tasks`), alongside the capture
 config in the same app-side `config.json` (`tasks_root()` resolves the
 default). All logic lives in the pure `core::tasks` crate (unit-tested on
@@ -1162,13 +1178,20 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   store): a `tasks` panel view reached from a per-row Tasks button; an
   add-task input with an optional due/priority row (the tasks-folder setting
   lives in the per-vault Vault settings view, not here), and a
-  date-bucketed list (Overdue / Today / Upcoming / No date / Done — bucket
-  headers render only once a dated open task exists, so a vault that never
-  uses due dates keeps the flat list it always had). A task's title is a click
+  Plan-bucketed list (Overdue / Today / Upcoming / Anytime / Done, keyed off
+  the effective plan date = `scheduled ?? due` via `plannerDateOf`, so a future
+  do-date moves a task's plan even past its deadline — the Things model; the
+  empty-date bucket is **Anytime**). Bucket headers render only once a dated
+  open task exists, so a vault that never uses do/due dates keeps the flat list
+  it always had. Each row shows the **do-date** (`scheduled`) as an accent
+  `Chip` when set and distinct from the deadline (`relativeDateLabel`:
+  Today / Tomorrow / weekday / short-date, with a round-trip guard that falls
+  back to the literal date for a calendar-invalid value like `2026-02-31`). A
+  task's title is a click
   target that calls `open_task` — a successful launch closes the panel
   (best-effort `close_panel`, same as every other Obsidian handoff), a failed
   one keeps it open for the error toast. A pencil opens an inline editor
-  (title, due, priority, tags) with one row editable at a time, Save sending
+  (title, due, scheduled, priority, tags) with one row editable at a time, Save sending
   only the changed fields (`clearDue: true` for an emptied date; tags follows
   the same changed-fields rule below) in a single `update_task` call.
   Toggle/archive/edit are all optimistic (revert + toast on failure) and
@@ -1181,7 +1204,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   can never strand a stale, invisible filter — which is precisely what lets
   `filteredTasks`/`filterActive` drop the old "is the input visible" gate
   (a hidden input can no longer hold a live query).
-  `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
+  `TaskItem`/`TaskDto` fields (now including `due`/`scheduled`/`priority`/`tags`) match
   camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
   task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
   prop; `null` is the aggregate mode, reached via the "All tasks" header icon
@@ -1206,6 +1229,60 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `vaultName.localeCompare` → `path.localeCompare` tiebreak on both arms so
   ties across vaults are stable; date buckets, tag mode, filters, and the
   per-row busy-guard serialization are unchanged and shared by both modes.
+- **Plan-my-day verbs (the do-date/planner-foundation increment): quick-schedule,
+  reschedule-overdue, and schedule-on-create/edit.** A per-row calendar
+  `IconButton` opens `TaskScheduleMenu.vue`, a presentational popover (Today /
+  Tomorrow / This weekend / a native `<input type=date>` pick / Clear — Clear
+  renders only when the task already has a do-date) that emits `schedule` with
+  the chosen `YYYY-MM-DD` or `null`. It flips to render ABOVE the trigger only
+  when there ISN'T room below the trigger for a downward popover AND there's
+  MORE room above than below (`shouldFlipUp`, a pure function over BOTH the
+  trigger's and the clip container's `top`/`bottom`, plus a fixed height
+  estimate — GAP-73a: the one-sided predecessor clipped only against the
+  bottom, so a compact scroll area with even LESS room above than below could
+  still flip up and clip the popover's own top controls instead). The clip
+  edges are the nearest **`.panel-scroll`** overflow ancestor's
+  `getBoundingClientRect()` `top`/`bottom` — the actual container the row list
+  scrolls inside — falling back to `0`/`window.innerHeight` only when no such
+  ancestor exists; measuring only the window bottom (the earlier approach)
+  over-estimated the room below in a compact panel or with the composer
+  options expanded. A Teleport-based reposition (retiring the flip heuristic
+  entirely) was considered and deliberately rejected as over-engineering for
+  a five-item popover — docs/Gaps.md GAP-73a. For assistive tech it
+  presents **dialog** semantics — the trigger carries `aria-haspopup="dialog"` +
+  `aria-expanded` + (while open) an `aria-controls` linking to the popover's
+  `useId()` id, and the popover carries `role="dialog"` + `aria-label`. It
+  swallows its own Escape/outside-click (the GAP-27 class: focus on open,
+  focus back to the trigger on keyboard close — save the rebucket-unmount edge,
+  GAP-73;
+  Escape `stopPropagation`s so it can't bubble into the panel's own close
+  handler). The container's `useTaskSchedule` composable owns the two write
+  verbs, both riding the row's shared `busy` guard so a schedule can't race a
+  toggle/edit on the same task: `quickSchedule(task, date)` is a single
+  optimistic set/clear (`date: null` → `{clearScheduled: true}` on the
+  `update_task` patch) with revert-and-toast on failure, the same shape as
+  every other row write — and, going through `update_task`, it ID-stamps like
+  any other edit. `rescheduleOverdue(overdue)` — behind the Overdue bucket
+  header's "Reschedule → Today" `AppButton`, shown only when `!filterActive`
+  (a filtered subset can't act on the complete overdue set, the manual-reorder
+  precedent) — is genuinely best-effort: it writes each task independently
+  rather than failing the whole batch on the first rejection, reverts only the
+  failed task, and holds a row whose write is already in flight OUT of the
+  batch rather than racing it — but never drops it silently, naming both
+  write-failures and held-back busy rows in one summary toast so "reschedule
+  all" never claims success while a task is still overdue. A batch-level
+  `reschedulingOverdue` flag makes a second click a no-op (and disables the
+  button) so a double-click can't see the first batch's own in-flight rows as
+  "busy" and falsely report them as failed. **Schedule on create/edit**: the
+  composer (`TaskComposer.vue`, a `Do date` input beside the existing due-date
+  field, `data-testid="task-add-scheduled"`) and the inline editor
+  (`TaskEditor.vue`, the same changed-fields rule as due/priority/tags) both
+  thread a `scheduled` value through their payload/patch — the composer's
+  `submit` payload → `Tasks.vue`'s `add()` → `add_task`'s `scheduled` arg, and
+  the editor's `buildPatch()` → `applyFieldPatch`'s `TaskPatch` respectively —
+  and `applyFieldPatch`'s revert snapshot (`before = {title, due, scheduled,
+  priority, tags}`) includes `scheduled`, so a failed edit reverts the
+  optimistic do-date change along with every other field.
 - **Tags (v0.5.3): chips, filter, inputs, and a grouping toggle.** Each row
   renders all of its tags as chips between the title and the due chip; a chip
   click activates a single component-local tag filter (no multi-tag filter
@@ -1218,10 +1295,12 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   client-side into an array); the editor sends `tags` in the patch only when
   the parsed array differs from the task's current tags, and an emptied input
   sends `tags: []` (clear) — same changed-fields/optimistic-revert discipline
-  as the other fields. A `Lists | Dates | Tags` segmented toggle
-  (component-local state, resets to `lists` — the panel's default grouping —
-  on remount; see below) switches the SAME filtered, globally-sorted list
-  from date buckets to tag sections when Tags is picked: one alphabetical
+  as the other fields. A `Lists | Plan | Tags` segmented toggle (the middle
+  tab's LABEL is "Plan"; its grouping KEY stays `dates`, no migration; the
+  choice PERSISTS per view (`vault-buddy:task-grouping`) — a per-vault view
+  opens on `lists` and the aggregate view on Plan when nothing is stored; see
+  the grouping-persistence note below) switches the SAME filtered, globally-sorted list
+  from planner buckets to tag sections when Tags is picked: one alphabetical
   section per distinct tag with the task repeated under EACH of its tags,
   then "No tags" (open, untagged), then "Done" (all done tasks) — headers
   always render in tag mode. Because a task can render more than once, the
@@ -1229,13 +1308,20 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   (`` `${section}:${task.path}` ``, `editingKey`/`rowKey`), so opening the
   editor on one duplicate never expands the others, while the per-path
   `busy` guard still serializes writes for the underlying task across all its
-  rendered rows.
+  rendered rows. Because the section prefix is part of that key, **switching
+  grouping re-keys every row** and silently unmounts an open editor (without
+  firing cancel/save) — so `Tasks.vue` runs a `watch(grouping, cancelEdit)` to
+  clear `editingKey`/`editingPath` on the switch. Without it a stale
+  `editingPath` outlives the row and makes `rescheduleOverdue` (GAP-73c)
+  falsely hold a reschedulable overdue task, reporting it "still overdue"
+  (Codex, PR #75); the draft was already lost to the unmount, so closing the
+  editor only makes the state honest.
 - **Lists (the lists increment): a List IS a folder** under the vault's
   tasks root — the filesystem defines which lists exist (a hand-created
   folder counts, the `type: Task` philosophy applied to folders; this
   AMENDED the PRD's earlier metadata-not-folders draft). A task's `list` =
   its parent folder relative to the canonical root, `/`-joined, `""` at the
-  root (rendered as **No list**, the No date/No tags precedent). Read
+  root (rendered as **No list**, the Anytime/No tags precedent). Read
   lenient / write strict: `tasks::task_lists` enumerates ANY folder
   (empties included, dot-dirs skipped, `vault_walk` containment/cycle
   discipline); `create_task_list` creates single segments only (no leading
@@ -1249,8 +1335,11 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   round-tripped by `serialize_config`; `set_task_lists_config` is its own
   write command (the independent field-save pattern, edited in the Vault
   settings view's self-contained `TaskListSettings.vue`). Frontend: the
-  grouping toggle is `Lists | Dates | Tags` — **Lists is first and is the
-  default grouping** every panel visit opens on (sections in
+  grouping toggle is `Lists | Plan | Tags` ("Plan" is the middle tab's label;
+  the grouping key stays `dates`, no migration) — **Lists is first**; a
+  per-vault view opens on Lists, while the aggregate ("All tasks") view
+  defaults to **Plan** when unset (a persisted choice always wins — the do-date
+  increment's aggregate default) (sections in
   `listOrder`-then-alphabetical order, No list, Done; the aggregate merges
   same-named lists case-insensitively — first-seen casing in sort order
   labels the section, the tags precedent — and skips empty lists, while
@@ -1340,7 +1429,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   a now-hidden archived list (Codex, PR #59). An UNTOUCHED picker needs nothing
   — it already tracks the vault default reactively (`displayList`); a delete
   that KEPT the folder leaves the pick, the list still exists. **Grouping
-  persistence**: the `Lists | Dates |
+  persistence**: the `Lists | Plan |
   Tags` choice persists per view (`vault-buddy:task-grouping` via the shared
   `perViewStore` envelope, same keying as the sort pref). **Drag a task
   between lists**: in Manual sort under Lists grouping (never aggregate — ranks
@@ -1351,7 +1440,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   optimistically re-homes to the dropped section and adopts the landed path,
   reverting + toasting on failure — same feel as the rank-write path. A release
   over a DIFFERENT section that is NOT a valid list target (Done, or any
-  section under Dates/Tags grouping) is a **no-op**: the drag gate commits on
+  section under Plan/Tags grouping) is a **no-op**: the drag gate commits on
   `overSectionKey !== sectionKey` to allow a slot-unchanged move, so
   `commitReorder` must early-return there rather than fall through to an in-list
   `planReorder` — the origin's drop line only renders for a same-section drop,
@@ -1411,7 +1500,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   (`getrandom`); `tasks::is_valid_id_property(name)` gates the property
   name to `[A-Za-z0-9_-]`, non-empty, and — critically — **disjoint from
   the reserved structured task keys** (`type`/`status`/`title`/`created`/
-  `due`/`priority`/`tags`/`tag`/`order`), which is what lets the writer
+  `due`/`scheduled`/`priority`/`tags`/`tag`/`order`), which is what lets the writer
   treat the ID as a plain "ensure present" key without ever colliding with
   a real patch key. Two write sites, same never-clobber discipline as
   every other vault write: **create** — `services::add_task` resolves the
@@ -1463,7 +1552,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `core::template::render_extra_frontmatter` (see the capture domain): extra
   frontmatter placeholders (`{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`)
   are resolved, the result parsed as YAML, and filtered against the
-  reserved task keys (`type`/`status`/`title`/`created`/`due`/`priority`/
+  reserved task keys (`type`/`status`/`title`/`created`/`due`/`scheduled`/`priority`/
   `tags`/`tag`/`order`, plus the vault's configured task-id property when
   one is set) before injection, so a user key can never confuse the
   surgical field writer (`set_fields`); a

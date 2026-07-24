@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 
 import type { AggTask, TaskEditorPatch, TaskItem } from "../types";
 import { copyToClipboard } from "../utils/clipboard";
-import { dueOf, parseTagsInput } from "../utils/taskFields";
+import { dueOf, parseTagsInput, scheduledOf } from "../utils/taskFields";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // Presentational inline editor: owns its own draft field state (seeded from
@@ -23,6 +23,7 @@ const normalizedPriority = (t: TaskItem) =>
 
 const editTitle = ref(props.task.title);
 const editDue = ref(dueOf(props.task) ?? "");
+const editScheduled = ref(scheduledOf(props.task) ?? "");
 const editPriority = ref<string>(normalizedPriority(props.task));
 const editTags = ref(props.task.tags.join(", "));
 const editList = ref(props.task.list);
@@ -33,14 +34,27 @@ const editList = ref(props.task.list);
 // tags change (Codex, PR #46). Mirrors the add-task composer's disabled Add.
 const titleValid = computed(() => editTitle.value.trim().length > 0);
 
+// due and scheduled use the identical changed-fields shape (draft vs.
+// original, blank means clear) — single-sourced here instead of mirrored
+// per field, which had tripped the complexFunctions CRAP gate (GAP-74).
+function diffDateField(
+  patch: TaskEditorPatch,
+  draft: string,
+  original: string | null,
+  setKey: "due" | "scheduled",
+  clearKey: "clearDue" | "clearScheduled",
+) {
+  if (draft === (original ?? "")) return;
+  if (draft === "") patch[clearKey] = true;
+  else patch[setKey] = draft;
+}
+
 function buildPatch(): TaskEditorPatch {
   const patch: TaskEditorPatch = {};
   const title = editTitle.value.trim();
   if (title && title !== props.task.title) patch.title = title;
-  if (editDue.value !== (dueOf(props.task) ?? "")) {
-    if (editDue.value === "") patch.clearDue = true;
-    else patch.due = editDue.value;
-  }
+  diffDateField(patch, editDue.value, dueOf(props.task), "due", "clearDue");
+  diffDateField(patch, editScheduled.value, scheduledOf(props.task), "scheduled", "clearScheduled");
   if (editPriority.value !== normalizedPriority(props.task)) patch.priority = editPriority.value;
   const parsedTags = parseTagsInput(editTags.value);
   if (parsedTags.join(" ") !== props.task.tags.join(" ")) patch.tags = parsedTags;
@@ -107,11 +121,22 @@ function onEditorEsc(e: KeyboardEvent) {
       @keydown.enter="onTitleEnter"
     >
     <div class="flex items-center gap-1">
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Due</span>
       <input
         v-model="editDue"
         data-testid="task-edit-due"
         type="date"
         aria-label="Due date"
+        title="Due date (deadline)"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
+      >
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Do</span>
+      <input
+        v-model="editScheduled"
+        data-testid="task-edit-scheduled"
+        type="date"
+        aria-label="Do date"
+        title="Do date (when you plan to work on it)"
         class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
       <div

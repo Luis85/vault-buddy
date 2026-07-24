@@ -1,5 +1,5 @@
 import type { AggTask } from "../types";
-import { dueOf } from "./taskFields";
+import { plannerDateOf } from "./taskFields";
 
 // The grouping-section builders for the Tasks view (dates / tags / lists),
 // extracted from the container so each mode is a pure, unit-testable
@@ -8,22 +8,20 @@ import { dueOf } from "./taskFields";
 
 export type Bucket = { key: string; label: string | null; tasks: AggTask[]; list?: string };
 
-/** Date buckets: Overdue / Today / Upcoming / No date / Done. Headers render
- * only once a dated open task exists — a vault that never uses due dates
- * keeps the flat list it always had. */
-export function dateBuckets(tasks: AggTask[], today: string): Bucket[] {
+/** Do-date planner buckets: Overdue / Today / Upcoming / Anytime / Done, keyed
+ * off the EFFECTIVE plan date = scheduled ?? due, so setting a do-date moves a
+ * task's plan while a deadline-only task still buckets by its deadline
+ * (non-regressing). Headers render only once a dated open task exists — a vault
+ * that never uses dates keeps the flat list it always had. */
+export function plannerBuckets(tasks: AggTask[], today: string): Bucket[] {
   const groups: Record<string, AggTask[]> = {
-    overdue: [],
-    today: [],
-    upcoming: [],
-    nodate: [],
-    done: [],
+    overdue: [], today: [], upcoming: [], anytime: [], done: [],
   };
   for (const t of tasks) {
     if (t.done) groups.done.push(t);
     else {
-      const d = dueOf(t);
-      if (!d) groups.nodate.push(t);
+      const d = plannerDateOf(t);
+      if (!d) groups.anytime.push(t);
       else if (d < today) groups.overdue.push(t);
       else if (d === today) groups.today.push(t);
       else groups.upcoming.push(t);
@@ -35,7 +33,7 @@ export function dateBuckets(tasks: AggTask[], today: string): Bucket[] {
     { key: "overdue", label: "Overdue" },
     { key: "today", label: "Today" },
     { key: "upcoming", label: "Upcoming" },
-    { key: "nodate", label: "No date" },
+    { key: "anytime", label: "Anytime" },
     { key: "done", label: "Done" },
   ]
     .map(({ key, label }) => ({ key, label: showHeaders ? label : null, tasks: groups[key] }))
@@ -82,7 +80,7 @@ export function tagSections(tasks: AggTask[]): Bucket[] {
  * is visible); the aggregate passes false to avoid cross-vault noise.
  * `archived` (Task 8) hides a list's section entirely AND drops its open
  * tasks from the grouping rather than bucketing them — the folder + tasks
- * still exist on disk, and the SAME task still shows under Dates/Tags
+ * still exist on disk, and the SAME task still shows under Plan/Tags
  * grouping (this only scopes the Lists view); a done task is unaffected
  * either way since Done already ignores list assignment. Each list bucket
  * carries its raw `list` name (used by callers — e.g. a future section

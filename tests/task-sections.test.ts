@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AggTask } from "../src/types";
-import { type Bucket, crossListDropTargetKey, dateBuckets, dropTargetList, listSections, remapListRef, tagSections } from "../src/utils/taskSections";
+import { type Bucket, crossListDropTargetKey, dropTargetList, listSections, plannerBuckets, remapListRef, tagSections } from "../src/utils/taskSections";
 
 const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   path: `C:/v/Tasks/${title.replace(/\s+/g, "-")}.md`,
@@ -10,6 +10,7 @@ const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   created: "2026-07-08",
   done: false,
   due: null,
+  scheduled: null,
   priority: null,
   tags: [],
   list: "",
@@ -83,16 +84,6 @@ describe("listSections", () => {
 });
 
 describe("moved builders keep their contracts", () => {
-  it("dateBuckets buckets and hides headers when nothing is dated", () => {
-    const flat = dateBuckets([t("A")], "2026-07-09");
-    expect(labels(flat)).toEqual([null]);
-    const dated = dateBuckets(
-      [t("Over", { due: "2026-07-08" }), t("Now", { due: "2026-07-09" }), t("Soon", { due: "2026-07-10" })],
-      "2026-07-09",
-    );
-    expect(labels(dated)).toEqual(["Overdue", "Today", "Upcoming"]);
-  });
-
   it("tagSections repeats a task under each tag with No tags and Done last", () => {
     const sections = tagSections([
       t("Both", { tags: ["Work", "home"] }),
@@ -100,6 +91,42 @@ describe("moved builders keep their contracts", () => {
       t("Fin", { done: true, status: "done" }),
     ]);
     expect(labels(sections)).toEqual(["#home", "#Work", "No tags", "Done"]);
+  });
+});
+
+describe("plannerBuckets", () => {
+  const today = "2026-07-10";
+  it("buckets by effective plan date = scheduled ?? due", () => {
+    const rows = [
+      t("OverdueByDue", { due: "2026-07-01" }),
+      t("TodayByScheduled", { scheduled: "2026-07-10", due: "2026-08-01" }),
+      t("UpcomingByScheduled", { scheduled: "2026-07-20" }),
+      t("Anytime"),
+      t("Done", { done: true }),
+    ];
+    const b = plannerBuckets(rows, today);
+    const byKey = (k: string) => b.find((x) => x.key === k)?.tasks.map((task) => task.title) ?? [];
+    expect(byKey("overdue")).toEqual(["OverdueByDue"]);
+    expect(byKey("today")).toEqual(["TodayByScheduled"]);
+    expect(byKey("upcoming")).toEqual(["UpcomingByScheduled"]);
+    expect(byKey("anytime")).toEqual(["Anytime"]);
+    expect(byKey("done")).toEqual(["Done"]);
+  });
+  it("a future scheduled date beats an overdue deadline (Things model)", () => {
+    // scheduled = tomorrow, due = yesterday → Upcoming (plan follows the do-date).
+    const rows = [t("T", { scheduled: "2026-07-20", due: "2026-07-01" })];
+    const b = plannerBuckets(rows, today);
+    expect(b.find((x) => x.key === "upcoming")?.tasks.map((task) => task.title)).toEqual(["T"]);
+    expect(b.find((x) => x.key === "overdue")).toBeUndefined();
+  });
+  it("keeps a flat, header-less list when no dated open task exists", () => {
+    const b = plannerBuckets([t("A"), t("B", { done: true })], today);
+    // Anytime + Done present, but labels null (no headers) — the existing rule.
+    expect(b.every((x) => x.label === null)).toBe(true);
+  });
+  it("labels the empty-date bucket 'Anytime'", () => {
+    const b = plannerBuckets([t("A"), t("D", { due: "2026-07-01" })], today);
+    expect(b.find((x) => x.key === "anytime")?.label).toBe("Anytime");
   });
 });
 

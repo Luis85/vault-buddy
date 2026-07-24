@@ -137,6 +137,7 @@ mod tests {
             None,
             &[],
             Some(""),
+            None,
         )
         .unwrap();
         let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
@@ -163,6 +164,7 @@ mod tests {
             None,
             &[],
             Some(""),
+            None,
         )
         .unwrap();
         assert!(created.id.is_none());
@@ -199,6 +201,7 @@ mod tests {
             None,
             &[],
             Some(""),
+            None,
         )
         .unwrap();
         let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
@@ -221,6 +224,7 @@ mod tests {
             None,
             &[],
             Some("Inbox"),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -254,6 +258,7 @@ mod tests {
             None,
             &[],
             Some("Inbox"),
+            None,
         )
         .unwrap();
         assert!(created.id.is_none()); // ids were off at create

@@ -103,21 +103,44 @@ export function useTaskActions(opts: {
   // two tag sections opens its editor on only the clicked row. The draft
   // field state and its IME-guarded key handlers live in TaskEditor.
   const editingKey = ref<string | null>(null);
+  // The absolute path of the row currently open in the editor, if any — kept
+  // alongside editingKey (not derived by splitting it) because both bucketKey
+  // and an absolute path can themselves contain `:`. Exposed so
+  // rescheduleOverdue (GAP-73c) can hold this row out of a batch reschedule:
+  // it isn't in `busy` (drafting, not yet saving), so without this a batch
+  // could re-bucket the row out from under an in-progress, unsaved edit.
+  const editingPath = ref<string | null>(null);
   const rowKey = (bucketKey: string, task: AggTask) => `${bucketKey}:${task.path}`;
   const startEdit = (task: AggTask, bucketKey: string) => {
     editingKey.value = rowKey(bucketKey, task);
+    editingPath.value = task.path;
   };
   const cancelEdit = () => {
     editingKey.value = null;
+    editingPath.value = null;
   };
+
+  // due and scheduled apply the identical set/clear shape — single-sourced
+  // here instead of mirrored per field, which had tripped the
+  // complexFunctions CRAP gate (GAP-74).
+  function applyDateField(
+    task: AggTask,
+    patch: TaskPatch,
+    field: "due" | "scheduled",
+    setKey: "due" | "scheduled",
+    clearKey: "clearDue" | "clearScheduled",
+  ) {
+    if (patch[clearKey]) task[field] = null;
+    else if (patch[setKey]) task[field] = patch[setKey]!;
+  }
 
   // Optimistic field save: apply locally (re-sort/re-bucket live), revert +
   // toast on failure. Returns whether the write landed.
   async function applyFieldPatch(task: AggTask, patch: TaskPatch): Promise<boolean> {
-    const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
+    const before = { title: task.title, due: task.due, scheduled: task.scheduled, priority: task.priority, tags: task.tags };
     if (patch.title) task.title = patch.title;
-    if (patch.clearDue) task.due = null;
-    else if (patch.due) task.due = patch.due;
+    applyDateField(task, patch, "due", "due", "clearDue");
+    applyDateField(task, patch, "scheduled", "scheduled", "clearScheduled");
     if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
     if (patch.tags !== undefined) task.tags = patch.tags;
     sortInPlace();
@@ -157,7 +180,7 @@ export function useTaskActions(opts: {
       applyMovedTask(task, moved);
       task.list = targetList;
       sortInPlace();
-      // A move can cross archived visibility — from Dates/Tags grouping an
+      // A move can cross archived visibility — from Plan/Tags grouping an
       // archived list's row still shows, and moving it to a visible list
       // makes it countable again (count_open_tasks skips archived lists) —
       // so refresh the cached badges like every other count-moving mutation
@@ -174,6 +197,7 @@ export function useTaskActions(opts: {
 
   async function onEditorSave(task: AggTask, editorPatch: TaskEditorPatch) {
     editingKey.value = null;
+    editingPath.value = null;
     // The list move is not a frontmatter write — strip it off the field patch
     // and run it as its own step AFTER the fields land (the fields write
     // targets the OLD path; the move changes it).
@@ -198,6 +222,7 @@ export function useTaskActions(opts: {
     archive,
     openInObsidian,
     editingKey,
+    editingPath,
     rowKey,
     startEdit,
     cancelEdit,

@@ -456,6 +456,49 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-68 · Low · A do-date write can overwrite a stable Task ID in the (formerly settable) `scheduled`-as-id-property config
+`src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
+`id_property_for_generation`) and `src-tauri/core/src/tasks/disk.rs`
+(`RESERVED_TASK_KEYS`, the surgical `set_fields`/`update_task_fields` writer).
+The do-date increment
+(docs/superpowers/specs/2026-07-24-task-management-do-date-planner-foundation-design.md)
+adds `scheduled` as a managed frontmatter field and reserves it in BOTH
+reserved-key sets. **Accuracy note (Codex, PR #75):** before this increment `is_valid_id_property`
+did NOT reserve `scheduled`, so the supported `set_task_id_config` command (and
+the Task-IDs settings card) would ACCEPT `scheduled` as a task-id property — this
+config was reachable *through the app*, not only by hand-editing `config.json`. A
+vault that had `task_id_enabled` ON and its task-id property set to the literal
+`scheduled` therefore has on-disk tasks carrying `scheduled: <stable-id>`.
+**Mitigation, going forward:** reserving `scheduled` makes
+`id_property_for_generation` re-validate and turn id generation OFF for that vault
+(logged) — no duplicate `scheduled:` on create, and `set_task_id_config` now
+refuses to set it — while on READ `scheduledOf` accepts only a plain
+`YYYY-MM-DD`, so a non-date id value reads as *unscheduled* and never surfaces as
+a do-date. **What is NOT claimed:** never-clobber for the pre-existing on-disk ids
+in that config. Those tasks still contain `scheduled: <stable-id>`; if the user
+later schedules (or clears the do-date on) such a task, the surgical write
+rewrites or removes the `scheduled:` line and the id is lost. **Why still Low /
+document-only for now:** the exposure needs `task_id_enabled` on (opt-in, off by
+default) AND the id property *named* the literal `scheduled` — a semantically
+nonsensical choice for a stable-handle property (it reads as a date field), which
+is why the realistic affected population is near-zero even though the config was
+command-reachable. The near-zero claim rests on that name-choice implausibility,
+NOT on a false "hand-edit only" barrier. **Remedy:** re-point the id property to a
+non-reserved name *before* scheduling such a task. **Alternatives weighed,
+deliberately declined this increment (the approved design's call):**
+auto-migrating the on-disk ids to a new property is exactly the mass vault
+mutation this app forbids; hard-blocking scheduling reintroduces the
+duplicate-`scheduled:` clobber and punishes the overwhelmingly common vaults.
+**Proportionate escalation IF real affected vaults surface:** a one-time,
+non-mutating startup DETECTION + user warning ("your Task-ID property `scheduled`
+is now a reserved do-date field — re-point it in Settings to keep your IDs")
+keeps the human in control without an automatic rewrite — a tracked future
+option, not built here. **What any future fix must respect:** it must ride the
+same never-clobber/atomic rails as every other vault write and must not rewrite
+files the user did not touch. (Codex re-raised migration/block on PR #75; the
+document-only posture is the approved spec's decision — revisiting it is a human
+call, recorded for the final review.)
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
@@ -612,6 +655,190 @@ dismissal are unchanged. Regression tests pin all three behaviors.
   sort" (the user's explicit request); cross-vault list ordering remains a
   non-goal — only the reorder-writes-a-meaningless-rank half of this bullet
   is fixed.
+
+### GAP-69 · Low · A "This Evening" sub-bucket and a distinct "Someday" planner bucket are deferred (each needs a second signal)
+`src/utils/taskSections.ts` (`plannerBuckets`). The Plan grouping's five
+buckets (Overdue / Today / Upcoming / Anytime / Done — see
+`docs/superpowers/specs/2026-07-24-task-management-do-date-planner-foundation-design.md`)
+are the do-date increment's full scope. Two finer time-horizon buckets some
+task-planning tools offer were considered and deliberately deferred, not
+forgotten — both need a second signal `scheduled`/`due` alone can't supply:
+- **"This Evening"**, a same-day sub-bucket of Today separating "still to
+  do" from "already handled for today," needs a time-of-day component —
+  either widening `scheduled` past its plain `YYYY-MM-DD` shape or a second
+  boolean/tag convention layered on top of it. Neither exists; adding one is
+  a Task Model change, not a bucketing tweak.
+- **A "Someday" planner bucket**, distinct from **Anytime**, needs a
+  back-burner signal to key on: today "no do-date and no due-date" is the
+  only test Anytime uses, so splitting off a lower-priority subset means
+  either a new frontmatter flag or overloading `priority`/`tags` (e.g. a
+  reserved `#someday` convention) — out of scope for a foundation increment.
+  (Unrelated to a user hand-creating a **List** folder literally named
+  "Someday" under the Lists grouping, which already works today — the
+  deferred item here is a Plan-grouping BUCKET derived from dates, not a
+  List.)
+**Remedy, if ever pursued:** either addition is additive (a new optional,
+leniently-read field) and would not change `scheduled`'s existing shape or
+the other four buckets — but it is a follow-up increment, not a patch,
+since it touches the Task Model.
+
+### GAP-71 · Low · Plan-grouping buckets can shift a Task by a day at local midnight (accepted, by design)
+`src/utils/taskFields.ts` (`localToday`) and `src/utils/taskSections.ts`
+(`plannerBuckets`). The Plan grouping computes "today" from the local
+wall-clock date (`new Date()`'s local getters, never UTC slicing) at the
+moment a bucket is computed — the SAME rule the Rust-side `add_task`
+already uses (`task_commands.rs`'s `chrono::Local::now().date_naive()`,
+deliberately local rather than UTC per its own comment, so a task isn't
+named with tomorrow's/yesterday's date near local midnight). Because the
+panel is a long-lived webview (hidden/shown, never reloaded), a Task open
+across local midnight can flip bucket without any write happening: a Task
+in Today at 11:59 PM silently becomes Overdue at 12:00 AM the next time the
+view re-renders (a re-sort/re-bucket — e.g. triggered by any other row's
+optimistic write, or simply reopening the panel). **The row's relative
+do-date LABEL has the same staleness:** `relativeDateLabel`
+(Today/Tomorrow/weekday, `taskFields.ts`) also reads `localToday()` with no
+reactive dependency, so a "Tomorrow" chip keeps reading "Tomorrow" after
+local midnight until that row happens to re-render. **Accepted as a
+deliberate design call (contested — Codex, PR #75):** it matches the
+pre-existing due-date bucketing (recomputed against wall-clock "today" the
+same way before this increment existed) and the local-not-UTC choice
+`add_task` already made. Codex argued for driving "today" from a *reactive*
+value that advances at local midnight (a shared reactive clock, or an
+on-midnight / metronome-driven view refresh) — that is the proportionate fix
+if this is ever reconsidered, and is NOT the same as freezing "today" for the
+mounted view (freezing would make buckets AND labels silently stale across a
+long session — strictly worse). Kept accepted for now on **low exposure**:
+the panel is a transient popup that re-runs discovery on every open, so the
+stale window requires it left open ACROSS midnight with no interaction.
+Recorded so a future reviewer doesn't mistake the day-boundary flip for a new
+bug; the accept-vs-reactive-clock call is a judgment this increment
+deliberately left open.
+
+### GAP-73 · Low · Quick-schedule popover: one remaining UX edge (rebucket focus) — (a)/(c) addressed
+`src/components/TaskScheduleMenu.vue`, `src/composables/useTaskSchedule.ts`.
+Genuine but non-trivial edges Codex surfaced on PR #75 AFTER the whole-branch
+review, tracked here rather than reactively patched onto the completed increment
+(each needed deliberate, possibly architectural work):
+- **(a) Flip read one side only · ADDRESSED by the polish pass via a two-sided
+  heuristic.** `shouldFlipUp` clipped against the `.panel-scroll` ancestor's
+  bottom but never its top, and used a fixed ~200px estimate rather than the
+  rendered popover — so in a compact scroll area where the popover fit BELOW
+  the trigger but had even less room ABOVE, it could wrongly flip up and clip
+  its first controls. Fixed the pragmatic way: `shouldFlipUp` now takes both
+  the trigger's and the clip container's `top`/`bottom` and only flips up when
+  there ISN'T room below AND there's MORE room above than below — never toward
+  the tighter side. `toggle()` measures both rects (falling back to `0`/
+  `window.innerHeight` when there's no `.panel-scroll` ancestor, as before).
+  Regression-tested in `tests/task-schedule-menu.test.ts` (a case pinning the
+  exact old bug — insufficient room below, even less room above, must NOT
+  flip — fails against the prior one-sided implementation and passes against
+  the fix). **The render-and-measure and Teleport options considered here
+  originally were deliberately REJECTED as over-engineering** for a five-item,
+  ~200px popover with one clip ancestor to track — this pass's review judged
+  the two-sided heuristic proportionate to the actual bug (a comparison
+  reading the wrong side), not a reason to add a portal + scroll-reposition
+  layer to a presentational popover this small.
+- **(b) Focus lost when scheduling re-buckets the row.** Choosing a date that
+  changes the effective plan date (`scheduled ?? due`) moves the task to a
+  different Plan bucket; the row `:key` is `bucketKey:path`, so Vue UNMOUNTS the
+  row (and this popover) on the next render, and `closeAndRefocus`'s `nextTick`
+  then finds `root` null → focus drops to `<body>` despite the restore logic. A
+  real fix restores focus from the PARENT (`Tasks.vue`) onto the newly-mounted
+  row's trigger, not from the unmounting child.
+- **(c) Reschedule-overdue discards an open editor's unsaved draft · ADDRESSED
+  by the polish pass.** `rescheduleOverdue` held out rows whose write was in
+  `busy`, but a row merely OPEN in the inline editor (drafting, not yet saving)
+  was NOT in `busy`, so the batch would reschedule it → it re-buckets to Today →
+  the editor row unmounts → unsaved draft fields silently lost. The sharpest of
+  the three (silent loss of typed input, however narrow the trigger: overdue AND
+  open-in-editor AND reschedule-all clicked). Fixed via the scoped bounded fix:
+  `useTaskActions` now tracks `editingPath` (the row's absolute path — kept
+  alongside `editingKey`, not derived by splitting it, since both bucketKey and
+  an absolute path can themselves contain `:`; set in `startEdit`, cleared in
+  `cancelEdit` and `onEditorSave`), and `Tasks.vue` threads it into
+  `rescheduleOverdue(bucket.tasks, editingPath)`. The composable excludes any
+  task whose `path === editingPath` from `targets` exactly like a busy row and
+  names it in the summary toast ("still overdue") — regression-tested in
+  `tests/task-schedule.test.ts`.
+
+(a) and (c) landed in the do-date polish pass; (b) remains open and is
+architectural (cross-component focus restoration) — none blocked the shipped
+do-date foundation (whole-branch review: merge-ready). Codex, PR #75.
+
+### GAP-74 · Low · Fallow quality-baseline loosened for the do-date increment (documented)
+`scripts/quality-baseline.json`. The do-date/planner increment (PR #75) moved two
+shrink-only fallow counters, each a reviewed, deliberate trade-off. Codex flagged
+(P1) that the reasons lived only in commit messages, not discoverably in-repo —
+this entry (linked from the baseline file's `description`) is the durable record:
+- **averageMaintainability 91.8 → 91.7** (commit 371a60f): the additive do-date
+  chip single-sourced `shortDate`/`relativeDateLabel` into `taskFields.ts`
+  (required to keep the duplicate-code/clone gate green — two `MONTHS` arrays
+  would trip it) and added one conditionally-rendered element to `TaskRow.vue`'s
+  template. The pre-change tree measured exactly 91.8 (zero slack), so any change
+  touching those files would trip the floor regardless of implementation. Still
+  the baseline today — this half of the loosening stands.
+- **complexFunctions 13 → 15 (commit 64e876a) · RETIRED by the polish pass.**
+  `TaskEditor.vue::buildPatch` (CRAP 43.1) and `useTaskActions.ts::applyFieldPatch`
+  (CRAP 31.6) had crossed the CRAP-30 gate when the do-date's set/clear branch was
+  mirrored beside `due`'s — "wide, not deep" complexity (parallel field blocks, no
+  added nesting); `criticalComplexity` stayed 4 and every other fallow counter was
+  unchanged. The deferred follow-up landed: both functions now call a shared pure
+  helper (`diffDateField` in `TaskEditor.vue`, `applyDateField` in
+  `useTaskActions.ts`) that collapses the duplicated `due`/`scheduled` blocks into
+  one call per field, dropping both back under the CRAP gate.
+  `complexFunctions` is back to 13 in the committed baseline; behavior is
+  byte-identical (task-editor.test.ts + tasks.test.ts unchanged and green).
+
+### GAP-75 · Low · Inline editor's `type="date"` inputs can't display a shape-valid but calendar-invalid do/due date (accepted, symmetric with `due`)
+`src/components/TaskEditor.vue`. The task contract deliberately accepts a
+shape-valid but calendar-invalid date like `2026-02-31` (`is_valid_due` checks
+only the `YYYY-MM-DD` shape, matching Obsidian's own tolerant date picker; core
+returns it unfiltered for `scheduled` too). The editor's Do and Due fields are
+native `<input type="date">` controls, which cannot represent such a value — the
+browser sanitizes it to an empty display, so the editor shows the stored date as
+*unset* and the user can't see or directly round-trip it. Codex flagged this on
+the `scheduled` input (PR #75); it applies **identically to `due`**, which has
+used the same control since the tasks-todo-list increment — this is a
+pre-existing, symmetric edge, not a do-date regression.
+- **Not data loss.** `editScheduled`/`editDue` are seeded with the raw stored
+  value; a programmatic `v-model` set fires no `input`/`change` event, so the ref
+  keeps `2026-02-31` even while the field renders empty. An untouched save
+  early-returns from `diffDateField` (`draft === original`), so nothing is
+  written and the value is preserved on disk. Only if the user actively edits the
+  empty-looking field does it change — an explicit action, not silent loss.
+- **Why accepted, not fixed:** swapping the native picker for a free-text control
+  (the only way to display every accepted value) would regress the common-case
+  UX for both fields to serve a value that essentially only arises from
+  hand-authoring frontmatter. The proportionate remedy is to re-enter a valid
+  date if you want to edit such a task from the panel; the calendar-invalid value
+  otherwise keeps rendering correctly on the row (`relativeDateLabel` falls back
+  to the literal `shortDate`, see the Task 5 guard) and round-trips untouched.
+
+### GAP-76 · Low · The composer/editor options row crowds at the 400px compact panel preset
+`src/components/TaskComposer.vue` (the `showAddOptions` row) and the sibling
+Due/Do/priority row in `src/components/TaskEditor.vue`. The do-date/planner
+increment added a second labeled date input (**Do**) beside the existing
+**Due** input on a single `flex items-center gap-1` (nowrap) row that also
+holds three priority buttons and a tags input. All three inputs are
+`min-w-0 flex-1`, so at the 400px **compact** preset (≈356px usable after
+gutters/card padding) they shrink below a usable width — a native `type="date"`
+control can't show a full date at ~60px, and the tags input loses most of its
+text. The comfortable/large presets have room; only compact is affected, and
+the row is behind the `⋯` options toggle. Codex flagged the composer (PR #75,
+`TaskComposer.vue:262`); the editor's row shares the shape.
+- **Why not fixed in the increment:** the fix is a responsive-layout change —
+  add `flex-wrap` and give the date inputs a real min basis (removing `min-w-0`
+  so they wrap instead of collapsing), or split dates onto their own row — whose
+  correctness is purely *visual*. The frontend test stack is happy-dom, which
+  does no layout, so no automated test can confirm the result looks right across
+  the three presets (compact/comfortable/large). Shipping a blind CSS change on
+  an already-green, reviewed branch trades a P2 nit for unverifiable visual risk.
+- **Recommended fix (needs visual verification):** container
+  `flex flex-wrap items-center gap-1`; the two date inputs `flex-1 basis-32`
+  (≈128px floor) instead of `min-w-0 flex-1`; keep the tags input
+  `min-w-0 flex-1`. Apply to BOTH the composer and editor rows so they stay
+  consistent, then eyeball all three presets. Pairs naturally with the tracked
+  GAP-65 `Tasks.vue`/composer refactor.
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
@@ -916,6 +1143,51 @@ plus the still-bespoke favorite star.
   temp-name loop is duplicated verbatim inside `capture_note.rs`. Extract
   `for_each_dated_capture_mp3` and a shared temp-open helper — the repo's
   own `vault_walk.rs` header warns about exactly this drift class.
+
+### GAP-70 · Low · `RESERVED_TASK_KEYS` is duplicated verbatim across `disk.rs` and `id.rs`
+`src-tauri/core/src/tasks/disk.rs:48-59` and
+`src-tauri/core/src/tasks/id.rs:10-21` each define their own `const
+RESERVED_TASK_KEYS: &[&str]`, both currently the identical ten entries
+(`type`/`status`/`title`/`created`/`due`/`scheduled`/`priority`/`tags`/
+`tag`/`order`). The do-date increment added `scheduled` to BOTH by hand;
+today the only thing keeping them aligned is a pair of `// keep in sync
+with <other file>::RESERVED_TASK_KEYS` comments — a reviewer convention,
+not a compiler-enforced one. A future widened field (the next
+`due`/`scheduled`-shaped addition) that updates one list and forgets the
+other reopens exactly the class of edge GAP-68 documents: an id-property
+validator that doesn't know about a new reserved key would let it be
+configured as a task-id property, and the template-frontmatter filter that
+doesn't know about it would let a user's extra-frontmatter template
+redefine it. **Fix:** hoist one `pub(crate) const RESERVED_TASK_KEYS` (or a
+shared function) into a common module both `disk.rs` and `id.rs` import —
+mechanical, no behavior change; deferred here since the do-date increment's
+own reciprocal comments keep the two lists in sync today.
+
+### GAP-72 · Low · `due` stays an unfiltered raw scalar in `TaskItem`/`TaskDto`; `scheduled` is core-validated at the same boundary
+`src-tauri/core/src/tasks/list.rs` (`collect_task_file`). Line 129,
+`let due = scalar_field(&content, "due");`, carries whatever raw scalar
+sits in the frontmatter straight onto `TaskItem.due`/`TaskDto.due` — an
+unparseable value (anything not plain `YYYY-MM-DD`) passes through
+unfiltered. Line 133 (added by the do-date increment), `let scheduled =
+scalar_field(&content, "scheduled").filter(|s| is_valid_due(s));`, does the
+opposite: an unparseable `scheduled` becomes `None` right here, at the
+DTO/MCP boundary, per the field's own doc comment on `TaskItem.scheduled`
+("Read then validator-filtered... an honest DTO/MCP boundary" — already
+called out in-code as the deliberate choice, Codex PR #75) but never
+applied back to `due`. **Consequence:** `due`'s honesty currently lives
+only in each CONSUMER — the frontend's `dueOf()` (`src/utils/taskFields.ts`)
+re-filters it client-side, and the Rust-side sort's `due_key` filters it
+again for ordering — so an MCP client or any other `TaskDto` consumer
+reading `due` directly gets an un-validated raw value, while the same
+consumer reading `scheduled` gets a pre-filtered guarantee. **Why left
+alone this increment:** `due`'s DTO/MCP contract predates this work;
+filtering it now is a compatibility change (a malformed `due` a consumer
+currently sees verbatim would become `None` instead) that deserves its own
+reviewed change, not a side effect of adding `scheduled`. **Fix, if
+pursued:** apply the same `.filter(|d| is_valid_due(d))` to `due` in
+`collect_task_file`, then drop `due_key`'s redundant re-filter and
+`dueOf`'s client-side re-check once the DTO itself is honest — landing both
+fields on one consistent contract.
 
 ### GAP-47 · Frontend
 - ~~Inline SVG icon paths are copy-pasted (the identical gear in

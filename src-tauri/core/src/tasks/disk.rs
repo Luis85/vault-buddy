@@ -44,8 +44,18 @@ pub fn task_basename(title: &str, today: &str) -> String {
 /// the surgical field writer (`set_fields`) is never confused about which key
 /// it owns. The task-id property (when present) is appended to this set at
 /// call time — it's per-vault configurable, so it can't be a `const`.
+// keep in sync with id.rs::RESERVED_TASK_KEYS
 const RESERVED_TASK_KEYS: &[&str] = &[
-    "type", "status", "title", "created", "due", "priority", "tags", "tag", "order",
+    "type",
+    "status",
+    "title",
+    "created",
+    "due",
+    "scheduled",
+    "priority",
+    "tags",
+    "tag",
+    "order",
 ];
 
 /// A `type: Task` document. `type`/`status`/`created` (and the optional
@@ -55,7 +65,8 @@ const RESERVED_TASK_KEYS: &[&str] = &[
 /// bare `due:` is never emitted. `tags` renders as a single canonical flow
 /// line (`tags: [a, b]`) after `due`/`priority`, only when non-empty. When
 /// `task_id` is `Some((property, id))`, a `<property>: <id>` line is written
-/// immediately after `created:`.
+/// immediately after `created:`. `scheduled` (the last param) is emitted
+/// after `due`, only when present.
 ///
 /// `extra_frontmatter` is `{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`
 /// rendered via `render_extra_frontmatter`, which resolves the placeholders,
@@ -77,6 +88,7 @@ pub fn render_task(
     task_id: Option<(&str, &str)>,
     extra_frontmatter: Option<&str>,
     body_template: Option<&str>,
+    scheduled: Option<&str>,
 ) -> String {
     let mut extra = String::new();
     // The generated ID (when enabled) sits right after `created`, before the
@@ -87,6 +99,9 @@ pub fn render_task(
     }
     if let Some(d) = due {
         extra.push_str(&format!("due: {d}\n"));
+    }
+    if let Some(s) = scheduled {
+        extra.push_str(&format!("scheduled: {s}\n"));
     }
     if let Some(p) = priority {
         extra.push_str(&format!("priority: {p}\n"));
@@ -147,6 +162,7 @@ pub fn create_task(
     task_id: Option<(&str, &str)>,
     extra_frontmatter: Option<&str>,
     body_template: Option<&str>,
+    scheduled: Option<&str>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let target = root.join(format!("{}.md", task_basename(title, today)));
@@ -161,6 +177,7 @@ pub fn create_task(
             task_id,
             extra_frontmatter,
             body_template,
+            scheduled,
         ),
     )
 }
@@ -291,6 +308,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         set_task_status(&root, &p, "archived").unwrap();
@@ -338,7 +356,17 @@ mod tests {
 
     #[test]
     fn render_writes_type_task_status_new_quoted_title() {
-        let doc = render_task("Buy milk", "2026-07-08", None, None, &[], None, None, None);
+        let doc = render_task(
+            "Buy milk",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             doc,
             "---\ntype: Task\nstatus: new\ntitle: \"Buy milk\"\ncreated: 2026-07-08\n---\n\n"
@@ -348,7 +376,17 @@ mod tests {
     #[test]
     fn render_quotes_a_colon_title() {
         // A colon in the title would break unquoted YAML — must be quoted.
-        let doc = render_task("Ship: v1", "2026-07-08", None, None, &[], None, None, None);
+        let doc = render_task(
+            "Ship: v1",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(doc.contains("title: \"Ship: v1\"\n"));
     }
 
@@ -356,7 +394,17 @@ mod tests {
     fn render_quotes_and_escapes_special_title() {
         // A title with a quote and backslash must be escaped so it can't break
         // the frontmatter (read back by note_field).
-        let doc = render_task("a\"b\\c", "2026-07-08", None, None, &[], None, None, None);
+        let doc = render_task(
+            "a\"b\\c",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(doc.contains("title: \"a\\\"b\\\\c\"\n"));
     }
 
@@ -372,6 +420,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -394,6 +443,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_ne!(p1, p2);
@@ -412,6 +462,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -451,7 +502,7 @@ mod tests {
 
     #[test]
     fn render_includes_due_and_priority_only_when_present() {
-        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None);
+        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None, None);
         assert_eq!(
             plain,
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
@@ -465,13 +516,58 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(full.contains("created: 2026-07-09\ndue: 2026-07-15\npriority: high\n---\n"));
     }
 
     #[test]
+    fn render_includes_scheduled_after_due_only_when_present() {
+        // Absent → byte-identical to the pre-scheduled output (no scheduled line).
+        let plain = render_task(
+            "A",
+            "2026-07-09",
+            Some("2026-07-15"),
+            Some("high"),
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(plain.contains("due: 2026-07-15\npriority: high\n"));
+        assert!(!plain.contains("scheduled"));
+        // Present → emitted right after due, before priority.
+        let sched = render_task(
+            "A",
+            "2026-07-09",
+            Some("2026-07-15"),
+            Some("high"),
+            &[],
+            None,
+            None,
+            None,
+            Some("2026-07-20"),
+        );
+        assert!(sched.contains("due: 2026-07-15\nscheduled: 2026-07-20\npriority: high\n"));
+        // Scheduled with no due lands right after created.
+        let no_due = render_task(
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            Some("2026-07-20"),
+        );
+        assert!(no_due.contains("created: 2026-07-09\nscheduled: 2026-07-20\n---\n"));
+    }
+
+    #[test]
     fn render_includes_flow_tags_only_when_present() {
-        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None);
+        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None, None);
         assert_eq!(
             plain,
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
@@ -482,6 +578,7 @@ mod tests {
             Some("2026-07-15"),
             None,
             &["work".to_string(), "home/errands".to_string()],
+            None,
             None,
             None,
             None,
@@ -500,10 +597,11 @@ mod tests {
             Some(("task-id", "k3n7p2qz")),
             None,
             None,
+            None,
         );
         assert!(doc.contains("created: 2026-07-09\ntask-id: k3n7p2qz\n"));
         // Absent → byte-identical to the pre-id output (no id line).
-        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None);
+        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None, None);
         assert!(!plain.contains("task-id"));
         assert_eq!(
             plain,
@@ -525,6 +623,7 @@ mod tests {
             Some(("task-id", "abcd1234")),
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(std::fs::read_to_string(&p)
@@ -533,10 +632,63 @@ mod tests {
     }
 
     #[test]
+    fn update_task_fields_sets_rewrites_and_clears_scheduled() {
+        // `scheduled` rides the same generic surgical writer as `due`/`tags` —
+        // no new write machinery — but the spec promised an explicit
+        // scheduled-named regression test pinning the set/rewrite/clear
+        // round-trip on disk (not just render_task's in-memory output).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("scheduled"));
+
+        // Set: absent → inserted at the closing fence.
+        update_task_fields(&root, &p, &[("scheduled", Some("2026-07-20"))], None).unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("scheduled: 2026-07-20\n"));
+
+        // Rewrite: existing line replaced in place, not duplicated.
+        update_task_fields(&root, &p, &[("scheduled", Some("2026-07-25"))], None).unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("scheduled: 2026-07-25\n"));
+        assert!(!body.contains("2026-07-20"));
+        assert_eq!(body.matches("scheduled:").count(), 1);
+
+        // Clear: None removes the line entirely.
+        update_task_fields(&root, &p, &[("scheduled", None)], None).unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("scheduled"));
+    }
+
+    #[test]
     fn update_task_fields_stamps_an_absent_ensure_key_but_never_overwrites() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None, None, None).unwrap();
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         // Absent → a fresh id is generated INTERNALLY, stamped alongside the
         // edit, and returned (shape-asserted: generation is random now).
         let stamped = update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id"))
@@ -568,7 +720,19 @@ mod tests {
         // scalar_field_ci read must catch the existing key under any casing.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None, None, None).unwrap();
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
         let seeded = content.replacen(
             "created: 2026-07-08\n",
@@ -602,7 +766,19 @@ mod tests {
         // The non-empty check now stamps it and reports the fresh id.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None, None, None).unwrap();
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
         let seeded = content.replacen(
             "created: 2026-07-08\n",
@@ -635,7 +811,19 @@ mod tests {
         // on-disk key name.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None, None, None).unwrap();
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
         let seeded = content.replacen(
             "created: 2026-07-08\n",
@@ -677,8 +865,19 @@ mod tests {
             ("map", "task-id:\n  source: jira\n  ref: ABC-1\n"),
             ("list", "task-id:\n- a1\n- b2\n"),
         ] {
-            let p =
-                create_task(&root, name, "2026-07-08", None, None, &[], None, None, None).unwrap();
+            let p = create_task(
+                &root,
+                name,
+                "2026-07-08",
+                None,
+                None,
+                &[],
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
             let content = std::fs::read_to_string(&p).unwrap();
             let seeded = content.replacen(
                 "created: 2026-07-08\n",
@@ -706,14 +905,36 @@ mod tests {
         // ensure keys, so toggling never adds an id.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
-        let p = create_task(&root, "A", "2026-07-08", None, None, &[], None, None, None).unwrap();
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         set_task_status(&root, &p, "done").unwrap();
         assert!(!std::fs::read_to_string(&p).unwrap().contains("task-id"));
     }
 
     #[test]
     fn task_default_output_is_byte_identical_with_no_template() {
-        let out = render_task("Buy milk", "2026-07-08", None, None, &[], None, None, None);
+        let out = render_task(
+            "Buy milk",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             out,
             "---\ntype: Task\nstatus: new\ntitle: \"Buy milk\"\ncreated: 2026-07-08\n---\n\n"
@@ -731,6 +952,7 @@ mod tests {
             None,
             Some("project: Alpha\nstatus: HIJACK"),
             Some("- [ ] {{title}} by {{date}}"),
+            None,
         );
         assert!(out.contains("project: Alpha"));
         assert!(!out.contains("status: HIJACK"), "reserved dropped: {out}");

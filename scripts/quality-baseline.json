@@ -1,5 +1,5 @@
 {
-  "description": "Fallow quality baseline. Counters may shrink but not grow; averageMaintainability may rise but not drop. Regenerate with `npm run check:quality -- --update` (commit the diff in the same PR that moves the metric).",
+  "description": "Fallow quality baseline. Counters may shrink but not grow; averageMaintainability may rise but not drop. Regenerate with `npm run check:quality -- --update` (commit the diff in the same PR that moves the metric). The do-date increment (PR #75) lowered averageMaintainability 91.8->91.7 — the reviewed reason is recorded in docs/Gaps.md GAP-74 (that entry's complexFunctions 13->15 bump was retired by a later refactor, per the same GAP).",
   "fallowVersion": "3.3.0",
   "metrics": {
     "deadCodeIssues": 2,
@@ -10,6 +10,6 @@
     "duplicatedLines": 0,
     "complexFunctions": 13,
     "criticalComplexity": 4,
-    "averageMaintainability": 91.8
+    "averageMaintainability": 91.7
   }
 }

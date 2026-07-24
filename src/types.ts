@@ -173,6 +173,9 @@ export interface TaskItem {
   created: string;
   done: boolean;
   due: string | null;
+  /** The do/plan date (YYYY-MM-DD) — when the user plans to work the task,
+   * distinct from `due`. null when unset. */
+  scheduled: string | null;
   priority: string | null;
   tags: string[];
   /** The task's List: parent folder relative to the tasks root, `/`-joined,
@@ -195,6 +198,10 @@ export interface TaskPatch {
   title?: string;
   due?: string;
   clearDue?: boolean;
+  /** Set the do/plan date. */
+  scheduled?: string;
+  /** Clear the do/plan date (mirrors clearDue). */
+  clearScheduled?: boolean;
   priority?: string;
   tags?: string[];
   /** Manual rank write (drag-to-reorder). Finite; nothing un-ranks a task. */

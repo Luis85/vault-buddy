@@ -27,6 +27,7 @@ const emit = defineEmits<{
     payload: {
       title: string;
       due: string;
+      scheduled: string;
       priority: string;
       tags: string[];
       // undefined = "let the backend apply the configured default" — see submit().
@@ -41,6 +42,7 @@ const emit = defineEmits<{
 const title = ref("");
 const showAddOptions = ref(false);
 const addDue = ref("");
+const addScheduled = ref("");
 const addPriority = ref("normal");
 const addTags = ref("");
 // The user's explicit list pick ("" = an explicit No-list override); only
@@ -129,6 +131,7 @@ function submit() {
   emit("submit", {
     title: title.value,
     due: addDue.value,
+    scheduled: addScheduled.value,
     priority: addPriority.value,
     // Client-side lenient parse; the shell strictly validates the charset.
     tags: parseTagsInput(addTags.value),
@@ -186,6 +189,7 @@ function remapPick(from: string, to: string | null) {
 function reset() {
   title.value = "";
   addDue.value = "";
+  addScheduled.value = "";
   addPriority.value = "normal";
   addTags.value = "";
   showAddOptions.value = false;
@@ -215,9 +219,9 @@ defineExpose({ reset, setList, remapPick });
       <button
         type="button"
         data-testid="task-add-options"
-        :aria-label="showAddOptions ? 'Hide task options' : 'Set due date or priority'"
+        :aria-label="showAddOptions ? 'Hide task options' : 'Set due date, do date or priority'"
         :aria-expanded="showAddOptions"
-        title="Due date / priority"
+        title="Due date / do date / priority"
         class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="showAddOptions ? 'border-violet-400 text-fg' : ''"
         @click="showAddOptions = !showAddOptions"
@@ -239,11 +243,22 @@ defineExpose({ reset, setList, remapPick });
       v-if="showAddOptions"
       class="flex items-center gap-1"
     >
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Due</span>
       <input
         v-model="addDue"
         data-testid="task-add-due"
         type="date"
         aria-label="Due date"
+        title="Due date (deadline)"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
+      >
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Do</span>
+      <input
+        v-model="addScheduled"
+        data-testid="task-add-scheduled"
+        type="date"
+        aria-label="Do date"
+        title="Do date"
         class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
       <div

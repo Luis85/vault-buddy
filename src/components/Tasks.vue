@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskDisplay } from "../composables/useTaskDisplay";
 import { useTaskLists } from "../composables/useTaskLists";
 import { useTaskReorder } from "../composables/useTaskReorder";
 import { useTaskReorderCommit } from "../composables/useTaskReorderCommit";
+import { useTaskSchedule } from "../composables/useTaskSchedule";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
@@ -18,6 +19,7 @@ import TaskEditor from "./TaskEditor.vue";
 import TaskRow from "./TaskRow.vue";
 import TaskSectionMenu from "./TaskSectionMenu.vue";
 import TaskViewControls from "./TaskViewControls.vue";
+import AppButton from "./ui/AppButton.vue";
 import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
@@ -102,11 +104,25 @@ const {
   archive,
   openInObsidian,
   editingKey,
+  editingPath,
   rowKey,
   startEdit,
   cancelEdit,
   onEditorSave,
 } = useTaskActions({ tasks, sortInPlace });
+// Switching grouping re-keys every row (bucket keys differ per grouping), so an
+// open inline editor unmounts WITHOUT firing cancel/save — leaving editingKey/
+// editingPath pointing at a row that's no longer rendered. A stale editingPath
+// then makes rescheduleOverdue (GAP-73c) falsely hold that task out of the batch
+// and report it "still overdue" (Codex, PR #75). Close the editor on any grouping
+// change so the editing refs never outlive the row (the draft was already lost to
+// the unmount — this just makes the state honest).
+watch(grouping, () => cancelEdit());
+// The plan-my-day verbs: the row popover's quick-schedule and the Overdue
+// header's reschedule-all-to-today. Shares the SAME busy guard as the row
+// actions above, so a schedule write can't race a toggle/edit on one task.
+const { quickSchedule, rescheduleOverdue, reschedulingOverdue } =
+  useTaskSchedule({ tasks, sortInPlace, busy });
 
 // New list flow: create + cache, then re-select here. `target` (the vault
 // createList used) blocks a mid-create composer vault switch from adopting the
@@ -284,6 +300,7 @@ onMounted(async () => {
 type AddPayload = {
   title: string;
   due: string;
+  scheduled: string;
   priority: string;
   tags: string[];
   // undefined = the composer had no explicit pick and its default hadn't
@@ -302,6 +319,7 @@ async function add(payload: AddPayload) {
   try {
     const args: Record<string, unknown> = { id: targetVault, title };
     if (payload.due) args.due = payload.due;
+    if (payload.scheduled) args.scheduled = payload.scheduled;
     if (payload.priority !== "normal") args.priority = payload.priority;
     if (payload.tags.length > 0) args.tags = payload.tags;
     // A defined list (incl. "" = an explicit No list override) is sent as-is;
@@ -456,6 +474,22 @@ async function add(payload: AddPayload) {
             >
               {{ bucket.label }}
             </h3>
+            <!-- Reschedule-all only when bucket.tasks is the COMPLETE overdue
+                 set — a title/tag filter narrows it to matching rows, and
+                 "reschedule all" must never silently leave the rest overdue
+                 (Codex P2). Same "no active filter" gate manual reorder
+                 already uses (a filtered subset can't rank/act against its
+                 invisible neighbors). -->
+            <AppButton
+              v-if="bucket.key === 'overdue' && !filterActive"
+              variant="secondary"
+              size="sm"
+              data-testid="task-reschedule-overdue"
+              :disabled="reschedulingOverdue"
+              @click="rescheduleOverdue(bucket.tasks, editingPath)"
+            >
+              Reschedule → Today
+            </AppButton>
             <TaskSectionMenu
               v-if="bucket.list && grouping === 'lists' && !isAggregate"
               :list="bucket.list!"
@@ -489,6 +523,7 @@ async function add(payload: AddPayload) {
               @edit="startEdit(task, bucket.key)"
               @open="openInObsidian(task)"
               @tag-click="tagFilter = $event"
+              @schedule="quickSchedule(task, $event)"
               @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
               @reorder-keydown="onHandleKeydown($event, bucket.key, i)"
             >

@@ -38,7 +38,7 @@ const emit = defineEmits<{
 
 const GROUPINGS = [
   { key: "lists", label: "Lists" },
-  { key: "dates", label: "Dates" },
+  { key: "dates", label: "Plan" },
   { key: "tags", label: "Tags" },
 ] as const;
 

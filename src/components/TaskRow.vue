@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { AggTask } from "../types";
-import { dueOf, localToday } from "../utils/taskFields";
+import { dueOf, localToday, relativeDateLabel, scheduledOf, shortDate } from "../utils/taskFields";
 import AppIcon from "./AppIcon.vue";
 import TaskDragHandle from "./TaskDragHandle.vue";
+import TaskScheduleMenu from "./TaskScheduleMenu.vue";
 import Avatar from "./ui/Avatar.vue";
 import Chip from "./ui/Chip.vue";
 import IconButton from "./ui/IconButton.vue";
@@ -35,21 +36,24 @@ defineEmits<{
   (e: "edit"): void;
   (e: "open"): void;
   (e: "tagClick", tag: string): void;
+  (e: "schedule", value: string | null): void;
   (e: "reorderPointerDown", ev: PointerEvent): void;
   (e: "reorderKeydown", ev: KeyboardEvent): void;
 }>();
 
-// Deterministic short label (no locale dependence): "Jul 15".
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function dueLabel(d: string): string {
-  const [, m, day] = d.split("-");
-  const month = MONTHS[Number(m) - 1];
-  return month ? `${month} ${Number(day)}` : d;
-}
 const isOverdue = (t: AggTask): boolean => {
   const d = dueOf(t);
   return d !== null && !t.done && d < localToday();
 };
+
+// The do-date chip label — shown only when a scheduled date is set AND differs
+// from the deadline (when they coincide, the existing due element already shows
+// the date). Additive: a task with no scheduled date renders exactly as before.
+function scheduledChip(t: AggTask): string | null {
+  const s = scheduledOf(t);
+  if (!s || s === dueOf(t)) return null;
+  return relativeDateLabel(s, localToday());
+}
 </script>
 
 <template>
@@ -124,13 +128,27 @@ const isOverdue = (t: AggTask): boolean => {
         >
           #{{ tag }}
         </Chip>
+        <Chip
+          v-if="scheduledChip(task)"
+          variant="accent"
+          data-testid="task-scheduled"
+          :title="`Scheduled for ${scheduledChip(task)}`"
+        >
+          {{ scheduledChip(task) }}
+        </Chip>
         <span
           v-if="dueOf(task)"
           data-testid="task-due"
           class="shrink-0 text-micro tabular-nums"
           :class="isOverdue(task) ? 'font-semibold text-danger-fg' : 'text-fg-muted'"
-        >{{ dueLabel(dueOf(task)!) }}</span>
+        >{{ shortDate(dueOf(task)!) }}</span>
       </div>
+      <TaskScheduleMenu
+        :title="task.title"
+        :scheduled="task.scheduled"
+        :busy="busy"
+        @schedule="$emit('schedule', $event)"
+      />
       <IconButton
         size="sm"
         data-testid="task-edit"

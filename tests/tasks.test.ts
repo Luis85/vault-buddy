@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import type { TaskItem } from "../src/types";
+import { localToday } from "../src/utils/taskFields";
 import { aggTask, mountAggregate, mountAggregateAttached, mountView, sample } from "./helpers/taskMount";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
@@ -18,12 +19,20 @@ const many = (n: number): TaskItem[] =>
     created: "2026-07-08",
     done: false,
     due: null,
+    scheduled: null,
     priority: null,
     tags: [],
     list: "",
     order: null,
     id: null,
   }));
+
+// Two due-in-the-past tasks land in Overdue given a real localToday() — no
+// fake timers needed as long as the sandbox clock is after 2026-01-02.
+const overdueFixture = (): TaskItem[] => [
+  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+];
 
 describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -165,7 +174,7 @@ describe("Tasks", () => {
     // in-progress task silently relabeled it.
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/ip.md", title: "In progress", status: "in-progress", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null },
+        { path: "C:/v/Tasks/ip.md", title: "In progress", status: "in-progress", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
       ],
       set_task_status: () => {
         throw new Error("disk full");
@@ -261,7 +270,7 @@ describe("Tasks", () => {
   it("renders a due chip and priority dot from the task fields", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/p.md", title: "P", status: "new", created: "2026-07-08", done: false, due: "2026-07-15", priority: "high", tags: [], list: "", order: null },
+        { path: "C:/v/Tasks/p.md", title: "P", status: "new", created: "2026-07-08", done: false, due: "2026-07-15", scheduled: null, priority: "high", tags: [], list: "", order: null, id: null },
       ],
     });
     await flushPromises();
@@ -279,7 +288,7 @@ describe("Tasks", () => {
   it("falls back to the raw due string for an out-of-range month", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/x.md", title: "Bad month", status: "new", created: "2026-07-08", done: false, due: "2026-13-05", priority: null, tags: [], list: "", order: null },
+        { path: "C:/v/Tasks/x.md", title: "Bad month", status: "new", created: "2026-07-08", done: false, due: "2026-13-05", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
       ],
     });
     await flushPromises();
@@ -289,31 +298,57 @@ describe("Tasks", () => {
   it("renders a due chip with no leading zero on the day", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/x.md", title: "Single digit day", status: "new", created: "2026-07-08", done: false, due: "2026-07-05", priority: null, tags: [], list: "", order: null },
+        { path: "C:/v/Tasks/x.md", title: "Single digit day", status: "new", created: "2026-07-08", done: false, due: "2026-07-05", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
       ],
     });
     await flushPromises();
     expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 5");
   });
 
-  it("groups tasks into date buckets with headers", async () => {
+  it("shows a do-date chip only for scheduled tasks, leaving due-only rows unchanged", async () => {
+    // A far-past scheduled date always renders as a short date ("Jan 15")
+    // regardless of when the suite runs — the relative-label branches (Today/
+    // Tomorrow/weekday) are unit-tested deterministically in task-fields.test.ts.
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/s.md", title: "Sched", status: "new", created: "2026-07-08", done: false, due: null, scheduled: "2020-01-15", priority: null, tags: [], list: "", order: null, id: null },
+        { path: "C:/v/Tasks/d.md", title: "DueOnly", status: "new", created: "2026-07-08", done: false, due: "2026-07-20", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+    });
+    await flushPromises();
+    const chips = wrapper.findAll('[data-testid="task-scheduled"]');
+    expect(chips).toHaveLength(1); // only the scheduled task
+    expect(chips[0].text()).toContain("Jan 15");
+  });
+
+  it("hides the do-date chip when scheduled equals due, avoiding a redundant chip", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/sd.md", title: "SameDate", status: "new", created: "2026-07-08", done: false, due: "2026-07-20", scheduled: "2026-07-20", priority: null, tags: [], list: "", order: null, id: null },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-scheduled"]').exists()).toBe(false);
+  });
+
+  it("groups tasks into plan buckets with headers", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] }); // 2026-07-09 local
     try {
       const { wrapper } = mountView({
         list_tasks: () => [
-          { path: "C:/v/Tasks/o.md", title: "Old", status: "new", created: "2026-07-01", done: false, due: "2026-07-08", priority: null, tags: [], list: "", order: null },
-          { path: "C:/v/Tasks/t.md", title: "Now", status: "new", created: "2026-07-01", done: false, due: "2026-07-09", priority: null, tags: [], list: "", order: null },
-          { path: "C:/v/Tasks/u.md", title: "Soon", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null, tags: [], list: "", order: null },
-          { path: "C:/v/Tasks/n.md", title: "Someday", status: "new", created: "2026-07-01", done: false, due: null, priority: null, tags: [], list: "", order: null },
-          { path: "C:/v/Tasks/d.md", title: "Finished", status: "done", created: "2026-07-01", done: true, due: null, priority: null, tags: [], list: "", order: null },
+          { path: "C:/v/Tasks/o.md", title: "Old", status: "new", created: "2026-07-01", done: false, due: "2026-07-08", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+          { path: "C:/v/Tasks/t.md", title: "Now", status: "new", created: "2026-07-01", done: false, due: "2026-07-09", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+          { path: "C:/v/Tasks/u.md", title: "Soon", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+          { path: "C:/v/Tasks/n.md", title: "Someday", status: "new", created: "2026-07-01", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+          { path: "C:/v/Tasks/d.md", title: "Finished", status: "done", created: "2026-07-01", done: true, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
         ],
       });
       await flushPromises();
-      // Lists is the default grouping now — switch to Dates to exercise its
-      // bucket-header behavior.
+      // Lists is the default grouping now — switch to Plan (grouping key
+      // "dates") to exercise its bucket-header behavior.
       await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
-      expect(headers).toEqual(["Overdue", "Today", "Upcoming", "No date", "Done"]);
+      expect(headers).toEqual(["Overdue", "Today", "Upcoming", "Anytime", "Done"]);
     } finally {
       vi.useRealTimers();
     }
@@ -324,30 +359,147 @@ describe("Tasks", () => {
     // only once dated open tasks exist.
     const { wrapper } = mountView(); // sample: one undated open + one done
     await flushPromises();
-    // Lists is the default grouping now — switch to Dates to exercise its
-    // bucket-header behavior.
+    // Lists is the default grouping now — switch to Plan (grouping key
+    // "dates") to exercise its bucket-header behavior.
     await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
     expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
   });
 
-  it("buckets an unparseable hand-authored due under No date", async () => {
+  it("buckets an unparseable hand-authored due under Anytime", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] });
     try {
       const { wrapper } = mountView({
         list_tasks: () => [
-          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", priority: null, tags: [], list: "", order: null },
-          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null, tags: [], list: "", order: null },
+          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
         ],
       });
       await flushPromises();
-      // Lists is the default grouping now — switch to Dates to exercise its
-      // bucket-header behavior.
+      // Lists is the default grouping now — switch to Plan (grouping key
+      // "dates") to exercise its bucket-header behavior.
       await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
-      expect(headers).toEqual(["Upcoming", "No date"]);
+      expect(headers).toEqual(["Upcoming", "Anytime"]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("quick-schedules a task from its row popover, writing the do-date optimistically", async () => {
+    const { wrapper, calls } = mountView({ update_task: () => null });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-schedule-B open"]').trigger("click");
+    await wrapper.get('[data-testid="task-schedule-today"]').trigger("click");
+    await flushPromises();
+    const call = calls.find((c) => c.cmd === "update_task");
+    expect(call?.args).toMatchObject({
+      id: "v1",
+      path: "C:/v/Tasks/2026-07-08-b.md",
+      patch: { scheduled: localToday() },
+    });
+    expect(wrapper.get('[data-testid="task-scheduled"]').text()).toBe("Today"); // optimistic, re-rendered
+  });
+
+  it("reschedules all overdue to today from the Overdue header", async () => {
+    const { wrapper, calls } = mountView({
+      list_tasks: () => overdueFixture(),
+      update_task: () => null,
+    });
+    await flushPromises();
+    // Lists is the default grouping — switch to Plan (grouping key "dates")
+    // to reach the Overdue bucket.
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    await wrapper.get('[data-testid="task-reschedule-overdue"]').trigger("click");
+    await flushPromises();
+    const paths = calls
+      .filter((c) => c.cmd === "update_task")
+      .map((c) => (c.args as { path: string }).path)
+      .sort();
+    expect(paths).toEqual(["C:/v/Tasks/a.md", "C:/v/Tasks/b.md"]);
+  });
+
+  it("hides the Overdue reschedule button while a filter is active (Codex, must act on the unfiltered set)", async () => {
+    // bucket.tasks holds only matching rows once a title/tag filter narrows
+    // the list — an advertised "reschedule all" acting on that subset would
+    // silently leave the rest overdue. The button must not even be
+    // clickable in that state (the same "no active filter" gate manual
+    // reorder already uses).
+    const { wrapper } = mountView({ list_tasks: () => overdueFixture() });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    expect(wrapper.find('[data-testid="task-reschedule-overdue"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="task-filter-toggle"]').trigger("click");
+    await wrapper.get('[data-testid="task-filter"]').setValue("A");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-reschedule-overdue"]').exists()).toBe(false);
+  });
+
+  it("disables the Overdue reschedule button while its batch write is in flight (Codex, batch re-entrancy)", async () => {
+    // A 2-task all-overdue fixture isn't enough to observe this: the batch's
+    // optimistic flip moves BOTH straight to today in one synchronous step,
+    // so the Overdue bucket — and its button — unmount instantly rather than
+    // staying present-but-disabled. Add a THIRD overdue task and put it
+    // genuinely mid-write via its own inline-editor save first (a real
+    // in-flight row action, not a poke at internals) — rescheduleOverdue
+    // holds a busy row out of its optimistic flip, so it stays overdue and
+    // keeps the bucket (and the button) mounted for the whole batch.
+    let updateCalls = 0;
+    let resolveReschedule: (() => void) | undefined;
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        ...overdueFixture(),
+        { path: "C:/v/Tasks/c.md", title: "C", status: "new", created: "2026-01-01", done: false, due: "2026-01-03", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+      update_task: () => {
+        updateCalls++;
+        if (updateCalls === 1) return new Promise<null>(() => {}); // C's own edit save — never resolves
+        if (updateCalls === 2) {
+          return new Promise<null>((r) => {
+            resolveReschedule = () => r(null);
+          });
+        }
+        return null;
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
+    const rowC = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("C"))!;
+    await rowC.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
+    await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
+    await flushPromises(); // C is now busy; its save never resolves in this test
+
+    const button = () => wrapper.get('[data-testid="task-reschedule-overdue"]');
+    await button().trigger("click"); // reschedules A and B; C is held back, still overdue
+    await flushPromises();
+    expect((button().element as HTMLButtonElement).disabled).toBe(true);
+    resolveReschedule?.();
+    await flushPromises();
+    expect((button().element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("clears the open editor when grouping changes so reschedule-overdue doesn't falsely hold it (Codex, PR #75)", async () => {
+    // Open the inline editor on overdue A under the default Lists grouping, then
+    // switch to Plan: A's row re-keys and its editor unmounts WITHOUT firing
+    // cancel/save, so editingPath would linger on A. rescheduleOverdue (GAP-73c)
+    // would then hold A out of the batch as if its editor were still open and
+    // report it "still overdue" — even though the draft is already gone. The
+    // grouping-change watch must clear the editing refs so BOTH A and B reschedule.
+    const { wrapper, calls } = mountView({
+      list_tasks: () => overdueFixture(),
+      update_task: () => null,
+    });
+    await flushPromises();
+    const rowA = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("A"))!;
+    await rowA.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click"); // Lists → Plan; A's editor unmounts
+    await wrapper.get('[data-testid="task-reschedule-overdue"]').trigger("click");
+    await flushPromises();
+    const paths = calls
+      .filter((c) => c.cmd === "update_task")
+      .map((c) => (c.args as { path: string }).path)
+      .sort();
+    expect(paths).toEqual(["C:/v/Tasks/a.md", "C:/v/Tasks/b.md"]);
   });
 
   it("adds a task with due and priority from the options row", async () => {
@@ -363,6 +515,38 @@ describe("Tasks", () => {
       cmd: "add_task",
       args: { id: "v1", title: "Big one", due: "2026-07-20", priority: "high" },
     });
+  });
+
+  it("passes a do-date from the composer to add_task", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    await wrapper.get('[data-testid="task-add-scheduled"]').setValue("2026-07-22");
+    await wrapper.get('[data-testid="task-input"]').setValue("Plan ahead");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({
+      cmd: "add_task",
+      args: { id: "v1", title: "Plan ahead", scheduled: "2026-07-22" },
+    });
+  });
+
+  it("labels the closed add-options toggle with the do date it now reveals", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-add-options"]').attributes("aria-label")).toContain(
+      "do date",
+    );
+  });
+
+  it("shows distinct visible Due/Do labels beside the date inputs, not aria-label-only", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    const due = wrapper.get('[data-testid="task-add-due"]').element;
+    const scheduled = wrapper.get('[data-testid="task-add-scheduled"]').element;
+    expect(due.previousElementSibling?.textContent).toBe("Due");
+    expect(scheduled.previousElementSibling?.textContent).toBe("Do");
   });
 
   it("omits due/priority when the options are untouched", async () => {
@@ -438,7 +622,7 @@ describe("Tasks", () => {
     const notifications = useNotificationsStore();
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null, tags: [], list: "", order: null },
+        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", scheduled: "2020-01-05", priority: null, tags: [], list: "", order: null },
       ],
       update_task: () => {
         throw new Error("disk full");
@@ -448,15 +632,17 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-edit"]').trigger("click");
     await wrapper.get('[data-testid="task-edit-title"]').setValue("Broken");
     await wrapper.get('[data-testid="task-edit-due"]').setValue("2026-08-01");
+    await wrapper.get('[data-testid="task-edit-scheduled"]').setValue("2020-02-15");
     await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
     await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
     await flushPromises();
-    // All three fields (title, due, priority) revert together — pins that
-    // saveEdit's failure path restores the whole `before` snapshot, not just
-    // the field a given test happens to check.
+    // All four fields (title, due, scheduled, priority) revert together — pins
+    // that saveEdit's (applyFieldPatch's) failure path restores the whole
+    // `before` snapshot, not just the field a given test happens to check.
     expect(wrapper.text()).toContain("B open"); // reverted title
     expect(wrapper.text()).not.toContain("Broken");
     expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 10"); // reverted due
+    expect(wrapper.get('[data-testid="task-scheduled"]').text()).toBe("Jan 5"); // reverted scheduled
     expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(false); // reverted priority
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });
@@ -763,7 +949,7 @@ describe("Tasks", () => {
 
   it("tag and title filters combine (AND)", async () => {
     const tagged = (n: number, tags: string[]): TaskItem => ({
-      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags, list: "", order: null, id: null,
+      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null,
     });
     const { wrapper } = mountView({
       list_tasks: () => [tagged(0, ["work"]), tagged(1, ["work"]), tagged(2, []), tagged(3, []), tagged(4, []), tagged(5, [])],
@@ -930,7 +1116,7 @@ describe("Tasks", () => {
     expect(headers).toEqual(["#home", "#work"]);
   });
 
-  it("grouping defaults to lists and the toggle switches to dates", async () => {
+  it("grouping defaults to lists and the toggle switches to Plan", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
         { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"], list: "", order: null },

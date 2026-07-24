@@ -18,6 +18,7 @@ const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   created: "2026-07-08",
   done: false,
   due: null,
+  scheduled: null,
   priority: null,
   tags: [],
   list: "",

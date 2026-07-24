@@ -440,7 +440,7 @@ describe("Tasks — lists & sorting", () => {
 
     it("a successful list move refreshes the vault's open-task badge (review)", async () => {
       // count_open_tasks skips archived lists, so moving an open task OUT of
-      // an archived list — reachable from Dates/Tags grouping, where its row
+      // an archived list — reachable from Plan/Tags grouping, where its row
       // still shows and the picker offers visible targets — makes it
       // countable again. The editor move must refresh the cached badges like
       // every other count-moving mutation (GAP-32 precedent); the stale badge
@@ -531,7 +531,7 @@ describe("Tasks — lists & sorting", () => {
       // The Lists grouping (the default view) hides both the section and the row.
       expect(wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text())).not.toContain("Old");
       expect(wrapper.findAll('[data-testid="task-row"]')).toHaveLength(0);
-      // Dates grouping still surfaces the task — archiving only scopes the
+      // Plan grouping still surfaces the task — archiving only scopes the
       // Lists view, not the task itself (a deliberate simplification; a
       // later increment task tracks it in docs/Gaps.md).
       await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
