@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 
 import { comingSaturday, localDatePlus, localToday } from "../utils/taskFields";
 import AppIcon from "./AppIcon.vue";
@@ -17,18 +17,21 @@ const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 const popover = ref<HTMLElement | null>(null);
 const pick = ref("");
+// A stable unique id linking the trigger (aria-controls) to the role="dialog"
+// popover, so assistive tech reports the disclosure relationship (Codex, PR #75).
+const popoverId = useId();
 
 // Whether the popover renders ABOVE the trigger instead of below it (Codex
-// P2): Tasks.vue renders every row inside its own `overflow-y-auto` scroll
-// ancestor, so a downward-only absolute popover on a row near the bottom of
-// that viewport is clipped and its lower items (the date picker, Clear)
-// become unreachable. `window.innerHeight` stands in for "the visible
-// viewport bottom" — the same proxy SelectMenu.vue's own flip-up logic
-// already uses — because each Tauri window (main/panel/bubble) already IS
-// the whole viewport; there's no independent browser chrome to subtract.
-// POPOVER_HEIGHT is a fixed estimate (5 items ≈ 200px) rather than a
-// measurement of the not-yet-open popover, which doesn't exist in the DOM
-// until `open` flips true.
+// P2): the row list lives inside the panel's `.panel-scroll` overflow
+// container, so a downward-only absolute popover on a row near the bottom of
+// that container is clipped and its lower items (the date picker, Clear)
+// become unreachable. We clip against the NEAREST `.panel-scroll` ancestor's
+// bottom — the actual overflow edge — not `window.innerHeight`, which
+// over-estimates the space below in a compact panel or with the composer
+// options expanded (Codex, PR #75); `window.innerHeight` is only the fallback
+// when no such ancestor is found. POPOVER_HEIGHT is a fixed estimate (5 items
+// ≈ 200px) rather than a measurement of the not-yet-open popover, which
+// doesn't exist in the DOM until `open` flips true.
 const POPOVER_HEIGHT = 200;
 const flipUp = ref(false);
 
@@ -47,7 +50,9 @@ function toggle() {
     // descendant of `root` to measure regardless of ordering, but reading it
     // first keeps the intent unambiguous.
     const rect = root.value?.querySelector("button")?.getBoundingClientRect();
-    flipUp.value = rect ? shouldFlipUp(rect.bottom, POPOVER_HEIGHT, window.innerHeight) : false;
+    const scrollEl = root.value?.closest(".panel-scroll");
+    const clipBottom = scrollEl ? scrollEl.getBoundingClientRect().bottom : window.innerHeight;
+    flipUp.value = rect ? shouldFlipUp(rect.bottom, POPOVER_HEIGHT, clipBottom) : false;
   }
   open.value = opening;
 }
@@ -101,7 +106,8 @@ const itemClass =
       :disabled="busy"
       :label="`Schedule ${title}`"
       title="Schedule"
-      aria-haspopup="true"
+      aria-haspopup="dialog"
+      :aria-controls="open ? popoverId : undefined"
       :aria-expanded="open"
       @click.stop="toggle"
     >
@@ -118,7 +124,10 @@ const itemClass =
     </IconButton>
     <div
       v-if="open"
+      :id="popoverId"
       ref="popover"
+      role="dialog"
+      aria-label="Schedule"
       tabindex="-1"
       :data-testid="`task-schedule-popover-${title}`"
       class="absolute right-0 z-10 flex min-w-40 flex-col gap-0.5 rounded-control border border-white/10 bg-slate-800 p-1 shadow-lg focus:outline-none"

@@ -42,15 +42,23 @@ describe("TaskScheduleMenu", () => {
     expect(popover(w).exists()).toBe(false); // choosing closes it
   });
 
-  it("exposes aria-haspopup and reflects the open state via aria-expanded", async () => {
-    // The trigger is a disclosure that opens a popup — screen readers need
-    // aria-haspopup + a live aria-expanded to tell it apart from an
-    // immediate-action button and report open/closed (Codex, PR #75).
+  it("declares dialog semantics: haspopup=dialog, aria-controls links the role=dialog popover, aria-expanded tracks open", async () => {
+    // The trigger is a disclosure that opens a dialog-like popup — screen
+    // readers need matching semantics: aria-haspopup="dialog" (not "true"/menu,
+    // which would promise a menu structure this unroled popover doesn't have),
+    // a live aria-expanded, and an aria-controls link to the role="dialog"
+    // popover (Codex, PR #75).
     const w = mountMenu();
-    expect(trigger(w).attributes("aria-haspopup")).toBe("true");
+    expect(trigger(w).attributes("aria-haspopup")).toBe("dialog");
     expect(trigger(w).attributes("aria-expanded")).toBe("false");
+    expect(trigger(w).attributes("aria-controls")).toBeUndefined(); // no dangling ref while closed
     await trigger(w).trigger("click");
     expect(trigger(w).attributes("aria-expanded")).toBe("true");
+    const pop = popover(w);
+    expect(pop.attributes("role")).toBe("dialog");
+    expect(pop.attributes("aria-label")).toBe("Schedule");
+    expect(pop.attributes("id")).toBeTruthy();
+    expect(trigger(w).attributes("aria-controls")).toBe(pop.attributes("id")); // linked
   });
 
   it("restores focus to the trigger after a keyboard-driven close (choose / Escape)", async () => {
@@ -181,6 +189,29 @@ describe("TaskScheduleMenu", () => {
       const classes = popover(w).classes();
       expect(classes).toContain("bottom-full");
       expect(classes).not.toContain("top-full");
+    });
+
+    it("clips against the .panel-scroll ancestor's bottom, not the window", async () => {
+      // Trigger fits far below the WINDOW bottom but near the inner scroll
+      // container's bottom → must flip up, proving the clip edge is the
+      // container, not window.innerHeight (Codex, PR #75).
+      vi.spyOn(window, "innerHeight", "get").mockReturnValue(2000);
+      const scroll = document.createElement("div");
+      scroll.className = "panel-scroll";
+      document.body.appendChild(scroll);
+      const w = mount(TaskScheduleMenu, {
+        props: { title: "Task A", scheduled: null, busy: false },
+        attachTo: scroll,
+      });
+      scroll.getBoundingClientRect = () =>
+        ({ top: 0, bottom: 560, left: 0, right: 300, width: 300, height: 560, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+      (trigger(w).element as HTMLElement).getBoundingClientRect = () =>
+        ({ top: 480, bottom: 500, left: 0, right: 30, width: 30, height: 20, x: 0, y: 480, toJSON: () => ({}) }) as DOMRect;
+      await trigger(w).trigger("click");
+      // 500 + 200 (est) = 700 > 560 (container) → flip up, though 700 < 2000 (window).
+      expect(popover(w).classes()).toContain("bottom-full");
+      w.unmount();
+      scroll.remove();
     });
   });
 });
