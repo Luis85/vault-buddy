@@ -179,20 +179,22 @@ same shape as `recordMode`/`recordings`.
   single-line scalars). Both are acceptable because the app owns the write
   format and reads defensively; both are recorded in `docs/Gaps.md`, with
   extending `set_fields` to consume block scalars named as the future hardening.
-- **Reserved ONLY in the task-ID-property set** (`tasks/id.rs::RESERVED_TASK_KEYS`
-  via `is_valid_id_property`, so a vault can't point its id property at
-  `description` — that would let an id write clobber the managed description the
-  detail view owns). It is deliberately **NOT** in the template reserved set
-  (`tasks/disk.rs::RESERVED_TASK_KEYS`): unlike `due`/`scheduled`/`priority`,
-  `render_task` never emits `description`, so a template key can't duplicate a
-  managed line — and a vault may legitimately seed a task's description from its
-  template, which template-reserving would silently drop on upgrade (Codex P2,
-  PR #76 — an earlier draft reserved it in both, mirroring `scheduled`; that was
-  wrong for `description`). The two constants now diverge on this one key; their
-  comments cross-reference the divergence. (The pre-existing edge — a vault that
-  had already set its id property to `description`, which older releases
-  accepted — is the same shape as GAP-68's `scheduled`-as-id case and is
-  documented there, not migrated.)
+- **Reserved in BOTH reserved-key sets** (`tasks/disk.rs::RESERVED_TASK_KEYS`
+  the template filter, `tasks/id.rs::RESERVED_TASK_KEYS` via `is_valid_id_property`).
+  `description` is a **managed detail-view field**: the detail surface owns it
+  via `set_fields` (single-line escaped scalar), exactly as `due`/`status`/
+  `priority` are managed and set via the composer/toggle, not templates. So a
+  template must not seed it (id-set: a `description` id property would let an id
+  write clobber it; template-set: `render_extra_frontmatter` would emit whatever
+  YAML shape the template used — e.g. a **block scalar** `description: |` — which
+  `description_field` reads back as its bare marker and a later `set_fields` save
+  orphans the indented content; Codex P2, PR #76). Reserving it in both, like
+  every other managed field, is the stable, consistent choice — an earlier draft
+  un-reserved it from the template set to let templates seed it, which reopened
+  exactly that block-scalar corruption. The two constants stay identical. (The
+  pre-existing edge — a vault that had already set its id property to
+  `description`, which older releases accepted — is the same shape as GAP-68's
+  `scheduled`-as-id case and is documented at GAP-77, not migrated.)
 - **DTO:** `TaskItem` (`tasks/list.rs`) and `TaskDto` (`services/tasks/mod.rs`)
   gain `description: Option<String>`, filtered through `yaml_unquote_multiline`
   at the read boundary; it rides `list_tasks` like every other field, and

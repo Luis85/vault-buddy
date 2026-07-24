@@ -12,7 +12,7 @@
 
 - **`Tasks.vue` must NOT grow** — it is grandfathered over the 500-nonblank-LOC frontend cap at 521 (GAP-65, shrink-only). All new logic lives in new files (`TaskDetail.vue`, `useTaskDetail.ts`, additions to `utils/taskFields.ts`). Per-function ESLint limits also apply everywhere: `max-lines-per-function` 200, `complexity` 25, `max-params` 6, `max-depth` 5.
 - **LOC / quality / coverage baselines are shrink-only.** If a gate fails because a metric IMPROVED, re-run with `--update` and commit the baseline in the same task. If a new file legitimately needs headroom, add its allowlist entry in the same commit with a one-line justification.
-- **`description` is reserved ONLY in the id-property set** (`tasks/id.rs::RESERVED_TASK_KEYS`), NOT the template set (`tasks/disk.rs::RESERVED_TASK_KEYS`): `render_task` never emits `description`, so a template can't duplicate a managed line and a vault may legitimately seed it — the two `const`s now deliberately diverge on this one key (Codex P2, PR #76), and their comments cross-reference the divergence.
+- **`description` is reserved in BOTH key-sets** — `tasks/disk.rs::RESERVED_TASK_KEYS` (template filter) AND `tasks/id.rs::RESERVED_TASK_KEYS` (id-property validator). It is a MANAGED detail-view field (set via the detail surface, exactly as `due`/`status` are set via the composer/toggle, not templates), so templates must not seed it — a template block scalar would otherwise read back as its bare marker and orphan the indented content on the first save (Codex PR #76). The two `const`s stay identical.
 - **camelCase across the Rust↔TS boundary** — DTO fields use `#[serde(rename_all = "camelCase")]`; TS types match.
 - **Writes stay never-clobber + canonically contained.** Duplicate uses the collision-safe non-replacing writer (`write_note_collision_safe`); delete asserts canonical containment before `remove_file`. Permanent delete is the app's first destructive vault write and is documented as a bounded departure in `docs/Gaps.md`.
 - **Rust gates:** `cd src-tauri && cargo fmt --check`; `cd src-tauri/core && cargo clippy --all-targets -- -D warnings && cargo test`. Shell changes compile-gate on Linux: `npm run setup:linux` (once) then `npx tauri build --no-bundle`.
@@ -233,13 +233,15 @@ In the same file, in `collect_task_file`'s `out.push(TaskItem { ... })` (line 16
     });
 ```
 
-Do NOT add `"description"` to `src-tauri/core/src/tasks/disk.rs`'s `RESERVED_TASK_KEYS` (the TEMPLATE filter). `render_task` never emits `description`, so a template key can't duplicate a managed line, and a vault may legitimately seed a task's description from its template — reserving it there would silently drop that content on upgrade (Codex P2, PR #76). Instead, update disk.rs's sync comment (the `// keep in sync with id.rs::RESERVED_TASK_KEYS` line above the array) to note the intentional divergence:
+In `src-tauri/core/src/tasks/disk.rs`, add `"description"` to `RESERVED_TASK_KEYS` (line 48-59), after `"order",` — it is a MANAGED detail-view field (set via the detail surface, like `due`/`status`), so a template must NOT seed it; a template block scalar would otherwise read back as its bare marker and orphan the indented content on the first save (Codex PR #76). Keep the disk.rs sync comment noting this:
 
 ```rust
-// Matches id.rs::RESERVED_TASK_KEYS except `description` (reserved there as an id property only; render_task never emits it, so a template may seed it — Codex PR #76).
+    "order",
+    "description",
+];
 ```
 
-`description` IS reserved as an id property. In `src-tauri/core/src/tasks/id.rs`, add `"description"` to its `RESERVED_TASK_KEYS` (line 10-21) after `"order",`, update its sync comment to note the same divergence, AND add it to the reserved-iteration loop in `is_valid_id_property_charset_and_reserved` (line 116-127):
+Also add `"description"` to `src-tauri/core/src/tasks/id.rs`'s `RESERVED_TASK_KEYS` (line 10-21) after `"order",` (it must never be an id property either), AND to the reserved-iteration loop in `is_valid_id_property_charset_and_reserved` (line 116-127):
 
 ```rust
     "order",
@@ -1295,6 +1297,7 @@ it("renders the description and gates delete behind a confirm", async () => {
   mockIPC((cmd, args) => {
     calls.push([cmd, args]);
     if (cmd === "list_task_lists") return [];
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
     if (cmd === "update_task") return null;
     return undefined;
   });
@@ -1326,8 +1329,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { computed, onMounted, ref, toRef } from "vue";
 
 import { useTaskDetail } from "../composables/useTaskDetail";
-import type { AggTask, TaskEditorPatch } from "../types";
+import { logWarning } from "../logging";
+import type { AggTask, TaskEditorPatch, TasksConfig } from "../types";
 import { buildTaskPatch, dueOf, scheduledOf } from "../utils/taskFields";
+import { archivedMatcher } from "../utils/taskSections";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // The full-height detail surface: a roomy home for one task. It holds its own
@@ -1349,13 +1354,23 @@ const draftPriority = ref(normPriority(props.task.priority));
 const draftTags = ref(props.task.tags.join(", "));
 const draftList = ref(props.task.list);
 
-// The vault's lists for the picker (self-contained fetch, empty on failure).
+// The vault's lists for the picker. Archived lists are dropped as move targets
+// (they're hidden from the Lists view and open-task counts), but the task's OWN
+// current list is always kept so a task already in an archived list stays
+// selectable — matching useTaskLists.listsForEditor (Codex P2, PR #76). A load
+// failure logs rather than silently rendering a blank picker (Codex P2).
 const lists = ref<string[]>([]);
 onMounted(async () => {
   try {
-    lists.value = await invoke<string[]>("list_task_lists", { id: props.task.vaultId });
-  } catch {
+    const [all, cfg] = await Promise.all([
+      invoke<string[]>("list_task_lists", { id: props.task.vaultId }),
+      invoke<TasksConfig>("get_tasks_config", { id: props.task.vaultId }),
+    ]);
+    const isArchived = archivedMatcher(cfg.archivedLists ?? []);
+    lists.value = all.filter((l) => l === props.task.list || !isArchived(l));
+  } catch (e) {
     lists.value = [];
+    logWarning(`task detail: could not load task lists: ${String(e)}`);
   }
 });
 

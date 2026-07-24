@@ -481,9 +481,10 @@ hard-block (punishing the overwhelmingly common vaults for a config essentially
 no one has). Codex (PR #76) re-raised migrate/block; document-only is the
 proportionate, precedent-consistent call. A non-mutating startup detection +
 warning is the tracked future option if the exposure ever proves real.
-**A separate `description`-in-a-task-TEMPLATE config is NOT affected** — the
-template set deliberately does not reserve `description`, so a template that
-sets `description:` still seeds new tasks (Codex P2, PR #76).
+`description` is reserved in the template set too (it is a managed detail-view
+field, like `due`/`status`), so a task template cannot seed it — which also
+avoids a template block-scalar `description` orphaning on the first detail-view
+save (Codex P2, PR #76).
 
 ### GAP-68 · Low · A do-date write can overwrite a stable Task ID in the (formerly settable) `scheduled`-as-id-property config
 `src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,

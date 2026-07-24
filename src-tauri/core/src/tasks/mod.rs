@@ -22,5 +22,5 @@ pub use lists::{
     create_task_list, delete_task_list, is_valid_list_name, move_task_to_list, normalize_list_rel,
     rename_task_list, task_lists, DeleteListOutcome,
 };
-pub use parse::{description_field, is_valid_due, is_valid_tag, note_tags};
+pub use parse::{is_valid_due, is_valid_tag, note_tags};
 pub use writer::{set_fields, set_status};
