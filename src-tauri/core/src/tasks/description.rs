@@ -64,13 +64,16 @@ pub(super) fn opens_multiline_quoted(value: &str) -> bool {
 /// a DOUBLE-quoted scalar (`"…"`, optionally followed by a ` # comment`) is
 /// unescaped via `yaml_unquote_multiline` on just its span; a SINGLE-quoted
 /// scalar (`'…'`, `''` → `'`, optional trailing comment) is decoded likewise. An
-/// UNQUOTED value is taken verbatim — a description is free text where a bare
-/// `#` is CONTENT, not a comment (UNLIKE the structured fields that go through
-/// `scalar_field`). A BLOCK scalar (`description: |` / `>` + indented lines) is
-/// REJECTED (`None`): we store/read single-line scalars only, and surfacing the
-/// bare `|`/`>` marker as the description would be wrong (Codex P2, PR #76) —
-/// the block itself stays safe, since `set_fields` consumes it whole on a
-/// rewrite. Returns `None` when absent or empty. Top-level only (an
+/// UNQUOTED value has its YAML comment stripped as Obsidian would: a `#` that
+/// STARTS the value or is whitespace-preceded begins a comment (`# foo` reads as
+/// none, `bar # baz` reads as `bar`), while a `#` glued to non-whitespace
+/// (`bar#baz`) stays content; a YAML null form (`null`/`~`) reads as none. A
+/// BLOCK scalar (`description: |` / `>` + indented lines) is REJECTED (`None`),
+/// as are a multi-line quoted scalar and a flow collection (`[..]`/`{..}`): we
+/// store/read single-line scalars only, and surfacing a partial value or a bare
+/// `|`/`>` marker would be wrong (Codex P2, PR #76) — the block itself stays
+/// safe, since `set_fields` consumes it whole on a rewrite. Returns `None` when
+/// absent or empty. Top-level only (an
 /// indented `  description:` never matches), stops at the closing fence,
 /// mirroring `note_field`.
 pub(super) fn description_field(content: &str) -> Option<String> {
@@ -95,6 +98,15 @@ pub(super) fn description_field(content: &str) -> Option<String> {
                 // degrade to no description like the other unsupported forms (Codex
                 // P2, PR #76). Quoted values start with `"`/`'`, so a bracket INSIDE
                 // quotes (`"[not a list]"`) still reaches the quoted branch below.
+                return None;
+            }
+            if raw.starts_with('#') {
+                // A value that STARTS with `#` is a YAML comment — the property is
+                // null. `strip_inline_comment` (shared with the tags parser)
+                // deliberately KEEPS a leading `#` (a `#tag` token), so it would
+                // otherwise expose the comment as the description; a description has
+                // no such exception (Codex P2, PR #76). Quoted values start with
+                // `"`/`'`, so a quoted `"#hashtag"` still reaches the branch below.
                 return None;
             }
             let decoded = if raw.starts_with('"') {
@@ -236,6 +248,31 @@ mod tests {
             super::description_field("---\ntype: Task\ndescription: \"all one line\"\n---\n")
                 .as_deref(),
             Some("all one line")
+        );
+    }
+
+    #[test]
+    fn description_field_treats_a_leading_hash_as_a_comment() {
+        // A value starting with `#` is a YAML comment → the property is null. The
+        // tags parser keeps a leading `#` (a tag token), but a description must not
+        // (Codex P2, PR #76).
+        for v in ["#private", "# private", "#tag then words"] {
+            assert_eq!(
+                super::description_field(&format!("---\ntype: Task\ndescription: {v}\n---\n")),
+                None,
+                "`{v}` is a YAML comment"
+            );
+        }
+        // A `#` glued to non-whitespace content (not a comment) is still kept.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: color#3\n---\n").as_deref(),
+            Some("color#3")
+        );
+        // A `#` inside quotes is content, not a comment.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: \"#hashtag\"\n---\n")
+                .as_deref(),
+            Some("#hashtag")
         );
     }
 
