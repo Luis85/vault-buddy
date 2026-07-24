@@ -1186,4 +1186,34 @@ mod tests {
         assert!(out.contains("source: jira") && out.contains("ref: ABC-1"));
         assert!(out.contains("title: \"X (copy)\""));
     }
+
+    #[test]
+    fn update_task_fields_sets_rewrites_and_clears_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let p = root.join("t.md");
+        std::fs::write(&p, "---\ntype: Task\nstatus: new\ntitle: X\n---\n\nbody\n").unwrap();
+        let quoted = crate::template::yaml_quote_multiline("hi\nthere #42");
+        update_task_fields(&root, &p, &[("description", Some(quoted.as_str()))], None).unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        // NOTE (brief deviation): the brief's literal `super::parse::…` does not
+        // resolve here — `super` inside this nested `tests` module means `disk`,
+        // not `tasks` (that shorthand only works from disk.rs's own top-level
+        // functions, or from a sibling module like list.rs, one nesting level
+        // shallower). Fully qualifying from the crate root reaches the same
+        // `pub(super)` item — still visible, since `tasks::disk::tests` is a
+        // descendant of `tasks` — without changing `description_field`'s
+        // visibility or touching any other call site.
+        assert_eq!(
+            crate::tasks::parse::description_field(&after),
+            Some("hi\nthere #42".to_string())
+        );
+        assert!(after.contains("\nbody\n")); // body untouched
+        update_task_fields(&root, &p, &[("description", None)], None).unwrap();
+        assert_eq!(
+            crate::tasks::parse::description_field(&std::fs::read_to_string(&p).unwrap()),
+            None
+        );
+    }
 }

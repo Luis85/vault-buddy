@@ -494,6 +494,12 @@ pub struct TaskPatchDto {
     /// slice, so there is no clear flag.
     #[serde(default)]
     pub order: Option<f64>,
+    /// Free-text detail written as an escaped single-line scalar via
+    /// `yaml_quote_multiline` (multi-line, `#`-safe).
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub clear_description: bool,
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
@@ -566,6 +572,14 @@ pub async fn update_task(
         // line is a documented no-op, so this is safe on files that never had
         // the alias.
         updates.push(("tag", None));
+    }
+    if patch.clear_description {
+        updates.push(("description", None));
+    } else if let Some(desc) = &patch.description {
+        updates.push((
+            "description",
+            Some(capture_note::yaml_quote_multiline(desc)),
+        ));
     }
     if updates.is_empty() {
         return Ok(None);
