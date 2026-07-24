@@ -41,6 +41,17 @@ describe("TaskScheduleMenu", () => {
     expect(popover(w).exists()).toBe(false); // choosing closes it
   });
 
+  it("exposes aria-haspopup and reflects the open state via aria-expanded", async () => {
+    // The trigger is a disclosure that opens a popup — screen readers need
+    // aria-haspopup + a live aria-expanded to tell it apart from an
+    // immediate-action button and report open/closed (Codex, PR #75).
+    const w = mountMenu();
+    expect(trigger(w).attributes("aria-haspopup")).toBe("true");
+    expect(trigger(w).attributes("aria-expanded")).toBe("false");
+    await trigger(w).trigger("click");
+    expect(trigger(w).attributes("aria-expanded")).toBe("true");
+  });
+
   it("emits Tomorrow and This weekend from their own buttons", async () => {
     const w = mountMenu();
     await trigger(w).trigger("click");

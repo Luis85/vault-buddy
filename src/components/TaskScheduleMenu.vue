@@ -93,6 +93,8 @@ const itemClass =
       :disabled="busy"
       :label="`Schedule ${title}`"
       title="Schedule"
+      aria-haspopup="true"
+      :aria-expanded="open"
       @click.stop="toggle"
     >
       <AppIcon :size="14">
