@@ -146,17 +146,14 @@ Append `scheduled: Option<&str>` as the **last** parameter of `render_task` (kee
     }
 ```
 
-Add a `scheduled` template var to the `vars` array (so `{{scheduled}}` resolves in body/frontmatter templates), after the `due` entry:
-
-```rust
-    let vars = [
-        ("title", title),
-        ("date", created),
-        ("due", due.unwrap_or("")),
-        ("scheduled", scheduled.unwrap_or("")),
-        ("priority", priority.unwrap_or("")),
-    ];
-```
+Do **NOT** add `scheduled` to the `vars` array — leave it
+`[("title", …), ("date", …), ("due", …), ("priority", …)]` unchanged. Exposing a
+new `{{scheduled}}` template placeholder would oblige us to update
+`TaskTemplateSettings.vue`'s user-visible `TEMPLATE_PLACEHOLDER_HINT` and the
+template-placeholder contract in AGENTS.md, which is out of this increment's
+scope (Codex, PR #75). `scheduled` only needs to be RESERVED (done above), not a
+substitutable variable; an author who types `{{scheduled}}` gets the existing
+unknown-token behavior (renders empty), same as any other unsupported token.
 
 Append `scheduled: Option<&str>` as the **last** parameter of `create_task`, and pass it through to the `render_task` call as the last argument.
 
@@ -422,17 +419,27 @@ export const scheduledOf = (t: TaskItem): string | null =>
 export const plannerDateOf = (t: TaskItem): string | null => scheduledOf(t) ?? dueOf(t);
 ```
 
-- [ ] **Step 5: Default the field in the shared test factory.** In `tests/helpers/taskMount.ts`, find the object literal(s) that build a `TaskItem`/`AggTask` and add `scheduled: null,` beside the existing `due:` default (so existing tests using the factory keep compiling). If any other test file builds a raw `TaskItem` literal, TypeScript's build will flag it — add `scheduled: null` there too.
+- [ ] **Step 5: Default the field in EVERY typed fixture the required field breaks.** `scheduled: string | null` is REQUIRED (matching `due`), so every raw `TaskItem`/`AggTask` object literal in the test suite must gain `scheduled: null` or `vue-tsc` fails and the branch won't typecheck. First the shared factory: in `tests/helpers/taskMount.ts`, add `scheduled: null,` beside the existing `due:` default. Then find the raw-literal fixtures — grep is the reliable way:
+
+```bash
+grep -rln "due:" tests/ | xargs grep -l "priority:" 
+```
+
+Known offenders that build typed task literals (verify against the grep + the build output, don't assume this list is exhaustive): `tests/task-sort.test.ts`, `tests/task-order.test.ts`, `tests/task-reorder.test.ts`. Add `scheduled: null` to each raw literal in every file `npm run build` flags.
 
 - [ ] **Step 6: Run the new test + typecheck — expect PASS:**
 
 Run: `npx vitest run tests/task-fields.test.ts && npm run build`
-Expected: PASS; `vue-tsc` typecheck clean.
+Expected: PASS; `vue-tsc` typecheck clean (a remaining type error names another fixture file — add `scheduled: null` there and re-run).
 
-- [ ] **Step 7: Commit:**
+- [ ] **Step 7: Commit — stage EVERY file you touched, including all flagged fixtures:**
 
 ```bash
 git add src/types.ts src/utils/taskFields.ts tests/task-fields.test.ts tests/helpers/taskMount.ts
+# plus every fixture the required field forced you to update, e.g.:
+git add tests/task-sort.test.ts tests/task-order.test.ts tests/task-reorder.test.ts
+# then confirm nothing is left behind:
+git status --porcelain   # must be empty for the tracked tests/src you changed
 git commit -m "feat(ui): scheduled type + scheduledOf/plannerDateOf helpers"
 ```
 
@@ -1298,7 +1305,7 @@ In the options row template (the `showAddOptions` block with `task-add-due`), ad
       >
 ```
 
-- [ ] **Step 9: Thread `scheduled` through the container `add()`.** In `src/components/Tasks.vue`:
+Also update the **options-toggle (⋯) button's accessible name** — it now reveals a do-date field too, so its stale `aria-label`/`title` must mention scheduling. The button currently reads `:aria-label="showAddOptions ? 'Hide task options' : 'Set due date or priority'"` and `title="Due date / priority"`; change the closed-state label to `'Set do date, due date or priority'` and the title to `'Do date / due date / priority'`. Add a `tests/tasks.test.ts` assertion that the `task-add-options` button's `aria-label` (closed state) includes "do date".
 
 Add `scheduled: string;` to the `AddPayload` type.
 

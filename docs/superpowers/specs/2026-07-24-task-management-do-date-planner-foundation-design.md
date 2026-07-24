@@ -283,9 +283,12 @@ plan date** = `scheduled ?? due`":
   bucket is simply not rendered — no bespoke "nothing planned today" hint this
   increment (an earlier draft promised one, but the filter makes an empty Today
   unreachable without changing the contract, so it's dropped rather than
-  special-cased). A vault that never schedules never triggers the bucket headers
-  and keeps its flat list — the header rule is preserved exactly. The overall
-  empty state (no tasks at all) reuses `EmptyState` as today.
+  special-cased). A vault with **no effective dates at all** (no `scheduled`
+  AND no `due`) never triggers the bucket headers and keeps its flat list — the
+  header rule is preserved exactly. (A vault that never *schedules* but does use
+  `due` dates still gets the Overdue/Today/Upcoming headers, because the
+  effective plan date is `scheduled ?? due` — same as today's `dateBuckets`.)
+  The overall empty state (no tasks at all) reuses `EmptyState` as today.
 
 ## Architecture
 
