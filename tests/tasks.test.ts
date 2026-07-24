@@ -297,6 +297,22 @@ describe("Tasks", () => {
     expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 5");
   });
 
+  it("shows a do-date chip only for scheduled tasks, leaving due-only rows unchanged", async () => {
+    // A far-past scheduled date always renders as a short date ("Jan 15")
+    // regardless of when the suite runs — the relative-label branches (Today/
+    // Tomorrow/weekday) are unit-tested deterministically in task-fields.test.ts.
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/s.md", title: "Sched", status: "new", created: "2026-07-08", done: false, due: null, scheduled: "2020-01-15", priority: null, tags: [], list: "", order: null, id: null },
+        { path: "C:/v/Tasks/d.md", title: "DueOnly", status: "new", created: "2026-07-08", done: false, due: "2026-07-20", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+      ],
+    });
+    await flushPromises();
+    const chips = wrapper.findAll('[data-testid="task-scheduled"]');
+    expect(chips).toHaveLength(1); // only the scheduled task
+    expect(chips[0].text()).toContain("Jan 15");
+  });
+
   it("groups tasks into plan buckets with headers", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] }); // 2026-07-09 local
     try {

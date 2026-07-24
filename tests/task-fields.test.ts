@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TaskItem } from "../src/types";
-import { plannerDateOf, scheduledOf } from "../src/utils/taskFields";
+import { plannerDateOf, relativeDateLabel, scheduledOf, shortDate } from "../src/utils/taskFields";
 
 function task(p: Partial<TaskItem>): TaskItem {
   return {
@@ -23,5 +23,27 @@ describe("plannerDateOf", () => {
     expect(plannerDateOf(task({ scheduled: "2026-07-20", due: "2026-07-10" }))).toBe("2026-07-20");
     expect(plannerDateOf(task({ scheduled: null, due: "2026-07-10" }))).toBe("2026-07-10");
     expect(plannerDateOf(task({ scheduled: null, due: null }))).toBeNull();
+  });
+});
+
+describe("relativeDateLabel", () => {
+  it("labels Today / Tomorrow / weekday / short date", () => {
+    const today = "2026-07-24"; // a Friday
+    expect(relativeDateLabel("2026-07-24", today)).toBe("Today");
+    expect(relativeDateLabel("2026-07-25", today)).toBe("Tomorrow");
+    expect(relativeDateLabel("2026-07-27", today)).toBe("Mon"); // within the next 6 days
+    expect(relativeDateLabel("2026-08-10", today)).toBe(shortDate("2026-08-10")); // far → short date
+    expect(relativeDateLabel("2026-07-20", today)).toBe("Jul 20"); // past → short date
+  });
+
+  it("falls back to the literal shortDate for a shape-valid but calendar-invalid date", () => {
+    // is_valid_due checks only the YYYY-MM-DD shape, never calendar validity, so
+    // a stored "2026-02-31" is possible (Obsidian's own date picker tolerates
+    // it too). `new Date("2026-02-31T00:00:00")` silently normalizes to
+    // March 3, which would render a wrong weekday for a date the user
+    // authored as "Feb 31" — the round-trip guard must catch this and fall
+    // back to the literal shortDate instead.
+    expect(relativeDateLabel("2026-02-31", "2026-02-01")).toBe(shortDate("2026-02-31"));
+    expect(relativeDateLabel("2026-02-31", "2026-02-01")).toBe("Feb 31");
   });
 });

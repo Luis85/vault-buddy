@@ -28,6 +28,38 @@ export function localToday(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// A short, locale-independent date label ("Jul 15"). Shared by the row's due
+// element and the do-date chip's far-date fallback.
+export function shortDate(date: string): string {
+  const [, m, day] = date.split("-");
+  const month = MONTHS[Number(m) - 1];
+  return month ? `${month} ${Number(day)}` : date;
+}
+
+// A friendly relative label for a plan date, given today (both YYYY-MM-DD):
+// Today / Tomorrow / a weekday within the next 6 days ("Sat") / else shortDate.
+// `today` is injected so it's deterministic and unit-testable (no clock mock).
+export function relativeDateLabel(date: string, today: string): string {
+  if (date === today) return "Today";
+  const d = new Date(`${date}T00:00:00`);
+  const t = new Date(`${today}T00:00:00`);
+  // A shape-valid but calendar-invalid date (e.g. 2026-02-31 — the task contract
+  // accepts it; is_valid_due does NO calendar check) normalizes into the next
+  // month, so getDay()/day-diff would render a wrong weekday. Fall back to the
+  // literal shortDate when the Date didn't round-trip.
+  const [y, mo, day] = date.split("-").map(Number);
+  if (d.getFullYear() !== y || d.getMonth() + 1 !== mo || d.getDate() !== day) {
+    return shortDate(date);
+  }
+  const diffDays = Math.round((d.getTime() - t.getTime()) / 86_400_000);
+  if (diffDays === 1) return "Tomorrow";
+  if (diffDays > 1 && diffDays < 7) return WEEKDAYS[d.getDay()];
+  return shortDate(date);
+}
+
 // Split a free-text tags field on commas/whitespace, strip leading `#`s,
 // drop empties, dedupe case-insensitively keeping the first casing.
 // Client-side parsing is lenient; the shell strictly validates the charset
