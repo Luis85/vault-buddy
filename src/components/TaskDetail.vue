@@ -6,7 +6,7 @@ import { useTaskDetail } from "../composables/useTaskDetail";
 import { logWarning } from "../logging";
 import type { AggTask, TaskEditorPatch, TasksConfig } from "../types";
 import { buildTaskPatch, dueOf, scheduledOf } from "../utils/taskFields";
-import { archivedMatcher } from "../utils/taskSections";
+import { archivedMatcher, orderLists } from "../utils/taskSections";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // The full-height detail surface: a roomy home for one task. It holds its own
@@ -41,7 +41,12 @@ onMounted(async () => {
       invoke<TasksConfig>("get_tasks_config", { id: props.task.vaultId }),
     ]);
     const isArchived = archivedMatcher(cfg.archivedLists ?? []);
-    lists.value = all.filter((l) => l === props.task.list || !isArchived(l));
+    // Order by the vault's configured listOrder-then-alphabetical (matching
+    // useTaskLists.listsForVault), keeping the task's OWN list even if archived
+    // (reviewer, PR #76).
+    lists.value = orderLists(all, cfg.listOrder ?? []).filter(
+      (l) => l === props.task.list || !isArchived(l),
+    );
   } catch (e) {
     lists.value = [];
     logWarning(`task detail: could not load task lists: ${String(e)}`);
@@ -74,9 +79,9 @@ async function onSave() {
   await save(currentPatch());
 }
 
-// Two-step permanent-delete confirm (GAP-27 class: focus the confirm on open,
-// Escape steps back one level and stops propagation so it can't bubble into the
-// panel's own close handler).
+// Two-step permanent-delete confirm (GAP-27 class: focus the confirm on open;
+// Escape steps back one level ONLY while the confirm is open — a closed-confirm
+// Escape bubbles to the panel's own close handler like every other view).
 const confirming = ref(false);
 const confirmBtn = ref<HTMLButtonElement | null>(null);
 async function openConfirm() {
@@ -85,7 +90,11 @@ async function openConfirm() {
   confirmBtn.value?.focus();
 }
 function onDeleteKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
+  // Only swallow Escape while the confirm is OPEN. When it is closed, let Escape
+  // bubble to PanelRoot's window handler so it closes the panel like every other
+  // view — an unconditional stopPropagation() would make Escape a dead end on
+  // this page (reviewer + Codex P2, PR #76).
+  if (e.key === "Escape" && confirming.value) {
     e.stopPropagation();
     confirming.value = false;
   }

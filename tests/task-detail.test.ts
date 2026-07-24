@@ -412,4 +412,102 @@ describe("TaskDetail.vue", () => {
       document.body.innerHTML = "";
     }
   });
+
+  it("shares one busy guard: a slow write disables every detail write control", async () => {
+    // The serialize-all-writes invariant (Codex P2): while ANY write is in
+    // flight, a DIFFERENT write control must also be disabled so a second write
+    // can't race the first. Manually-resolved-pending idiom from tasks.test.ts.
+    let resolveDup: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "duplicate_task")
+        return new Promise<string>((r) => {
+          resolveDup = () => r("/v/Tasks/t (copy).md");
+        });
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    const del = () => wrapper.find('[data-testid="task-detail-delete"]').element as HTMLButtonElement;
+    const dup = () => wrapper.find('[data-testid="task-detail-duplicate"]').element as HTMLButtonElement;
+    expect(del().disabled).toBe(false);
+    await wrapper.get('[data-testid="task-detail-duplicate"]').trigger("click"); // slow write starts
+    await new Promise((r) => setTimeout(r));
+    expect(dup().disabled).toBe(true);
+    expect(del().disabled).toBe(true); // a DIFFERENT control, disabled by the shared guard
+    resolveDup?.();
+    await new Promise((r) => setTimeout(r));
+    expect(del().disabled).toBe(false);
+    expect(dup().disabled).toBe(false);
+  });
+
+  it("focuses the confirm button when the delete confirm opens", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
+    try {
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+      await new Promise((r) => setTimeout(r)); // openConfirm awaits a tick before focusing
+      expect(document.activeElement).toBe(
+        wrapper.get('[data-testid="task-detail-delete-confirm"]').element,
+      );
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("swallows Escape only while the confirm is open, letting it bubble otherwise", async () => {
+    // Confirm CLOSED → Escape must reach the document so PanelRoot's window
+    // handler can close the panel like every other view; OPEN → swallowed and
+    // steps back one level (reviewer + Codex P2, PR #76).
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
+    const seen: string[] = [];
+    const onDocKeydown = (e: Event) => seen.push((e as KeyboardEvent).key);
+    document.addEventListener("keydown", onDocKeydown);
+    try {
+      await new Promise((r) => setTimeout(r));
+      // Confirm closed → Escape bubbles all the way to the document.
+      await wrapper.get('[data-testid="task-detail-title"]').trigger("keydown", { key: "Escape" });
+      expect(seen).toContain("Escape");
+      // Open the confirm, then Escape is swallowed (never reaches the document)
+      // and closes the confirm.
+      seen.length = 0;
+      await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-delete-confirm"]').trigger("keydown", { key: "Escape" });
+      expect(seen).not.toContain("Escape");
+      expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(false);
+    } finally {
+      document.removeEventListener("keydown", onDocKeydown);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("onMounted orders lists by the vault's listOrder then alphabetical", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return ["Alpha", "Zebra", "Middle"];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: ["Zebra", "Middle"], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ list: "" }) } });
+    await new Promise((r) => setTimeout(r));
+    // listOrder first (Zebra, Middle), then the unordered rest alphabetically.
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Zebra", "Middle", "Alpha"]);
+  });
 });
