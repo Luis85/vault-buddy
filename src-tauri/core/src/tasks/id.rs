@@ -6,7 +6,10 @@
 /// Reserved frontmatter keys the ID property must never collide with — the
 /// structured task fields the surgical writer and reader own. Using one as
 /// the ID property would let the ID writer clobber a real field.
-// keep in sync with disk.rs::RESERVED_TASK_KEYS
+// Shares its members with disk.rs::RESERVED_TASK_KEYS EXCEPT `description`,
+// which is reserved HERE (an id property must never be the managed description
+// the detail view writes) but NOT as a template key there — render_task never
+// emits description, so a template may legitimately seed it (Codex P2, PR #76).
 const RESERVED_TASK_KEYS: &[&str] = &[
     "type",
     "status",

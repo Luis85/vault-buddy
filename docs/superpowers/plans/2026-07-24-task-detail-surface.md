@@ -12,7 +12,7 @@
 
 - **`Tasks.vue` must NOT grow** — it is grandfathered over the 500-nonblank-LOC frontend cap at 521 (GAP-65, shrink-only). All new logic lives in new files (`TaskDetail.vue`, `useTaskDetail.ts`, additions to `utils/taskFields.ts`). Per-function ESLint limits also apply everywhere: `max-lines-per-function` 200, `complexity` 25, `max-params` 6, `max-depth` 5.
 - **LOC / quality / coverage baselines are shrink-only.** If a gate fails because a metric IMPROVED, re-run with `--update` and commit the baseline in the same task. If a new file legitimately needs headroom, add its allowlist entry in the same commit with a one-line justification.
-- **`description` is reserved in BOTH key-sets** — `tasks/disk.rs::RESERVED_TASK_KEYS` (template filter) AND `tasks/id.rs::RESERVED_TASK_KEYS` (id-property validator). The two `const`s are kept in sync by hand (cross-referencing comments already say so).
+- **`description` is reserved ONLY in the id-property set** (`tasks/id.rs::RESERVED_TASK_KEYS`), NOT the template set (`tasks/disk.rs::RESERVED_TASK_KEYS`): `render_task` never emits `description`, so a template can't duplicate a managed line and a vault may legitimately seed it — the two `const`s now deliberately diverge on this one key (Codex P2, PR #76), and their comments cross-reference the divergence.
 - **camelCase across the Rust↔TS boundary** — DTO fields use `#[serde(rename_all = "camelCase")]`; TS types match.
 - **Writes stay never-clobber + canonically contained.** Duplicate uses the collision-safe non-replacing writer (`write_note_collision_safe`); delete asserts canonical containment before `remove_file`. Permanent delete is the app's first destructive vault write and is documented as a bounded departure in `docs/Gaps.md`.
 - **Rust gates:** `cd src-tauri && cargo fmt --check`; `cd src-tauri/core && cargo clippy --all-targets -- -D warnings && cargo test`. Shell changes compile-gate on Linux: `npm run setup:linux` (once) then `npx tauri build --no-bundle`.
@@ -233,15 +233,13 @@ In the same file, in `collect_task_file`'s `out.push(TaskItem { ... })` (line 16
     });
 ```
 
-In `src-tauri/core/src/tasks/disk.rs`, add `"description"` to `RESERVED_TASK_KEYS` (line 48-59), after `"order",`:
+Do NOT add `"description"` to `src-tauri/core/src/tasks/disk.rs`'s `RESERVED_TASK_KEYS` (the TEMPLATE filter). `render_task` never emits `description`, so a template key can't duplicate a managed line, and a vault may legitimately seed a task's description from its template — reserving it there would silently drop that content on upgrade (Codex P2, PR #76). Instead, update disk.rs's sync comment (the `// keep in sync with id.rs::RESERVED_TASK_KEYS` line above the array) to note the intentional divergence:
 
 ```rust
-    "order",
-    "description",
-];
+// Matches id.rs::RESERVED_TASK_KEYS except `description` (reserved there as an id property only; render_task never emits it, so a template may seed it — Codex PR #76).
 ```
 
-In `src-tauri/core/src/tasks/id.rs`, add `"description"` to its `RESERVED_TASK_KEYS` (line 10-21) after `"order",`, AND to the reserved-iteration loop in `is_valid_id_property_charset_and_reserved` (line 116-127):
+`description` IS reserved as an id property. In `src-tauri/core/src/tasks/id.rs`, add `"description"` to its `RESERVED_TASK_KEYS` (line 10-21) after `"order",`, update its sync comment to note the same divergence, AND add it to the reserved-iteration loop in `is_valid_id_property_charset_and_reserved` (line 116-127):
 
 ```rust
     "order",
@@ -447,6 +445,34 @@ fn duplicate_task_uses_the_filename_stem_when_the_source_has_no_title() {
     let out = std::fs::read_to_string(&new).unwrap();
     assert!(out.contains("title: \"My hand note (copy)\""));
 }
+
+#[test]
+fn duplicate_task_rewrites_the_on_disk_id_key_casing() {
+    // Source key `Task-ID:`, configured property `task-id`: the copy must
+    // rewrite/strip THAT on-disk key, never insert a second differently-cased
+    // id or miss the strip (Codex P2, PR #76).
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("Tasks");
+    std::fs::create_dir_all(&root).unwrap();
+    let src = root.join("orig.md");
+    std::fs::write(
+        &src,
+        "---\ntype: Task\nstatus: new\ntitle: X\nTask-ID: aaa11111\n---\n",
+    )
+    .unwrap();
+    // IDs on → the existing `Task-ID:` line is rewritten to a fresh id (no
+    // second `task-id:` line, exactly one id key remains).
+    let on = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+    let out_on = std::fs::read_to_string(&on).unwrap();
+    assert!(!out_on.contains("aaa11111")); // old id replaced
+    assert_eq!(out_on.matches("Task-ID:").count(), 1); // rewritten in place
+    assert!(!out_on.to_lowercase().contains("task-id: aaa")); // no stale value
+    assert_eq!(out_on.to_lowercase().matches("task-id:").count(), 1); // exactly one id key
+    // IDs off → the `Task-ID:` line is stripped despite the casing mismatch.
+    let off = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
+    let out_off = std::fs::read_to_string(&off).unwrap();
+    assert!(!out_off.to_lowercase().contains("task-id"));
+}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -505,10 +531,21 @@ pub fn duplicate_task(
     } else {
         None
     };
+    // Resolve the id key to its ON-DISK casing (case-insensitive lookup) so the
+    // case-sensitive `set_fields` matches a differently-cased existing id — else
+    // a strip misses `Task-ID:` and a regenerate inserts a SECOND, differently-
+    // cased id (Codex P2, PR #76). With no id line on disk, add one under the
+    // configured name ONLY when regenerating.
+    let id_key: Option<String> = id_property.and_then(|prop| {
+        match super::parse::frontmatter_scalar_ci(&content, prop) {
+            Some((on_disk, _)) => Some(on_disk),
+            None => new_id.as_ref().map(|_| prop.to_string()),
+        }
+    });
     let mut updates: Vec<(&str, Option<&str>)> =
         vec![("title", Some(quoted.as_str())), ("status", Some("new"))];
-    if let Some(prop) = id_property {
-        updates.push((prop, new_id.as_deref()));
+    if let Some(key) = id_key.as_deref() {
+        updates.push((key, new_id.as_deref()));
     }
     let rewritten = set_fields(&content, &updates)
         .ok_or("Source is not a valid type: Task document")?;

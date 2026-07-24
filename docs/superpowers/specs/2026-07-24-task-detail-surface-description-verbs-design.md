@@ -179,13 +179,20 @@ same shape as `recordMode`/`recordings`.
   single-line scalars). Both are acceptable because the app owns the write
   format and reads defensively; both are recorded in `docs/Gaps.md`, with
   extending `set_fields` to consume block scalars named as the future hardening.
-- **Reserved in BOTH reserved-key sets**, exactly like `scheduled` before it:
-  the template reserved set (`tasks/disk.rs::RESERVED_TASK_KEYS`, so a per-vault
-  extra-frontmatter template can't redefine the managed field) **and** the
-  task-ID-property reserved set (`tasks/id.rs::RESERVED_TASK_KEYS` via
-  `is_valid_id_property`, so a vault can't point its id property at
-  `description`). Cross-reference the two constants in comments, as the
-  do-date increment did.
+- **Reserved ONLY in the task-ID-property set** (`tasks/id.rs::RESERVED_TASK_KEYS`
+  via `is_valid_id_property`, so a vault can't point its id property at
+  `description` — that would let an id write clobber the managed description the
+  detail view owns). It is deliberately **NOT** in the template reserved set
+  (`tasks/disk.rs::RESERVED_TASK_KEYS`): unlike `due`/`scheduled`/`priority`,
+  `render_task` never emits `description`, so a template key can't duplicate a
+  managed line — and a vault may legitimately seed a task's description from its
+  template, which template-reserving would silently drop on upgrade (Codex P2,
+  PR #76 — an earlier draft reserved it in both, mirroring `scheduled`; that was
+  wrong for `description`). The two constants now diverge on this one key; their
+  comments cross-reference the divergence. (The pre-existing edge — a vault that
+  had already set its id property to `description`, which older releases
+  accepted — is the same shape as GAP-68's `scheduled`-as-id case and is
+  documented there, not migrated.)
 - **DTO:** `TaskItem` (`tasks/list.rs`) and `TaskDto` (`services/tasks/mod.rs`)
   gain `description: Option<String>`, filtered through `yaml_unquote_multiline`
   at the read boundary; it rides `list_tasks` like every other field, and

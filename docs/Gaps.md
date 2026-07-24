@@ -456,6 +456,35 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-77 · Low · Reserving `description` disables ID generation for a (formerly settable) `description`-as-id-property config
+`src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
+`id_property_for_generation`). The Task Detail increment
+(docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md)
+adds `description` as a managed frontmatter field and reserves it in the id.rs
+reserved-key set (NOT the template set — the two now diverge on this one key;
+see the cross-referencing comments). Before this increment `is_valid_id_property`
+did NOT reserve `description`, so the supported `set_task_id_config` command
+would ACCEPT `description` as a task-id property. A vault that had
+`task_id_enabled` ON and its id property set to the literal `description`
+therefore has on-disk tasks carrying `description: <stable-id>`.
+**Consequence:** reserving `description` makes `id_property_for_generation`
+re-validate and turn id generation OFF for that vault (logged); `list_tasks`
+stops surfacing the stored ids (the property is no longer read) and
+creates/edits stop stamping, while the stored config still reads `enabled`.
+This is the exact shape of GAP-68 (`scheduled`-as-id). **Why Low / document-only:**
+the exposure is near-zero (it needs the id property *named* the literal
+`description`, a nonsensical choice for a stable-handle property), and the
+remedy — re-point the id property to a non-reserved name — is a one-line
+settings change. As with GAP-68 we deliberately do NOT auto-migrate (rewriting
+every task's id property is the mass vault mutation this app forbids) nor
+hard-block (punishing the overwhelmingly common vaults for a config essentially
+no one has). Codex (PR #76) re-raised migrate/block; document-only is the
+proportionate, precedent-consistent call. A non-mutating startup detection +
+warning is the tracked future option if the exposure ever proves real.
+**A separate `description`-in-a-task-TEMPLATE config is NOT affected** — the
+template set deliberately does not reserve `description`, so a template that
+sets `description:` still seeds new tasks (Codex P2, PR #76).
+
 ### GAP-68 · Low · A do-date write can overwrite a stable Task ID in the (formerly settable) `scheduled`-as-id-property config
 `src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
 `id_property_for_generation`) and `src-tauri/core/src/tasks/disk.rs`

@@ -44,7 +44,7 @@ pub fn task_basename(title: &str, today: &str) -> String {
 /// the surgical field writer (`set_fields`) is never confused about which key
 /// it owns. The task-id property (when present) is appended to this set at
 /// call time — it's per-vault configurable, so it can't be a `const`.
-// keep in sync with id.rs::RESERVED_TASK_KEYS
+// Matches id.rs::RESERVED_TASK_KEYS except `description` (reserved there as an id property only; render_task never emits it, so a template may seed it — Codex PR #76).
 const RESERVED_TASK_KEYS: &[&str] = &[
     "type",
     "status",
@@ -56,7 +56,6 @@ const RESERVED_TASK_KEYS: &[&str] = &[
     "tags",
     "tag",
     "order",
-    "description",
 ];
 
 /// A `type: Task` document. `type`/`status`/`created` (and the optional
