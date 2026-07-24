@@ -131,14 +131,29 @@ today," one durable concept.
   *separate* constants today. Without the second, a vault that had configured
   its task-id property as `scheduled` would, after this feature, emit a
   duplicate `scheduled:` on create and let a schedule edit clobber the id.
-  **Existing conflicting configs degrade safely:** `id_property_for_generation`
-  re-validates the property on every create/edit, so once `scheduled` is
-  reserved a vault pointing its id at `scheduled` simply gets id generation OFF
-  (logged), never a collision — the same defensive posture any reserved id
-  property already gets; `set_task_id_config` also rejects setting it going
-  forward. (Single-sourcing the two duplicated reserved lists is a noted small
-  cleanup, not required here; this increment adds `scheduled` to both and
-  cross-references them.)
+  **Existing conflicting configs — the honest limits.** Reserving `scheduled`
+  stops FUTURE id generation/reading for such a vault: `id_property_for_generation`
+  re-validates on every create/edit, so a vault pointing its id at `scheduled`
+  gets id generation OFF (logged), no duplicate `scheduled:` on create, and
+  `set_task_id_config` rejects setting it going forward. On the READ side the
+  stored `scheduled: <id>` value is harmless — `scheduledOf` only accepts a
+  plain `YYYY-MM-DD`, so a non-date id reads as *unscheduled* and never shows as
+  a do-date. **But we do NOT claim never-clobber for the pre-existing on-disk
+  ids in that pathological config:** those tasks still contain `scheduled:
+  <stable-id>`, and if the user later schedules (or clears) such a task, the
+  write overwrites that value — losing the id. This is an **accepted, documented
+  edge (see docs/Gaps.md)**, not a silent guarantee: the config is a hand-set
+  collision with a name that has become a managed field, the remedy is to
+  re-point the id property to a non-reserved name *before* scheduling, and we
+  deliberately do **not** auto-migrate (rewriting every task file's property is
+  exactly the mass vault mutation this app forbids) nor hard-block scheduling
+  (punishing the overwhelmingly common vaults for a config essentially no one
+  has). The realistic exposure is near-zero — it needs `task_id_enabled` on AND
+  the property hand-set to the odd literal `scheduled` — which is why documenting
+  + remedy is the proportionate call over migration/blocking machinery.
+  (Single-sourcing the two duplicated reserved lists is a noted small cleanup,
+  not required here; this increment adds `scheduled` to both and cross-references
+  them.)
 - **DTO:** `TaskItem`/`TaskDto` gains `scheduled: string | null` (camelCase
   across Rust↔TS, the existing precedent); `add_task` and `update_task` accept
   an optional `scheduled` plus a `clearScheduled` flag mirroring `clearDue`.
@@ -248,11 +263,14 @@ plan date** = `scheduled ?? due`":
   show. This is what keeps the compatibility promise honest at the *rendering*
   level, not merely at bucket placement: the only rows that look different are
   ones the user has explicitly scheduled.
-- Empty/degraded states reuse `EmptyState`; the planner's Today bucket gets a
-  friendly empty hint ("Nothing planned for today — pull something from Anytime
-  or Upcoming") rather than a blank, nudging the plan-my-day loop. (A vault that
-  never schedules never triggers the bucket headers, so it keeps its flat list —
-  the existing `dateBuckets` header rule, preserved by `plannerBuckets`.)
+- **Empty-bucket behavior is unchanged from `dateBuckets`:** `plannerBuckets`
+  keeps the existing `.filter(tasks.length > 0)`, so a zero-task Today (or any)
+  bucket is simply not rendered — no bespoke "nothing planned today" hint this
+  increment (an earlier draft promised one, but the filter makes an empty Today
+  unreachable without changing the contract, so it's dropped rather than
+  special-cased). A vault that never schedules never triggers the bucket headers
+  and keeps its flat list — the header rule is preserved exactly. The overall
+  empty state (no tasks at all) reuses `EmptyState` as today.
 
 ## Architecture
 
