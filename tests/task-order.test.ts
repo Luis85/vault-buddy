@@ -10,6 +10,7 @@ const t = (title: string, order: number | null): AggTask => ({
   created: "2026-07-08",
   done: false,
   due: null,
+  scheduled: null,
   priority: null,
   tags: [],
   list: "",

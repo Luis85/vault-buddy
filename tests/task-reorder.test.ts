@@ -16,6 +16,7 @@ const task = (title: string, order: number | null): TaskItem => ({
   created: "2026-07-08",
   done: false,
   due: null,
+  scheduled: null,
   priority: null,
   tags: [],
   list: "",
@@ -65,7 +66,7 @@ const rowTitles = (wrapper: ReturnType<typeof mount>) =>
 
 const inList = (title: string, list: string, order: number): TaskItem => ({
   path: `C:/v/Tasks/${list}/${title}.md`,
-  title, status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list, order, id: null,
+  title, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags: [], list, order, id: null,
 });
 
 describe("manual reordering", () => {
@@ -445,7 +446,7 @@ describe("manual reordering", () => {
     // the origin's pointer slot would be a silent surprise.
     const done: TaskItem = {
       path: "C:/v/Tasks/z.md", title: "z", status: "done", created: "2026-07-06",
-      done: true, due: null, priority: null, tags: [], list: "", order: null, id: null,
+      done: true, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null,
     };
     const { wrapper, calls } = mountManual([inList("x1", "A", 1024), inList("x2", "A", 2048), done]);
     await flushPromises();

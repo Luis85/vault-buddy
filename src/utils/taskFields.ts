@@ -10,6 +10,16 @@ const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const dueOf = (t: TaskItem): string | null =>
   t.due && DUE_RE.test(t.due) ? t.due : null;
 
+// A scheduled (do) date counts only when it's a plain YYYY-MM-DD (defensive
+// read, same shape gate as dueOf).
+export const scheduledOf = (t: TaskItem): string | null =>
+  t.scheduled && DUE_RE.test(t.scheduled) ? t.scheduled : null;
+
+// The effective PLAN date the planner buckets by: the do-date if set, else the
+// deadline. Setting a scheduled date is what moves a task's plan; a
+// deadline-only task still buckets by its deadline (non-regressing).
+export const plannerDateOf = (t: TaskItem): string | null => scheduledOf(t) ?? dueOf(t);
+
 // LOCAL calendar date — never UTC/ISO slicing, matching add_task's local-date
 // rule; near midnight UTC-derived "today" would mis-bucket by a day.
 export function localToday(): string {
