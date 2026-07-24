@@ -2,6 +2,7 @@
 //! convenience. Reader/writer agreement tests live here — they pin what
 //! `set_fields` writes against what the parse side reads.
 
+use super::description::opens_multiline_quoted;
 use super::doc::is_task;
 use super::parse::strip_inline_comment;
 
@@ -130,7 +131,8 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
                 // the writer must consume it too or an edit would orphan the
                 // items and a clear would leave stale tags (Codex, PR #46).
                 let rest = &trimmed[key.len() + 1..];
-                let v = strip_inline_comment(rest.trim()).trim();
+                let raw_val = rest.trim();
+                let v = strip_inline_comment(raw_val).trim();
                 if v.is_empty() {
                     skip_list_items = true;
                 } else if v.starts_with(['|', '>']) {
@@ -139,6 +141,12 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
                     // this value, so consume it too — a rewrite/removal must
                     // replace the whole scalar, never orphan its lines (Codex P2,
                     // PR #76). An unquoted plain scalar can't start with `|`/`>`.
+                    skip_block_scalar = true;
+                } else if opens_multiline_quoted(raw_val) {
+                    // A multi-line QUOTED scalar (`"…` / `'…` with the close on a
+                    // later line): same hazard — its indented continuation lines
+                    // belong to this value and must be consumed on a rewrite so
+                    // nothing orphans (Codex P2, PR #76).
                     skip_block_scalar = true;
                 }
                 if let Some(v) = value {
@@ -493,6 +501,23 @@ mod tests {
         let doc = "---\ntype: Task\nstatus: new\ndescription: >\n  folded text\n  more\n---\n";
         let out = set_fields(doc, &[("description", None)]).unwrap();
         assert_eq!(out, "---\ntype: Task\nstatus: new\n---\n");
+    }
+
+    #[test]
+    fn set_fields_consumes_a_multiline_quoted_scalar_continuation() {
+        // A multi-line double-quoted scalar (`description: "first` + indented
+        // continuation) must be replaced whole on a rewrite/removal — its
+        // continuation lines are consumed, never orphaned (Codex P2, PR #76).
+        let doc = "---\ntype: Task\nstatus: new\ndescription: \"first line\n  second line\"\ntitle: \"A\"\n---\nbody\n";
+        let out = set_fields(doc, &[("description", Some("\"one line\""))]).unwrap();
+        assert!(out.contains("description: \"one line\"\n"));
+        assert!(!out.contains("second line"));
+        assert!(out.contains("title: \"A\"\n"));
+        assert!(out.contains("\nbody\n"));
+        let removed = set_fields(doc, &[("description", None)]).unwrap();
+        assert!(!removed.contains("first line"));
+        assert!(!removed.contains("second line"));
+        assert!(removed.contains("title: \"A\"\n"));
     }
 
     #[test]

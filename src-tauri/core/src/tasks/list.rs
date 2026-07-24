@@ -172,7 +172,7 @@ fn collect_task_file(
         list,
         order,
         id,
-        description: super::parse::description_field(&content),
+        description: super::description::description_field(&content),
     });
 }
 

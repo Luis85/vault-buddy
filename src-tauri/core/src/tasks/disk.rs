@@ -513,22 +513,22 @@ mod tests {
         let quoted = crate::yaml_scalar::yaml_quote_multiline("hi\nthere #42");
         update_task_fields(&root, &p, &[("description", Some(quoted.as_str()))], None).unwrap();
         let after = std::fs::read_to_string(&p).unwrap();
-        // NOTE (brief deviation): the brief's literal `super::parse::…` does not
-        // resolve here — `super` inside this nested `tests` module means `disk`,
-        // not `tasks` (that shorthand only works from disk.rs's own top-level
-        // functions, or from a sibling module like list.rs, one nesting level
-        // shallower). Fully qualifying from the crate root reaches the same
-        // `pub(super)` item — still visible, since `tasks::disk::tests` is a
-        // descendant of `tasks` — without changing `description_field`'s
-        // visibility or touching any other call site.
+        // NOTE (brief deviation): the brief's literal `super::description::…`
+        // does not resolve here — `super` inside this nested `tests` module
+        // means `disk`, not `tasks` (that shorthand only works from disk.rs's
+        // own top-level functions, or from a sibling module like list.rs, one
+        // nesting level shallower). Fully qualifying from the crate root
+        // reaches the same `pub(super)` item — still visible, since
+        // `tasks::disk::tests` is a descendant of `tasks` — without changing
+        // `description_field`'s visibility or touching any other call site.
         assert_eq!(
-            crate::tasks::parse::description_field(&after),
+            crate::tasks::description::description_field(&after),
             Some("hi\nthere #42".to_string())
         );
         assert!(after.contains("\nbody\n")); // body untouched
         update_task_fields(&root, &p, &[("description", None)], None).unwrap();
         assert_eq!(
-            crate::tasks::parse::description_field(&std::fs::read_to_string(&p).unwrap()),
+            crate::tasks::description::description_field(&std::fs::read_to_string(&p).unwrap()),
             None
         );
     }

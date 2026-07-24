@@ -5,6 +5,7 @@
 //! docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md.
 
 mod create;
+mod description;
 mod disk;
 mod doc;
 mod id;
