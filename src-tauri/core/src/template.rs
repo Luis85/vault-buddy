@@ -26,7 +26,11 @@ pub fn yaml_quote(value: &str) -> String {
 /// fields). Produces a valid one-physical-line YAML double-quoted scalar so a
 /// multi-line value (the task `description`) rides the line-oriented surgical
 /// writer untouched. Escapes `\` and `"`, encodes newline as `\n` and tab as
-/// `\t`, and drops CR (newlines normalize to `\n`).
+/// `\t`, drops CR (newlines normalize to `\n`), and hex-escapes every OTHER C0
+/// control char (U+0000–U+001F) and DEL (U+007F) as `\xXX` — a bare control
+/// char is forbidden in a YAML double-quoted scalar and would invalidate the
+/// frontmatter, so the "valid for any input" claim must hold for pasted control
+/// characters too (Codex PR #76).
 pub fn yaml_quote_multiline(value: &str) -> String {
     let mut inner = String::with_capacity(value.len() + 2);
     for c in value.chars() {
@@ -36,6 +40,9 @@ pub fn yaml_quote_multiline(value: &str) -> String {
             '\n' => inner.push_str("\\n"),
             '\t' => inner.push_str("\\t"),
             '\r' => {} // CR dropped; newlines normalize to \n
+            ctrl if (ctrl as u32) < 0x20 || ctrl == '\u{7f}' => {
+                inner.push_str(&format!("\\x{:02x}", ctrl as u32));
+            }
             other => inner.push(other),
         }
     }
@@ -58,8 +65,33 @@ pub fn yaml_unquote_multiline(value: &str) -> String {
             match chars.next() {
                 Some('n') => out.push('\n'),
                 Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
                 Some('"') => out.push('"'),
                 Some('\\') => out.push('\\'),
+                Some('x') => {
+                    // `\xXX` hex escape → the (control) char. A malformed or
+                    // truncated escape degrades to verbatim.
+                    match (chars.next(), chars.next()) {
+                        (Some(h), Some(l)) => match u8::from_str_radix(&format!("{h}{l}"), 16) {
+                            Ok(n) => out.push(n as char),
+                            Err(_) => {
+                                out.push('\\');
+                                out.push('x');
+                                out.push(h);
+                                out.push(l);
+                            }
+                        },
+                        (Some(h), None) => {
+                            out.push('\\');
+                            out.push('x');
+                            out.push(h);
+                        }
+                        _ => {
+                            out.push('\\');
+                            out.push('x');
+                        }
+                    }
+                }
                 Some(other) => {
                     out.push('\\');
                     out.push(other);
@@ -836,6 +868,24 @@ mod tests {
         // single-pass decoder consumes `\\` before it can see `n`.
         let s = "a\\nb"; // the three chars: a, backslash, n, b
         let quoted = yaml_quote_multiline(s);
+        assert_eq!(yaml_unquote_multiline(&quoted), s);
+    }
+
+    #[test]
+    fn yaml_quote_multiline_hex_escapes_control_characters() {
+        // Pasted control chars (NUL, backspace, form-feed, ESC) are forbidden
+        // bare in a YAML double-quoted scalar; they must be `\xXX`-escaped so the
+        // frontmatter stays valid, and round-trip exactly (Codex PR #76).
+        let s = "a\u{0}b\u{8}c\u{c}d\u{1b}e";
+        let quoted = yaml_quote_multiline(s);
+        assert!(
+            !quoted.chars().any(|c| (c as u32) < 0x20),
+            "no raw control chars survive in the quoted scalar"
+        );
+        assert!(quoted.contains("\\x00"));
+        assert!(quoted.contains("\\x08"));
+        assert!(quoted.contains("\\x0c"));
+        assert!(quoted.contains("\\x1b"));
         assert_eq!(yaml_unquote_multiline(&quoted), s);
     }
 }

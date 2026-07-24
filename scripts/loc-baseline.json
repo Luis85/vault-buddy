@@ -41,6 +41,10 @@
       "loc": 886,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 835->854: +capture_dir (flat/dated recording-layout helper, beside dated_folder) + its test; splitting this file is disproportionate for the addition. 854->886: transcription accuracy & speed increment (docs/superpowers/specs/2026-07-16-transcription-accuracy-and-speed-design.md) — +capture_title (strips the capture-name date/time prefix for initial-prompt priming, beside is_capture_base) + its tests."
     },
+    "src-tauri/core/src/template.rs": {
+      "loc": 842,
+      "reason": "Crossed the 800 cap in the Task Detail increment (docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md): the multi-line description scalar helpers yaml_quote_multiline/yaml_unquote_multiline (Task 1 — escaped-single-line encode so a multi-line `description` rides the line-oriented surgical writer, single-pass decode) plus their tests, then +35 for hex-escaping C0 control chars / DEL as \\xXX on encode and decoding \\xXX / \\r on read (a pasted control char would otherwise be a bare, YAML-invalid char in the double-quoted scalar — Codex PR #76). The balance is the inline test module (the higher Rust cap assumes inline tests). Splitting the quoting/substitution helpers out from render_extra_frontmatter + tests is the follow-up when next touched. Shrink only; split when next touched."
+    },
     "src-tauri/core/src/transcript.rs": {
       "loc": 832,
       "reason": "Grandfathered hotspot (docs/Gaps.md GAP-45/GAP-47). Shrink only; split when next touched. 2026-07-16: +21 for detected-language (field + frontmatter/stats rendering + render test) — Increment A, honest auto-detection reporting. +11 defense-in-depth parity for the frontmatter gate (H2 review M1) with pinned+detected render assertions."
