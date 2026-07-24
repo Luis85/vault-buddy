@@ -44,6 +44,14 @@ _Avoid_: Task, tagged Task — a Task-tagged Note is not a Task
 An inline checklist line, written `- [ ] description`, inside any Note's body — a Task, a Task-tagged Note, or any other Note — used to track granular progress or present a checklist for that Note. A Todo has no frontmatter, no file of its own, and no identity outside the Note containing it.
 _Avoid_: Task, subtask, todo item
 
+**Description**:
+A Task's free-text detail — an optional `description` frontmatter property on the Task document, edited from the Task Detail surface. Distinct from the Note **body** (the Markdown under the frontmatter, where a Task's Todos live and which Task Management still never writes) and from a **Todo** (an inline checklist line). The Buddy writes it as a single escaped YAML scalar it round-trips exactly, and reads it leniently — a hand-authored block or flow value degrades rather than corrupting the frontmatter (see docs/Gaps.md).
+_Avoid_: body, notes, comment — the Description is a managed frontmatter field, not the free Note body
+
+**Task Detail**:
+The in-panel home surface for a single Task, opened by a plain click on the Task's title in a task view (Ctrl/⌘-click still opens the Task in Obsidian instead). It shows and edits the Task's title, Description, Do Date / deadline, Priority, Tags, and List, and offers the per-Task lifecycle verbs — Open in Obsidian, Duplicate, and permanent Delete (behind a hardened confirm).
+_Avoid_: Task page, task editor — "Task Detail" is the canonical surface name; the inline row editor is a separate, lighter affordance
+
 **Task List** (or just **List**, in the tasks domain):
 A named grouping of Tasks (e.g. Inbox, Next, Someday), reflected as a real folder under the Vault's Task Folder — the filesystem defines which Lists exist (a folder created by hand in Obsidian is a List), and moving a Task between Lists moves its file. The Buddy keeps only preferences ABOUT Lists (the default List for new Tasks, their display order) in its own config, never their existence. Tasks at the Task Folder root belong to no List ("No list"). This supersedes the earlier draft that held Lists as Task metadata.
 _Avoid_: Category, board; "folder" alone (a List is a folder, but not every vault folder is a List)

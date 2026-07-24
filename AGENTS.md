@@ -496,7 +496,7 @@ Invariants:
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. Six sanctioned write paths
+logged (`uri::launch`) as the audit trail. Eight sanctioned write paths
 exist, each documented in its own domain section below:
 
 1. the **capture** domain — recordings and companion notes;
@@ -508,21 +508,33 @@ exist, each documented in its own domain section below:
    the folder only if empty, keeping one that still holds sub-lists/foreign
    files);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
-   (status toggle, rename, due/priority/tags edit, the manual `order`
-   rank, and the ensure-id task-ID stamp — one generalized writer);
+   (status toggle, rename, due/priority/tags/**description** edit, the manual
+   `order` rank, and the ensure-id task-ID stamp — one generalized writer);
 5. the **tasks** domain — the in-root task file move between list folders
    (`move_task_to_list`: `rename_noreplace` + ` (N)` suffix retry, never
    clobbers, same-list no-op; also backfills a missing task ID on the landed
    file when the vault opts in);
-6. the **document-import** domain — a Pandoc-converted markdown note plus
+6. the **tasks** domain — the permanent **delete** of a task file
+   (`delete_task`: the app's FIRST destructive vault write — canonical
+   containment + `type: Task` re-validation + a file-identity re-check at
+   unlink time + a no-follow symlink refusal, behind the detail view's
+   hardened two-step confirm; an irreversible unlink, not a trash — GAP-79 /
+   GAP-80);
+7. the **tasks** domain — the faithful collision-safe **duplicate** of a task
+   file (`duplicate_task`: copies the bytes and resets ONLY identity — title
+   `(copy)` / status `new` / Task ID regenerated-or-stripped, non-scalar id
+   left untouched);
+8. the **document-import** domain — a Pandoc-converted markdown note plus
    its extracted-media sibling folder.
 
 They all ride the same never-clobber/atomic machinery in
 `core::capture_note` / `core::capture_paths` (exclusive-create temps,
 `rename_noreplace`, suffix retry) — except where a write documents its own
 deliberate variant: `rename_task_list` REFUSES a collision instead of
-suffix-retrying (the name is user-chosen), and `delete_task_list` removes
-an already-empty folder. Any other code touching vault contents
+suffix-retrying (the name is user-chosen), `delete_task_list` removes
+an already-empty folder, and `delete_task` is a guarded REMOVE (not a create)
+— the one destructive path, which is why it re-validates identity at unlink
+time. Any other code touching vault contents
 directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`,
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`,
@@ -1114,6 +1126,38 @@ inline error naming the offending token instead of dropping it, so a bad tag
 can never silently vanish on save. `Some([])` from the editor/patch clears —
 removes the line (or block) entirely, same "absent means gone" semantics as
 `due`.
+
+- **The `description` field, delete/duplicate, and the Task Detail surface
+  (the task-detail increment).** `description` is a fifth optional widened
+  field: an editable free-text detail, distinct from the note BODY (which the
+  app still never writes). READ by `core::tasks::description_field` (its own
+  module), which decodes each SINGLE-LINE YAML scalar form as Obsidian's
+  js-yaml does — plain (a whitespace-preceded OR leading `#` is a comment,
+  `null`/`~` reads as none), single-quoted, and double-quoted (unescaped,
+  trailing comment dropped) — and degrades a block scalar (`|`/`>`), a
+  multi-line quoted scalar, or a flow collection (`[..]`/`{..}`) to `None`
+  rather than surfacing a partial/wrong value (GAP-81). WRITTEN as one escaped
+  single-line scalar via `core::yaml_scalar::yaml_quote_multiline`; the surgical
+  `set_fields` writer handles it like any other key and CONSUMES a hand-authored
+  block on rewrite (`skip_block_scalar`), so nothing orphans. `description` is
+  RESERVED in BOTH task key-sets (the template-frontmatter filter and the
+  task-ID-property validator) so it can never be smuggled in as a template key
+  nor configured as the id property. `update_task`'s patch carries `description`
+  / `clearDescription` (a whitespace-only draft clears — it's treated as absent,
+  so Save returns to disabled instead of writing forever) and every `list_tasks`
+  row carries its `description`. Two MORE sanctioned vault writes join
+  create/field-write/move: **`delete_task`** — the app's FIRST destructive vault
+  write (a permanent `remove_file`, NOT a trash — GAP-80; a no-follow
+  symlink-leaf refusal, canonical containment, `type: Task` re-validation, and a
+  file-identity re-check at unlink time — GAP-79) — and **`duplicate_task`** — a
+  faithful collision-safe copy that resets ONLY identity (title `(copy)` /
+  status `new` / id regenerated-or-stripped, non-scalar id untouched). Both are
+  async, containment-gated task commands. Frontend: the **Task Detail** surface
+  (`TaskDetail.vue`, the `taskDetail` view) is a full-height per-task home opened
+  by a title click (`useTaskActions`' `onOpenTask`: plain → detail, Ctrl/⌘ →
+  Obsidian); it edits title, description, dates, priority, tags, and list and
+  offers Open / Duplicate / Delete under one shared `busy` guard, all through the
+  `useTaskDetail` composable (`save`/`remove`/`duplicate`/`openInObsidian`).
 
 - **Two sanctioned vault writes, same discipline as capture/transcript.**
   *Create* (`create_task`, now threading through optional `due`/`priority`)
@@ -1778,16 +1822,20 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks | search | importPicker | documentImport | update`, with
-`captureSettingsVaultId` /
+transcriptions | tasks | taskDetail | search | importPicker | documentImport |
+update`, with `captureSettingsVaultId` /
 `recordingsVaultId` / `recordModeVaultId` / `tasksVaultId` /
-`pendingImportPath`) because that must
+`taskDetailTask` / `pendingImportPath`) because that must
 survive the panel window being hidden. Views form a fixed one-parent-per-view
 tree (no history stack): the vault-row capture button `openRecordMode`s (titled
 "Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
 Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
-per-vault todo view, `importPicker` (parent: the list) is the import vault
+per-vault todo view, a plain click on a task's title `openTaskDetail`s the
+`taskDetail` view (parent: `tasks` — it keeps `tasksVaultId` so `back()`
+returns to the task list, and `taskDetailTask` carries the row across the
+`panel-shown` hide/show) while Ctrl/⌘-click opens the task in Obsidian instead,
+`importPicker` (parent: the list) is the import vault
 chooser (drop mode when the queue holds a dropped file; vault-first mode on
 an empty queue — the buddy-menu entry — where picking a vault opens the OS
 file picker), `documentImport` (parent: the list) is the focused Pandoc setup screen

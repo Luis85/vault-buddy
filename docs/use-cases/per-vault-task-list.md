@@ -11,6 +11,7 @@ related_specs:
   - "docs/superpowers/specs/2026-07-09-recursive-tasks-scan-design.md"
   - "docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md"
   - "docs/superpowers/specs/2026-07-09-task-tags-design.md"
+  - "docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md"
 tags: [use-case, task-management]
 ---
 
@@ -38,7 +39,7 @@ Management PRD's status line now narrates what shipped and what remains
 unbuilt, and `AGENTS.md` documents the `task_commands::*` surface. Kept as a
 struck-through record per this catalog's convention.
 
-## Status: Shipped (v0.5.0, extended through v0.5.3, the lists increment, and the do-date/planner-foundation increment)
+## Status: Shipped (v0.5.0, extended through v0.5.3, the lists increment, the do-date/planner-foundation increment, and the task-detail increment)
 
 - **v0.5.0** — the vertical slice: configure a per-vault tasks folder, list
   tasks, add a task, toggle completion.
@@ -64,6 +65,14 @@ struck-through record per this catalog's convention.
   (Today / Tomorrow / This weekend / pick / Clear); a best-effort
   "Reschedule → Today" action on the whole Overdue bucket; and a Do Date
   field on both the add-task composer and the inline editor.
+- **Task-detail increment** — the **Task Detail** surface: a plain click on a
+  task's title now opens a full-height per-task home (Ctrl/⌘-click still opens
+  the task in Obsidian), which shows and edits the title, an editable free-text
+  `description` field, the Do Date / deadline, priority, tags, and list, and
+  adds the first per-task lifecycle verbs — Open in Obsidian, **Duplicate** (a
+  faithful, collision-safe copy that resets only identity), and a permanent
+  **Delete** behind a hardened two-step confirm (the app's first destructive
+  vault write).
 
 ## Implementation
 
@@ -74,26 +83,44 @@ struck-through record per this catalog's convention.
   `note_tags` (frontmatter tags in every Obsidian form), and `set_fields` —
   the generalized surgical multi-key frontmatter writer behind every edit
   (byte-preserving; consumes block-style lists on rewrite/removal).
-- Two sanctioned vault writes, mirroring the transcript sidecar's
-  never-clobber discipline: collision-safe create and the surgical
-  field write (`update_task_fields`: canonical containment + atomic
-  replacing rename).
+- Sanctioned vault writes, mirroring the transcript sidecar's never-clobber
+  discipline: collision-safe create; the surgical field write
+  (`update_task_fields`: canonical containment + atomic replacing rename); a
+  faithful collision-safe **duplicate** (`duplicate_task` — copies the bytes
+  and resets only identity); and a permanent **delete** (`delete_task` — the
+  app's first destructive vault write: canonical containment + `type: Task`
+  re-validation + file-identity re-check at unlink time + a no-follow symlink
+  refusal).
+- The `description` field: an optional free-text `description:` frontmatter
+  property, written as a single escaped YAML scalar the app round-trips
+  exactly (`core::yaml_scalar`) and read leniently by
+  `core::tasks::description_field` (decodes each single-line scalar form as
+  Obsidian's js-yaml does; a block or flow value degrades to none rather than
+  corrupting the frontmatter). Reserved in both task key-sets so it can never
+  be smuggled in as a template key nor configured as the Task ID property.
 - Config: `tasks_folder` on `VaultCaptureConfig`, default `"Tasks"`, edited
   in the per-vault Vault settings view.
-- IPC: `get_tasks_config`, `set_tasks_config`, `list_tasks`, `add_task`,
-  `set_task_status`, `count_open_tasks`, `open_task`, `update_task`
+- IPC: `get_tasks_config`, `set_tasks_config`, `list_tasks` (rows now carry
+  `description`), `add_task`, `set_task_status`, `count_open_tasks`,
+  `open_task`, `update_task` (patch now carries `description` /
+  `clearDescription`), `delete_task`, `duplicate_task`
   (`src-tauri/src/task_commands.rs`).
 - Frontend: `Tasks.vue` (self-contained, no dedicated Pinia store), reached
   via the Tasks button on each vault row (which carries the open-task
   badge); `vaults` store holds `view: 'tasks'` / `tasksVaultId` /
-  `openTasks()` and the per-vault counts.
+  `openTasks()` and the per-vault counts. The **Task Detail** surface is
+  `TaskDetail.vue`, driven by the `useTaskDetail` composable
+  (save / delete / duplicate / open under one shared busy guard); a title
+  click routes through `useTaskActions`' `onOpenTask` (plain → detail,
+  Ctrl/⌘ → Obsidian), and the store adds `view: 'taskDetail'` +
+  `taskDetailTask` + `openTaskDetail()`.
 
 ## Explicitly out of scope (single-vault list)
 
 Task lists (Inbox/Next/Today/etc. as metadata), project and estimated-effort
 fields, parent-task hierarchy, the cross-vault aggregated dashboard, Task
-Tags on non-Task notes, inline-Todo scanning, templates, the standalone
-Quick Task modal, delete/move/duplicate, un-archiving / a show-archived
+Tags on non-Task notes, inline-Todo scanning, the standalone
+Quick Task modal, un-archiving / a show-archived
 view, recurring tasks and notifications — see
 [Aggregated Task Dashboard & Lists](aggregated-task-dashboard-and-lists.md),
 [Task Tags & Todos](task-tags-and-todos.md), and

@@ -456,6 +456,44 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-80 · Low · `delete_task` is a permanent unlink, not a recoverable trash (accepted departure)
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`). The app's first
+destructive vault write removes the task file with `std::fs::remove_file` — an
+irreversible unlink, NOT a move to the OS Recycle Bin or a vault `.trash/`
+folder (Obsidian's own delete convention). It is heavily gated: canonical
+containment, `type: Task` re-validation, a file-identity re-check at unlink
+time (GAP-79), a no-follow symlink refusal, and a two-step hardened confirm in
+the Task Detail surface — so an *accidental* delete takes a deliberate
+confirm-through. But a delete that IS confirmed cannot be undone from within
+the app. **Why Low / accepted:** delete is an explicit, confirmed, single-file
+action the user opts into (unlike a background write), and the guards make a
+stray click safe. **Future refinement:** route deletes to the OS trash (a
+`trash`-style crate) or a vault `.trash/` folder so a confirmed delete stays
+recoverable — the posture Obsidian itself takes — tracked here as the
+follow-up, deliberately out of this increment's scope.
+
+### GAP-81 · Low · A hand-authored multi-line / block / flow `description` reads as empty in Task Detail
+`src-tauri/core/src/tasks/description.rs` (`description_field`). The reader
+supports only SINGLE-LINE scalar forms (plain, single-quoted, double-quoted);
+a block scalar (`description: |` / `>`), a multi-line quoted scalar, and a flow
+collection (`[..]` / `{..}`) all degrade to `None` — deliberately, so the field
+never surfaces a partial/wrong value or a bare `|`/`>` marker. So a task whose
+`description` was hand-authored in one of those forms shows a BLANK description
+in the Task Detail surface. There is no corruption: `set_fields` consumes a
+block scalar / block list / multi-line quoted value whole on the next save (its
+`skip_block_scalar` path), so saving a new description cleanly REPLACES the old
+block rather than orphaning its continuation lines — the original multi-line
+content is simply not displayed, and is replaced on that save. The app only
+ever WRITES escaped single-line scalars (`core::yaml_scalar`). **Why Low:**
+hand-authored multi-line descriptions are rare and the failure mode is "not
+shown / replaced on edit", never broken frontmatter. **Future enhancement:**
+teach `description_field` + the detail editor to round-trip a multi-line
+description (a textarea ↔ a block scalar). **Related payload note:** every
+`list_tasks` row now carries its full `description`, so a vault with long
+descriptions inflates the list payload and the MCP DTO — acceptable for now
+(descriptions are short free text), with a lazy `get_task` command the fallback
+if it ever bites.
+
 ### GAP-79 · Low · `delete_task`'s identity re-check leaves an irreducible re-stat→unlink residual (accepted)
 `src-tauri/core/src/tasks/structural.rs` (`delete_task`). The one destructive
 vault write validates a task's bytes + inode identity from a single open handle,
@@ -655,6 +693,24 @@ was closed out in a later pass: it now logs the path via `log::warn!` and
 returns the same path-free copy as `start_capture_blocking`.
 
 ## 4. Frontend defects & races
+
+### GAP-82 · Low · Task Detail (like every panel sub-view) loses unsaved edits on panel auto-hide + reopen
+`src/components/TaskDetail.vue` + the `panel-shown` refresh
+(`src/stores/vaults.ts` `refresh()` → `showList()`). Editing a field in the
+Task Detail surface and then clicking outside the panel — or switching
+applications — triggers the focus-out auto-hide; reopening the panel emits
+`panel-shown`, whose `refresh()` defaults to `showList()` and unmounts
+`TaskDetail`, discarding its component-local draft + `dirty` state without
+warning. This is NOT specific to Task Detail: the panel keeps no history or
+draft state, so EVERY sub-view (the inline `TaskEditor`, `RecordMode` config,
+the import picker, …) resets to the list on reopen — the detail view simply has
+a larger draft to lose. **Why Low:** the reopen-resets-to-list behavior is
+long-standing and consistent; the user's edits are one explicit Save away, and
+the surface makes Save prominent. **Future work (cross-cutting):** persist a
+dirty draft across reopen, or confirm / autosave before a dirty exit — an
+app-wide panel concern (it should cover the inline editor too), deliberately
+not bolted onto TaskDetail alone. Codex raised it (P2, PR #76) against Task
+Detail specifically.
 
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
