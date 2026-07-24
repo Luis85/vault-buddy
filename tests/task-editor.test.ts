@@ -49,3 +49,19 @@ describe("TaskEditor copy-id row", () => {
     expect(wrapper.find('[data-testid="task-edit-id-copy"]').exists()).toBe(false);
   });
 });
+
+describe("TaskEditor scheduled (do date)", () => {
+  it("sends scheduled when set and clearScheduled when emptied", async () => {
+    // Set a do-date on a task that had none.
+    const setW = mountEditor(t({ scheduled: null }));
+    await setW.get('[data-testid="task-edit-scheduled"]').setValue("2026-07-20");
+    await setW.get('[data-testid="task-edit-save"]').trigger("click");
+    expect(setW.emitted("save")![0][0]).toMatchObject({ scheduled: "2026-07-20" });
+
+    // Clear an existing do-date.
+    const clrW = mountEditor(t({ scheduled: "2026-07-20" }));
+    await clrW.get('[data-testid="task-edit-scheduled"]').setValue("");
+    await clrW.get('[data-testid="task-edit-save"]').trigger("click");
+    expect(clrW.emitted("save")![0][0]).toMatchObject({ clearScheduled: true });
+  });
+});

@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 
 import type { AggTask, TaskEditorPatch, TaskItem } from "../types";
 import { copyToClipboard } from "../utils/clipboard";
-import { dueOf, parseTagsInput } from "../utils/taskFields";
+import { dueOf, parseTagsInput, scheduledOf } from "../utils/taskFields";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // Presentational inline editor: owns its own draft field state (seeded from
@@ -23,6 +23,7 @@ const normalizedPriority = (t: TaskItem) =>
 
 const editTitle = ref(props.task.title);
 const editDue = ref(dueOf(props.task) ?? "");
+const editScheduled = ref(scheduledOf(props.task) ?? "");
 const editPriority = ref<string>(normalizedPriority(props.task));
 const editTags = ref(props.task.tags.join(", "));
 const editList = ref(props.task.list);
@@ -40,6 +41,10 @@ function buildPatch(): TaskEditorPatch {
   if (editDue.value !== (dueOf(props.task) ?? "")) {
     if (editDue.value === "") patch.clearDue = true;
     else patch.due = editDue.value;
+  }
+  if (editScheduled.value !== (scheduledOf(props.task) ?? "")) {
+    if (editScheduled.value === "") patch.clearScheduled = true;
+    else patch.scheduled = editScheduled.value;
   }
   if (editPriority.value !== normalizedPriority(props.task)) patch.priority = editPriority.value;
   const parsedTags = parseTagsInput(editTags.value);
@@ -112,6 +117,14 @@ function onEditorEsc(e: KeyboardEvent) {
         data-testid="task-edit-due"
         type="date"
         aria-label="Due date"
+        class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
+      >
+      <input
+        v-model="editScheduled"
+        data-testid="task-edit-scheduled"
+        type="date"
+        aria-label="Do date"
+        title="Do date (when you plan to work on it)"
         class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
       <div

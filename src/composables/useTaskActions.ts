@@ -114,10 +114,12 @@ export function useTaskActions(opts: {
   // Optimistic field save: apply locally (re-sort/re-bucket live), revert +
   // toast on failure. Returns whether the write landed.
   async function applyFieldPatch(task: AggTask, patch: TaskPatch): Promise<boolean> {
-    const before = { title: task.title, due: task.due, priority: task.priority, tags: task.tags };
+    const before = { title: task.title, due: task.due, scheduled: task.scheduled, priority: task.priority, tags: task.tags };
     if (patch.title) task.title = patch.title;
     if (patch.clearDue) task.due = null;
     else if (patch.due) task.due = patch.due;
+    if (patch.clearScheduled) task.scheduled = null;
+    else if (patch.scheduled) task.scheduled = patch.scheduled;
     if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
     if (patch.tags !== undefined) task.tags = patch.tags;
     sortInPlace();

@@ -483,6 +483,28 @@ describe("Tasks", () => {
     });
   });
 
+  it("passes a do-date from the composer to add_task", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    await wrapper.get('[data-testid="task-add-scheduled"]').setValue("2026-07-22");
+    await wrapper.get('[data-testid="task-input"]').setValue("Plan ahead");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "add_task")).toEqual({
+      cmd: "add_task",
+      args: { id: "v1", title: "Plan ahead", scheduled: "2026-07-22" },
+    });
+  });
+
+  it("labels the closed add-options toggle with the do date it now reveals", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-add-options"]').attributes("aria-label")).toContain(
+      "do date",
+    );
+  });
+
   it("omits due/priority when the options are untouched", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();

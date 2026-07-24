@@ -291,6 +291,7 @@ onMounted(async () => {
 type AddPayload = {
   title: string;
   due: string;
+  scheduled: string;
   priority: string;
   tags: string[];
   // undefined = the composer had no explicit pick and its default hadn't
@@ -309,6 +310,7 @@ async function add(payload: AddPayload) {
   try {
     const args: Record<string, unknown> = { id: targetVault, title };
     if (payload.due) args.due = payload.due;
+    if (payload.scheduled) args.scheduled = payload.scheduled;
     if (payload.priority !== "normal") args.priority = payload.priority;
     if (payload.tags.length > 0) args.tags = payload.tags;
     // A defined list (incl. "" = an explicit No list override) is sent as-is;
