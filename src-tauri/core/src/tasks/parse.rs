@@ -157,6 +157,29 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
+/// Read the top-level `description:` free-text field, decoded via
+/// `yaml_unquote_multiline`. UNLIKE `scalar_field`, it does NOT strip an inline
+/// `#` comment (a description may legitimately contain `#`) and it unescapes
+/// `\n` so a multi-line description round-trips. Returns `None` when absent or
+/// empty. Top-level only (an indented `  description:` never matches), stops at
+/// the closing fence, mirroring `note_field`.
+pub(super) fn description_field(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    for line in lines {
+        if line.trim_end() == "---" {
+            break; // end of frontmatter — never scan the body
+        }
+        if let Some(rest) = line.strip_prefix("description:") {
+            let decoded = crate::template::yaml_unquote_multiline(rest.trim());
+            return (!decoded.is_empty()).then_some(decoded);
+        }
+    }
+    None
+}
+
 /// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
 /// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
 /// case and `is_valid_id_property` accepts case variants, so reads and writes
@@ -618,6 +641,24 @@ mod tests {
         assert_eq!(
             note_tags("---\ntype: Task\ntags:\n  - 'work'\n---\n"),
             vec!["work"]
+        );
+    }
+
+    #[test]
+    fn description_field_decodes_a_multiline_scalar_and_ignores_comment_hash() {
+        let content = "---\ntype: Task\ndescription: \"fix bug #42\\nsee notes\"\n---\n\nbody\n";
+        assert_eq!(
+            super::description_field(content),
+            Some("fix bug #42\nsee notes".to_string())
+        );
+    }
+
+    #[test]
+    fn description_field_is_none_when_absent_or_empty() {
+        assert_eq!(super::description_field("---\ntype: Task\n---\n"), None);
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: \"\"\n---\n"),
+            None
         );
     }
 }

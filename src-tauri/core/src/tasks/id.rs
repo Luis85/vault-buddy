@@ -18,6 +18,7 @@ const RESERVED_TASK_KEYS: &[&str] = &[
     "tags",
     "tag",
     "order",
+    "description",
 ];
 
 /// A short random task ID: 8 base36 characters (`0-9a-z`) from the OS CSPRNG.
@@ -104,6 +105,7 @@ mod tests {
         assert_eq!(id_property_for_generation(true, "Status"), None); // case-folded reserved
         assert_eq!(id_property_for_generation(true, ""), None); // empty/invalid charset
         assert_eq!(id_property_for_generation(true, "scheduled"), None); // reserved (do-date)
+        assert_eq!(id_property_for_generation(true, "description"), None); // reserved (detail)
     }
 
     #[test]
@@ -124,6 +126,7 @@ mod tests {
             "tags",
             "tag",
             "order",
+            "description",
         ] {
             assert!(
                 !is_valid_id_property(reserved),

@@ -33,6 +33,9 @@ pub struct TaskItem {
     /// the vault has task IDs enabled; `None` when the feature is off (the
     /// property is never read) or the file simply has no value there.
     pub id: Option<String>,
+    /// Free-text detail, decoded from the `description:` frontmatter scalar
+    /// (multi-line, `#`-tolerant). `None` when absent/empty.
+    pub description: Option<String>,
 }
 
 /// Sort tier for a priority value: high first, low last, anything else
@@ -170,6 +173,7 @@ fn collect_task_file(
         list,
         order,
         id,
+        description: super::parse::description_field(&content),
     });
 }
 

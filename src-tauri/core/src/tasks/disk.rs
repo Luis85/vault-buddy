@@ -56,6 +56,7 @@ const RESERVED_TASK_KEYS: &[&str] = &[
     "tags",
     "tag",
     "order",
+    "description",
 ];
 
 /// A `type: Task` document. `type`/`status`/`created` (and the optional
