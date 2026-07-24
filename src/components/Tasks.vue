@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskDisplay } from "../composables/useTaskDisplay";
@@ -110,6 +110,14 @@ const {
   cancelEdit,
   onEditorSave,
 } = useTaskActions({ tasks, sortInPlace });
+// Switching grouping re-keys every row (bucket keys differ per grouping), so an
+// open inline editor unmounts WITHOUT firing cancel/save — leaving editingKey/
+// editingPath pointing at a row that's no longer rendered. A stale editingPath
+// then makes rescheduleOverdue (GAP-73c) falsely hold that task out of the batch
+// and report it "still overdue" (Codex, PR #75). Close the editor on any grouping
+// change so the editing refs never outlive the row (the draft was already lost to
+// the unmount — this just makes the state honest).
+watch(grouping, () => cancelEdit());
 // The plan-my-day verbs: the row popover's quick-schedule and the Overdue
 // header's reschedule-all-to-today. Shares the SAME busy guard as the row
 // actions above, so a schedule write can't race a toggle/edit on one task.

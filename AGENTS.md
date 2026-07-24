@@ -1308,7 +1308,14 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   (`` `${section}:${task.path}` ``, `editingKey`/`rowKey`), so opening the
   editor on one duplicate never expands the others, while the per-path
   `busy` guard still serializes writes for the underlying task across all its
-  rendered rows.
+  rendered rows. Because the section prefix is part of that key, **switching
+  grouping re-keys every row** and silently unmounts an open editor (without
+  firing cancel/save) — so `Tasks.vue` runs a `watch(grouping, cancelEdit)` to
+  clear `editingKey`/`editingPath` on the switch. Without it a stale
+  `editingPath` outlives the row and makes `rescheduleOverdue` (GAP-73c)
+  falsely hold a reschedulable overdue task, reporting it "still overdue"
+  (Codex, PR #75); the draft was already lost to the unmount, so closing the
+  editor only makes the state honest.
 - **Lists (the lists increment): a List IS a folder** under the vault's
   tasks root — the filesystem defines which lists exist (a hand-created
   folder counts, the `type: Task` philosophy applied to folders; this

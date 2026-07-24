@@ -478,6 +478,30 @@ describe("Tasks", () => {
     expect((button().element as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("clears the open editor when grouping changes so reschedule-overdue doesn't falsely hold it (Codex, PR #75)", async () => {
+    // Open the inline editor on overdue A under the default Lists grouping, then
+    // switch to Plan: A's row re-keys and its editor unmounts WITHOUT firing
+    // cancel/save, so editingPath would linger on A. rescheduleOverdue (GAP-73c)
+    // would then hold A out of the batch as if its editor were still open and
+    // report it "still overdue" — even though the draft is already gone. The
+    // grouping-change watch must clear the editing refs so BOTH A and B reschedule.
+    const { wrapper, calls } = mountView({
+      list_tasks: () => overdueFixture(),
+      update_task: () => null,
+    });
+    await flushPromises();
+    const rowA = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("A"))!;
+    await rowA.get('[data-testid="task-edit"]').trigger("click");
+    await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click"); // Lists → Plan; A's editor unmounts
+    await wrapper.get('[data-testid="task-reschedule-overdue"]').trigger("click");
+    await flushPromises();
+    const paths = calls
+      .filter((c) => c.cmd === "update_task")
+      .map((c) => (c.args as { path: string }).path)
+      .sort();
+    expect(paths).toEqual(["C:/v/Tasks/a.md", "C:/v/Tasks/b.md"]);
+  });
+
   it("adds a task with due and priority from the options row", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();
