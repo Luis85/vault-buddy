@@ -151,7 +151,7 @@ today," one durable concept.
   ids in that pathological config:** those tasks still contain `scheduled:
   <stable-id>`, and if the user later schedules (or clears) such a task, the
   write overwrites that value — losing the id. This is an **accepted, documented
-  edge (see docs/Gaps.md)**, not a silent guarantee: the config is a hand-set
+  edge (docs/Gaps.md GAP-68)**, not a silent guarantee: the config is a hand-set
   collision with a name that has become a managed field, the remedy is to
   re-point the id property to a non-reserved name *before* scheduling, and we
   deliberately do **not** auto-migrate (rewriting every task file's property is

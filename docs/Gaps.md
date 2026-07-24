@@ -456,6 +456,35 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-68 · Low · A do-date write can overwrite a stable Task ID in the pathological `scheduled`-as-id-property config
+`src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
+`id_property_for_generation`) and `src-tauri/core/src/tasks/disk.rs`
+(`RESERVED_TASK_KEYS`, the surgical `set_fields`/`update_task_fields` writer).
+The do-date increment
+(docs/superpowers/specs/2026-07-24-task-management-do-date-planner-foundation-design.md)
+adds `scheduled` as a managed frontmatter field and reserves it in BOTH
+reserved-key sets. A vault that had `task_id_enabled` ON **and** hand-set its
+task-id property to the literal `scheduled` (before this increment) has on-disk
+tasks carrying `scheduled: <stable-id>`. **Mitigation, going forward:** reserving
+`scheduled` makes `id_property_for_generation` re-validate and turn id generation
+OFF for that vault (logged) — no duplicate `scheduled:` on create, and
+`set_task_id_config` refuses to set it — while on READ `scheduledOf` accepts only
+a plain `YYYY-MM-DD`, so a non-date id value reads as *unscheduled* and never
+surfaces as a do-date. **What is NOT claimed:** never-clobber for the
+pre-existing on-disk ids in that config. Those tasks still contain `scheduled:
+<stable-id>`; if the user later schedules (or clears the do-date on) such a task,
+the surgical write rewrites or removes the `scheduled:` line and the id is lost.
+**Accepted, documented edge — deliberately no machinery:** the config is a
+hand-set collision with a name that has become a managed field; the realistic
+exposure needs `task_id_enabled` on AND the property hand-set to the odd literal
+`scheduled` (near-zero). **Remedy:** re-point the id property to a non-reserved
+name *before* scheduling such a task. We deliberately do **not** auto-migrate
+(rewriting every task file's property is exactly the mass vault mutation this app
+forbids) nor hard-block scheduling (punishing the overwhelmingly common vaults
+for a config essentially no one has). **What a fix must respect:** any future
+auto-migration or rescue must ride the same never-clobber/atomic rails as every
+other vault write and must not rewrite files the user did not touch.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
