@@ -395,7 +395,7 @@ pub async fn list_tasks(id: String) -> Vec<TaskDto> {
 /// ASYNC (GAP-22 class, Codex PR #46): the fsync'd create + collision retry is
 /// blocking disk I/O — offloaded so a slow/cloud/network vault can't freeze
 /// the panel/buddy event loop. The cheap up-front validation stays inline so
-/// a bad due/priority/tag errors before any thread hop.
+/// a bad due/scheduled/priority/tag errors before any thread hop.
 #[tauri::command]
 pub async fn add_task(
     id: String,
@@ -497,10 +497,11 @@ pub struct TaskPatchDto {
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
-/// set the priority, set/clear tags — validated up front, then ONE surgical
-/// multi-key frontmatter write (title quoted here; `priority: normal` and a
-/// cleared due remove their lines; an empty tags list clears the
-/// line/block). An empty patch is a no-op Ok.
+/// set/clear the do (scheduled) date, set the priority, set/clear tags —
+/// validated up front, then ONE surgical multi-key frontmatter write (title
+/// quoted here; `priority: normal` and a cleared due/scheduled remove their
+/// lines; an empty tags list clears the line/block). An empty patch is a
+/// no-op Ok.
 ///
 /// ASYNC (GAP-22 class, Codex PR #46): validation + patch assembly are cheap
 /// and stay inline (so a bad field errors before any thread hop), but the
