@@ -789,6 +789,31 @@ this entry (linked from the baseline file's `description`) is the durable record
   `complexFunctions` is back to 13 in the committed baseline; behavior is
   byte-identical (task-editor.test.ts + tasks.test.ts unchanged and green).
 
+### GAP-75 · Low · Inline editor's `type="date"` inputs can't display a shape-valid but calendar-invalid do/due date (accepted, symmetric with `due`)
+`src/components/TaskEditor.vue`. The task contract deliberately accepts a
+shape-valid but calendar-invalid date like `2026-02-31` (`is_valid_due` checks
+only the `YYYY-MM-DD` shape, matching Obsidian's own tolerant date picker; core
+returns it unfiltered for `scheduled` too). The editor's Do and Due fields are
+native `<input type="date">` controls, which cannot represent such a value — the
+browser sanitizes it to an empty display, so the editor shows the stored date as
+*unset* and the user can't see or directly round-trip it. Codex flagged this on
+the `scheduled` input (PR #75); it applies **identically to `due`**, which has
+used the same control since the tasks-todo-list increment — this is a
+pre-existing, symmetric edge, not a do-date regression.
+- **Not data loss.** `editScheduled`/`editDue` are seeded with the raw stored
+  value; a programmatic `v-model` set fires no `input`/`change` event, so the ref
+  keeps `2026-02-31` even while the field renders empty. An untouched save
+  early-returns from `diffDateField` (`draft === original`), so nothing is
+  written and the value is preserved on disk. Only if the user actively edits the
+  empty-looking field does it change — an explicit action, not silent loss.
+- **Why accepted, not fixed:** swapping the native picker for a free-text control
+  (the only way to display every accepted value) would regress the common-case
+  UX for both fields to serve a value that essentially only arises from
+  hand-authoring frontmatter. The proportionate remedy is to re-enter a valid
+  date if you want to edit such a task from the panel; the calendar-invalid value
+  otherwise keeps rendering correctly on the row (`relativeDateLabel` falls back
+  to the literal `shortDate`, see the Task 5 guard) and round-trips untouched.
+
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
 `closeMenu()`, matching Search's handler; a regression test opens the popup,
