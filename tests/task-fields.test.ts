@@ -13,7 +13,7 @@ import {
 function task(p: Partial<TaskItem>): TaskItem {
   return {
     path: "p", title: "t", status: "new", created: "2026-07-01", done: false,
-    due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, ...p,
+    due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, ...p,
   };
 }
 

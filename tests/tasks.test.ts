@@ -25,13 +25,14 @@ const many = (n: number): TaskItem[] =>
     list: "",
     order: null,
     id: null,
+    description: null,
   }));
 
 // Two due-in-the-past tasks land in Overdue given a real localToday() — no
 // fake timers needed as long as the sandbox clock is after 2026-01-02.
 const overdueFixture = (): TaskItem[] => [
-  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
-  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
+  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
 ];
 
 describe("Tasks", () => {
@@ -949,7 +950,7 @@ describe("Tasks", () => {
 
   it("tag and title filters combine (AND)", async () => {
     const tagged = (n: number, tags: string[]): TaskItem => ({
-      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null,
+      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null, description: null,
     });
     const { wrapper } = mountView({
       list_tasks: () => [tagged(0, ["work"]), tagged(1, ["work"]), tagged(2, []), tagged(3, []), tagged(4, []), tagged(5, [])],

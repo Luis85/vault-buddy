@@ -186,6 +186,8 @@ export interface TaskItem {
   /** The generated id under the vault's configured property; null when IDs
    * are off. */
   id: string | null;
+  /** Free-text detail (the `description:` frontmatter field); null when unset. */
+  description: string | null;
 }
 
 /** A TaskItem enriched with its owning vault — the ONE internal shape the
@@ -206,6 +208,10 @@ export interface TaskPatch {
   tags?: string[];
   /** Manual rank write (drag-to-reorder). Finite; nothing un-ranks a task. */
   order?: number;
+  /** Set the free-text description. */
+  description?: string;
+  /** Clear the description (mirrors clearDue). */
+  clearDescription?: boolean;
 }
 
 /** What the inline editor emits: the update_task patch plus an optional list

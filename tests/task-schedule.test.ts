@@ -12,7 +12,7 @@ function agg(p: Partial<AggTask>): AggTask {
   return {
     path: "p", title: "t", status: "new", created: "2026-07-01", done: false,
     due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null,
-    vaultId: "v", vaultName: "V", ...p,
+    description: null, vaultId: "v", vaultName: "V", ...p,
   };
 }
 

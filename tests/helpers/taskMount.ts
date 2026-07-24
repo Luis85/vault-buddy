@@ -21,7 +21,7 @@ export const aggTask = (
   extra: Partial<TaskItem> = {},
 ): TaskItem => ({
   path: `C:/${vault}/Tasks/${title.replace(/\s+/g, "-")}.md`,
-  title, status: "new", created, done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, ...extra,
+  title, status: "new", created, done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, ...extra,
 });
 
 type Handlers = Partial<Record<string, (args: unknown) => unknown>>;
@@ -58,7 +58,7 @@ export function mountAggregateAttached(handlers: Handlers = {}) {
     if (cmd === "list_tasks") return [];
     if (cmd === "add_task") {
       const a = args as { id: string; title: string };
-      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null };
+      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null };
     }
   });
   const wrapper = mount(Tasks, { props: { vaultId: null }, attachTo: document.body });
@@ -66,8 +66,8 @@ export function mountAggregateAttached(handlers: Handlers = {}) {
 }
 
 export const sample: TaskItem[] = [
-  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
-  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
+  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
 ];
 
 export function mountView(handlers: Handlers = {}, opts: { attach?: boolean } = {}) {
@@ -84,7 +84,7 @@ export function mountView(handlers: Handlers = {}, opts: { attach?: boolean } = 
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
       const a = args as { title: string; due?: string; priority?: string; tags?: string[] };
-      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, scheduled: null, priority: a.priority ?? null, tags: a.tags ?? [], list: "", order: null, id: null };
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, scheduled: null, priority: a.priority ?? null, tags: a.tags ?? [], list: "", order: null, id: null, description: null };
       list = [created, ...list];
       return created;
     }
