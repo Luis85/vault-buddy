@@ -21,6 +21,58 @@ pub fn yaml_quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Double-quote a scalar PRESERVING newlines as `\n` escapes (unlike
+/// `yaml_quote`, which flattens them to spaces for single-line managed
+/// fields). Produces a valid one-physical-line YAML double-quoted scalar so a
+/// multi-line value (the task `description`) rides the line-oriented surgical
+/// writer untouched. Escapes `\` and `"`, encodes newline as `\n` and tab as
+/// `\t`, and drops CR (newlines normalize to `\n`).
+pub fn yaml_quote_multiline(value: &str) -> String {
+    let mut inner = String::with_capacity(value.len() + 2);
+    for c in value.chars() {
+        match c {
+            '\\' => inner.push_str("\\\\"),
+            '"' => inner.push_str("\\\""),
+            '\n' => inner.push_str("\\n"),
+            '\t' => inner.push_str("\\t"),
+            '\r' => {} // CR dropped; newlines normalize to \n
+            other => inner.push(other),
+        }
+    }
+    format!("\"{inner}\"")
+}
+
+/// Inverse of `yaml_quote_multiline`. A double-quoted value is unescaped in a
+/// SINGLE left-to-right pass (so `\\` consumes both chars before an `n` could
+/// be misread as a newline). An unquoted value (hand-authored / older file) is
+/// returned verbatim — the defensive-read posture of the rest of the vault
+/// domain.
+pub fn yaml_unquote_multiline(value: &str) -> String {
+    let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
+        return value.to_string();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// A sentinel wrapping a Private-Use-Area delimiter (U+E000) — a valid YAML
 /// plain-scalar character (YAML c-printable includes U+E000–U+FFFD) that cannot
 /// occur in real input, so a `{{placeholder}}` parses as opaque structure and
@@ -761,5 +813,29 @@ mod tests {
         let out = render_extra_frontmatter("note: {{t}}", &[("t", "a \"q\" \\ b")], &[]);
         assert_eq!(out.lines().count(), 1, "one scalar line: {out}");
         assert!(out.starts_with("note:"), "{out}");
+    }
+
+    #[test]
+    fn yaml_quote_multiline_roundtrips_newlines_quotes_backslashes() {
+        let s = "line one\nline \"two\"\twith a \\ backslash";
+        let quoted = yaml_quote_multiline(s);
+        // Single physical line, double-quoted, no raw newline.
+        assert!(quoted.starts_with('"') && quoted.ends_with('"'));
+        assert!(!quoted.contains('\n'));
+        assert_eq!(yaml_unquote_multiline(&quoted), s);
+    }
+
+    #[test]
+    fn yaml_unquote_multiline_passes_through_unquoted_and_handles_literal_backslash_n() {
+        // Hand-authored unquoted scalar → verbatim.
+        assert_eq!(
+            yaml_unquote_multiline("hello # not a comment"),
+            "hello # not a comment"
+        );
+        // A user who literally typed backslash-n must NOT get a newline: the
+        // single-pass decoder consumes `\\` before it can see `n`.
+        let s = "a\\nb"; // the three chars: a, backslash, n, b
+        let quoted = yaml_quote_multiline(s);
+        assert_eq!(yaml_unquote_multiline(&quoted), s);
     }
 }
