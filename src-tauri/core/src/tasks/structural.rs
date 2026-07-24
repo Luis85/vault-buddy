@@ -1,0 +1,268 @@
+//! Structural task writes that go beyond a field patch: permanently deleting
+//! a task file, and duplicating one into a fresh copy. Same never-clobber /
+//! containment discipline as `disk.rs`'s surgical writers, which these build
+//! on (`set_fields`, `task_basename`, the collision-safe note writer).
+
+use super::writer::set_fields;
+use crate::yaml_scalar::yaml_quote;
+use std::path::{Path, PathBuf};
+
+/// Permanently delete a task file — the app's ONLY destructive vault write.
+/// Canonicalizes `root` and `path` and requires containment (a symlink at the
+/// file or folder can't be seen lexically), THEN re-reads the file and requires
+/// it to be a `type: Task` document before removing. Task folders may
+/// legitimately hold foreign files, and a listed row could be swapped for a
+/// non-task file at the same path before the confirm lands — so identity is
+/// re-validated immediately before this irreversible write, the same posture
+/// the move/field writers get from `set_fields`' `type: Task` precondition
+/// (Codex P1, PR #76). A missing file surfaces as an error (the row the user
+/// clicked should exist), never a silent success.
+#[allow(dead_code)]
+pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let canon_path =
+        std::fs::canonicalize(path).map_err(|e| format!("Cannot resolve task file: {e}"))?;
+    if !canon_path.starts_with(&canon_root) {
+        return Err("Task file is outside the vault's tasks folder".to_string());
+    }
+    let content =
+        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+    if !super::doc::is_task(&content) {
+        return Err("Refusing to delete: not a type: Task document".to_string());
+    }
+    std::fs::remove_file(&canon_path).map_err(|e| format!("Cannot delete task: {e}"))
+}
+
+/// Duplicate a task file into the same folder, faithfully: the source bytes
+/// are copied (body, extra frontmatter, description, unknown keys all
+/// preserved), then only the identity fields are rewritten surgically via
+/// `set_fields` — title → "<title> (copy)", status → new, and the id handled so
+/// no two tasks ever share one. `id_property` is the vault's configured id key
+/// ONLY when it is a valid, non-reserved property (else `None`, so a
+/// foreign/reserved key is never touched). When present, the copy's id is
+/// REGENERATED (`ids_enabled == true`) or STRIPPED (`false`): stripping matters
+/// because leaving the source id on the copy would collide with the original if
+/// the user later re-enables IDs, and the ensure-id path never overwrites an
+/// existing value (Codex P2, PR #76). Written through the collision-safe
+/// never-clobber writer, so a name clash takes the ` (N)` suffix. `today` names
+/// the new file (clock-free core).
+#[allow(dead_code)]
+pub fn duplicate_task(
+    root: &Path,
+    path: &Path,
+    today: &str,
+    id_property: Option<&str>,
+    ids_enabled: bool,
+) -> Result<PathBuf, String> {
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let canon_path =
+        std::fs::canonicalize(path).map_err(|e| format!("Cannot resolve task file: {e}"))?;
+    if !canon_path.starts_with(&canon_root) {
+        return Err("Task file is outside the vault's tasks folder".to_string());
+    }
+    let content =
+        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+    // Title fallback matches list_tasks' display: an untitled hand-authored
+    // task shows its filename stem, so the copy must too (Codex P2, PR #76).
+    let stem = canon_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let title = crate::capture_note::note_field(&content, "title").unwrap_or(stem);
+    let new_title = format!("{title} (copy)");
+    let quoted = yaml_quote(&new_title);
+    // A fresh id when IDs are on; `None` strips the configured property so the
+    // copy can never inherit the source id.
+    let new_id = if ids_enabled {
+        Some(super::id::new_task_id())
+    } else {
+        None
+    };
+    // Resolve the id key to its ON-DISK casing (case-insensitive lookup) so the
+    // case-sensitive `set_fields` matches a differently-cased existing id — else
+    // a strip misses `Task-ID:` and a regenerate inserts a SECOND, differently-
+    // cased id (Codex P2, PR #76). With no id line on disk, add one under the
+    // configured name ONLY when regenerating.
+    let id_key: Option<String> =
+        id_property.and_then(
+            |prop| match super::parse::frontmatter_scalar_ci(&content, prop) {
+                // A block-valued (nested map/list under the key) OR flow-valued
+                // (inline `{..}` / `[..]`) id property is the USER's frontmatter,
+                // not a scalar id — set_fields would consume the block, or
+                // rewrite the single flow line, and destroy it either way. Leave
+                // it untouched (Codex P2, PR #76); update_task_fields' ensure_id
+                // never rewrites a present value, so only duplicate is exposed.
+                Some((on_disk, _))
+                    if super::parse::key_opens_block(&content, &on_disk)
+                        || super::parse::key_opens_flow(&content, &on_disk) =>
+                {
+                    None
+                }
+                Some((on_disk, _)) => Some(on_disk),
+                None => new_id.as_ref().map(|_| prop.to_string()),
+            },
+        );
+    let mut updates: Vec<(&str, Option<&str>)> =
+        vec![("title", Some(quoted.as_str())), ("status", Some("new"))];
+    if let Some(key) = id_key.as_deref() {
+        updates.push((key, new_id.as_deref()));
+    }
+    let rewritten =
+        set_fields(&content, &updates).ok_or("Source is not a valid type: Task document")?;
+    let parent = canon_path.parent().unwrap_or(&canon_root);
+    let target = parent.join(format!("{}.md", super::task_basename(&new_title, today)));
+    crate::capture_note::write_note_collision_safe(&target, &rewritten)
+        .map_err(|e| format!("Cannot write duplicate: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_task_removes_a_task_refuses_outside_and_refuses_a_non_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let p = root.join("t.md");
+        std::fs::write(&p, "---\ntype: Task\nstatus: new\ntitle: X\n---\n").unwrap();
+        // Happy path: a real task is removed.
+        assert!(delete_task(&root, &p).is_ok());
+        assert!(!p.exists());
+        // A path outside the tasks root is refused (write a sibling file to delete).
+        let outside = dir.path().join("outside.md");
+        std::fs::write(&outside, "x").unwrap();
+        assert!(delete_task(&root, &outside).is_err());
+        assert!(outside.exists());
+        // A FOREIGN (non-task) file INSIDE the tasks root is refused — task folders
+        // may legitimately hold non-task files, and this first destructive write
+        // must never remove one (Codex P1, PR #76).
+        let foreign = root.join("notes.md");
+        std::fs::write(&foreign, "# just some notes, not a task\n").unwrap();
+        assert!(delete_task(&root, &foreign).is_err());
+        assert!(foreign.exists());
+    }
+
+    #[test]
+    fn duplicate_task_copies_body_and_resets_identity_with_fresh_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: done\ntitle: \"Buy milk\"\ncreated: 2026-07-01\ntask-id: aaa11111\ndue: 2026-07-10\n---\n\nThe body stays.\n",
+        )
+        .unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        assert!(new.exists() && new != src);
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("title: \"Buy milk (copy)\""));
+        assert!(out.contains("status: new")); // reset
+        assert!(out.contains("The body stays.")); // body preserved
+        assert!(out.contains("due: 2026-07-10")); // other fields preserved
+        assert!(!out.contains("task-id: aaa11111")); // id regenerated, not shared
+        assert!(out.contains("task-id: ")); // a fresh id is present
+                                            // IDs off → the configured id property is STRIPPED, not inherited: leaving
+                                            // the source id on the copy would collide with the original if IDs are
+                                            // later re-enabled, and ensure-id never overwrites an existing value
+                                            // (Codex P2, PR #76).
+        let new2 = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
+        let out2 = std::fs::read_to_string(&new2).unwrap();
+        assert!(!out2.contains("task-id")); // stripped when ids are off
+        assert!(out2.contains("title: \"Buy milk (copy)\""));
+    }
+
+    #[test]
+    fn duplicate_task_uses_the_filename_stem_when_the_source_has_no_title() {
+        // An untitled hand-authored task lists under its filename stem, so the copy
+        // must too — not an empty " (copy)" (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("My hand note.md");
+        std::fs::write(&src, "---\ntype: Task\nstatus: new\n---\n\nbody\n").unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-24", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("title: \"My hand note (copy)\""));
+    }
+
+    #[test]
+    fn duplicate_task_rewrites_the_on_disk_id_key_casing() {
+        // Source key `Task-ID:`, configured property `task-id`: the copy must
+        // rewrite/strip THAT on-disk key, never insert a second differently-cased
+        // id or miss the strip (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: X\nTask-ID: aaa11111\n---\n",
+        )
+        .unwrap();
+        // IDs on → the existing `Task-ID:` line is rewritten to a fresh id (no
+        // second `task-id:` line, exactly one id key remains).
+        let on = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        let out_on = std::fs::read_to_string(&on).unwrap();
+        assert!(!out_on.contains("aaa11111")); // old id replaced
+        assert_eq!(out_on.matches("Task-ID:").count(), 1); // rewritten in place
+        assert!(!out_on.to_lowercase().contains("task-id: aaa")); // no stale value
+        assert_eq!(out_on.to_lowercase().matches("task-id:").count(), 1); // exactly one id key
+                                                                          // IDs off → the `Task-ID:` line is stripped despite the casing mismatch.
+        let off = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
+        let out_off = std::fs::read_to_string(&off).unwrap();
+        assert!(!out_off.to_lowercase().contains("task-id"));
+    }
+
+    #[test]
+    fn duplicate_task_leaves_a_block_valued_id_property_untouched() {
+        // A block-valued id property (nested map under the key) is the user's
+        // frontmatter, not a scalar id — duplicating must not consume/delete the
+        // indented block (Codex P2, PR #76), mirroring update_task_fields.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: X\ntask-id:\n  source: jira\n  ref: ABC-1\n---\n",
+        )
+        .unwrap();
+        // IDs on: the block-valued property is NOT treated as a scalar id, so the
+        // nested lines survive and no fresh id is jammed onto the block key.
+        let new = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("source: jira") && out.contains("ref: ABC-1"));
+        assert!(out.contains("title: \"X (copy)\""));
+    }
+
+    #[test]
+    fn duplicate_task_leaves_a_flow_valued_id_property_untouched() {
+        // A FLOW-valued id property (inline map/list on one line) is the user's
+        // frontmatter, not a scalar id. Unlike the block case it has no indented
+        // lines, so key_opens_block misses it — key_opens_flow catches it. Both
+        // ids-on (no fresh id jammed over it) and ids-off (not stripped) must
+        // leave the inline structure intact (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: done\ntitle: X\ntask-id: {source: jira, ref: ABC-1}\n---\n",
+        )
+        .unwrap();
+        let on = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        let out_on = std::fs::read_to_string(&on).unwrap();
+        assert!(out_on.contains("task-id: {source: jira, ref: ABC-1}"));
+        assert!(out_on.contains("title: \"X (copy)\""));
+        assert!(out_on.contains("status: new"));
+        let off = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
+        let out_off = std::fs::read_to_string(&off).unwrap();
+        assert!(out_off.contains("task-id: {source: jira, ref: ABC-1}"));
+    }
+}

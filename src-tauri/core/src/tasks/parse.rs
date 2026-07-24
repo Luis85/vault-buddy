@@ -173,7 +173,7 @@ pub(super) fn description_field(content: &str) -> Option<String> {
             break; // end of frontmatter — never scan the body
         }
         if let Some(rest) = line.strip_prefix("description:") {
-            let decoded = crate::template::yaml_unquote_multiline(rest.trim());
+            let decoded = crate::yaml_scalar::yaml_unquote_multiline(rest.trim());
             return (!decoded.is_empty()).then_some(decoded);
         }
     }

@@ -35,11 +35,11 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
-// yaml_quote now lives in `crate::template` (the frontmatter-primitives home)
+// yaml_quote now lives in `crate::yaml_scalar` (the frontmatter-primitives home)
 // so `template::substitute_yaml` can quote values without a template↔capture_note
 // module cycle; re-exported here to keep the `capture_note::yaml_quote` path for
 // callers (document_import, tasks::disk) and this module's own field quoting.
-pub use crate::template::{yaml_quote, yaml_quote_multiline};
+pub use crate::yaml_scalar::{yaml_quote, yaml_quote_multiline};
 
 /// Read one top-level `key:` scalar from a note's leading `---` frontmatter
 /// block, undoing `yaml_quote`'s escaping. Returns None if the note has no

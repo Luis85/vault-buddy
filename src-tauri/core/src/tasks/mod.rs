@@ -10,6 +10,7 @@ mod id;
 mod list;
 mod lists;
 mod parse;
+mod structural;
 mod writer;
 
 pub use disk::{
