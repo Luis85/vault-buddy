@@ -219,9 +219,9 @@ defineExpose({ reset, setList, remapPick });
       <button
         type="button"
         data-testid="task-add-options"
-        :aria-label="showAddOptions ? 'Hide task options' : 'Set do date, due date or priority'"
+        :aria-label="showAddOptions ? 'Hide task options' : 'Set due date, do date or priority'"
         :aria-expanded="showAddOptions"
-        title="Do date / due date / priority"
+        title="Due date / do date / priority"
         class="shrink-0 cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-1 text-sm text-fg-secondary transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :class="showAddOptions ? 'border-violet-400 text-fg' : ''"
         @click="showAddOptions = !showAddOptions"
@@ -243,13 +243,16 @@ defineExpose({ reset, setList, remapPick });
       v-if="showAddOptions"
       class="flex items-center gap-1"
     >
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Due</span>
       <input
         v-model="addDue"
         data-testid="task-add-due"
         type="date"
         aria-label="Due date"
+        title="Due date (deadline)"
         class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Do</span>
       <input
         v-model="addScheduled"
         data-testid="task-add-scheduled"

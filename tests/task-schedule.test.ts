@@ -1,5 +1,5 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { createPinia,setActivePinia } from "pinia";
+import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
 

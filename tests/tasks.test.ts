@@ -321,6 +321,16 @@ describe("Tasks", () => {
     expect(chips[0].text()).toContain("Jan 15");
   });
 
+  it("hides the do-date chip when scheduled equals due, avoiding a redundant chip", async () => {
+    const { wrapper } = mountView({
+      list_tasks: () => [
+        { path: "C:/v/Tasks/sd.md", title: "SameDate", status: "new", created: "2026-07-08", done: false, due: "2026-07-20", scheduled: "2026-07-20", priority: null, tags: [], list: "", order: null, id: null },
+      ],
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-scheduled"]').exists()).toBe(false);
+  });
+
   it("groups tasks into plan buckets with headers", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] }); // 2026-07-09 local
     try {
@@ -360,8 +370,8 @@ describe("Tasks", () => {
     try {
       const { wrapper } = mountView({
         list_tasks: () => [
-          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", priority: null, tags: [], list: "", order: null },
-          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", priority: null, tags: [], list: "", order: null },
+          { path: "C:/v/Tasks/x.md", title: "Bad", status: "new", created: "2026-07-01", done: false, due: "tomorrow", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+          { path: "C:/v/Tasks/y.md", title: "Dated", status: "new", created: "2026-07-01", done: false, due: "2026-07-10", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
         ],
       });
       await flushPromises();
@@ -505,6 +515,16 @@ describe("Tasks", () => {
     );
   });
 
+  it("shows distinct visible Due/Do labels beside the date inputs, not aria-label-only", async () => {
+    const { wrapper } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-add-options"]').trigger("click");
+    const due = wrapper.get('[data-testid="task-add-due"]').element;
+    const scheduled = wrapper.get('[data-testid="task-add-scheduled"]').element;
+    expect(due.previousElementSibling?.textContent).toBe("Due");
+    expect(scheduled.previousElementSibling?.textContent).toBe("Do");
+  });
+
   it("omits due/priority when the options are untouched", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();
@@ -578,7 +598,7 @@ describe("Tasks", () => {
     const notifications = useNotificationsStore();
     const { wrapper } = mountView({
       list_tasks: () => [
-        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", priority: null, tags: [], list: "", order: null },
+        { path: "C:/v/Tasks/e.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: "2026-07-10", scheduled: "2020-01-05", priority: null, tags: [], list: "", order: null },
       ],
       update_task: () => {
         throw new Error("disk full");
@@ -588,15 +608,17 @@ describe("Tasks", () => {
     await wrapper.get('[data-testid="task-edit"]').trigger("click");
     await wrapper.get('[data-testid="task-edit-title"]').setValue("Broken");
     await wrapper.get('[data-testid="task-edit-due"]').setValue("2026-08-01");
+    await wrapper.get('[data-testid="task-edit-scheduled"]').setValue("2020-02-15");
     await wrapper.get('[data-testid="task-edit-priority-high"]').trigger("click");
     await wrapper.get('[data-testid="task-edit-save"]').trigger("click");
     await flushPromises();
-    // All three fields (title, due, priority) revert together — pins that
-    // saveEdit's failure path restores the whole `before` snapshot, not just
-    // the field a given test happens to check.
+    // All four fields (title, due, scheduled, priority) revert together — pins
+    // that saveEdit's (applyFieldPatch's) failure path restores the whole
+    // `before` snapshot, not just the field a given test happens to check.
     expect(wrapper.text()).toContain("B open"); // reverted title
     expect(wrapper.text()).not.toContain("Broken");
     expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 10"); // reverted due
+    expect(wrapper.get('[data-testid="task-scheduled"]').text()).toBe("Jan 5"); // reverted scheduled
     expect(wrapper.find('[data-testid="task-priority"]').exists()).toBe(false); // reverted priority
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
   });

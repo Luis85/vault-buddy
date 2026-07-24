@@ -64,4 +64,12 @@ describe("TaskEditor scheduled (do date)", () => {
     await clrW.get('[data-testid="task-edit-save"]').trigger("click");
     expect(clrW.emitted("save")![0][0]).toMatchObject({ clearScheduled: true });
   });
+
+  it("shows distinct visible Due/Do labels beside the date inputs, not aria-label-only", () => {
+    const wrapper = mountEditor(t());
+    const due = wrapper.get('[data-testid="task-edit-due"]').element;
+    const scheduled = wrapper.get('[data-testid="task-edit-scheduled"]').element;
+    expect(due.previousElementSibling?.textContent).toBe("Due");
+    expect(scheduled.previousElementSibling?.textContent).toBe("Do");
+  });
 });

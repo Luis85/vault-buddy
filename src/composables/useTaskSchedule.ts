@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { type Ref,ref } from "vue";
+import { type Ref, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";

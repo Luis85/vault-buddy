@@ -112,13 +112,16 @@ function onEditorEsc(e: KeyboardEvent) {
       @keydown.enter="onTitleEnter"
     >
     <div class="flex items-center gap-1">
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Due</span>
       <input
         v-model="editDue"
         data-testid="task-edit-due"
         type="date"
         aria-label="Due date"
+        title="Due date (deadline)"
         class="min-w-0 flex-1 rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none"
       >
+      <span class="shrink-0 text-micro uppercase tracking-wider text-fg-subtle">Do</span>
       <input
         v-model="editScheduled"
         data-testid="task-edit-scheduled"
