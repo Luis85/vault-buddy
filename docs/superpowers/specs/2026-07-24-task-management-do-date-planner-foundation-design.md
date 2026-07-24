@@ -125,11 +125,13 @@ today," one durable concept.
   raw scalar today and is filtered frontend-side; that pre-existing asymmetry is
   noted in Gaps, and we make the new field right rather than copy it.) The
   frontend `scheduledOf(t)` accessor beside `dueOf` stays as a matching guard.
-- **Write = strict + never-clobber**, riding the existing surgical multi-key
-  writer (`set_fields` / `update_task_fields`): `Some(date)` rewrites or inserts
-  the `scheduled:` line, `None`/clear removes it, everything else byte-preserved.
-  No new write machinery — `scheduled` is just another key the generalized
-  writer already supports.
+- **Write = strict + never-clobber** (save the one documented exception in the
+  reserved-key note below — the pathological vault whose id property is the
+  literal `scheduled`), riding the existing surgical multi-key writer
+  (`set_fields` / `update_task_fields`): `Some(date)` rewrites or inserts the
+  `scheduled:` line, `None`/clear removes it, everything else byte-preserved. No
+  new write machinery — `scheduled` is just another key the generalized writer
+  already supports.
 - **Reserved in BOTH reserved-key sets.** `scheduled` is added to the template
   reserved set (`disk.rs::RESERVED_TASK_KEYS`, so a per-vault extra-frontmatter
   template can't redefine the managed do-date, same guard `due`/`priority`
@@ -247,9 +249,12 @@ plan date** = `scheduled ?? due`":
   toast names the tasks that failed. Serialized through the shared per-row busy
   guard like the other row writes. Per-vault it targets that vault; in the
   aggregate it spans vaults, each write against its row's own vault.
-- **Schedule on create:** the composer's options row gains a "When / Do date"
-  control (Today / Tomorrow / pick / none) beside the existing
-  due/priority/tags/list, threaded into `add_task`.
+- **Schedule on create:** the composer's options row gains a **do-date input**
+  beside the existing due input — a native date field mirroring how `due` works
+  in the composer, threaded into `add_task`. (The one-click Today / Tomorrow /
+  This-weekend quick picks live in the row's schedule menu, where they shine;
+  the composer stays consistent with its existing `due` date field rather than
+  growing a second, divergent quick-pick control.)
 - **Schedule on edit:** the inline `TaskEditor` gains a "Do date" field beside
   "Due," sent in the same changed-fields patch (`clearScheduled` for an emptied
   value), through the one `update_task` call.
@@ -314,7 +319,9 @@ use these terms.
 ## Error handling
 
 No new error surface. Every write is an existing `update_task`/`add_task` path
-(atomic, containment-gated, never-clobber); a failed quick-schedule or batch
+(atomic, containment-gated, never-clobber — with the single documented exception
+in §1: a vault that had hand-set its id property to the literal `scheduled`, an
+accepted edge in Gaps); a failed quick-schedule or batch
 reschedule reverts the optimistic UI and toasts, best-effort per task (the batch
 names failures in one toast, like the delete-list relocation). A malformed
 `scheduled` value is read as unscheduled, never an error. Window/placement code

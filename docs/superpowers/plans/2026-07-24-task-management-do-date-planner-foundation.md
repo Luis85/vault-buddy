@@ -17,7 +17,7 @@
 - **The grouping localStorage key stays `dates`** — only its display *label* becomes "Plan" and the "No date" bucket label becomes "Anytime". No pref migration.
 - **Aggregate default grouping is Plan only when unset**: `loadGrouping("all", "dates")` — a persisted `"all"` value still wins. Per-vault default stays `"lists"`.
 - **Behavior AND rendering are preserved for scheduled-less tasks**: a task with no `scheduled` buckets and renders byte-identically (the do-date chip appears only when `scheduled` is present; the existing `due` element is untouched).
-- **Vault writes never clobber** (the whole increment rides `set_fields` / `update_task_fields`).
+- **Vault writes never clobber** (the whole increment rides `set_fields` / `update_task_fields`) — with the ONE documented exception in Task 8's Gaps entry (d): a vault that hand-set its id property to the literal `scheduled` can have that on-disk id overwritten by a schedule write (accepted edge, remedy = re-point the id property first).
 - **Commits:** Conventional Commits (`feat(core)`, `feat(ui)`, `fix(shell)`, `docs`, `test`). Imperative subject; body explains the *why*. Do NOT put any model identifier in commits/PRs/code.
 - **CI gates that must stay green:** `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test` for core + shell; `npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage`.
 
@@ -632,13 +632,16 @@ migration); the aggregate view defaults to Plan only when unset."
 
 ```ts
   it("shows a do-date chip only for scheduled tasks, leaving due-only rows unchanged", async () => {
+    // A far-past scheduled date always renders as a short date ("Jan 15")
+    // regardless of when the suite runs — the relative-label branches (Today/
+    // Tomorrow/weekday) are unit-tested deterministically in task-fields.test.ts.
     const wrapper = await mountTasks([
-      task({ title: "Sched", scheduled: "2026-07-20" }),
+      task({ title: "Sched", scheduled: "2020-01-15" }),
       task({ title: "DueOnly", due: "2026-07-20" }),
     ]);
     const chips = wrapper.findAll('[data-testid="task-scheduled"]');
     expect(chips).toHaveLength(1); // only the scheduled task
-    expect(chips[0].text()).toContain("Jul 20");
+    expect(chips[0].text()).toContain("Jan 15");
   });
 ```
 
@@ -657,7 +660,60 @@ Extend the taskFields import:
 import { dueOf, localToday, scheduledOf } from "../utils/taskFields";
 ```
 
-Add a helper in `<script setup>` (after `dueLabel`/`isOverdue`):
+**First, single-source the date formatters in `src/utils/taskFields.ts`** (the do-date chip's relative label and the row's existing due label must share one implementation — the repo's duplicate-code gate would flag two `MONTHS` arrays). Add:
+
+```ts
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// A short, locale-independent date label ("Jul 15"). Shared by the row's due
+// element and the do-date chip's far-date fallback.
+export function shortDate(date: string): string {
+  const [, m, day] = date.split("-");
+  const month = MONTHS[Number(m) - 1];
+  return month ? `${month} ${Number(day)}` : date;
+}
+
+// A friendly relative label for a plan date, given today (both YYYY-MM-DD):
+// Today / Tomorrow / a weekday within the next 6 days ("Sat") / else shortDate.
+// `today` is injected so it's deterministic and unit-testable (no clock mock).
+export function relativeDateLabel(date: string, today: string): string {
+  if (date === today) return "Today";
+  const d = new Date(`${date}T00:00:00`);
+  const t = new Date(`${today}T00:00:00`);
+  const diffDays = Math.round((d.getTime() - t.getTime()) / 86_400_000);
+  if (diffDays === 1) return "Tomorrow";
+  if (diffDays > 1 && diffDays < 7) return WEEKDAYS[d.getDay()];
+  return shortDate(date);
+}
+```
+
+Add tests to `tests/task-fields.test.ts`:
+
+```ts
+import { relativeDateLabel, shortDate } from "../src/utils/taskFields";
+
+describe("relativeDateLabel", () => {
+  it("labels Today / Tomorrow / weekday / short date", () => {
+    const today = "2026-07-24"; // a Friday
+    expect(relativeDateLabel("2026-07-24", today)).toBe("Today");
+    expect(relativeDateLabel("2026-07-25", today)).toBe("Tomorrow");
+    expect(relativeDateLabel("2026-07-27", today)).toBe("Mon"); // within the next 6 days
+    expect(relativeDateLabel("2026-08-10", today)).toBe(shortDate("2026-08-10")); // far → short date
+    expect(relativeDateLabel("2026-07-20", today)).toBe("Jul 20"); // past → short date
+  });
+});
+```
+
+**Then in `src/components/TaskRow.vue`:** extend the taskFields import and **delete the local `dueLabel` function** (its `MONTHS` array + body now live in `shortDate`):
+
+```ts
+import { dueOf, localToday, relativeDateLabel, scheduledOf, shortDate } from "../utils/taskFields";
+```
+
+Update the existing due `<span>`'s interpolation from `dueLabel(dueOf(task)!)` to `shortDate(dueOf(task)!)` — byte-identical output, just single-sourced (the deadline element's rendering is unchanged).
+
+Add the chip helper (after `isOverdue`):
 
 ```ts
 // The do-date chip label — shown only when a scheduled date is set AND differs
@@ -666,26 +722,26 @@ Add a helper in `<script setup>` (after `dueLabel`/`isOverdue`):
 function scheduledChip(t: AggTask): string | null {
   const s = scheduledOf(t);
   if (!s || s === dueOf(t)) return null;
-  return s === localToday() ? "Today" : dueLabel(s);
+  return relativeDateLabel(s, localToday());
 }
 ```
 
-In the template, inside the `flex min-w-0 flex-1` group, add the chip **before** the existing `task-due` span (after the tag chips):
+In the template, add the chip **before** the existing `task-due` span (after the tag chips), using the shared **`Chip` primitive** (already imported by `TaskRow`) with the `accent` variant — NOT a hand-rolled pill (§5 requires the primitive; AGENTS.md GAP-66 design-system discipline):
 
 ```html
-        <span
+        <Chip
           v-if="scheduledChip(task)"
+          variant="accent"
           data-testid="task-scheduled"
-          class="shrink-0 rounded-full bg-accent/20 px-1.5 text-micro text-accent-fg"
           :title="`Scheduled for ${scheduledChip(task)}`"
-        >{{ scheduledChip(task) }}</span>
+        >{{ scheduledChip(task) }}</Chip>
         <span
           v-if="dueOf(task)"
           data-testid="task-due"
           ...
 ```
 
-(Leave the existing `task-due` span exactly as it is — it is the deadline element and must not change.)
+(The existing `task-due` span keeps its class + `isOverdue` red styling untouched — only its formatter call moved to the shared `shortDate`, output identical. If `Chip` renders with `inheritAttrs` off and does not forward `data-testid`/`title`, wrap it or pass them via a `label` prop — verify against `Chip.vue` when implementing; the tag chips already carry a `data-testid`, so fallthrough is the expected behavior.)
 
 - [ ] **Step 4: Run — expect PASS:**
 
