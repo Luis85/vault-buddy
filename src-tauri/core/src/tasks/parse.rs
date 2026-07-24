@@ -157,12 +157,60 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
-/// Read the top-level `description:` free-text field, decoded via
-/// `yaml_unquote_multiline`. UNLIKE `scalar_field`, it does NOT strip an inline
-/// `#` comment (a description may legitimately contain `#`) and it unescapes
-/// `\n` so a multi-line description round-trips. Returns `None` when absent or
-/// empty. Top-level only (an indented `  description:` never matches), stops at
-/// the closing fence, mirroring `note_field`.
+/// Extract the `"..."` span of a double-quoted scalar starting at `s[0] == '"'`,
+/// through its closing quote (the first `"` not escaped by a preceding `\`).
+/// `"` and `\` are ASCII, so byte-scanning can never mismatch inside a
+/// multi-byte char; any trailing ` # comment` after the close is left out.
+/// None when the scalar is unterminated.
+fn double_quoted_slice(s: &str) -> Option<&str> {
+    let b = s.as_bytes();
+    let mut i = 1;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2, // skip the escaped char (its bytes are never " or \)
+            b'"' => return Some(&s[..=i]),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Decode a single-quoted YAML scalar starting at `s[0] == '\''`: the content up
+/// to the closing quote (a `'` that is NOT doubled), collapsing each `''` to one
+/// `'`. A trailing ` # comment` after the close is dropped. None when
+/// unterminated.
+fn decode_single_quoted(s: &str) -> Option<String> {
+    let inner = &s[1..];
+    let b = inner.as_bytes();
+    let mut out = String::with_capacity(inner.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\'' {
+            if b.get(i + 1) == Some(&b'\'') {
+                out.push('\'');
+                i += 2;
+            } else {
+                return Some(out); // closing quote — the rest is a comment
+            }
+        } else {
+            let ch = inner[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    None
+}
+
+/// Read the top-level `description:` free-text field, decoded by its YAML scalar
+/// form so a value reads exactly as Obsidian's js-yaml does (Codex P2, PR #76):
+/// a DOUBLE-quoted scalar (`"…"`, optionally followed by a ` # comment`) is
+/// unescaped via `yaml_unquote_multiline` on just its span; a SINGLE-quoted
+/// scalar (`'…'`, `''` → `'`, optional trailing comment) is decoded likewise. An
+/// UNQUOTED value is taken verbatim — a description is free text where a bare
+/// `#` is CONTENT, not a comment (UNLIKE the structured fields that go through
+/// `scalar_field`). Returns `None` when absent or empty. Top-level only (an
+/// indented `  description:` never matches), stops at the closing fence,
+/// mirroring `note_field`.
 pub(super) fn description_field(content: &str) -> Option<String> {
     let mut lines = content.lines();
     if lines.next()?.trim_end() != "---" {
@@ -173,7 +221,14 @@ pub(super) fn description_field(content: &str) -> Option<String> {
             break; // end of frontmatter — never scan the body
         }
         if let Some(rest) = line.strip_prefix("description:") {
-            let decoded = crate::yaml_scalar::yaml_unquote_multiline(rest.trim());
+            let raw = rest.trim();
+            let decoded = if raw.starts_with('"') {
+                crate::yaml_scalar::yaml_unquote_multiline(double_quoted_slice(raw).unwrap_or(raw))
+            } else if raw.starts_with('\'') {
+                decode_single_quoted(raw).unwrap_or_else(|| raw.to_string())
+            } else {
+                raw.to_string()
+            };
             return (!decoded.is_empty()).then_some(decoded);
         }
     }
@@ -183,14 +238,15 @@ pub(super) fn description_field(content: &str) -> Option<String> {
 /// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
 /// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
 /// case and `is_valid_id_property` accepts case variants, so reads and writes
-/// must agree despite casing. The id-stamp uses BOTH halves: the value
-/// (via `scalar_field_ci`) to decide "already has a usable id" — a bare
-/// `task-id:` reads as `Some("")`, so `.filter(non-empty)` still stamps it
+/// must agree despite casing. The id-stamp (`update_task_fields`) uses BOTH
+/// halves: the value to decide "already has a usable id" — a bare `task-id:`
+/// reads as `Some("")`, treated as MISSING so a fresh id is still stamped
 /// (Codex, PR #59) — and the on-disk NAME to rewrite a present-but-blank line
 /// under its own casing, so `set_fields` (case-sensitive) matches it instead of
 /// inserting a case-mismatched DUPLICATE the CI read would then shadow.
-/// `list_tasks` reads the id back through `scalar_field_ci`, so a stable
-/// on-disk id stays visible in `TaskItem.id`. Skips indented/nested lines (a
+/// `list_tasks` reads the id back through `scalar_id_ci` (which rejects a blank
+/// or non-scalar value), so a stable on-disk id stays visible in
+/// `TaskItem.id`. Skips indented/nested lines (a
 /// nested `  task-id:` under a mapping is never the top-level property
 /// `set_fields` would rewrite), then delegates value parsing (comment-strip,
 /// quote-unwrap) to `scalar_field` with the ACTUAL casing found.
@@ -718,6 +774,41 @@ mod tests {
         assert_eq!(
             super::description_field("---\ntype: Task\ndescription: \"\"\n---\n"),
             None
+        );
+    }
+
+    #[test]
+    fn description_field_decodes_quoted_forms_and_drops_trailing_comments() {
+        // A hand-authored description can use any YAML scalar form; each must
+        // read as Obsidian's js-yaml decodes it (Codex P2, PR #76).
+        // Double-quoted with a trailing comment → the # after the close is a comment.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: \"done\" # note\n---\n")
+                .as_deref(),
+            Some("done")
+        );
+        // Single-quoted, with the YAML `''` → `'` escape.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: 'it''s done'\n---\n")
+                .as_deref(),
+            Some("it's done")
+        );
+        // Single-quoted with a trailing comment.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: 'plain' # c\n---\n").as_deref(),
+            Some("plain")
+        );
+        // A `#` INSIDE double quotes is content, not a comment.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: \"has #hash inside\"\n---\n")
+                .as_deref(),
+            Some("has #hash inside")
+        );
+        // An UNQUOTED description keeps its `#` — free text, the field's design.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: use #tag today\n---\n")
+                .as_deref(),
+            Some("use #tag today")
         );
     }
 }
