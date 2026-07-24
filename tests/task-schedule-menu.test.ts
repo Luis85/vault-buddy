@@ -213,5 +213,49 @@ describe("TaskScheduleMenu", () => {
       w.unmount();
       scroll.remove();
     });
+
+    // GAP-73a: the one-sided predecessor clipped only against the bottom, so
+    // it could flip up whenever room below was tight — even where room above
+    // was tighter still, clipping the popover's OWN top controls instead. The
+    // two-sided fix requires BOTH "not enough room below" AND "more room
+    // above than below" before it ever flips.
+    it("never flips when there is ample room below, even with even more room above", async () => {
+      // Room above (500) > room below (480), which a broken "just compare the
+      // two sides" implementation would flip on — but room below (480) alone
+      // already comfortably fits the ~200px popover, so it must stay down.
+      vi.spyOn(window, "innerHeight", "get").mockReturnValue(1000);
+      const w = mountMenu();
+      (trigger(w).element as HTMLElement).getBoundingClientRect = () =>
+        ({ top: 500, bottom: 520, left: 0, right: 30, width: 30, height: 20, x: 0, y: 500, toJSON: () => ({}) }) as DOMRect;
+      await trigger(w).trigger("click");
+      const classes = popover(w).classes();
+      expect(classes).toContain("top-full");
+      expect(classes).not.toContain("bottom-full");
+    });
+
+    it("does NOT flip up when room below is short but room above is even shorter", async () => {
+      // A compact .panel-scroll (150px tall) with the trigger near its TOP:
+      // room below = 150-30 = 120 (< the ~200px popover, so downward alone
+      // would clip) but room above = 10-0 = 10 — flipping up would clip WORSE.
+      // The old one-sided heuristic flipped here (120 < 200 was its whole
+      // check); the two-sided fix must decline.
+      const scroll = document.createElement("div");
+      scroll.className = "panel-scroll";
+      document.body.appendChild(scroll);
+      const w = mount(TaskScheduleMenu, {
+        props: { title: "Task A", scheduled: null, busy: false },
+        attachTo: scroll,
+      });
+      scroll.getBoundingClientRect = () =>
+        ({ top: 0, bottom: 150, left: 0, right: 300, width: 300, height: 150, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+      (trigger(w).element as HTMLElement).getBoundingClientRect = () =>
+        ({ top: 10, bottom: 30, left: 0, right: 30, width: 30, height: 20, x: 0, y: 10, toJSON: () => ({}) }) as DOMRect;
+      await trigger(w).trigger("click");
+      const classes = popover(w).classes();
+      expect(classes).toContain("top-full");
+      expect(classes).not.toContain("bottom-full");
+      w.unmount();
+      scroll.remove();
+    });
   });
 });

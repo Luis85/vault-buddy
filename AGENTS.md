@@ -1234,16 +1234,21 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `IconButton` opens `TaskScheduleMenu.vue`, a presentational popover (Today /
   Tomorrow / This weekend / a native `<input type=date>` pick / Clear — Clear
   renders only when the task already has a do-date) that emits `schedule` with
-  the chosen `YYYY-MM-DD` or `null`. It flips to render ABOVE the trigger when a
-  downward popover would overflow the clip edge (`shouldFlipUp`, a pure function
-  over the trigger's `getBoundingClientRect().bottom`, a fixed height estimate,
-  and the clip bottom). The clip bottom is the nearest **`.panel-scroll`**
-  overflow ancestor's `getBoundingClientRect().bottom` — the actual container
-  the row list scrolls inside — falling back to `window.innerHeight` only when
-  no such ancestor exists; measuring the whole window (the earlier approach)
-  over-estimated the room below in a compact panel or with the composer options
-  expanded (the remaining refinement toward reading BOTH sides / a
-  render-measure or portal is docs/Gaps.md GAP-73). For assistive tech it
+  the chosen `YYYY-MM-DD` or `null`. It flips to render ABOVE the trigger only
+  when there ISN'T room below the trigger for a downward popover AND there's
+  MORE room above than below (`shouldFlipUp`, a pure function over BOTH the
+  trigger's and the clip container's `top`/`bottom`, plus a fixed height
+  estimate — GAP-73a: the one-sided predecessor clipped only against the
+  bottom, so a compact scroll area with even LESS room above than below could
+  still flip up and clip the popover's own top controls instead). The clip
+  edges are the nearest **`.panel-scroll`** overflow ancestor's
+  `getBoundingClientRect()` `top`/`bottom` — the actual container the row list
+  scrolls inside — falling back to `0`/`window.innerHeight` only when no such
+  ancestor exists; measuring only the window bottom (the earlier approach)
+  over-estimated the room below in a compact panel or with the composer
+  options expanded. A Teleport-based reposition (retiring the flip heuristic
+  entirely) was considered and deliberately rejected as over-engineering for
+  a five-item popover — docs/Gaps.md GAP-73a. For assistive tech it
   presents **dialog** semantics — the trigger carries `aria-haspopup="dialog"` +
   `aria-expanded` + (while open) an `aria-controls` linking to the popover's
   `useId()` id, and the popover carries `role="dialog"` + `aria-label`. It

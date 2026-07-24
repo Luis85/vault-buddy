@@ -714,19 +714,30 @@ Recorded so a future reviewer doesn't mistake the day-boundary flip for a new
 bug; the accept-vs-reactive-clock call is a judgment this increment
 deliberately left open.
 
-### GAP-73 · Low · Quick-schedule popover: three known UX edges (flip heuristic, rebucket focus/draft loss)
+### GAP-73 · Low · Quick-schedule popover: one remaining UX edge (rebucket focus) — (a)/(c) addressed
 `src/components/TaskScheduleMenu.vue`, `src/composables/useTaskSchedule.ts`.
 Genuine but non-trivial edges Codex surfaced on PR #75 AFTER the whole-branch
 review, tracked here rather than reactively patched onto the completed increment
-(each needs deliberate, possibly architectural work):
-- **(a) Flip reads one side only.** `shouldFlipUp` clips against the
-  `.panel-scroll` ancestor's bottom but never its top, and uses a fixed ~200px
-  estimate rather than the rendered popover — so in a compact scroll area where
-  the popover fits BELOW the trigger but has even less room ABOVE, it can wrongly
-  flip up and clip its first controls. Robust fix: render-and-measure (open
-  hidden, measure, place — no down-then-up flash) or, best, **Teleport the
-  popover out of the overflow container** and position it against the trigger
-  rect (reposition on scroll), which retires the flip heuristic entirely.
+(each needed deliberate, possibly architectural work):
+- **(a) Flip read one side only · ADDRESSED by the polish pass via a two-sided
+  heuristic.** `shouldFlipUp` clipped against the `.panel-scroll` ancestor's
+  bottom but never its top, and used a fixed ~200px estimate rather than the
+  rendered popover — so in a compact scroll area where the popover fit BELOW
+  the trigger but had even less room ABOVE, it could wrongly flip up and clip
+  its first controls. Fixed the pragmatic way: `shouldFlipUp` now takes both
+  the trigger's and the clip container's `top`/`bottom` and only flips up when
+  there ISN'T room below AND there's MORE room above than below — never toward
+  the tighter side. `toggle()` measures both rects (falling back to `0`/
+  `window.innerHeight` when there's no `.panel-scroll` ancestor, as before).
+  Regression-tested in `tests/task-schedule-menu.test.ts` (a case pinning the
+  exact old bug — insufficient room below, even less room above, must NOT
+  flip — fails against the prior one-sided implementation and passes against
+  the fix). **The render-and-measure and Teleport options considered here
+  originally were deliberately REJECTED as over-engineering** for a five-item,
+  ~200px popover with one clip ancestor to track — this pass's review judged
+  the two-sided heuristic proportionate to the actual bug (a comparison
+  reading the wrong side), not a reason to add a portal + scroll-reposition
+  layer to a presentational popover this small.
 - **(b) Focus lost when scheduling re-buckets the row.** Choosing a date that
   changes the effective plan date (`scheduled ?? due`) moves the task to a
   different Plan bucket; the row `:key` is `bucketKey:path`, so Vue UNMOUNTS the
@@ -750,8 +761,8 @@ review, tracked here rather than reactively patched onto the completed increment
   names it in the summary toast ("still overdue") — regression-tested in
   `tests/task-schedule.test.ts`.
 
-(c) landed in the do-date polish pass; (a)/(b) remain open and are both
-architectural (portal / cross-component focus) — none blocked the shipped
+(a) and (c) landed in the do-date polish pass; (b) remains open and is
+architectural (cross-component focus restoration) — none blocked the shipped
 do-date foundation (whole-branch review: merge-ready). Codex, PR #75.
 
 ### GAP-74 · Low · Fallow quality-baseline loosened for the do-date increment (documented)

@@ -26,19 +26,32 @@ const popoverId = useId();
 // container, so a downward-only absolute popover on a row near the bottom of
 // that container is clipped and its lower items (the date picker, Clear)
 // become unreachable. We clip against the NEAREST `.panel-scroll` ancestor's
-// bottom — the actual overflow edge — not `window.innerHeight`, which
+// top/bottom — the actual overflow edges — not `window.innerHeight`, which
 // over-estimates the space below in a compact panel or with the composer
-// options expanded (Codex, PR #75); `window.innerHeight` is only the fallback
-// when no such ancestor is found. POPOVER_HEIGHT is a fixed estimate (5 items
-// ≈ 200px) rather than a measurement of the not-yet-open popover, which
-// doesn't exist in the DOM until `open` flips true.
+// options expanded (Codex, PR #75); `0`/`window.innerHeight` are only the
+// fallback when no such ancestor is found. POPOVER_HEIGHT is a fixed estimate
+// (5 items ≈ 200px) rather than a measurement of the not-yet-open popover,
+// which doesn't exist in the DOM until `open` flips true.
 const POPOVER_HEIGHT = 200;
 const flipUp = ref(false);
 
 // Pure so the decision itself stays trivially unit-testable without a real
 // layout engine (happy-dom's getBoundingClientRect is zeroed by default).
-function shouldFlipUp(triggerBottom: number, popoverHeight: number, viewportBottom: number): boolean {
-  return triggerBottom + popoverHeight > viewportBottom;
+// Reads BOTH sides of the clip container (GAP-73a — the one-sided predecessor
+// clipped only against the bottom, so a compact `.panel-scroll` with even LESS
+// room above than below would still flip up and clip the popover's own top
+// controls instead): flip up only when there ISN'T room below for the popover
+// AND there's MORE room above than below — never flip toward the tighter side.
+function shouldFlipUp(
+  triggerTop: number,
+  triggerBottom: number,
+  clipTop: number,
+  clipBottom: number,
+  popoverHeight: number,
+): boolean {
+  const roomBelow = clipBottom - triggerBottom;
+  const roomAbove = triggerTop - clipTop;
+  return roomBelow < popoverHeight && roomAbove > roomBelow;
 }
 
 function toggle() {
@@ -51,8 +64,10 @@ function toggle() {
     // first keeps the intent unambiguous.
     const rect = root.value?.querySelector("button")?.getBoundingClientRect();
     const scrollEl = root.value?.closest(".panel-scroll");
-    const clipBottom = scrollEl ? scrollEl.getBoundingClientRect().bottom : window.innerHeight;
-    flipUp.value = rect ? shouldFlipUp(rect.bottom, POPOVER_HEIGHT, clipBottom) : false;
+    const scrollRect = scrollEl?.getBoundingClientRect();
+    const clipTop = scrollRect ? scrollRect.top : 0;
+    const clipBottom = scrollRect ? scrollRect.bottom : window.innerHeight;
+    flipUp.value = rect ? shouldFlipUp(rect.top, rect.bottom, clipTop, clipBottom, POPOVER_HEIGHT) : false;
   }
   open.value = opening;
 }
