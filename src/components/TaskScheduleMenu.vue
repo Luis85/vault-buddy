@@ -52,10 +52,18 @@ function toggle() {
   open.value = opening;
 }
 function close() { open.value = false; }
+// Keyboard-driven closes (choosing an option, Escape) return focus to the
+// trigger — removing the focused popup child/container via v-if otherwise drops
+// focus to <body>, forcing a keyboard user to re-traverse the panel (Codex, PR
+// #75). Outside-click closes deliberately do NOT refocus (the user aimed elsewhere).
+function closeAndRefocus() {
+  close();
+  void nextTick(() => (root.value?.querySelector("button") as HTMLElement | null)?.focus());
+}
 function choose(value: string | null) {
   if (props.busy) return;
   emit("schedule", value);
-  close();
+  closeAndRefocus();
 }
 function onPick() { if (pick.value) choose(pick.value); }
 
@@ -64,7 +72,7 @@ function onRootKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.isComposing || !open.value) return;
   e.preventDefault();
   e.stopPropagation();
-  close();
+  closeAndRefocus();
 }
 function onWindowPointerDown(e: PointerEvent) {
   if (!open.value) return;

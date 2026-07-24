@@ -1,5 +1,6 @@
 import { mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { nextTick } from "vue";
 
 import TaskScheduleMenu from "../src/components/TaskScheduleMenu.vue";
 import { comingSaturday, localDatePlus, localToday } from "../src/utils/taskFields";
@@ -50,6 +51,23 @@ describe("TaskScheduleMenu", () => {
     expect(trigger(w).attributes("aria-expanded")).toBe("false");
     await trigger(w).trigger("click");
     expect(trigger(w).attributes("aria-expanded")).toBe("true");
+  });
+
+  it("restores focus to the trigger after a keyboard-driven close (choose / Escape)", async () => {
+    // Removing the focused popup child (choose) or container (Escape) via v-if
+    // otherwise drops focus to <body>, forcing a keyboard user to re-traverse
+    // the panel (Codex, PR #75). mountMenu attaches to body, so activeElement is
+    // meaningful.
+    const w = mountMenu();
+    await trigger(w).trigger("click");
+    await w.get('[data-testid="task-schedule-today"]').trigger("click");
+    await nextTick();
+    expect(document.activeElement).toBe(trigger(w).element);
+    // Escape path (the handler is on the component root; keydown bubbles to it)
+    await trigger(w).trigger("click");
+    await trigger(w).trigger("keydown", { key: "Escape" });
+    await nextTick();
+    expect(document.activeElement).toBe(trigger(w).element);
   });
 
   it("emits Tomorrow and This weekend from their own buttons", async () => {
