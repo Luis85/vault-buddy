@@ -48,7 +48,9 @@ pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
         use std::io::Read as _;
         let mut file =
             std::fs::File::open(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-        let meta = file.metadata().map_err(|e| format!("Cannot stat task: {e}"))?;
+        let meta = file
+            .metadata()
+            .map_err(|e| format!("Cannot stat task: {e}"))?;
         let mut content = String::new();
         file.read_to_string(&mut content)
             .map_err(|e| format!("Cannot read task: {e}"))?;
@@ -66,8 +68,8 @@ pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     // single-user desktop the whole of delete_task runs at machine speed with no
     // user pause inside it (the confirm happens client-side, before the IPC call),
     // so this window is microseconds — documented as a bounded gap (docs/Gaps.md).
-    let now = std::fs::symlink_metadata(&canon_path)
-        .map_err(|e| format!("Cannot re-check task: {e}"))?;
+    let now =
+        std::fs::symlink_metadata(&canon_path).map_err(|e| format!("Cannot re-check task: {e}"))?;
     if now.file_type().is_symlink() || is_different_file(&validated, &now) {
         return Err(
             "Refusing to delete: the task file changed on disk since it was validated; reopen it and retry"
