@@ -371,6 +371,12 @@ pub fn duplicate_task(
     let id_key: Option<String> =
         id_property.and_then(
             |prop| match super::parse::frontmatter_scalar_ci(&content, prop) {
+                // A block-valued id property (a nested map/list under the key)
+                // is the USER's frontmatter, not a scalar id — set_fields would
+                // consume the indented block on rewrite/strip and delete it.
+                // Leave it untouched, mirroring update_task_fields' guard above
+                // (Codex P2, PR #76).
+                Some((on_disk, _)) if super::parse::key_opens_block(&content, &on_disk) => None,
                 Some((on_disk, _)) => Some(on_disk),
                 None => new_id.as_ref().map(|_| prop.to_string()),
             },
@@ -1157,5 +1163,27 @@ mod tests {
         let off = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
         let out_off = std::fs::read_to_string(&off).unwrap();
         assert!(!out_off.to_lowercase().contains("task-id"));
+    }
+
+    #[test]
+    fn duplicate_task_leaves_a_block_valued_id_property_untouched() {
+        // A block-valued id property (nested map under the key) is the user's
+        // frontmatter, not a scalar id — duplicating must not consume/delete the
+        // indented block (Codex P2, PR #76), mirroring update_task_fields.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: X\ntask-id:\n  source: jira\n  ref: ABC-1\n---\n",
+        )
+        .unwrap();
+        // IDs on: the block-valued property is NOT treated as a scalar id, so the
+        // nested lines survive and no fresh id is jammed onto the block key.
+        let new = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("source: jira") && out.contains("ref: ABC-1"));
+        assert!(out.contains("title: \"X (copy)\""));
     }
 }
