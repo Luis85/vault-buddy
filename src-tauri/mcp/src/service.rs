@@ -400,6 +400,9 @@ impl VaultBuddyMcp {
                 None,
                 &[],
                 None,
+                // The MCP add_task tool does not expose scheduling this
+                // increment — no input field for it in AddTaskParams.
+                None,
             )?;
             Ok((vault.name, task))
         })

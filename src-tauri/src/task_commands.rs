@@ -331,6 +331,15 @@ fn validated_due(due: Option<String>) -> Result<Option<String>, String> {
     }
 }
 
+/// Validate an optional do/plan date for a write (same shape as `due`).
+/// Ok(None) when absent.
+fn validated_scheduled(scheduled: Option<String>) -> Result<Option<String>, String> {
+    match scheduled {
+        Some(d) if !tasks::is_valid_due(&d) => Err(format!("Do date must be YYYY-MM-DD, got: {d}")),
+        other => Ok(other),
+    }
+}
+
 /// Validate an optional priority for a write. `normal` normalizes to None —
 /// absent means normal, and a `priority: normal` line is never written.
 fn validated_priority(priority: Option<String>) -> Result<Option<String>, String> {
@@ -395,6 +404,7 @@ pub async fn add_task(
     priority: Option<String>,
     tags: Option<Vec<String>>,
     list: Option<String>,
+    scheduled: Option<String>,
 ) -> Result<TaskDto, String> {
     // Local calendar date (YYYY-MM-DD), matching every other date-sensitive
     // path in the app (capture uses chrono::Local::now().date_naive()). A UTC
@@ -405,6 +415,7 @@ pub async fn add_task(
         .format("%Y-%m-%d")
         .to_string();
     let due = validated_due(due)?;
+    let scheduled = validated_scheduled(scheduled)?;
     let priority = validated_priority(priority)?;
     let tags = validated_tags(tags.unwrap_or_default())?;
     // The list is validated in services (normalize_list_rel — the same gate
@@ -419,6 +430,7 @@ pub async fn add_task(
             priority.as_deref(),
             &tags,
             list.as_deref(),
+            scheduled.as_deref(),
         )
     })
     .await
@@ -471,6 +483,10 @@ pub struct TaskPatchDto {
     #[serde(default)]
     pub clear_due: bool,
     #[serde(default)]
+    pub scheduled: Option<String>,
+    #[serde(default)]
+    pub clear_scheduled: bool,
+    #[serde(default)]
     pub priority: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
@@ -513,6 +529,11 @@ pub async fn update_task(
         updates.push(("due", None));
     } else if patch.due.is_some() {
         updates.push(("due", validated_due(patch.due.clone())?));
+    }
+    if patch.clear_scheduled {
+        updates.push(("scheduled", None));
+    } else if patch.scheduled.is_some() {
+        updates.push(("scheduled", validated_scheduled(patch.scheduled.clone())?));
     }
     if patch.priority.is_some() {
         updates.push(("priority", validated_priority(patch.priority.clone())?));
@@ -597,6 +618,16 @@ pub fn open_task(id: String, path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validated_scheduled_accepts_dates_and_rejects_junk() {
+        assert_eq!(validated_scheduled(None).unwrap(), None);
+        assert_eq!(
+            validated_scheduled(Some("2026-07-20".to_string())).unwrap(),
+            Some("2026-07-20".to_string())
+        );
+        assert!(validated_scheduled(Some("next week".to_string())).is_err());
+    }
 
     // GAP-22: list_tasks/count_open_tasks must be async — the recursive
     // tasks-folder walk ran on the main thread on every panel open. The

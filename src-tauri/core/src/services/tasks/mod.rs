@@ -111,8 +111,8 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it. `today`
 /// (`YYYY-MM-DD`) is supplied by the caller — no clock in core. `due`,
-/// `priority`, and `tags` are written only when present and are assumed
-/// ALREADY VALIDATED by the caller's gate (the IPC command validates
+/// `scheduled`, `priority`, and `tags` are written only when present and are
+/// assumed ALREADY VALIDATED by the caller's gate (the IPC command validates
 /// strictly; a caller passing raw input would write it verbatim). `list`
 /// picks the list folder the task lands in: `Some` is a caller's explicit
 /// choice (write-strict — an escaping path is an inline error; `Some("")`
@@ -129,6 +129,7 @@ pub fn add_task(
     priority: Option<&str>,
     tags: &[String],
     list: Option<&str>,
+    scheduled: Option<&str>,
 ) -> Result<TaskDto, String> {
     let title = title.trim();
     if title.is_empty() {
@@ -229,7 +230,7 @@ pub fn add_task(
         task_id,
         cfg.task_extra_frontmatter.as_deref(),
         cfg.task_body_template.as_deref(),
-        None,
+        scheduled,
     )
     .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {
@@ -239,8 +240,7 @@ pub fn add_task(
         created: today.to_string(),
         done: false,
         due: due.map(str::to_string),
-        // wired in Task 2 (schedule-on-create)
-        scheduled: None,
+        scheduled: scheduled.map(str::to_string),
         priority: priority.map(str::to_string),
         tags: tags.to_vec(),
         list: effective_list,
