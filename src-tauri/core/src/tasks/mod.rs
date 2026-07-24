@@ -4,6 +4,7 @@
 //! discipline as the capture note and transcript sidecar. See
 //! docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md.
 
+mod create;
 mod disk;
 mod doc;
 mod id;
@@ -13,9 +14,8 @@ mod parse;
 mod structural;
 mod writer;
 
-pub use disk::{
-    backfill_task_id, create_task, render_task, set_task_status, task_basename, update_task_fields,
-};
+pub use create::{create_task, render_task, task_basename};
+pub use disk::{backfill_task_id, set_task_status, update_task_fields};
 pub use doc::is_task;
 pub use id::{id_property_for_generation, is_valid_id_property, new_task_id};
 pub use list::{list_tasks, priority_rank, TaskItem};

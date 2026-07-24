@@ -219,12 +219,6 @@ pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String,
     None
 }
 
-/// The scalar value of `frontmatter_scalar_ci` (the on-disk key name dropped) —
-/// what `list_tasks` and the id-stamp's "has a usable value" check read.
-pub(super) fn scalar_field_ci(content: &str, key: &str) -> Option<String> {
-    frontmatter_scalar_ci(content, key).map(|(_, v)| v)
-}
-
 /// True when the top-level `key:` line (exact, ON-DISK casing) opens a BLOCK
 /// value — a nested mapping or block list on the following lines — rather than
 /// standing alone as a truly blank scalar. The id-stamp asks this before
@@ -295,6 +289,23 @@ pub(super) fn key_opens_flow(content: &str, key: &str) -> bool {
         }
     }
     false
+}
+
+/// Read the configured id property as a stable PLAIN-SCALAR id (on-disk casing
+/// insensitive). Returns None when the property is absent, blank, or holds a
+/// NON-SCALAR value — a block (`key:` then indented lines) or flow (`key: {..}`
+/// / `[..]`) collection is the user's structure, not an id, and must never
+/// surface AS an id. Without this, a duplicate that PRESERVED a flow-valued
+/// property (the never-clobber posture) would read as sharing the source's
+/// stable id — two tasks with one id (Codex P2, PR #76). The scalar READ now
+/// agrees with the write guards (`key_opens_block`/`key_opens_flow`):
+/// non-scalar = non-id on both sides.
+pub(super) fn scalar_id_ci(content: &str, key: &str) -> Option<String> {
+    let (on_disk, value) = frontmatter_scalar_ci(content, key)?;
+    if value.is_empty() || key_opens_block(content, &on_disk) || key_opens_flow(content, &on_disk) {
+        return None;
+    }
+    Some(value)
 }
 
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
@@ -393,61 +404,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scalar_field_ci_matches_regardless_of_casing() {
+    fn scalar_id_ci_matches_regardless_of_casing() {
         // A task stamped `Task-ID:` must be readable by a config using the
         // lowercase `task-id` property name, and vice versa — Obsidian folds
         // frontmatter key case, so a case-sensitive read would miss a stable
         // on-disk id (and the stamp would write a second, conflicting line).
         let upper = "---\ntype: Task\nTask-ID: abc123\n---\n";
-        assert_eq!(scalar_field_ci(upper, "task-id").as_deref(), Some("abc123"));
-        assert_eq!(scalar_field_ci(upper, "TASK-ID").as_deref(), Some("abc123"));
+        assert_eq!(scalar_id_ci(upper, "task-id").as_deref(), Some("abc123"));
+        assert_eq!(scalar_id_ci(upper, "TASK-ID").as_deref(), Some("abc123"));
         let lower = "---\ntype: Task\ntask-id: abc123\n---\n";
-        assert_eq!(scalar_field_ci(lower, "Task-ID").as_deref(), Some("abc123"));
+        assert_eq!(scalar_id_ci(lower, "Task-ID").as_deref(), Some("abc123"));
     }
 
     #[test]
-    fn scalar_field_ci_none_for_absent_key_and_body_only_occurrence() {
-        assert_eq!(scalar_field_ci("---\ntype: Task\n---\n", "task-id"), None);
+    fn scalar_id_ci_none_for_absent_key_and_body_only_occurrence() {
+        assert_eq!(scalar_id_ci("---\ntype: Task\n---\n", "task-id"), None);
         // A same-named line AFTER the closing fence is body content, not
         // frontmatter — it must never be read as the property.
         assert_eq!(
-            scalar_field_ci("---\ntype: Task\n---\ntask-id: sneaky\n", "task-id"),
+            scalar_id_ci("---\ntype: Task\n---\ntask-id: sneaky\n", "task-id"),
             None
         );
-        assert_eq!(scalar_field_ci("no frontmatter", "task-id"), None);
+        assert_eq!(scalar_id_ci("no frontmatter", "task-id"), None);
         // Unterminated frontmatter (opens but the closing fence never comes)
         // falls through to None.
-        assert_eq!(scalar_field_ci("---\ntype: Task\n", "due"), None);
+        assert_eq!(scalar_id_ci("---\ntype: Task\n", "due"), None);
     }
 
     #[test]
-    fn scalar_field_ci_reads_blank_as_empty_and_skips_nested_keys() {
+    fn scalar_id_ci_treats_blank_and_non_scalar_as_absent_and_skips_nested_keys() {
         // A bare `task-id:` (an Obsidian property panel / template leaves the
-        // key valueless) reads as an EMPTY value, so the id-stamp's
-        // `.filter(non-empty)` treats it as MISSING and writes a usable id
-        // (Codex, PR #59) — the presence-only predecessor suppressed the stamp.
+        // key valueless) reads as ABSENT — the id-stamp treats it as MISSING and
+        // writes a usable id (Codex, PR #59), and the display read agrees so ""
+        // is never surfaced as an id.
         assert_eq!(
-            scalar_field_ci("---\ntype: Task\ntask-id:\n---\n", "task-id").as_deref(),
-            Some("")
+            scalar_id_ci("---\ntype: Task\ntask-id:\n---\n", "task-id"),
+            None
+        );
+        // A NON-SCALAR value — a block map/list, or an inline flow map/seq — is
+        // the user's structure, never an id (Codex P2, PR #76).
+        assert_eq!(
+            scalar_id_ci(
+                "---\ntype: Task\ntask-id:\n  source: jira\n---\n",
+                "task-id"
+            ),
+            None
+        );
+        assert_eq!(
+            scalar_id_ci("---\ntype: Task\ntask-id: {source: jira}\n---\n", "task-id"),
+            None
+        );
+        assert_eq!(
+            scalar_id_ci("---\ntype: Task\ntask-id: [a, b]\n---\n", "task-id"),
+            None
         );
         // An indented `task-id:` nested under a mapping is NOT the top-level
         // property set_fields rewrites — the top-level scan skips it (space and
         // tab indentation alike).
         assert_eq!(
-            scalar_field_ci(
+            scalar_id_ci(
                 "---\ntype: Task\nmetadata:\n  task-id: old\n---\n",
                 "task-id"
             ),
             None
         );
         assert_eq!(
-            scalar_field_ci("---\ntype: Task\nmeta:\n\ttask-id: old\n---\n", "task-id"),
+            scalar_id_ci("---\ntype: Task\nmeta:\n\ttask-id: old\n---\n", "task-id"),
             None
         );
         // A colonless malformed line neither matches nor panics; a genuine
         // top-level key later in the block still reads.
         assert_eq!(
-            scalar_field_ci(
+            scalar_id_ci(
                 "---\ntype: Task\nnotacolonhere\ntask-id: abc\n---\n",
                 "task-id"
             )
