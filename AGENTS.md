@@ -1086,8 +1086,8 @@ when present (clearing it removes the line, `due`'s semantics), and is reserved
 in BOTH `RESERVED_TASK_KEYS` sets — the template-frontmatter filter (`disk.rs`)
 and the task-ID-property validator (`id.rs`, kept in sync via reciprocal
 comments) — so it can never be smuggled in as a template key nor configured as
-an id property (the pathological pre-existing `scheduled`-as-id-property config
-is docs/Gaps.md GAP-68). The IPC write params (`scheduled`/`clearScheduled`)
+an id property (the formerly-settable `scheduled`-as-id-property edge — it was
+command-settable before this increment — is docs/Gaps.md GAP-68). The IPC write params (`scheduled`/`clearScheduled`)
 and the frontend planner/grouping that consume it are documented as those
 increments land. Per-vault
 config adds one field, `tasks_folder` (default `Tasks`), alongside the capture

@@ -151,15 +151,20 @@ today," one durable concept.
   ids in that pathological config:** those tasks still contain `scheduled:
   <stable-id>`, and if the user later schedules (or clears) such a task, the
   write overwrites that value — losing the id. This is an **accepted, documented
-  edge (docs/Gaps.md GAP-68)**, not a silent guarantee: the config is a hand-set
-  collision with a name that has become a managed field, the remedy is to
+  edge (docs/Gaps.md GAP-68)**, not a silent guarantee: the config was a
+  collision with a name that has become a managed field — settable through the
+  supported `set_task_id_config` command before this increment, not only by
+  hand-editing (see GAP-68's accuracy note) — the remedy is to
   re-point the id property to a non-reserved name *before* scheduling, and we
   deliberately do **not** auto-migrate (rewriting every task file's property is
   exactly the mass vault mutation this app forbids) nor hard-block scheduling
   (punishing the overwhelmingly common vaults for a config essentially no one
   has). The realistic exposure is near-zero — it needs `task_id_enabled` on AND
-  the property hand-set to the odd literal `scheduled` — which is why documenting
-  + remedy is the proportionate call over migration/blocking machinery.
+  the id property *named* the literal `scheduled`, a nonsensical choice for a
+  stable-handle property — which is why documenting + remedy is the proportionate
+  call over migration/blocking machinery (Codex re-raised migration/block on PR
+  #75; the document-only posture is a deliberate design decision, flagged for the
+  final review).
   (Single-sourcing the two duplicated reserved lists is a noted small cleanup,
   not required here; this increment adds `scheduled` to both and cross-references
   them.)
