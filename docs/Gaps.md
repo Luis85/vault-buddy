@@ -814,6 +814,32 @@ pre-existing, symmetric edge, not a do-date regression.
   otherwise keeps rendering correctly on the row (`relativeDateLabel` falls back
   to the literal `shortDate`, see the Task 5 guard) and round-trips untouched.
 
+### GAP-76 · Low · The composer/editor options row crowds at the 400px compact panel preset
+`src/components/TaskComposer.vue` (the `showAddOptions` row) and the sibling
+Due/Do/priority row in `src/components/TaskEditor.vue`. The do-date/planner
+increment added a second labeled date input (**Do**) beside the existing
+**Due** input on a single `flex items-center gap-1` (nowrap) row that also
+holds three priority buttons and a tags input. All three inputs are
+`min-w-0 flex-1`, so at the 400px **compact** preset (≈356px usable after
+gutters/card padding) they shrink below a usable width — a native `type="date"`
+control can't show a full date at ~60px, and the tags input loses most of its
+text. The comfortable/large presets have room; only compact is affected, and
+the row is behind the `⋯` options toggle. Codex flagged the composer (PR #75,
+`TaskComposer.vue:262`); the editor's row shares the shape.
+- **Why not fixed in the increment:** the fix is a responsive-layout change —
+  add `flex-wrap` and give the date inputs a real min basis (removing `min-w-0`
+  so they wrap instead of collapsing), or split dates onto their own row — whose
+  correctness is purely *visual*. The frontend test stack is happy-dom, which
+  does no layout, so no automated test can confirm the result looks right across
+  the three presets (compact/comfortable/large). Shipping a blind CSS change on
+  an already-green, reviewed branch trades a P2 nit for unverifiable visual risk.
+- **Recommended fix (needs visual verification):** container
+  `flex flex-wrap items-center gap-1`; the two date inputs `flex-1 basis-32`
+  (≈128px floor) instead of `min-w-0 flex-1`; keep the tags input
+  `min-w-0 flex-1`. Apply to BOTH the composer and editor rows so they stay
+  consistent, then eyeball all three presets. Pairs naturally with the tracked
+  GAP-65 `Tasks.vue`/composer refactor.
+
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
 `closeMenu()`, matching Search's handler; a regression test opens the popup,
