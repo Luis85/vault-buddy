@@ -38,7 +38,7 @@ Management PRD's status line now narrates what shipped and what remains
 unbuilt, and `AGENTS.md` documents the `task_commands::*` surface. Kept as a
 struck-through record per this catalog's convention.
 
-## Status: Shipped (v0.5.0, extended through v0.5.3 and the lists increment)
+## Status: Shipped (v0.5.0, extended through v0.5.3, the lists increment, and the do-date/planner-foundation increment)
 
 - **v0.5.0** — the vertical slice: configure a per-vault tasks folder, list
   tasks, add a task, toggle completion.
@@ -56,6 +56,14 @@ struck-through record per this catalog's convention.
   file between list folders), a per-vault default list + list order
   settings card, user-selectable sorting (persisted per view), and manual
   drag-to-reorder writing an `order` frontmatter rank.
+- **Do-date/planner-foundation increment** — a Do Date (`scheduled`,
+  distinct from Due Date) on every Task; the `Dates` tab relabeled **Plan**
+  (grouping key unchanged), bucketing by the effective plan date (Do Date if
+  set, else Due Date) into Overdue / Today / Upcoming / Anytime / Done; an
+  additive do-date chip on each row; a per-row quick-schedule popover
+  (Today / Tomorrow / This weekend / pick / Clear); a best-effort
+  "Reschedule → Today" action on the whole Overdue bucket; and a Do Date
+  field on both the add-task composer and the inline editor.
 
 ## Implementation
 

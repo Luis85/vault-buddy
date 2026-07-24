@@ -64,6 +64,10 @@ _Avoid_: due date / deadline (that is `due`, a separate field); "scheduled" spok
 The task-view grouping — the middle tab of the `Lists | Plan | Tags` toggle — that buckets Tasks by their effective plan date (Do Date, else deadline) into Overdue / Today / Upcoming / Anytime / Done. Supersedes the earlier "Dates" grouping label; the internal grouping key stays `dates`. It is the default grouping the aggregate ("All tasks") view opens on, while a per-vault view still opens on Lists.
 _Avoid_: Dates (the old label), Calendar, Schedule view
 
+**Focus**:
+The set of Tasks scheduled for today (Do Date = today) — a forward-looking term for what a future pinned Focus widget on the desktop will surface. Narrower than the Plan grouping's **Today** bucket, which also catches a Task whose only date is an already-past deadline; Focus is scoped to the Do Date specifically. Not yet its own surface — the term exists now so the eventual widget has a name to build toward.
+_Avoid_: Today (the broader Plan bucket), Dashboard, Agenda
+
 **Project**:
 Task metadata linking a Task to the larger body of notes or work it belongs to.
 _Avoid_: Epic, initiative

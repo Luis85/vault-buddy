@@ -656,6 +656,53 @@ dismissal are unchanged. Regression tests pin all three behaviors.
   non-goal — only the reorder-writes-a-meaningless-rank half of this bullet
   is fixed.
 
+### GAP-69 · Low · A "This Evening" sub-bucket and a distinct "Someday" planner bucket are deferred (each needs a second signal)
+`src/utils/taskSections.ts` (`plannerBuckets`). The Plan grouping's five
+buckets (Overdue / Today / Upcoming / Anytime / Done — see
+`docs/superpowers/specs/2026-07-24-task-management-do-date-planner-foundation-design.md`)
+are the do-date increment's full scope. Two finer time-horizon buckets some
+task-planning tools offer were considered and deliberately deferred, not
+forgotten — both need a second signal `scheduled`/`due` alone can't supply:
+- **"This Evening"**, a same-day sub-bucket of Today separating "still to
+  do" from "already handled for today," needs a time-of-day component —
+  either widening `scheduled` past its plain `YYYY-MM-DD` shape or a second
+  boolean/tag convention layered on top of it. Neither exists; adding one is
+  a Task Model change, not a bucketing tweak.
+- **A "Someday" planner bucket**, distinct from **Anytime**, needs a
+  back-burner signal to key on: today "no do-date and no due-date" is the
+  only test Anytime uses, so splitting off a lower-priority subset means
+  either a new frontmatter flag or overloading `priority`/`tags` (e.g. a
+  reserved `#someday` convention) — out of scope for a foundation increment.
+  (Unrelated to a user hand-creating a **List** folder literally named
+  "Someday" under the Lists grouping, which already works today — the
+  deferred item here is a Plan-grouping BUCKET derived from dates, not a
+  List.)
+**Remedy, if ever pursued:** either addition is additive (a new optional,
+leniently-read field) and would not change `scheduled`'s existing shape or
+the other four buckets — but it is a follow-up increment, not a patch,
+since it touches the Task Model.
+
+### GAP-71 · Low · Plan-grouping buckets can shift a Task by a day at local midnight (accepted, by design)
+`src/utils/taskFields.ts` (`localToday`) and `src/utils/taskSections.ts`
+(`plannerBuckets`). The Plan grouping computes "today" from the local
+wall-clock date (`new Date()`'s local getters, never UTC slicing) at the
+moment a bucket is computed — the SAME rule the Rust-side `add_task`
+already uses (`task_commands.rs`'s `chrono::Local::now().date_naive()`,
+deliberately local rather than UTC per its own comment, so a task isn't
+named with tomorrow's/yesterday's date near local midnight). Because the
+panel is a long-lived webview (hidden/shown, never reloaded), a Task open
+across local midnight can flip bucket without any write happening: a Task
+in Today at 11:59 PM silently becomes Overdue at 12:00 AM the next time the
+view re-renders (a re-sort/re-bucket — e.g. triggered by any other row's
+optimistic write, or simply reopening the panel). **Accepted, not a
+defect:** this matches the pre-existing due-date bucketing's behavior
+(recomputed against wall-clock "today" the same way before this increment
+existed) and the deliberate local-not-UTC choice `add_task` already made —
+the alternative (freezing "today" for the life of the mounted view) would
+make a Task's bucket silently stale across a long session instead, which is
+worse. No action needed; recorded so a future reviewer doesn't mistake the
+day-boundary flip for a new bug.
+
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
 `closeMenu()`, matching Search's handler; a regression test opens the popup,
@@ -959,6 +1006,51 @@ plus the still-bespoke favorite star.
   temp-name loop is duplicated verbatim inside `capture_note.rs`. Extract
   `for_each_dated_capture_mp3` and a shared temp-open helper — the repo's
   own `vault_walk.rs` header warns about exactly this drift class.
+
+### GAP-70 · Low · `RESERVED_TASK_KEYS` is duplicated verbatim across `disk.rs` and `id.rs`
+`src-tauri/core/src/tasks/disk.rs:48-59` and
+`src-tauri/core/src/tasks/id.rs:10-21` each define their own `const
+RESERVED_TASK_KEYS: &[&str]`, both currently the identical ten entries
+(`type`/`status`/`title`/`created`/`due`/`scheduled`/`priority`/`tags`/
+`tag`/`order`). The do-date increment added `scheduled` to BOTH by hand;
+today the only thing keeping them aligned is a pair of `// keep in sync
+with <other file>::RESERVED_TASK_KEYS` comments — a reviewer convention,
+not a compiler-enforced one. A future widened field (the next
+`due`/`scheduled`-shaped addition) that updates one list and forgets the
+other reopens exactly the class of edge GAP-68 documents: an id-property
+validator that doesn't know about a new reserved key would let it be
+configured as a task-id property, and the template-frontmatter filter that
+doesn't know about it would let a user's extra-frontmatter template
+redefine it. **Fix:** hoist one `pub(crate) const RESERVED_TASK_KEYS` (or a
+shared function) into a common module both `disk.rs` and `id.rs` import —
+mechanical, no behavior change; deferred here since the do-date increment's
+own reciprocal comments keep the two lists in sync today.
+
+### GAP-72 · Low · `due` stays an unfiltered raw scalar in `TaskItem`/`TaskDto`; `scheduled` is core-validated at the same boundary
+`src-tauri/core/src/tasks/list.rs` (`collect_task_file`). Line 129,
+`let due = scalar_field(&content, "due");`, carries whatever raw scalar
+sits in the frontmatter straight onto `TaskItem.due`/`TaskDto.due` — an
+unparseable value (anything not plain `YYYY-MM-DD`) passes through
+unfiltered. Line 133 (added by the do-date increment), `let scheduled =
+scalar_field(&content, "scheduled").filter(|s| is_valid_due(s));`, does the
+opposite: an unparseable `scheduled` becomes `None` right here, at the
+DTO/MCP boundary, per the field's own doc comment on `TaskItem.scheduled`
+("Read then validator-filtered... an honest DTO/MCP boundary" — already
+called out in-code as the deliberate choice, Codex PR #75) but never
+applied back to `due`. **Consequence:** `due`'s honesty currently lives
+only in each CONSUMER — the frontend's `dueOf()` (`src/utils/taskFields.ts`)
+re-filters it client-side, and the Rust-side sort's `due_key` filters it
+again for ordering — so an MCP client or any other `TaskDto` consumer
+reading `due` directly gets an un-validated raw value, while the same
+consumer reading `scheduled` gets a pre-filtered guarantee. **Why left
+alone this increment:** `due`'s DTO/MCP contract predates this work;
+filtering it now is a compatibility change (a malformed `due` a consumer
+currently sees verbatim would become `None` instead) that deserves its own
+reviewed change, not a side effect of adding `scheduled`. **Fix, if
+pursued:** apply the same `.filter(|d| is_valid_due(d))` to `due` in
+`collect_task_file`, then drop `due_key`'s redundant re-filter and
+`dueOf`'s client-side re-check once the DTO itself is honest — landing both
+fields on one consistent contract.
 
 ### GAP-47 · Frontend
 - ~~Inline SVG icon paths are copy-pasted (the identical gear in

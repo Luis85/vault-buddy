@@ -1070,7 +1070,7 @@ describe("Tasks", () => {
     expect(headers).toEqual(["#home", "#work"]);
   });
 
-  it("grouping defaults to lists and the toggle switches to dates", async () => {
+  it("grouping defaults to lists and the toggle switches to Plan", async () => {
     const { wrapper } = mountView({
       list_tasks: () => [
         { path: "C:/v/Tasks/a.md", title: "Tagged", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: ["work"], list: "", order: null },

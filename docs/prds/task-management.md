@@ -9,8 +9,13 @@
   v0.5.4; user-defined Lists (as real folders under the tasks folder —
   see the amendment under Task Lists below), user-selectable sorting, and
   manual drag-to-reorder (a persisted `order` rank) in the lists
-  increment. The dashboard, templates, Task Tags on
-  non-Task notes / Todos, and the AI features below remain unbuilt. See
+  increment; a Do Date (`scheduled`, distinct from Due Date) plus a
+  do-date-aware Plan grouping (Overdue / Today / Upcoming / Anytime / Done —
+  the default grouping the aggregate view opens on) in the do-date/planner-
+  foundation increment. The standalone Task Dashboard (Inbox / Completed
+  Today / Recently Created / High Priority / Recently Modified as separate
+  summary widgets), templates, Task Tags on non-Task notes / Todos, and the
+  AI features below remain unbuilt. See
   [Per-Vault Task List](../use-cases/per-vault-task-list.md) and
   [Aggregated Task Dashboard & Lists](../use-cases/aggregated-task-dashboard-and-lists.md).
 - **Version:** 1.0
@@ -194,6 +199,14 @@ Each task contains structured metadata.
 `Parent Task` is optional and references another Task, so Tasks can be organized into hierarchies (e.g. a large Task broken into child Tasks) purely through frontmatter — no nested folders required.
 
 This allows compatibility with Obsidian Properties, Dataview and future AI capabilities.
+
+**Amended (do-date/planner-foundation increment):** Tasks also carry an
+optional **Do Date** (`scheduled`, frontmatter `YYYY-MM-DD`) — the day the
+user plans to work the Task, kept distinct from Due Date (the deadline). It
+is read leniently (a malformed value is treated as unscheduled) and is the
+field the Task Dashboard's Today/Overdue/Upcoming buckets key on: a Task's
+effective plan date is its Do Date if set, else its Due Date, so scheduling
+a Task moves it even when its deadline has already passed.
 
 ## Task Tag Model
 
@@ -413,8 +426,14 @@ Obsidian is never required for creating or editing tasks.
   inline creation, moving tasks between lists, per-vault default list +
   list order settings; plus user-selectable sorting and manual
   drag-to-reorder via a persisted `order` rank)
-- Dashboard — unbuilt (per-vault date buckets shipped in v0.5.2 are the
-  single-vault precursor)
+- Dashboard — partially shipped: the Today/Overdue/Upcoming buckets (now
+  do-date-aware — a Task's effective plan date is `scheduled` else `due` —
+  and cross-vault by default) landed as the Plan grouping in the
+  do-date/planner-foundation increment, covering three of the eight
+  originally-envisioned widgets. Unbuilt: Inbox, Completed Today, Recently
+  Created, High Priority, and Recently Modified as separate summary cards —
+  today's buckets are a grouping mode inside `Tasks.vue`, not a standalone
+  dashboard screen.
 
 ### Version 2
 

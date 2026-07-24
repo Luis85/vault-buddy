@@ -257,7 +257,7 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async)*, `add_task` *(async — takes an optional `list` and an optional `scheduled` do-date, validated like `due`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank and the `scheduled`/`clearScheduled` do-date fields (validated like `due`/`clearDue`, `clearScheduled` winning); stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async — each row now also carries `scheduled`)*, `add_task` *(async — takes an optional `list` and an optional `scheduled` do-date, validated like `due`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank and the `scheduled`/`clearScheduled` do-date fields (validated like `due`/`clearDue`, `clearScheduled` winning); stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -1229,6 +1229,45 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `vaultName.localeCompare` → `path.localeCompare` tiebreak on both arms so
   ties across vaults are stable; date buckets, tag mode, filters, and the
   per-row busy-guard serialization are unchanged and shared by both modes.
+- **Plan-my-day verbs (the do-date/planner-foundation increment): quick-schedule,
+  reschedule-overdue, and schedule-on-create/edit.** A per-row calendar
+  `IconButton` opens `TaskScheduleMenu.vue`, a presentational popover (Today /
+  Tomorrow / This weekend / a native `<input type=date>` pick / Clear — Clear
+  renders only when the task already has a do-date) that emits `schedule` with
+  the chosen `YYYY-MM-DD` or `null`. It flips to render ABOVE the trigger when
+  the trigger sits close enough to the viewport bottom that a downward popover
+  would clip (`shouldFlipUp`, a pure function over the trigger's
+  `getBoundingClientRect()` and `window.innerHeight` — the same
+  viewport-is-the-whole-Tauri-window proxy `SelectMenu` already uses) and
+  swallows its own Escape/outside-click (the GAP-27 class: focus on open,
+  Escape `stopPropagation`s so it can't bubble into the panel's own close
+  handler). The container's `useTaskSchedule` composable owns the two write
+  verbs, both riding the row's shared `busy` guard so a schedule can't race a
+  toggle/edit on the same task: `quickSchedule(task, date)` is a single
+  optimistic set/clear (`date: null` → `{clearScheduled: true}` on the
+  `update_task` patch) with revert-and-toast on failure, the same shape as
+  every other row write — and, going through `update_task`, it ID-stamps like
+  any other edit. `rescheduleOverdue(overdue)` — behind the Overdue bucket
+  header's "Reschedule → Today" `AppButton`, shown only when `!filterActive`
+  (a filtered subset can't act on the complete overdue set, the manual-reorder
+  precedent) — is genuinely best-effort: it writes each task independently
+  rather than failing the whole batch on the first rejection, reverts only the
+  failed task, and holds a row whose write is already in flight OUT of the
+  batch rather than racing it — but never drops it silently, naming both
+  write-failures and held-back busy rows in one summary toast so "reschedule
+  all" never claims success while a task is still overdue. A batch-level
+  `reschedulingOverdue` flag makes a second click a no-op (and disables the
+  button) so a double-click can't see the first batch's own in-flight rows as
+  "busy" and falsely report them as failed. **Schedule on create/edit**: the
+  composer (`TaskComposer.vue`, a `Do date` input beside the existing due-date
+  field, `data-testid="task-add-scheduled"`) and the inline editor
+  (`TaskEditor.vue`, the same changed-fields rule as due/priority/tags) both
+  thread a `scheduled` value through their payload/patch — the composer's
+  `submit` payload → `Tasks.vue`'s `add()` → `add_task`'s `scheduled` arg, and
+  the editor's `buildPatch()` → `applyFieldPatch`'s `TaskPatch` respectively —
+  and `applyFieldPatch`'s revert snapshot (`before = {title, due, scheduled,
+  priority, tags}`) includes `scheduled`, so a failed edit reverts the
+  optimistic do-date change along with every other field.
 - **Tags (v0.5.3): chips, filter, inputs, and a grouping toggle.** Each row
   renders all of its tags as chips between the title and the due chip; a chip
   click activates a single component-local tag filter (no multi-tag filter
