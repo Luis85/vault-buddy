@@ -38,12 +38,15 @@ describe("relativeDateLabel", () => {
 
   it("falls back to the literal shortDate for a shape-valid but calendar-invalid date", () => {
     // is_valid_due checks only the YYYY-MM-DD shape, never calendar validity, so
-    // a stored "2026-02-31" is possible (Obsidian's own date picker tolerates
-    // it too). `new Date("2026-02-31T00:00:00")` silently normalizes to
-    // March 3, which would render a wrong weekday for a date the user
-    // authored as "Feb 31" — the round-trip guard must catch this and fall
-    // back to the literal shortDate instead.
-    expect(relativeDateLabel("2026-02-31", "2026-02-01")).toBe(shortDate("2026-02-31"));
-    expect(relativeDateLabel("2026-02-31", "2026-02-01")).toBe("Feb 31");
+    // a stored "2026-02-31" is possible (Obsidian's own date picker tolerates it
+    // too). `new Date("2026-02-31T00:00:00")` silently normalizes to March 3.
+    // `today` is deliberately "2026-03-01" so the normalized date lands just 2
+    // days out — INSIDE the (1,7) weekday window — so WITHOUT the round-trip
+    // guard this returns a weekday ("Tue" for Mar 3), and the guard is what makes
+    // it "Feb 31". A far-apart `today` (e.g. "2026-02-01", 30 days out) falls
+    // through to shortDate whether or not the guard exists, passing vacuously —
+    // this fixture is what actually PINS the guard against a future regression.
+    expect(relativeDateLabel("2026-02-31", "2026-03-01")).toBe(shortDate("2026-02-31"));
+    expect(relativeDateLabel("2026-02-31", "2026-03-01")).toBe("Feb 31");
   });
 });
