@@ -714,6 +714,40 @@ Recorded so a future reviewer doesn't mistake the day-boundary flip for a new
 bug; the accept-vs-reactive-clock call is a judgment this increment
 deliberately left open.
 
+### GAP-73 · Low · Quick-schedule popover: three known UX edges (flip heuristic, rebucket focus/draft loss)
+`src/components/TaskScheduleMenu.vue`, `src/composables/useTaskSchedule.ts`.
+Genuine but non-trivial edges Codex surfaced on PR #75 AFTER the whole-branch
+review, tracked here rather than reactively patched onto the completed increment
+(each needs deliberate, possibly architectural work):
+- **(a) Flip reads one side only.** `shouldFlipUp` clips against the
+  `.panel-scroll` ancestor's bottom but never its top, and uses a fixed ~200px
+  estimate rather than the rendered popover — so in a compact scroll area where
+  the popover fits BELOW the trigger but has even less room ABOVE, it can wrongly
+  flip up and clip its first controls. Robust fix: render-and-measure (open
+  hidden, measure, place — no down-then-up flash) or, best, **Teleport the
+  popover out of the overflow container** and position it against the trigger
+  rect (reposition on scroll), which retires the flip heuristic entirely.
+- **(b) Focus lost when scheduling re-buckets the row.** Choosing a date that
+  changes the effective plan date (`scheduled ?? due`) moves the task to a
+  different Plan bucket; the row `:key` is `bucketKey:path`, so Vue UNMOUNTS the
+  row (and this popover) on the next render, and `closeAndRefocus`'s `nextTick`
+  then finds `root` null → focus drops to `<body>` despite the restore logic. A
+  real fix restores focus from the PARENT (`Tasks.vue`) onto the newly-mounted
+  row's trigger, not from the unmounting child.
+- **(c) Reschedule-overdue discards an open editor's unsaved draft.**
+  `rescheduleOverdue` holds out rows whose write is in `busy`, but a row merely
+  OPEN in the inline editor (drafting, not yet saving) is NOT in `busy`, so the
+  batch reschedules it → it re-buckets to Today → the editor row unmounts →
+  unsaved draft fields are silently lost. The sharpest of the three (silent loss
+  of typed input, however narrow the trigger: overdue AND open-in-editor AND
+  reschedule-all clicked). Bounded fix: thread the currently-editing path into
+  `rescheduleOverdue` and exclude it (naming it in the summary toast, like the
+  busy-row skip), or block the batch while any row is being edited.
+
+None blocks the shipped do-date foundation (whole-branch review: merge-ready);
+(a)/(b) are architectural (portal / cross-component focus) and (c) is a bounded
+exclusion — the owner scopes whether any lands now or as a follow-up. Codex, PR #75.
+
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
 `closeMenu()`, matching Search's handler; a regression test opens the popup,

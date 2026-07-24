@@ -1234,12 +1234,22 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `IconButton` opens `TaskScheduleMenu.vue`, a presentational popover (Today /
   Tomorrow / This weekend / a native `<input type=date>` pick / Clear — Clear
   renders only when the task already has a do-date) that emits `schedule` with
-  the chosen `YYYY-MM-DD` or `null`. It flips to render ABOVE the trigger when
-  the trigger sits close enough to the viewport bottom that a downward popover
-  would clip (`shouldFlipUp`, a pure function over the trigger's
-  `getBoundingClientRect()` and `window.innerHeight` — the same
-  viewport-is-the-whole-Tauri-window proxy `SelectMenu` already uses) and
+  the chosen `YYYY-MM-DD` or `null`. It flips to render ABOVE the trigger when a
+  downward popover would overflow the clip edge (`shouldFlipUp`, a pure function
+  over the trigger's `getBoundingClientRect().bottom`, a fixed height estimate,
+  and the clip bottom). The clip bottom is the nearest **`.panel-scroll`**
+  overflow ancestor's `getBoundingClientRect().bottom` — the actual container
+  the row list scrolls inside — falling back to `window.innerHeight` only when
+  no such ancestor exists; measuring the whole window (the earlier approach)
+  over-estimated the room below in a compact panel or with the composer options
+  expanded (the remaining refinement toward reading BOTH sides / a
+  render-measure or portal is docs/Gaps.md GAP-73). For assistive tech it
+  presents **dialog** semantics — the trigger carries `aria-haspopup="dialog"` +
+  `aria-expanded` + (while open) an `aria-controls` linking to the popover's
+  `useId()` id, and the popover carries `role="dialog"` + `aria-label`. It
   swallows its own Escape/outside-click (the GAP-27 class: focus on open,
+  focus back to the trigger on keyboard close — save the rebucket-unmount edge,
+  GAP-73;
   Escape `stopPropagation`s so it can't bubble into the panel's own close
   handler). The container's `useTaskSchedule` composable owns the two write
   verbs, both riding the row's shared `busy` guard so a schedule can't race a
