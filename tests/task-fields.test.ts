@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TaskItem } from "../src/types";
 import {
+  buildTaskPatch,
   comingSaturday,
   localDatePlus,
   plannerDateOf,
   relativeDateLabel,
   scheduledOf,
   shortDate,
+  type TaskDraft,
 } from "../src/utils/taskFields";
 
 function task(p: Partial<TaskItem>): TaskItem {
@@ -93,5 +95,26 @@ describe("comingSaturday", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 25, 12, 0, 0)); // Jul 25, 2026 is a Saturday
     expect(comingSaturday()).toBe("2026-07-25");
+  });
+});
+
+describe("buildTaskPatch", () => {
+  const base: TaskItem = {
+    path: "p", title: "Old", status: "new", created: "2026-07-01", done: false,
+    due: "2026-07-10", scheduled: null, priority: null, tags: ["a"], list: "Work",
+    order: null, id: null, description: null,
+  };
+  const draft = (o: Partial<TaskDraft> = {}): TaskDraft => ({
+    title: "Old", due: "2026-07-10", scheduled: "", priority: "normal", tags: "a", list: "Work", ...o,
+  });
+
+  it("emits only changed fields", () => {
+    expect(buildTaskPatch(base, draft())).toEqual({});
+    expect(buildTaskPatch(base, draft({ title: "New" }))).toEqual({ title: "New" });
+    expect(buildTaskPatch(base, draft({ due: "" }))).toEqual({ clearDue: true });
+    expect(buildTaskPatch(base, draft({ scheduled: "2026-07-15" }))).toEqual({ scheduled: "2026-07-15" });
+    expect(buildTaskPatch(base, draft({ priority: "high" }))).toEqual({ priority: "high" });
+    expect(buildTaskPatch(base, draft({ tags: "a b" }))).toEqual({ tags: ["a", "b"] });
+    expect(buildTaskPatch(base, draft({ list: "Home" }))).toEqual({ list: "Home" });
   });
 });
