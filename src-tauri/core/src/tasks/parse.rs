@@ -208,7 +208,11 @@ fn decode_single_quoted(s: &str) -> Option<String> {
 /// scalar (`'…'`, `''` → `'`, optional trailing comment) is decoded likewise. An
 /// UNQUOTED value is taken verbatim — a description is free text where a bare
 /// `#` is CONTENT, not a comment (UNLIKE the structured fields that go through
-/// `scalar_field`). Returns `None` when absent or empty. Top-level only (an
+/// `scalar_field`). A BLOCK scalar (`description: |` / `>` + indented lines) is
+/// REJECTED (`None`): we store/read single-line scalars only, and surfacing the
+/// bare `|`/`>` marker as the description would be wrong (Codex P2, PR #76) —
+/// the block itself stays safe, since `set_fields` consumes it whole on a
+/// rewrite. Returns `None` when absent or empty. Top-level only (an
 /// indented `  description:` never matches), stops at the closing fence,
 /// mirroring `note_field`.
 pub(super) fn description_field(content: &str) -> Option<String> {
@@ -222,6 +226,9 @@ pub(super) fn description_field(content: &str) -> Option<String> {
         }
         if let Some(rest) = line.strip_prefix("description:") {
             let raw = rest.trim();
+            if raw.starts_with(['|', '>']) {
+                return None; // block scalar — not a single-line value we expose
+            }
             let decoded = if raw.starts_with('"') {
                 crate::yaml_scalar::yaml_unquote_multiline(double_quoted_slice(raw).unwrap_or(raw))
             } else if raw.starts_with('\'') {
@@ -810,5 +817,22 @@ mod tests {
                 .as_deref(),
             Some("use #tag today")
         );
+    }
+
+    #[test]
+    fn description_field_rejects_a_block_scalar() {
+        // A block scalar (`|` literal / `>` folded, with any chomping/indent
+        // suffix) is not a single-line value we expose — reading it must NOT
+        // surface the bare marker as the description (Codex P2, PR #76).
+        for marker in ["|", "|-", "|+", ">", ">-", ">2"] {
+            let doc = format!(
+                "---\ntype: Task\ndescription: {marker}\n  indented body line\n  second line\n---\n"
+            );
+            assert_eq!(
+                super::description_field(&doc),
+                None,
+                "block scalar `{marker}` must read as no description"
+            );
+        }
     }
 }

@@ -49,8 +49,23 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
     // deleting it), so the decision is deferred until the next non-comment
     // line shows whether the block continues.
     let mut pending_comments: Vec<&str> = Vec::new();
+    // True while consuming the body of a block SCALAR (`key: |` / `key: >` +
+    // indented lines) whose key was just rewritten/removed. Unlike a block
+    // LIST, a block scalar's body includes BLANK lines (paragraph breaks), so
+    // consumption is indent-based and blank-tolerant: every indented or blank
+    // line goes with the replaced value, until a non-indented, non-blank line
+    // (a top-level key or the closing fence) ends it. Without this, rewriting a
+    // hand-authored `description: |` block would orphan its indented lines and
+    // corrupt the frontmatter (Codex P2, PR #76).
+    let mut skip_block_scalar = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
+        if skip_block_scalar {
+            if line.starts_with([' ', '\t']) || trimmed.trim().is_empty() {
+                continue;
+            }
+            skip_block_scalar = false;
+        }
         if skip_list_items {
             let starts_indented = line.starts_with([' ', '\t']);
             let t = trimmed.trim_start();
@@ -115,8 +130,16 @@ pub fn set_fields(content: &str, updates: &[(&str, Option<&str>)]) -> Option<Str
                 // the writer must consume it too or an edit would orphan the
                 // items and a clear would leave stale tags (Codex, PR #46).
                 let rest = &trimmed[key.len() + 1..];
-                if strip_inline_comment(rest.trim()).trim().is_empty() {
+                let v = strip_inline_comment(rest.trim()).trim();
+                if v.is_empty() {
                     skip_list_items = true;
+                } else if v.starts_with(['|', '>']) {
+                    // A block SCALAR indicator (`|`/`>`, optional chomping/indent
+                    // suffix): its indented body on the following lines belongs to
+                    // this value, so consume it too — a rewrite/removal must
+                    // replace the whole scalar, never orphan its lines (Codex P2,
+                    // PR #76). An unquoted plain scalar can't start with `|`/`>`.
+                    skip_block_scalar = true;
                 }
                 if let Some(v) = value {
                     let ending = &line[trimmed.len()..]; // "\r\n", "\n", or ""
@@ -446,5 +469,40 @@ mod tests {
             out,
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\nbody\n"
         );
+    }
+
+    #[test]
+    fn set_fields_rewrites_a_block_scalar_value_consuming_its_indented_body() {
+        // A hand-authored block SCALAR (`description: |` + indented lines,
+        // INCLUDING a blank paragraph break) must be replaced whole — leaving
+        // the indented body behind would orphan it into the frontmatter (Codex
+        // P2, PR #76). Unlike a block list, blank lines are part of the scalar.
+        let doc = "---\ntype: Task\nstatus: new\ndescription: |\n  first para\n\n  second para\ntitle: \"A\"\n---\nbody\n";
+        let out = set_fields(doc, &[("description", Some("\"one line\""))]).unwrap();
+        assert!(out.contains("description: \"one line\"\n"));
+        assert!(!out.contains("first para"));
+        assert!(!out.contains("second para"));
+        assert!(out.contains("title: \"A\"\n")); // the key after the block survives
+        assert!(out.contains("\nbody\n"));
+    }
+
+    #[test]
+    fn set_fields_removes_a_block_scalar_value_entirely() {
+        // Folded (`>`) block scalar running to the fence: removal drops the
+        // header AND its indented body, leaving no orphan.
+        let doc = "---\ntype: Task\nstatus: new\ndescription: >\n  folded text\n  more\n---\n";
+        let out = set_fields(doc, &[("description", None)]).unwrap();
+        assert_eq!(out, "---\ntype: Task\nstatus: new\n---\n");
+    }
+
+    #[test]
+    fn set_fields_block_scalar_body_bullets_are_never_body_content() {
+        // The consumed block ends at the closing fence; a `- bullet` in the BODY
+        // (after the fence) is never touched by the scalar consumption.
+        let doc = "---\ntype: Task\nstatus: new\ndescription: |\n  detail\n---\n- a body bullet\n";
+        let out = set_fields(doc, &[("description", Some("\"x\""))]).unwrap();
+        assert!(out.contains("description: \"x\"\n"));
+        assert!(!out.contains("detail"));
+        assert!(out.contains("- a body bullet\n"));
     }
 }
