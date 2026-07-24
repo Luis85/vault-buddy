@@ -1059,6 +1059,7 @@ status: new
 title: "Buy milk"
 created: 2026-07-08
 due: 2026-07-15
+scheduled: 2026-07-14
 priority: high
 ---
 ```
@@ -1073,7 +1074,22 @@ minimal and round-trip stable). Reads degrade gracefully: an unparseable `due`
 (anything not plain `YYYY-MM-DD`, checked by `is_valid_due` — no calendar
 validity, so `2026-02-31` is accepted like Obsidian's own date picker tolerates
 it) sorts/buckets as no-date, and an unknown `priority` value sorts/renders as
-normal — same defensive-read posture as the rest of the vault domain. Per-vault
+normal — same defensive-read posture as the rest of the vault domain.
+**`scheduled` — the do date (do-date/planner-foundation increment,
+docs/superpowers/specs/2026-07-24-task-management-do-date-planner-foundation-design.md).**
+`scheduled` (`YYYY-MM-DD`) is a fourth optional widened field: the *do date*
+(when you plan to work a task), deliberately distinct from the `due` deadline.
+It reads leniently through the same `is_valid_due` shape check (a malformed
+value reads as unscheduled — no calendar validity, so `2026-02-31` is
+tolerated like `due`), is emitted between `due` and `priority`, is written only
+when present (clearing it removes the line, `due`'s semantics), and is reserved
+in BOTH `RESERVED_TASK_KEYS` sets — the template-frontmatter filter (`disk.rs`)
+and the task-ID-property validator (`id.rs`, kept in sync via reciprocal
+comments) — so it can never be smuggled in as a template key nor configured as
+an id property (the pathological pre-existing `scheduled`-as-id-property config
+is docs/Gaps.md GAP-68). The IPC write params (`scheduled`/`clearScheduled`)
+and the frontend planner/grouping that consume it are documented as those
+increments land. Per-vault
 config adds one field, `tasks_folder` (default `Tasks`), alongside the capture
 config in the same app-side `config.json` (`tasks_root()` resolves the
 default). All logic lives in the pure `core::tasks` crate (unit-tested on
@@ -1411,7 +1427,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   (`getrandom`); `tasks::is_valid_id_property(name)` gates the property
   name to `[A-Za-z0-9_-]`, non-empty, and — critically — **disjoint from
   the reserved structured task keys** (`type`/`status`/`title`/`created`/
-  `due`/`priority`/`tags`/`tag`/`order`), which is what lets the writer
+  `due`/`scheduled`/`priority`/`tags`/`tag`/`order`), which is what lets the writer
   treat the ID as a plain "ensure present" key without ever colliding with
   a real patch key. Two write sites, same never-clobber discipline as
   every other vault write: **create** — `services::add_task` resolves the
@@ -1463,7 +1479,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `core::template::render_extra_frontmatter` (see the capture domain): extra
   frontmatter placeholders (`{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`)
   are resolved, the result parsed as YAML, and filtered against the
-  reserved task keys (`type`/`status`/`title`/`created`/`due`/`priority`/
+  reserved task keys (`type`/`status`/`title`/`created`/`due`/`scheduled`/`priority`/
   `tags`/`tag`/`order`, plus the vault's configured task-id property when
   one is set) before injection, so a user key can never confuse the
   surgical field writer (`set_fields`); a
