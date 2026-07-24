@@ -1191,7 +1191,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   target that calls `open_task` — a successful launch closes the panel
   (best-effort `close_panel`, same as every other Obsidian handoff), a failed
   one keeps it open for the error toast. A pencil opens an inline editor
-  (title, due, priority, tags) with one row editable at a time, Save sending
+  (title, due, scheduled, priority, tags) with one row editable at a time, Save sending
   only the changed fields (`clearDue: true` for an emptied date; tags follows
   the same changed-fields rule below) in a single `update_task` call.
   Toggle/archive/edit are all optimistic (revert + toast on failure) and
@@ -1204,7 +1204,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   can never strand a stale, invisible filter — which is precisely what lets
   `filteredTasks`/`filterActive` drop the old "is the input visible" gate
   (a hidden input can no longer hold a live query).
-  `TaskItem`/`TaskDto` fields (now including `due`/`priority`/`tags`) match
+  `TaskItem`/`TaskDto` fields (now including `due`/`scheduled`/`priority`/`tags`) match
   camelCase across Rust↔TS. **Cross-vault aggregation (v0.5.4, the
   task-aggregation increment).** `Tasks.vue` takes a `vaultId: string | null`
   prop; `null` is the aggregate mode, reached via the "All tasks" header icon
