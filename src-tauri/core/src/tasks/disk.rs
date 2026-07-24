@@ -632,6 +632,47 @@ mod tests {
     }
 
     #[test]
+    fn update_task_fields_sets_rewrites_and_clears_scheduled() {
+        // `scheduled` rides the same generic surgical writer as `due`/`tags` —
+        // no new write machinery — but the spec promised an explicit
+        // scheduled-named regression test pinning the set/rewrite/clear
+        // round-trip on disk (not just render_task's in-memory output).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        let p = create_task(
+            &root,
+            "A",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("scheduled"));
+
+        // Set: absent → inserted at the closing fence.
+        update_task_fields(&root, &p, &[("scheduled", Some("2026-07-20"))], None).unwrap();
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("scheduled: 2026-07-20\n"));
+
+        // Rewrite: existing line replaced in place, not duplicated.
+        update_task_fields(&root, &p, &[("scheduled", Some("2026-07-25"))], None).unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("scheduled: 2026-07-25\n"));
+        assert!(!body.contains("2026-07-20"));
+        assert_eq!(body.matches("scheduled:").count(), 1);
+
+        // Clear: None removes the line entirely.
+        update_task_fields(&root, &p, &[("scheduled", None)], None).unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("scheduled"));
+    }
+
+    #[test]
     fn update_task_fields_stamps_an_absent_ensure_key_but_never_overwrites() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Tasks");
