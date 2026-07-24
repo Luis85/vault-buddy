@@ -1178,9 +1178,16 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   store): a `tasks` panel view reached from a per-row Tasks button; an
   add-task input with an optional due/priority row (the tasks-folder setting
   lives in the per-vault Vault settings view, not here), and a
-  date-bucketed list (Overdue / Today / Upcoming / No date / Done — bucket
-  headers render only once a dated open task exists, so a vault that never
-  uses due dates keeps the flat list it always had). A task's title is a click
+  Plan-bucketed list (Overdue / Today / Upcoming / Anytime / Done, keyed off
+  the effective plan date = `scheduled ?? due` via `plannerDateOf`, so a future
+  do-date moves a task's plan even past its deadline — the Things model; the
+  empty-date bucket is **Anytime**). Bucket headers render only once a dated
+  open task exists, so a vault that never uses do/due dates keeps the flat list
+  it always had. Each row shows the **do-date** (`scheduled`) as an accent
+  `Chip` when set and distinct from the deadline (`relativeDateLabel`:
+  Today / Tomorrow / weekday / short-date, with a round-trip guard that falls
+  back to the literal date for a calendar-invalid value like `2026-02-31`). A
+  task's title is a click
   target that calls `open_task` — a successful launch closes the panel
   (best-effort `close_panel`, same as every other Obsidian handoff), a failed
   one keeps it open for the error toast. A pencil opens an inline editor
@@ -1234,10 +1241,11 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   client-side into an array); the editor sends `tags` in the patch only when
   the parsed array differs from the task's current tags, and an emptied input
   sends `tags: []` (clear) — same changed-fields/optimistic-revert discipline
-  as the other fields. A `Lists | Dates | Tags` segmented toggle
-  (component-local state, resets to `lists` — the panel's default grouping —
+  as the other fields. A `Lists | Plan | Tags` segmented toggle (the middle
+  tab's LABEL is "Plan"; its grouping KEY stays `dates`, no migration;
+  component-local state, resets to `lists` — the panel's default grouping —
   on remount; see below) switches the SAME filtered, globally-sorted list
-  from date buckets to tag sections when Tags is picked: one alphabetical
+  from planner buckets to tag sections when Tags is picked: one alphabetical
   section per distinct tag with the task repeated under EACH of its tags,
   then "No tags" (open, untagged), then "Done" (all done tasks) — headers
   always render in tag mode. Because a task can render more than once, the
@@ -1251,7 +1259,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   folder counts, the `type: Task` philosophy applied to folders; this
   AMENDED the PRD's earlier metadata-not-folders draft). A task's `list` =
   its parent folder relative to the canonical root, `/`-joined, `""` at the
-  root (rendered as **No list**, the No date/No tags precedent). Read
+  root (rendered as **No list**, the Anytime/No tags precedent). Read
   lenient / write strict: `tasks::task_lists` enumerates ANY folder
   (empties included, dot-dirs skipped, `vault_walk` containment/cycle
   discipline); `create_task_list` creates single segments only (no leading
@@ -1265,8 +1273,11 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   round-tripped by `serialize_config`; `set_task_lists_config` is its own
   write command (the independent field-save pattern, edited in the Vault
   settings view's self-contained `TaskListSettings.vue`). Frontend: the
-  grouping toggle is `Lists | Dates | Tags` — **Lists is first and is the
-  default grouping** every panel visit opens on (sections in
+  grouping toggle is `Lists | Plan | Tags` ("Plan" is the middle tab's label;
+  the grouping key stays `dates`, no migration) — **Lists is first**; a
+  per-vault view opens on Lists, while the aggregate ("All tasks") view
+  defaults to **Plan** when unset (a persisted choice always wins — the do-date
+  increment's aggregate default) (sections in
   `listOrder`-then-alphabetical order, No list, Done; the aggregate merges
   same-named lists case-insensitively — first-seen casing in sort order
   labels the section, the tags precedent — and skips empty lists, while
@@ -1356,7 +1367,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   a now-hidden archived list (Codex, PR #59). An UNTOUCHED picker needs nothing
   — it already tracks the vault default reactively (`displayList`); a delete
   that KEPT the folder leaves the pick, the list still exists. **Grouping
-  persistence**: the `Lists | Dates |
+  persistence**: the `Lists | Plan |
   Tags` choice persists per view (`vault-buddy:task-grouping` via the shared
   `perViewStore` envelope, same keying as the sort pref). **Drag a task
   between lists**: in Manual sort under Lists grouping (never aggregate — ranks
@@ -1367,7 +1378,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   optimistically re-homes to the dropped section and adopts the landed path,
   reverting + toasting on failure — same feel as the rank-write path. A release
   over a DIFFERENT section that is NOT a valid list target (Done, or any
-  section under Dates/Tags grouping) is a **no-op**: the drag gate commits on
+  section under Plan/Tags grouping) is a **no-op**: the drag gate commits on
   `overSectionKey !== sectionKey` to allow a slot-unchanged move, so
   `commitReorder` must early-return there rather than fall through to an in-list
   `planReorder` — the origin's drop line only renders for a same-section drop,

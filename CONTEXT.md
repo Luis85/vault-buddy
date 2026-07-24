@@ -56,6 +56,14 @@ _Avoid_: Index, position (both imply a dense sequence; ranks are sparse and gap-
 A generated, stable identifier for a Task: eight random base36 characters written into its frontmatter under a configurable property (default `task-id`). Opt-in per Vault — once turned on, a new Task gets one at creation and an existing Task is stamped with one the next time it's edited, but an ID already present is never overwritten or regenerated. Distinct from both the file path (which can move or be renamed) and Order (the hand-arranged sort rank) — a Task keeps the same Task ID across either kind of change, which is the point of having one.
 _Avoid_: UID, key, index — the ID is random, not sequential, and it never doubles as the sort rank
 
+**Do Date** (the `scheduled` frontmatter field):
+The day you plan to WORK a Task — the "when will I do this" — kept distinct from the Task's **deadline** (the `due` date, "when is it due"). Stored as an optional `scheduled: YYYY-MM-DD` in the Task's frontmatter, read leniently (a non-date value is treated as unscheduled). It is the field the Plan grouping buckets by: a Task's effective plan date is its Do Date if set, else its deadline, so setting a Do Date moves a Task's plan even when its deadline is already past; a Task with neither sits under **Anytime**.
+_Avoid_: due date / deadline (that is `due`, a separate field); "scheduled" spoken as a synonym for due; start date
+
+**Plan** (grouping):
+The task-view grouping — the middle tab of the `Lists | Plan | Tags` toggle — that buckets Tasks by their effective plan date (Do Date, else deadline) into Overdue / Today / Upcoming / Anytime / Done. Supersedes the earlier "Dates" grouping label; the internal grouping key stays `dates`. It is the default grouping the aggregate ("All tasks") view opens on, while a per-vault view still opens on Lists.
+_Avoid_: Dates (the old label), Calendar, Schedule view
+
 **Project**:
 Task metadata linking a Task to the larger body of notes or work it belongs to.
 _Avoid_: Epic, initiative
