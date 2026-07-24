@@ -694,14 +694,25 @@ panel is a long-lived webview (hidden/shown, never reloaded), a Task open
 across local midnight can flip bucket without any write happening: a Task
 in Today at 11:59 PM silently becomes Overdue at 12:00 AM the next time the
 view re-renders (a re-sort/re-bucket — e.g. triggered by any other row's
-optimistic write, or simply reopening the panel). **Accepted, not a
-defect:** this matches the pre-existing due-date bucketing's behavior
-(recomputed against wall-clock "today" the same way before this increment
-existed) and the deliberate local-not-UTC choice `add_task` already made —
-the alternative (freezing "today" for the life of the mounted view) would
-make a Task's bucket silently stale across a long session instead, which is
-worse. No action needed; recorded so a future reviewer doesn't mistake the
-day-boundary flip for a new bug.
+optimistic write, or simply reopening the panel). **The row's relative
+do-date LABEL has the same staleness:** `relativeDateLabel`
+(Today/Tomorrow/weekday, `taskFields.ts`) also reads `localToday()` with no
+reactive dependency, so a "Tomorrow" chip keeps reading "Tomorrow" after
+local midnight until that row happens to re-render. **Accepted as a
+deliberate design call (contested — Codex, PR #75):** it matches the
+pre-existing due-date bucketing (recomputed against wall-clock "today" the
+same way before this increment existed) and the local-not-UTC choice
+`add_task` already made. Codex argued for driving "today" from a *reactive*
+value that advances at local midnight (a shared reactive clock, or an
+on-midnight / metronome-driven view refresh) — that is the proportionate fix
+if this is ever reconsidered, and is NOT the same as freezing "today" for the
+mounted view (freezing would make buckets AND labels silently stale across a
+long session — strictly worse). Kept accepted for now on **low exposure**:
+the panel is a transient popup that re-runs discovery on every open, so the
+stale window requires it left open ACROSS midnight with no interaction.
+Recorded so a future reviewer doesn't mistake the day-boundary flip for a new
+bug; the accept-vs-reactive-clock call is a judgment this increment
+deliberately left open.
 
 ### GAP-27 · ~~Medium~~ FIXED 2026-07-10 · Escape in an open dropdown also closes the whole panel
 `onPopupKeydown`'s Escape branch now calls `e.stopPropagation()` before
