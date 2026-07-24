@@ -314,13 +314,13 @@ Add to `src-tauri/core/src/tasks/disk.rs` test module:
 
 ```rust
 #[test]
-fn delete_task_removes_the_file_and_refuses_an_outside_path() {
+fn delete_task_removes_a_task_refuses_outside_and_refuses_a_non_task() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("Tasks");
     std::fs::create_dir_all(&root).unwrap();
     let p = root.join("t.md");
     std::fs::write(&p, "---\ntype: Task\nstatus: new\ntitle: X\n---\n").unwrap();
-    // Happy path.
+    // Happy path: a real task is removed.
     assert!(delete_task(&root, &p).is_ok());
     assert!(!p.exists());
     // A path outside the tasks root is refused (write a sibling file to delete).
@@ -328,6 +328,13 @@ fn delete_task_removes_the_file_and_refuses_an_outside_path() {
     std::fs::write(&outside, "x").unwrap();
     assert!(delete_task(&root, &outside).is_err());
     assert!(outside.exists());
+    // A FOREIGN (non-task) file INSIDE the tasks root is refused — task folders
+    // may legitimately hold non-task files, and this first destructive write
+    // must never remove one (Codex P1, PR #76).
+    let foreign = root.join("notes.md");
+    std::fs::write(&foreign, "# just some notes, not a task\n").unwrap();
+    assert!(delete_task(&root, &foreign).is_err());
+    assert!(foreign.exists());
 }
 ```
 
@@ -343,9 +350,14 @@ Add after `update_task_fields` (after line 264) in `src-tauri/core/src/tasks/dis
 ```rust
 /// Permanently delete a task file — the app's ONLY destructive vault write.
 /// Canonicalizes `root` and `path` and requires containment (a symlink at the
-/// file or folder can't be seen lexically) before removing, the same canonical
-/// guard `update_task_fields`/`open_task` use. A missing file surfaces as an
-/// error (the row the user clicked should exist), never a silent success.
+/// file or folder can't be seen lexically), THEN re-reads the file and requires
+/// it to be a `type: Task` document before removing. Task folders may
+/// legitimately hold foreign files, and a listed row could be swapped for a
+/// non-task file at the same path before the confirm lands — so identity is
+/// re-validated immediately before this irreversible write, the same posture
+/// the move/field writers get from `set_fields`' `type: Task` precondition
+/// (Codex P1, PR #76). A missing file surfaces as an error (the row the user
+/// clicked should exist), never a silent success.
 pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -353,6 +365,11 @@ pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
         std::fs::canonicalize(path).map_err(|e| format!("Cannot resolve task file: {e}"))?;
     if !canon_path.starts_with(&canon_root) {
         return Err("Task file is outside the vault's tasks folder".to_string());
+    }
+    let content =
+        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+    if !super::doc::is_task(&content) {
+        return Err("Refusing to delete: not a type: Task document".to_string());
     }
     std::fs::remove_file(&canon_path).map_err(|e| format!("Cannot delete task: {e}"))
 }
@@ -380,7 +397,7 @@ git commit -m "feat(core): add delete_task (canonical-containment-gated remove)"
 
 **Interfaces:**
 - Consumes: `set_fields` (writer), `task_basename` (private, disk.rs), `super::id::new_task_id`, `capture_note::{note_field, write_note_collision_safe}`, `template::yaml_quote`.
-- Produces: `pub fn duplicate_task(root: &Path, path: &Path, today: &str, id_property: Option<&str>) -> Result<PathBuf, String>`.
+- Produces: `pub fn duplicate_task(root: &Path, path: &Path, today: &str, id_property: Option<&str>, ids_enabled: bool) -> Result<PathBuf, String>`. `id_property` is `Some(name)` only when the configured name is a valid, non-reserved id property (never touch a foreign/reserved key); `ids_enabled` decides regenerate vs. strip.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -398,7 +415,7 @@ fn duplicate_task_copies_body_and_resets_identity_with_fresh_id() {
         "---\ntype: Task\nstatus: done\ntitle: \"Buy milk\"\ncreated: 2026-07-01\ntask-id: aaa11111\ndue: 2026-07-10\n---\n\nThe body stays.\n",
     )
     .unwrap();
-    let new = duplicate_task(&root, &src, "2026-07-24", Some("task-id")).unwrap();
+    let new = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
     assert!(new.exists() && new != src);
     let out = std::fs::read_to_string(&new).unwrap();
     assert!(out.contains("title: \"Buy milk (copy)\""));
@@ -407,11 +424,28 @@ fn duplicate_task_copies_body_and_resets_identity_with_fresh_id() {
     assert!(out.contains("due: 2026-07-10")); // other fields preserved
     assert!(!out.contains("task-id: aaa11111")); // id regenerated, not shared
     assert!(out.contains("task-id: ")); // a fresh id is present
-    // IDs off → id left untouched (invisible/inert), body still copied.
-    let new2 = duplicate_task(&root, &src, "2026-07-24", None).unwrap();
+    // IDs off → the configured id property is STRIPPED, not inherited: leaving
+    // the source id on the copy would collide with the original if IDs are
+    // later re-enabled, and ensure-id never overwrites an existing value
+    // (Codex P2, PR #76).
+    let new2 = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
     let out2 = std::fs::read_to_string(&new2).unwrap();
-    assert!(out2.contains("task-id: aaa11111")); // untouched when ids are off
+    assert!(!out2.contains("task-id")); // stripped when ids are off
     assert!(out2.contains("title: \"Buy milk (copy)\""));
+}
+
+#[test]
+fn duplicate_task_uses_the_filename_stem_when_the_source_has_no_title() {
+    // An untitled hand-authored task lists under its filename stem, so the copy
+    // must too — not an empty " (copy)" (Codex P2, PR #76).
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("Tasks");
+    std::fs::create_dir_all(&root).unwrap();
+    let src = root.join("My hand note.md");
+    std::fs::write(&src, "---\ntype: Task\nstatus: new\n---\n\nbody\n").unwrap();
+    let new = duplicate_task(&root, &src, "2026-07-24", None, false).unwrap();
+    let out = std::fs::read_to_string(&new).unwrap();
+    assert!(out.contains("title: \"My hand note (copy)\""));
 }
 ```
 
@@ -428,17 +462,22 @@ Add after `delete_task` in `src-tauri/core/src/tasks/disk.rs`:
 /// Duplicate a task file into the same folder, faithfully: the source bytes
 /// are copied (body, extra frontmatter, description, unknown keys all
 /// preserved), then only the identity fields are rewritten surgically via
-/// `set_fields` — title → "<title> (copy)", status → new, and the id
-/// REGENERATED when the vault has IDs on (`id_property = Some`) so no two
-/// tasks share an id. When IDs are OFF (`None`) the id is left untouched: it is
-/// never read (`list_tasks` skips it), so copying an inert value is harmless.
-/// Written through the collision-safe never-clobber writer, so a name clash
-/// takes the ` (N)` suffix. `today` names the new file (clock-free core).
+/// `set_fields` — title → "<title> (copy)", status → new, and the id handled so
+/// no two tasks ever share one. `id_property` is the vault's configured id key
+/// ONLY when it is a valid, non-reserved property (else `None`, so a
+/// foreign/reserved key is never touched). When present, the copy's id is
+/// REGENERATED (`ids_enabled == true`) or STRIPPED (`false`): stripping matters
+/// because leaving the source id on the copy would collide with the original if
+/// the user later re-enables IDs, and the ensure-id path never overwrites an
+/// existing value (Codex P2, PR #76). Written through the collision-safe
+/// never-clobber writer, so a name clash takes the ` (N)` suffix. `today` names
+/// the new file (clock-free core).
 pub fn duplicate_task(
     root: &Path,
     path: &Path,
     today: &str,
     id_property: Option<&str>,
+    ids_enabled: bool,
 ) -> Result<PathBuf, String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -449,14 +488,27 @@ pub fn duplicate_task(
     }
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    let title = crate::capture_note::note_field(&content, "title").unwrap_or_default();
+    // Title fallback matches list_tasks' display: an untitled hand-authored
+    // task shows its filename stem, so the copy must too (Codex P2, PR #76).
+    let stem = canon_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let title = crate::capture_note::note_field(&content, "title").unwrap_or(stem);
     let new_title = format!("{title} (copy)");
     let quoted = yaml_quote(&new_title);
-    let fresh = id_property.map(|_| super::id::new_task_id());
+    // A fresh id when IDs are on; `None` strips the configured property so the
+    // copy can never inherit the source id.
+    let new_id = if ids_enabled {
+        Some(super::id::new_task_id())
+    } else {
+        None
+    };
     let mut updates: Vec<(&str, Option<&str>)> =
         vec![("title", Some(quoted.as_str())), ("status", Some("new"))];
-    if let (Some(prop), Some(id)) = (id_property, fresh.as_deref()) {
-        updates.push((prop, Some(id)));
+    if let Some(prop) = id_property {
+        updates.push((prop, new_id.as_deref()));
     }
     let rewritten = set_fields(&content, &updates)
         .ok_or("Source is not a valid type: Task document")?;
@@ -626,9 +678,22 @@ pub async fn duplicate_task(id: String, path: String) -> Result<String, String> 
         if root.exists() {
             capture_paths::assert_root_inside_vault(&vault_path, &root)?;
         }
-        let id_property =
-            tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-        let new_path = tasks::duplicate_task(&root, Path::new(&path), &today, id_property)?;
+        // Touch the id property only when the configured name is a valid,
+        // non-reserved id key — never a foreign/reserved field. `ids_enabled`
+        // then decides regenerate (on) vs. strip (off) inside the core fn.
+        // (If `tasks::is_valid_id_property` isn't already re-exported from the
+        // `tasks` module the way `id_property_for_generation` is, add
+        // `pub use id::is_valid_id_property;` alongside it — it is `pub` in
+        // `tasks/id.rs`.)
+        let prop_name = cfg.task_id_property_name();
+        let id_property = tasks::is_valid_id_property(prop_name).then_some(prop_name);
+        let new_path = tasks::duplicate_task(
+            &root,
+            Path::new(&path),
+            &today,
+            id_property,
+            cfg.task_id_enabled,
+        )?;
         Ok(new_path.to_string_lossy().into_owned())
     })
     .await
@@ -1113,9 +1178,17 @@ export function useTaskDetail(task: Ref<AggTask>) {
       notifications.notify("success", `Duplicated "${task.value.title}".`, {
         action: {
           label: "Open",
-          run: () => {
-            void invoke("open_task", { id: vaultId, path: newPath }).catch(() => {});
-            void invoke("close_panel").catch(() => {});
+          // Mirror openInObsidian: await the launch, close the panel only on
+          // success, and surface a failure — never fire-and-forget the close or
+          // swallow the launch error (Codex P2, PR #76).
+          run: async () => {
+            try {
+              await invoke("open_task", { id: vaultId, path: newPath });
+              void invoke("close_panel").catch(() => {});
+            } catch (e) {
+              notifications.error(String(e));
+              logWarning(`open_task (duplicate) failed: ${String(e)}`);
+            }
           },
         },
       });

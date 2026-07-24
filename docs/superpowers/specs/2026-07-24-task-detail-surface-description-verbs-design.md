@@ -237,16 +237,21 @@ keys all preserved — with only identity fields changed:
    source path (reuse the `update_task_fields`/`open_task` guard).
 2. Read the source **bytes** (this is what preserves the body and every
    frontmatter key).
-3. Read the source `title`; compute the new title `"<title> (copy)"`.
-4. Decide the new id: **regenerate** under the vault's id property via
-   `tasks::new_task_id()` when IDs are enabled; otherwise **leave the id
-   untouched** — when IDs are off the property is never read, so an inherited
-   value is invisible/inert and copying it is harmless (no two *visible* tasks
-   share an id).
+3. Read the source `title`, falling back to the source **filename stem** when
+   absent (matching `list_tasks`' display); compute the new title
+   `"<title> (copy)"`.
+4. Decide the new id. Touch the configured id property ONLY when its name is a
+   valid, non-reserved id key (never a foreign/reserved field). When present:
+   **regenerate** it (`tasks::new_task_id()`) if IDs are enabled, else **strip**
+   it — a copy must never inherit the source id, or the two would collide if the
+   user later re-enables IDs (the ensure-id path never overwrites an existing
+   value). (Codex P2, PR #76 — an earlier "leave it untouched when IDs are off"
+   was wrong for the re-enable case.)
 5. Apply `set_fields` to the source content with
    `[("title", Some(quoted new title)), ("status", Some("new")),
-   (id_property, Some(new_id))]` (the id entry only when IDs are on) — a valid
-   Task always satisfies `set_fields`' `type: Task` + closed-fence precondition.
+   (id_property, regenerate ? Some(new_id) : None)]` (the id entry only when the
+   property is valid) — a valid Task always satisfies `set_fields`' `type: Task`
+   + closed-fence precondition.
 6. Write via the **collision-safe never-clobber create writer**
    (`write_note_collision_safe`, the same path `create_task` uses at
    `disk.rs:169`), deriving the filename from the new title (`task_basename`)
@@ -260,7 +265,10 @@ keys all preserved — with only identity fields changed:
 
 A new core fn + async command `delete_task(id, path) -> Result<(), String>`:
 resolve the vault + tasks root, **canonicalize + containment-assert** (reuse
-`open_task`'s guard — a delete must never escape the tasks root), then
+`open_task`'s guard — a delete must never escape the tasks root), **re-read the
+file and require `is_task`** (task folders may hold foreign files, and a listed
+row could be swapped for a non-task file before the confirm lands — identity is
+re-validated immediately before this irreversible write; Codex P1, PR #76), then
 `std::fs::remove_file`. Async, off the main thread, mirroring the other task
 writes.
 
