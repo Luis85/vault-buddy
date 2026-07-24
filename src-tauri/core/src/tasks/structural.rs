@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 /// non-task file at the same path before the delete lands — so the document is
 /// re-validated here, the same posture the move/field writers get from
 /// `set_fields`' `type: Task` precondition (Codex P1, PR #76). The validated
-/// bytes and the file's inode identity are taken from ONE open handle, and that
-/// identity is re-verified at unlink time (`is_different_file`) so the object we
-/// remove is provably the object we validated — a swap during the validation
-/// window is refused, not deleted. A missing file surfaces as an error (the row
-/// the user clicked should exist), never a silent success.
+/// bytes and the file's identity are taken from ONE open handle, and that
+/// identity is re-verified at unlink time (`handle_identity` + `id_differs`) so
+/// the object we remove is provably the object we validated — a swap during the
+/// validation window is refused, not deleted. A missing file surfaces as an error
+/// (the row the user clicked should exist), never a silent success.
 pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     // A destructive write must NEVER follow a symlink at the leaf: if `path` is
     // a symlink to a different valid Task inside the root, canonicalize would
@@ -39,79 +39,98 @@ pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     if !canon_path.starts_with(&canon_root) {
         return Err("Task file is outside the vault's tasks folder".to_string());
     }
-    // Read the bytes we validate AND the inode identity we will re-verify from ONE
-    // open handle, so they provably describe the same file (no read-vs-stat race).
-    // The handle is dropped at the end of this block, before any unlink, because
-    // Windows refuses to remove a file that still has an open handle without
-    // FILE_SHARE_DELETE.
-    let validated = {
+    // Read the bytes we validate AND the file's identity from ONE open handle, so
+    // they provably describe the same file (no read-vs-stat race). The handle is
+    // dropped at the end of this block, before any unlink, because Windows refuses
+    // to remove a file that still has an open handle without FILE_SHARE_DELETE.
+    let validated_id = {
         use std::io::Read as _;
         let mut file =
             std::fs::File::open(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-        let meta = file
-            .metadata()
-            .map_err(|e| format!("Cannot stat task: {e}"))?;
+        let id = handle_identity(&file);
         let mut content = String::new();
         file.read_to_string(&mut content)
             .map_err(|e| format!("Cannot read task: {e}"))?;
         if !super::doc::is_task(&content) {
             return Err("Refusing to delete: not a type: Task document".to_string());
         }
-        meta
+        id
     };
-    // Verify stable file identity at unlink time (Codex P1, PR #76): re-stat
-    // canon_path (no-follow) immediately before the irreversible remove and require
-    // it to STILL be the same inode we just validated. A task swapped for a
-    // different file — or for a symlink — during the validation window is refused
-    // rather than deleted. The residual race between this re-stat and remove_file is
-    // irreducible in portable std, which has no unlink-by-handle / funlinkat; on a
-    // single-user desktop the whole of delete_task runs at machine speed with no
-    // user pause inside it (the confirm happens client-side, before the IPC call),
-    // so this window is microseconds — documented as a bounded gap (docs/Gaps.md).
+    // Verify stable file identity at unlink time (Codex P1, PR #76): a no-follow
+    // re-stat rejects a swap to a symlink, and re-reading the file's identity
+    // rejects a swap to any different file — both immediately before the
+    // irreversible remove, so the object we unlink is provably the one we
+    // validated. The residual re-open->remove window is irreducible in portable
+    // std, which has no unlink-by-handle / funlinkat; on a single-user desktop
+    // delete_task runs at machine speed with no user pause inside it (the confirm
+    // happens client-side, before the IPC call), so the window is microseconds —
+    // documented as a bounded gap (docs/Gaps.md, GAP-79).
     let now =
         std::fs::symlink_metadata(&canon_path).map_err(|e| format!("Cannot re-check task: {e}"))?;
-    if now.file_type().is_symlink() || is_different_file(&validated, &now) {
-        return Err(
-            "Refusing to delete: the task file changed on disk since it was validated; reopen it and retry"
-                .to_string(),
-        );
+    if now.file_type().is_symlink() {
+        return Err(SWAPPED_MSG.to_string());
+    }
+    // canon_path is not a symlink per the check above, so this re-open cannot
+    // follow one; a differing identity means the entry was swapped during the
+    // validation window.
+    let now_id = std::fs::File::open(&canon_path)
+        .ok()
+        .and_then(|f| handle_identity(&f));
+    if id_differs(validated_id, now_id) {
+        return Err(SWAPPED_MSG.to_string());
     }
     std::fs::remove_file(&canon_path).map_err(|e| format!("Cannot delete task: {e}"))
 }
 
-/// Whether two `Metadata` snapshots of a path provably describe DIFFERENT files —
-/// used by `delete_task` to detect a swap between validating a task's bytes and
-/// unlinking it. Conservative: returns `true` ONLY on a positive identity mismatch,
-/// so a platform that can't supply comparable identity never blocks a legitimate
-/// delete — the guard fires on a proven swap, never on absence of proof (Codex P1
-/// TOCTOU, PR #76). Both snapshots come from handle-sourced metadata
-/// (`File::metadata` / `fs::symlink_metadata`), which populate the Windows
-/// identifiers; a `DirEntry`-sourced one would not, and none is passed here.
+const SWAPPED_MSG: &str =
+    "Refusing to delete: the task file changed on disk since it was validated; reopen it and retry";
+
+/// Best-effort stable identity of an OPEN file — `(device, inode)` on Unix,
+/// `(volume serial, file index)` on Windows — used by `delete_task` to detect a
+/// swap between validating a task's bytes and unlinking it. `None` when the
+/// platform can't supply it; callers treat a `None` on either side as "can't
+/// prove a swap" (see `id_differs`), so missing identity never blocks a legitimate
+/// delete (Codex P1 TOCTOU, PR #76).
 #[cfg(unix)]
-fn is_different_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+fn handle_identity(file: &std::fs::File) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
-    a.ino() != b.ino() || a.dev() != b.dev()
+    let m = file.metadata().ok()?;
+    Some((m.dev(), m.ino()))
 }
 
 #[cfg(windows)]
-fn is_different_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    // Compare each identifier only when BOTH snapshots supply it; a differing file
-    // index or volume serial proves the dir entry now points at another object.
-    let index_differs = matches!(
-        (a.file_index(), b.file_index()),
-        (Some(x), Some(y)) if x != y
-    );
-    let volume_differs = matches!(
-        (a.volume_serial_number(), b.volume_serial_number()),
-        (Some(x), Some(y)) if x != y
-    );
-    index_differs || volume_differs
+fn handle_identity(file: &std::fs::File) -> Option<(u64, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    // std's Metadata::file_index()/volume_serial_number() are still unstable
+    // (windows_by_handle, rust-lang/rust#63010), so read the identity through
+    // GetFileInformationByHandle — windows-sys is already a core dependency (it
+    // backs rename_noreplace's MoveFileExW fallback).
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` owns a valid handle for the duration of the call, and `info`
+    // is a live, correctly-typed out-parameter. RawHandle and windows-sys HANDLE
+    // are both `*mut c_void`, so the handle passes with no cast (the MoveFileExW
+    // call site in capture_paths.rs relies on the same pointer-alias identity).
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    let index = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+    Some((info.dwVolumeSerialNumber as u64, index))
 }
 
 #[cfg(not(any(unix, windows)))]
-fn is_different_file(_a: &std::fs::Metadata, _b: &std::fs::Metadata) -> bool {
-    false
+fn handle_identity(_file: &std::fs::File) -> Option<(u64, u64)> {
+    None
+}
+
+/// True only when two identity snapshots PROVE the path now points at a different
+/// file. A `None` on either side (identity unavailable) never fires, so the guard
+/// fires on a proven swap, never on absence of proof.
+fn id_differs(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> bool {
+    matches!((a, b), (Some(x), Some(y)) if x != y)
 }
 
 /// Duplicate a task file into the same folder, faithfully: the source bytes
@@ -250,29 +269,25 @@ mod tests {
     }
 
     #[test]
-    fn is_different_file_flags_distinct_files_and_accepts_the_same_inode() {
-        // delete_task re-stats the task immediately before unlink and refuses on a
-        // positive identity mismatch (a swap during the validation window). Two
-        // distinct files must read as different; the SAME file seen through a File
-        // handle (how delete_task captures `validated`) and through symlink_metadata
-        // (how it re-checks `now`) must NOT — else every delete would falsely refuse
-        // (Codex P1 TOCTOU, PR #76).
+    fn identity_flags_distinct_files_and_matches_the_same_file() {
+        // delete_task re-reads the file's identity immediately before unlink and
+        // refuses on a mismatch (a swap during the validation window). Two distinct
+        // files must read as different; the SAME file opened twice must NOT — else
+        // every delete would falsely refuse (Codex P1 TOCTOU, PR #76).
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.md");
         let b = dir.path().join("b.md");
         std::fs::write(&a, "a").unwrap();
         std::fs::write(&b, "b").unwrap();
-        let a_handle = std::fs::File::open(&a).unwrap().metadata().unwrap();
-        let a_stat = std::fs::symlink_metadata(&a).unwrap();
-        let b_stat = std::fs::symlink_metadata(&b).unwrap();
+        let ida1 = handle_identity(&std::fs::File::open(&a).unwrap());
+        let ida2 = handle_identity(&std::fs::File::open(&a).unwrap());
+        let idb = handle_identity(&std::fs::File::open(&b).unwrap());
+        assert!(ida1.is_some(), "identity is available on this platform");
         assert!(
-            !is_different_file(&a_handle, &a_stat),
-            "the same file via handle + stat is not a swap"
+            !id_differs(ida1, ida2),
+            "the same file opened twice is not a swap"
         );
-        assert!(
-            is_different_file(&a_handle, &b_stat),
-            "two distinct files are a swap"
-        );
+        assert!(id_differs(ida1, idb), "two distinct files are a swap");
     }
 
     #[test]
