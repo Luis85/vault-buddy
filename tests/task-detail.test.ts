@@ -179,6 +179,29 @@ describe("TaskDetail.vue", () => {
     expect(call[1].patch).toEqual({ clearDescription: true });
   });
 
+  it("returns Save to disabled after a whitespace-clear save (no repeated no-op writes)", async () => {
+    // A whitespace-only draft is equivalent to no description: after the clear
+    // lands (task.description → null), the draft and the task agree so dirty is
+    // false and Save disables, instead of emitting clearDescription forever
+    // (Codex P2, PR #76).
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "update_task") return null;
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ description: "hello" }) } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-description"]').setValue("   ");
+    await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(calls.filter((c) => c[0] === "update_task")).toHaveLength(1); // exactly one clear write
+    expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("disables Save when the draft is unchanged", async () => {
     mockIPC((cmd) => {
       if (cmd === "list_task_lists") return [];

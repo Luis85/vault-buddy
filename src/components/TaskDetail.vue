@@ -64,10 +64,15 @@ function currentPatch(): TaskEditorPatch {
     tags: draftTags.value,
     list: draftList.value,
   });
-  // Description lives only here — augment the shared patch.
-  if (draftDescription.value !== (props.task.description ?? "")) {
-    if (draftDescription.value.trim() === "") patch.clearDescription = true;
-    else patch.description = draftDescription.value;
+  // Description lives only here — augment the shared patch. A whitespace-only
+  // draft is equivalent to no description (same as an absent one), so after a
+  // whitespace-clear save the draft and the now-null task agree and `dirty`
+  // returns to false instead of emitting clearDescription forever, which kept
+  // Save enabled for repeated no-op writes (Codex P2, PR #76).
+  const draftDesc = draftDescription.value.trim() === "" ? "" : draftDescription.value;
+  if (draftDesc !== (props.task.description ?? "")) {
+    if (draftDesc === "") patch.clearDescription = true;
+    else patch.description = draftDesc;
   }
   return patch;
 }
