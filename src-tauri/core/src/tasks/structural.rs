@@ -19,6 +19,17 @@ use std::path::{Path, PathBuf};
 /// clicked should exist), never a silent success.
 #[allow(dead_code)]
 pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
+    // A destructive write must NEVER follow a symlink at the leaf: if `path` is
+    // a symlink to a different valid Task inside the root, canonicalize would
+    // resolve to that target, `is_task` would pass on it, and `remove_file`
+    // would delete the OTHER task instead of the entry the user clicked. Reject
+    // a symlink at the original path (no-follow lstat) before any resolution
+    // (Codex P1, PR #76). A missing path errors here too.
+    let leaf =
+        std::fs::symlink_metadata(path).map_err(|e| format!("Cannot resolve task file: {e}"))?;
+    if leaf.file_type().is_symlink() {
+        return Err("Refusing to delete: the task path is a symlink".to_string());
+    }
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
     let canon_path =
@@ -65,12 +76,13 @@ pub fn duplicate_task(
     let content =
         std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
     // Title fallback matches list_tasks' display: an untitled hand-authored
-    // task shows its filename stem, so the copy must too (Codex P2, PR #76).
+    // task shows its filename stem, so the copy must too — including a stem that
+    // is not valid UTF-8, where the list uses a LOSSY conversion (Codex P2,
+    // PR #76). `to_str()` would drop such a stem to "".
     let stem = canon_path
         .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_string();
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let title = crate::capture_note::note_field(&content, "title").unwrap_or(stem);
     let new_title = format!("{title} (copy)");
     let quoted = yaml_quote(&new_title);
@@ -146,6 +158,29 @@ mod tests {
         assert!(foreign.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn delete_task_refuses_a_symlink_leaf_and_never_deletes_the_target() {
+        // A symlink whose target is a real Task inside the root must NOT be
+        // followed: canonicalize would resolve to the target and remove_file
+        // would delete the WRONG task. delete_task must refuse, leaving the real
+        // task (and the symlink) intact (Codex P1, PR #76).
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let real = root.join("real.md");
+        std::fs::write(&real, "---\ntype: Task\nstatus: new\ntitle: Real\n---\n").unwrap();
+        let link = root.join("link.md");
+        symlink(&real, &link).unwrap();
+        assert!(delete_task(&root, &link).is_err());
+        assert!(real.exists(), "the symlink's target task must survive");
+        assert!(
+            link.symlink_metadata().is_ok(),
+            "the symlink itself is untouched"
+        );
+    }
+
     #[test]
     fn duplicate_task_copies_body_and_resets_identity_with_fresh_id() {
         let dir = tempfile::tempdir().unwrap();
@@ -188,6 +223,29 @@ mod tests {
         let new = duplicate_task(&root, &src, "2026-07-24", None, false).unwrap();
         let out = std::fs::read_to_string(&new).unwrap();
         assert!(out.contains("title: \"My hand note (copy)\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicate_task_uses_a_lossy_stem_for_a_non_utf8_untitled_filename() {
+        // An untitled task whose filename is not valid UTF-8 lists under a LOSSY
+        // stem, so the copy's title must too — `to_str()` would drop it to an
+        // empty " (copy)" (Codex P2, PR #76).
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"bad\xffname.md");
+        let src = root.join(name);
+        std::fs::write(&src, "---\ntype: Task\nstatus: new\n---\n").unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-24", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        // U+FFFD replaces the bad byte; the title is non-empty and " (copy)".
+        assert!(out.contains("(copy)\""));
+        assert!(
+            !out.contains("title: \" (copy)\""),
+            "the stem must not be dropped to empty"
+        );
     }
 
     #[test]
