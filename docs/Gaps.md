@@ -456,6 +456,30 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-78 · Low · A duplicated/edited Task keeps a SECOND case-variant ID key when the source has two
+`src-tauri/core/src/tasks/disk.rs` (`duplicate_task` and `update_task_fields`
+id-key resolution) via `parse::frontmatter_scalar_ci`, which returns only the
+FIRST case-insensitive match. If a source task carries two physically distinct
+frontmatter keys that differ only in case AND both match the configured id
+property name (e.g. a legacy `Task-ID: aaa` line followed by `task-id: bbb`),
+the id-stamp/strip path rewrites or removes only the first: with IDs enabled the
+duplicate/edit gets a fresh id on `Task-ID:` while `task-id: bbb` survives (two
+id-ish keys; Obsidian may resolve the stale one → two tasks sharing a stable
+identity); with IDs disabled a strip leaves the second key behind (incomplete
+strip). **Why Low / document-only:** the trigger is pathological — the app
+writes exactly ONE id key in its configured casing and Obsidian's Properties UI
+normalizes keys, so two case-variant id keys only arise from hand-authoring or
+an external tool that violates the "one id property per task" invariant at the
+source. **Why not fix only `duplicate_task`:** the single-occurrence
+`frontmatter_scalar_ci` + `set_fields` assumption is IDENTICAL in the
+already-shipped `update_task_fields` edit path (and the `ensure_id`/backfill
+sites that share it), so a fix belongs across all of them at once — a shared
+"collect every case-insensitive occurrence, rewrite one + remove the rest"
+helper — not bolted onto the newest write path in isolation. Codex (P2, PR #76)
+raised it against `duplicate_task`; documenting it here (consistent with the
+GAP-68/GAP-77 id-edge precedent) is the proportionate call, with the shared
+multi-occurrence helper the tracked fix if the exposure ever proves real.
+
 ### GAP-77 · Low · Reserving `description` disables ID generation for a (formerly settable) `description`-as-id-property config
 `src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
 `id_property_for_generation`). The Task Detail increment

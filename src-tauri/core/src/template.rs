@@ -26,11 +26,13 @@ pub fn yaml_quote(value: &str) -> String {
 /// fields). Produces a valid one-physical-line YAML double-quoted scalar so a
 /// multi-line value (the task `description`) rides the line-oriented surgical
 /// writer untouched. Escapes `\` and `"`, encodes newline as `\n` and tab as
-/// `\t`, drops CR (newlines normalize to `\n`), and hex-escapes every OTHER C0
-/// control char (U+0000–U+001F) and DEL (U+007F) as `\xXX` — a bare control
-/// char is forbidden in a YAML double-quoted scalar and would invalidate the
-/// frontmatter, so the "valid for any input" claim must hold for pasted control
-/// characters too (Codex PR #76).
+/// `\t`, drops CR (newlines normalize to `\n`), and hex-escapes as `\xXX` every
+/// code point OUTSIDE YAML's `c-printable` set that could otherwise appear bare:
+/// the other C0 controls (U+0000–U+001F), DEL (U+007F), and the C1 controls
+/// U+0080–U+0084 / U+0086–U+009F (U+0085 NEL stays printable). A bare
+/// non-printable is forbidden in a YAML double-quoted scalar and would
+/// invalidate the frontmatter, so the "valid for any input" claim must hold for
+/// pasted control characters too (Codex PR #76).
 pub fn yaml_quote_multiline(value: &str) -> String {
     let mut inner = String::with_capacity(value.len() + 2);
     for c in value.chars() {
@@ -40,7 +42,10 @@ pub fn yaml_quote_multiline(value: &str) -> String {
             '\n' => inner.push_str("\\n"),
             '\t' => inner.push_str("\\t"),
             '\r' => {} // CR dropped; newlines normalize to \n
-            ctrl if (ctrl as u32) < 0x20 || ctrl == '\u{7f}' => {
+            ctrl if (ctrl as u32) < 0x20
+                || ctrl == '\u{7f}'
+                || matches!(ctrl as u32, 0x80..=0x84 | 0x86..=0x9f) =>
+            {
                 inner.push_str(&format!("\\x{:02x}", ctrl as u32));
             }
             other => inner.push(other),
@@ -49,11 +54,49 @@ pub fn yaml_quote_multiline(value: &str) -> String {
     format!("\"{inner}\"")
 }
 
+/// Read `count` hex digits following a `\x`/`\u`/`\U` escape `marker` and push
+/// the decoded Unicode scalar onto `out`. A malformed (non-hex), truncated, or
+/// non-scalar (surrogate / out-of-range) escape degrades to verbatim so no
+/// bytes are ever lost — the defensive-read posture, matching how an unknown
+/// escape is preserved below.
+fn push_hex_escape(chars: &mut std::str::Chars<'_>, marker: char, count: usize, out: &mut String) {
+    let mut digits = String::with_capacity(count);
+    for _ in 0..count {
+        match chars.next() {
+            Some(d) if d.is_ascii_hexdigit() => digits.push(d),
+            trailing => {
+                out.push('\\');
+                out.push(marker);
+                out.push_str(&digits);
+                if let Some(t) = trailing {
+                    out.push(t);
+                }
+                return;
+            }
+        }
+    }
+    match u32::from_str_radix(&digits, 16)
+        .ok()
+        .and_then(char::from_u32)
+    {
+        Some(ch) => out.push(ch),
+        None => {
+            out.push('\\');
+            out.push(marker);
+            out.push_str(&digits);
+        }
+    }
+}
+
 /// Inverse of `yaml_quote_multiline`. A double-quoted value is unescaped in a
 /// SINGLE left-to-right pass (so `\\` consumes both chars before an `n` could
 /// be misread as a newline). An unquoted value (hand-authored / older file) is
 /// returned verbatim — the defensive-read posture of the rest of the vault
-/// domain.
+/// domain. Our encoder emits only a subset of escapes, but a hand-authored
+/// description can carry ANY standard YAML double-quoted escape, so the decoder
+/// accepts the full set — the single-char escapes plus `\x`/`\u`/`\U` — and
+/// reads a value exactly as Obsidian's js-yaml does (Codex PR #76). An escape
+/// outside that set keeps its backslash verbatim.
 pub fn yaml_unquote_multiline(value: &str) -> String {
     let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
         return value.to_string();
@@ -61,45 +104,36 @@ pub fn yaml_unquote_multiline(value: &str) -> String {
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some('r') => out.push('\r'),
-                Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
-                Some('x') => {
-                    // `\xXX` hex escape → the (control) char. A malformed or
-                    // truncated escape degrades to verbatim.
-                    match (chars.next(), chars.next()) {
-                        (Some(h), Some(l)) => match u8::from_str_radix(&format!("{h}{l}"), 16) {
-                            Ok(n) => out.push(n as char),
-                            Err(_) => {
-                                out.push('\\');
-                                out.push('x');
-                                out.push(h);
-                                out.push(l);
-                            }
-                        },
-                        (Some(h), None) => {
-                            out.push('\\');
-                            out.push('x');
-                            out.push(h);
-                        }
-                        _ => {
-                            out.push('\\');
-                            out.push('x');
-                        }
-                    }
-                }
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => out.push('\\'),
-            }
-        } else {
+        if c != '\\' {
             out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some('/') => out.push('/'),
+            Some(' ') => out.push(' '),
+            Some('0') => out.push('\0'),
+            Some('a') => out.push('\u{07}'),
+            Some('b') => out.push('\u{08}'),
+            Some('f') => out.push('\u{0c}'),
+            Some('v') => out.push('\u{0b}'),
+            Some('e') => out.push('\u{1b}'),
+            Some('N') => out.push('\u{85}'),
+            Some('_') => out.push('\u{a0}'),
+            Some('L') => out.push('\u{2028}'),
+            Some('P') => out.push('\u{2029}'),
+            Some('x') => push_hex_escape(&mut chars, 'x', 2, &mut out),
+            Some('u') => push_hex_escape(&mut chars, 'u', 4, &mut out),
+            Some('U') => push_hex_escape(&mut chars, 'U', 8, &mut out),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
         }
     }
     out
@@ -887,5 +921,46 @@ mod tests {
         assert!(quoted.contains("\\x0c"));
         assert!(quoted.contains("\\x1b"));
         assert_eq!(yaml_unquote_multiline(&quoted), s);
+    }
+
+    #[test]
+    fn yaml_quote_multiline_escapes_c1_controls() {
+        // C1 controls U+0080–U+0084 and U+0086–U+009F are OUTSIDE YAML's
+        // c-printable set, so a bare one invalidates the frontmatter just like a
+        // C0 control — Obsidian can reject the Task's whole property block. They
+        // must be `\xXX`-escaped and round-trip (Codex PR #76). U+0085 (NEL) IS
+        // printable, so it need not be escaped — the invariant tested is only
+        // that the round-trip is exact.
+        let s = "a\u{80}b\u{84}c\u{86}d\u{9f}e\u{85}f";
+        let quoted = yaml_quote_multiline(s);
+        assert!(
+            !quoted
+                .chars()
+                .any(|c| matches!(c as u32, 0x80..=0x84 | 0x86..=0x9f)),
+            "no raw forbidden C1 control survives in the quoted scalar"
+        );
+        assert!(quoted.contains("\\x80"));
+        assert!(quoted.contains("\\x9f"));
+        assert_eq!(yaml_unquote_multiline(&quoted), s);
+    }
+
+    #[test]
+    fn yaml_unquote_multiline_decodes_the_standard_yaml_escape_set() {
+        // A hand-authored double-quoted description can carry any standard YAML
+        // escape, not just the subset our encoder emits. We must read it exactly
+        // as Obsidian's js-yaml does, or `list_tasks` (and its MCP DTO) would
+        // expose the raw backslash sequence and a detail resave would
+        // canonicalize the wrong literal (Codex PR #76).
+        assert_eq!(yaml_unquote_multiline("\"caf\\u00e9\""), "café");
+        assert_eq!(yaml_unquote_multiline("\"\\U0001F600!\""), "😀!");
+        // The single-char escapes YAML defines for a double-quoted scalar.
+        assert_eq!(
+            yaml_unquote_multiline("\"\\0\\a\\b\\f\\v\\e\\/\\N\\_\\L\\P\\ end\""),
+            "\u{0}\u{7}\u{8}\u{c}\u{b}\u{1b}/\u{85}\u{a0}\u{2028}\u{2029} end"
+        );
+        // A malformed/truncated Unicode escape degrades to verbatim (never lose
+        // bytes) — the defensive-read posture, matching the `\x` handling.
+        assert_eq!(yaml_unquote_multiline("\"\\uZZ\""), "\\uZZ");
+        assert_eq!(yaml_unquote_multiline("\"\\u12\""), "\\u12");
     }
 }
