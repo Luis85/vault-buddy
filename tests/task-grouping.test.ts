@@ -17,4 +17,10 @@ describe("taskGrouping", () => {
     localStorage.setItem("vault-buddy:task-grouping", "not json");
     expect(loadGrouping("v1")).toBe("lists");
   });
+  it("aggregate default is Plan (dates) only when unset; a stored choice wins", () => {
+    expect(loadGrouping("all", "dates")).toBe("dates"); // unset → override
+    saveGrouping("all", "lists");
+    expect(loadGrouping("all", "dates")).toBe("lists"); // persisted wins
+    expect(loadGrouping("vault-1")).toBe("lists"); // per-vault default unchanged
+  });
 });

@@ -157,7 +157,7 @@ export function useTaskActions(opts: {
       applyMovedTask(task, moved);
       task.list = targetList;
       sortInPlace();
-      // A move can cross archived visibility — from Dates/Tags grouping an
+      // A move can cross archived visibility — from Plan/Tags grouping an
       // archived list's row still shows, and moving it to a visible list
       // makes it countable again (count_open_tasks skips archived lists) —
       // so refresh the cached badges like every other count-moving mutation

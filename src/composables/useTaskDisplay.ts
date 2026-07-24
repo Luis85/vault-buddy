@@ -3,12 +3,12 @@ import { computed, type Ref, ref, watch } from "vue";
 import type { AggTask } from "../types";
 import { localToday } from "../utils/taskFields";
 import { type Grouping, loadGrouping, saveGrouping } from "../utils/taskGrouping";
-import { archivedMatcher, type Bucket, dateBuckets, listSections, tagSections } from "../utils/taskSections";
+import { archivedMatcher, type Bucket, listSections, plannerBuckets, tagSections } from "../utils/taskSections";
 import { loadSortPref, NATURAL_DIR, saveSortPref, type SortKey, taskComparator, type TaskSortPref } from "../utils/taskSort";
 
 // The read side of the Tasks view: how the flat task list is filtered (title +
 // tag), sorted (persisted per view), and grouped into displayed sections
-// (Lists / Dates / Tags → buckets). State + derived computeds, no IPC, no
+// (Lists / Plan / Tags → buckets). State + derived computeds, no IPC, no
 // rendering — split out of Tasks.vue (its churn hotspot). `sortInPlace` is
 // shared with the write composables (useTaskActions / useTaskReorderCommit),
 // which re-sort after an optimistic mutation, so it must be created here and
@@ -23,14 +23,17 @@ export function useTaskDisplay(opts: {
 }) {
   const { tasks, isAggregate, knownLists, listOrder, archivedLists, sortViewKey } = opts;
 
-  // Grouping choice, persisted per view. A fresh/unset view opens on Lists (the
-  // DEFAULT inside taskGrouping.ts); a return visit recalls the last choice.
-  const grouping = ref<Grouping>(loadGrouping(sortViewKey));
+  // Grouping choice, persisted per view. A fresh/unset per-vault view opens on
+  // Lists (the DEFAULT inside taskGrouping.ts); a fresh/unset AGGREGATE view
+  // opens on Plan instead (the "plan my day across projects" hero view) via the
+  // optional override — a stored choice for either view always wins, so this
+  // never rewrites a deliberate pick. A return visit recalls the last choice.
+  const grouping = ref<Grouping>(loadGrouping(sortViewKey, isAggregate.value ? "dates" : undefined));
   watch(grouping, (g) => saveGrouping(sortViewKey, g));
 
   // The tasks the CURRENT grouping actually shows, before the title/tag filter:
   // Lists grouping hides OPEN tasks in archived lists (done ones still show in
-  // the Done bucket; No list always shows), mirroring listSections; Dates/Tags
+  // the Done bucket; No list always shows), mirroring listSections; Plan/Tags
   // show everything. The progress bar counts from THIS set, not the raw list,
   // so a vault whose only open tasks sit in an archived list doesn't report
   // phantom progress (Codex, PR #59).
@@ -100,7 +103,7 @@ export function useTaskDisplay(opts: {
         includeEmpty: !isAggregate.value && !filterActive.value,
         archived: archivedLists.value,
       });
-    return dateBuckets(filteredTasks.value, localToday());
+    return plannerBuckets(filteredTasks.value, localToday());
   });
 
   // A fresh per-vault list folder has no tasks yet; keep the grouping control

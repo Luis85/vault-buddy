@@ -297,7 +297,7 @@ describe("Tasks", () => {
     expect(wrapper.get('[data-testid="task-due"]').text()).toBe("Jul 5");
   });
 
-  it("groups tasks into date buckets with headers", async () => {
+  it("groups tasks into plan buckets with headers", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] }); // 2026-07-09 local
     try {
       const { wrapper } = mountView({
@@ -310,11 +310,11 @@ describe("Tasks", () => {
         ],
       });
       await flushPromises();
-      // Lists is the default grouping now — switch to Dates to exercise its
-      // bucket-header behavior.
+      // Lists is the default grouping now — switch to Plan (grouping key
+      // "dates") to exercise its bucket-header behavior.
       await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
-      expect(headers).toEqual(["Overdue", "Today", "Upcoming", "No date", "Done"]);
+      expect(headers).toEqual(["Overdue", "Today", "Upcoming", "Anytime", "Done"]);
     } finally {
       vi.useRealTimers();
     }
@@ -325,13 +325,13 @@ describe("Tasks", () => {
     // only once dated open tasks exist.
     const { wrapper } = mountView(); // sample: one undated open + one done
     await flushPromises();
-    // Lists is the default grouping now — switch to Dates to exercise its
-    // bucket-header behavior.
+    // Lists is the default grouping now — switch to Plan (grouping key
+    // "dates") to exercise its bucket-header behavior.
     await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
     expect(wrapper.findAll('[data-testid="task-bucket-header"]')).toHaveLength(0);
   });
 
-  it("buckets an unparseable hand-authored due under No date", async () => {
+  it("buckets an unparseable hand-authored due under Anytime", async () => {
     vi.useFakeTimers({ now: new Date(2026, 6, 9, 12, 0, 0), toFake: ["Date"] });
     try {
       const { wrapper } = mountView({
@@ -341,11 +341,11 @@ describe("Tasks", () => {
         ],
       });
       await flushPromises();
-      // Lists is the default grouping now — switch to Dates to exercise its
-      // bucket-header behavior.
+      // Lists is the default grouping now — switch to Plan (grouping key
+      // "dates") to exercise its bucket-header behavior.
       await wrapper.get('[data-testid="task-grouping-dates"]').trigger("click");
       const headers = wrapper.findAll('[data-testid="task-bucket-header"]').map((h) => h.text());
-      expect(headers).toEqual(["Upcoming", "No date"]);
+      expect(headers).toEqual(["Upcoming", "Anytime"]);
     } finally {
       vi.useRealTimers();
     }

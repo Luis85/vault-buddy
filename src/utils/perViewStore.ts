@@ -11,9 +11,9 @@ import { logWarning } from "../logging";
 /** A `load`/`save` pair over one localStorage key. */
 interface PerViewStore<T> {
   /** The persisted value for a view; a missing or corrupt (per `sanitize`)
-   * entry degrades to the default — with a warning, never a throw into the
-   * component. */
-  load(viewKey: string): T;
+   * entry degrades to `defaultOverride ?? defaultValue` — with a warning
+   * (from the corrupt-parse path), never a throw into the component. */
+  load(viewKey: string, defaultOverride?: T): T;
   /** Merges `value` into the per-view map and persists it. */
   save(viewKey: string, value: T): void;
 }
@@ -58,8 +58,8 @@ export function createPerViewStore<T>(
   }
 
   return {
-    load(viewKey) {
-      return sanitize(readAll()[viewKey]) ?? cloneDefault(defaultValue);
+    load(viewKey, defaultOverride) {
+      return sanitize(readAll()[viewKey]) ?? cloneDefault(defaultOverride ?? defaultValue);
     },
     save(viewKey, value) {
       const all = readAll();
