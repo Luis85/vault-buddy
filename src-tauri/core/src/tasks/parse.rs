@@ -266,6 +266,37 @@ pub(super) fn key_opens_block(content: &str, key: &str) -> bool {
     false
 }
 
+/// True when the top-level `key:` line (exact, ON-DISK casing) holds a FLOW
+/// collection value — an inline mapping `{...}` or sequence `[...]` on the SAME
+/// line — rather than a plain or quoted scalar. Unlike a block collection
+/// (`key_opens_block`, multi-line), a flow value is one line, so `set_fields`
+/// would rewrite that single line and DELETE the user's inline structure; the
+/// id-stamp/strip must skip it just as it skips a block (Codex P2, PR #76). The
+/// RAW value is inspected: a quoted `"[x]"` scalar starts with a quote, not a
+/// bracket, so it is correctly NOT treated as flow (a plain YAML scalar can
+/// never start with `{`/`[`).
+pub(super) fn key_opens_flow(content: &str, key: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    for line in lines {
+        let t = line.trim_end();
+        if t == "---" {
+            return false; // closing fence — key not found
+        }
+        if line.starts_with([' ', '\t']) {
+            continue; // nested key, never the top-level property
+        }
+        // Match the key's own line, colon-anchored — the same match set_fields
+        // makes — then look at the raw value after the colon.
+        if let Some(rest) = t.strip_prefix(key).filter(|r| r.starts_with(':')) {
+            return rest[1..].trim_start().starts_with(['{', '[']);
+        }
+    }
+    false
+}
+
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
 /// the normalized (possibly empty) list when present — so a present-but-empty
 /// `tags:` still shadows the `tag:` alias.

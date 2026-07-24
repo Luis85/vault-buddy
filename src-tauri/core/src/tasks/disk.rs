@@ -371,12 +371,18 @@ pub fn duplicate_task(
     let id_key: Option<String> =
         id_property.and_then(
             |prop| match super::parse::frontmatter_scalar_ci(&content, prop) {
-                // A block-valued id property (a nested map/list under the key)
-                // is the USER's frontmatter, not a scalar id — set_fields would
-                // consume the indented block on rewrite/strip and delete it.
-                // Leave it untouched, mirroring update_task_fields' guard above
-                // (Codex P2, PR #76).
-                Some((on_disk, _)) if super::parse::key_opens_block(&content, &on_disk) => None,
+                // A block-valued (nested map/list under the key) OR flow-valued
+                // (inline `{..}` / `[..]`) id property is the USER's frontmatter,
+                // not a scalar id — set_fields would consume the block, or
+                // rewrite the single flow line, and destroy it either way. Leave
+                // it untouched (Codex P2, PR #76); update_task_fields' ensure_id
+                // never rewrites a present value, so only duplicate is exposed.
+                Some((on_disk, _))
+                    if super::parse::key_opens_block(&content, &on_disk)
+                        || super::parse::key_opens_flow(&content, &on_disk) =>
+                {
+                    None
+                }
                 Some((on_disk, _)) => Some(on_disk),
                 None => new_id.as_ref().map(|_| prop.to_string()),
             },
@@ -1185,6 +1191,32 @@ mod tests {
         let out = std::fs::read_to_string(&new).unwrap();
         assert!(out.contains("source: jira") && out.contains("ref: ABC-1"));
         assert!(out.contains("title: \"X (copy)\""));
+    }
+
+    #[test]
+    fn duplicate_task_leaves_a_flow_valued_id_property_untouched() {
+        // A FLOW-valued id property (inline map/list on one line) is the user's
+        // frontmatter, not a scalar id. Unlike the block case it has no indented
+        // lines, so key_opens_block misses it — key_opens_flow catches it. Both
+        // ids-on (no fresh id jammed over it) and ids-off (not stripped) must
+        // leave the inline structure intact (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: done\ntitle: X\ntask-id: {source: jira, ref: ABC-1}\n---\n",
+        )
+        .unwrap();
+        let on = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        let out_on = std::fs::read_to_string(&on).unwrap();
+        assert!(out_on.contains("task-id: {source: jira, ref: ABC-1}"));
+        assert!(out_on.contains("title: \"X (copy)\""));
+        assert!(out_on.contains("status: new"));
+        let off = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
+        let out_off = std::fs::read_to_string(&off).unwrap();
+        assert!(out_off.contains("task-id: {source: jira, ref: ABC-1}"));
     }
 
     #[test]
