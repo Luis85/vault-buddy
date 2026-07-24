@@ -288,6 +288,33 @@ pub fn set_task_status(root: &Path, path: &Path, new_status: &str) -> Result<(),
     update_task_fields(root, path, &[("status", Some(new_status))], None).map(|_| ())
 }
 
+/// Permanently delete a task file — the app's ONLY destructive vault write.
+/// Canonicalizes `root` and `path` and requires containment (a symlink at the
+/// file or folder can't be seen lexically), THEN re-reads the file and requires
+/// it to be a `type: Task` document before removing. Task folders may
+/// legitimately hold foreign files, and a listed row could be swapped for a
+/// non-task file at the same path before the confirm lands — so identity is
+/// re-validated immediately before this irreversible write, the same posture
+/// the move/field writers get from `set_fields`' `type: Task` precondition
+/// (Codex P1, PR #76). A missing file surfaces as an error (the row the user
+/// clicked should exist), never a silent success.
+#[allow(dead_code)]
+pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
+    let canon_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
+    let canon_path =
+        std::fs::canonicalize(path).map_err(|e| format!("Cannot resolve task file: {e}"))?;
+    if !canon_path.starts_with(&canon_root) {
+        return Err("Task file is outside the vault's tasks folder".to_string());
+    }
+    let content =
+        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+    if !super::doc::is_task(&content) {
+        return Err("Refusing to delete: not a type: Task document".to_string());
+    }
+    std::fs::remove_file(&canon_path).map_err(|e| format!("Cannot delete task: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -961,5 +988,29 @@ mod tests {
         assert!(out.ends_with("- [ ] Buy milk by 2026-07-08\n"), "{out}");
         // Still a valid task (closed fence + type: Task).
         assert!(out.contains("---\ntype: Task\n"));
+    }
+
+    #[test]
+    fn delete_task_removes_a_task_refuses_outside_and_refuses_a_non_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let p = root.join("t.md");
+        std::fs::write(&p, "---\ntype: Task\nstatus: new\ntitle: X\n---\n").unwrap();
+        // Happy path: a real task is removed.
+        assert!(delete_task(&root, &p).is_ok());
+        assert!(!p.exists());
+        // A path outside the tasks root is refused (write a sibling file to delete).
+        let outside = dir.path().join("outside.md");
+        std::fs::write(&outside, "x").unwrap();
+        assert!(delete_task(&root, &outside).is_err());
+        assert!(outside.exists());
+        // A FOREIGN (non-task) file INSIDE the tasks root is refused — task folders
+        // may legitimately hold non-task files, and this first destructive write
+        // must never remove one (Codex P1, PR #76).
+        let foreign = root.join("notes.md");
+        std::fs::write(&foreign, "# just some notes, not a task\n").unwrap();
+        assert!(delete_task(&root, &foreign).is_err());
+        assert!(foreign.exists());
     }
 }
