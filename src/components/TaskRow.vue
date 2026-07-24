@@ -34,7 +34,7 @@ defineEmits<{
   (e: "toggle"): void;
   (e: "archive"): void;
   (e: "edit"): void;
-  (e: "open"): void;
+  (e: "open", ev: MouseEvent): void;
   (e: "tagClick", tag: string): void;
   (e: "schedule", value: string | null): void;
   (e: "reorderPointerDown", ev: PointerEvent): void;
@@ -96,7 +96,7 @@ function scheduledChip(t: AggTask): string | null {
           class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           :aria-label="`Open ${task.title} in Obsidian`"
           :title="`Open ${task.title} in Obsidian`"
-          @click="$emit('open')"
+          @click="$emit('open', $event)"
         >
           <Avatar
             v-if="isAggregate"

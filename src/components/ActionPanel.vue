@@ -19,6 +19,7 @@ import Recordings from "./Recordings.vue";
 import RecordMode from "./RecordMode.vue";
 import RenamePrompt from "./RenamePrompt.vue";
 import Search from "./Search.vue";
+import TaskDetail from "./TaskDetail.vue";
 import Tasks from "./Tasks.vue";
 import Transcriptions from "./Transcriptions.vue";
 import TranscriptionSummary from "./TranscriptionSummary.vue";
@@ -71,11 +72,14 @@ const VIEW_TITLES: Record<string, string> = {
   update: "Update",
 };
 // The tasks view is dual-mode: a null vault id is the cross-vault aggregate.
-const title = computed(() =>
-  view.value === "tasks" && store.tasksVaultId === null
+// The task detail view's header shows the task's own title (truncated by the
+// header's layout) rather than a static label.
+const title = computed(() => {
+  if (view.value === "taskDetail") return store.taskDetailTask?.title ?? "Task";
+  return view.value === "tasks" && store.tasksVaultId === null
     ? "All tasks"
-    : (VIEW_TITLES[view.value] ?? "Vaults"),
-);
+    : (VIEW_TITLES[view.value] ?? "Vaults");
+});
 
 // `/` jumps to search from the vault list — unless the keystroke is going
 // into a text field (the vault filter must keep receiving "/"). Ctrl/Cmd+F
@@ -368,6 +372,16 @@ watch(
         class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
       >
         <UpdateView />
+      </div>
+      <div
+        v-else-if="view === 'taskDetail'"
+        key="taskDetail"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <TaskDetail
+          v-if="store.taskDetailTask"
+          :task="store.taskDetailTask"
+        />
       </div>
       <div
         v-else

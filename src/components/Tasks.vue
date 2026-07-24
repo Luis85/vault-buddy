@@ -102,7 +102,7 @@ const {
   isBusy,
   toggle,
   archive,
-  openInObsidian,
+  onOpenTask,
   editingKey,
   editingPath,
   rowKey,
@@ -521,7 +521,7 @@ async function add(payload: AddPayload) {
               @toggle="toggle(task)"
               @archive="archive(task)"
               @edit="startEdit(task, bucket.key)"
-              @open="openInObsidian(task)"
+              @open="onOpenTask(task, $event)"
               @tag-click="tagFilter = $event"
               @schedule="quickSchedule(task, $event)"
               @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"

@@ -97,6 +97,14 @@ export function useTaskActions(opts: {
     }
   }
 
+  // A title click's routing: plain opens the in-panel detail home ("manage
+  // without opening Obsidian"); Ctrl/⌘-click keeps the old muscle memory and
+  // jumps straight to Obsidian, the one additive power-user shortcut.
+  function onOpenTask(task: AggTask, ev: MouseEvent) {
+    if (ev.ctrlKey || ev.metaKey) void openInObsidian(task);
+    else vaultsStore.openTaskDetail(task);
+  }
+
   // Inline editor: one row at a time; opening another row discards unsaved
   // edits in the first (the file is the source of truth, edits are cheap).
   // Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
@@ -205,7 +213,7 @@ export function useTaskActions(opts: {
     isBusy,
     toggle,
     archive,
-    openInObsidian,
+    onOpenTask,
     editingKey,
     editingPath,
     rowKey,
