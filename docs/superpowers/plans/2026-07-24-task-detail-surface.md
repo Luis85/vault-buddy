@@ -1141,14 +1141,18 @@ import { applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskM
 export function useTaskDetail(task: Ref<AggTask>) {
   const notifications = useNotificationsStore();
   const vaults = useVaultsStore();
-  const saving = ref(false);
-  const deleting = ref(false);
+  // One shared in-flight guard serializes every detail WRITE (save / delete /
+  // duplicate): a slow save must not leave delete or duplicate clickable, or a
+  // delete could race the save's atomic rename and the save would recreate the
+  // deleted file (Codex P2, PR #76). Matches the row-write busy invariant.
+  const busy = ref(false);
 
   async function save(patch: TaskEditorPatch): Promise<boolean> {
     const { list: targetList, ...fieldPatch } = patch;
     const hasFields = Object.keys(fieldPatch).length > 0;
     if (!hasFields && targetList === undefined) return true;
-    saving.value = true;
+    if (busy.value) return false;
+    busy.value = true;
     try {
       if (hasFields) {
         const id = await invoke<string | null>("update_task", {
@@ -1186,25 +1190,28 @@ export function useTaskDetail(task: Ref<AggTask>) {
       logWarning(`task detail save failed: ${String(e)}`);
       return false;
     } finally {
-      saving.value = false;
+      busy.value = false;
     }
   }
 
   async function remove(): Promise<void> {
-    deleting.value = true;
+    if (busy.value) return;
+    busy.value = true;
     try {
       await invoke("delete_task", { id: task.value.vaultId, path: task.value.path });
       void vaults.refreshTaskCount(task.value.vaultId);
       notifications.success(`Deleted "${task.value.title}".`);
       vaults.back(); // to the tasks list (remounts + re-fetches)
     } catch (e) {
-      deleting.value = false;
+      busy.value = false;
       notifications.error(String(e));
       logWarning(`delete_task failed: ${String(e)}`);
     }
   }
 
   async function duplicate(): Promise<void> {
+    if (busy.value) return;
+    busy.value = true;
     try {
       const newPath = await invoke<string>("duplicate_task", {
         id: task.value.vaultId,
@@ -1232,6 +1239,8 @@ export function useTaskDetail(task: Ref<AggTask>) {
     } catch (e) {
       notifications.error(String(e));
       logWarning(`duplicate_task failed: ${String(e)}`);
+    } finally {
+      busy.value = false;
     }
   }
 
@@ -1245,7 +1254,7 @@ export function useTaskDetail(task: Ref<AggTask>) {
     }
   }
 
-  return { saving, deleting, save, remove, duplicate, openInObsidian };
+  return { busy, save, remove, duplicate, openInObsidian };
 }
 ```
 
@@ -1328,7 +1337,7 @@ import TaskListPicker from "./TaskListPicker.vue";
 // user goes back, so this surface never syncs to the list's in-memory array.
 const props = defineProps<{ task: AggTask }>();
 const taskRef = toRef(props, "task");
-const { saving, deleting, save, remove, duplicate, openInObsidian } = useTaskDetail(taskRef);
+const { busy, save, remove, duplicate, openInObsidian } = useTaskDetail(taskRef);
 
 const normPriority = (p: string | null) => (p === "high" || p === "low" ? p : "normal");
 
@@ -1372,7 +1381,7 @@ function currentPatch(): TaskEditorPatch {
 const dirty = computed(() => Object.keys(currentPatch()).length > 0);
 
 async function onSave() {
-  if (!titleValid.value || saving.value) return;
+  if (!titleValid.value || busy.value) return;
   await save(currentPatch());
 }
 
@@ -1438,14 +1447,14 @@ function onDeleteKeydown(e: KeyboardEvent) {
     </div>
 
     <div class="flex items-center gap-2 pt-1">
-      <button type="button" data-testid="task-detail-save" :disabled="!titleValid || !dirty || saving"
+      <button type="button" data-testid="task-detail-save" :disabled="!titleValid || !dirty || busy"
         class="cursor-pointer rounded-control bg-accent-strong/80 px-3 py-1 text-xs font-semibold text-white hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="onSave">Save</button>
       <button type="button" data-testid="task-detail-open"
         class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @click="openInObsidian">Open in Obsidian</button>
-      <button type="button" data-testid="task-detail-duplicate"
-        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      <button type="button" data-testid="task-detail-duplicate" :disabled="busy"
+        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="duplicate">Duplicate</button>
       <div class="ml-auto flex items-center gap-1">
         <template v-if="confirming">
@@ -1453,12 +1462,12 @@ function onDeleteKeydown(e: KeyboardEvent) {
           <button type="button" data-testid="task-detail-delete-cancel"
             class="cursor-pointer rounded-control px-2 py-1 text-xs text-fg-muted hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @click="confirming = false">Cancel</button>
-          <button ref="confirmBtn" type="button" data-testid="task-detail-delete-confirm" :disabled="deleting"
+          <button ref="confirmBtn" type="button" data-testid="task-detail-delete-confirm" :disabled="busy"
             class="cursor-pointer rounded-control bg-danger/80 px-2 py-1 text-xs font-semibold text-danger-fg hover:bg-danger focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50"
             @click="remove">Delete</button>
         </template>
-        <button v-else type="button" data-testid="task-detail-delete"
-          class="cursor-pointer rounded-control border border-danger/40 px-3 py-1 text-xs text-danger-fg hover:bg-danger/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        <button v-else type="button" data-testid="task-detail-delete" :disabled="busy"
+          class="cursor-pointer rounded-control border border-danger/40 px-3 py-1 text-xs text-danger-fg hover:bg-danger/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
           @click="openConfirm">Delete</button>
       </div>
     </div>

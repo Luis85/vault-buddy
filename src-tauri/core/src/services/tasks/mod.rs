@@ -253,9 +253,14 @@ pub fn add_task(
         // actually landed in the file (or None when IDs are off), not a
         // fresh read.
         id: generated_id,
-        // A newly created task has no description; it is added later in the
-        // detail view.
-        description: None,
+        // A vault's task template may seed `description:` (it is no longer
+        // template-reserved), so reflect what actually landed on disk rather
+        // than always None — else opening the new task before a reload shows an
+        // empty description and a save could overwrite the seeded content
+        // (Codex P2, PR #76). Best-effort: a failed re-read degrades to None.
+        description: std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| tasks::description_field(&c)),
     })
 }
 

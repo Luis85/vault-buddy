@@ -163,7 +163,7 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
 /// `\n` so a multi-line description round-trips. Returns `None` when absent or
 /// empty. Top-level only (an indented `  description:` never matches), stops at
 /// the closing fence, mirroring `note_field`.
-pub(super) fn description_field(content: &str) -> Option<String> {
+pub fn description_field(content: &str) -> Option<String> {
     let mut lines = content.lines();
     if lines.next()?.trim_end() != "---" {
         return None;
