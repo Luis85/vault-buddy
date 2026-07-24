@@ -21,18 +21,31 @@ pub fn yaml_quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// True for a char that must be escaped in the single-line double-quoted YAML
+/// scalar `yaml_quote_multiline` produces: any C0/C1 control or DEL
+/// (`0x00–0x1F`, `0x7F–0x9F`), a line/paragraph separator (`U+2028`/`U+2029`),
+/// or a BMP noncharacter (`U+FFFE`/`U+FFFF`). NEL (`U+0085`) falls in the
+/// `0x7F–0x9F` range and so is escaped too — it is a YAML-1.1 line break whose
+/// folding could otherwise silently change the value. `\n`/`\t`/`\r` are handled
+/// by earlier match arms before this predicate is consulted.
+fn multiline_needs_escape(c: char) -> bool {
+    let u = c as u32;
+    u < 0x20 || (0x7f..=0x9f).contains(&u) || matches!(u, 0x2028 | 0x2029 | 0xfffe | 0xffff)
+}
+
 /// Double-quote a scalar PRESERVING newlines as `\n` escapes (unlike
 /// `yaml_quote`, which flattens them to spaces for single-line managed
 /// fields). Produces a valid one-physical-line YAML double-quoted scalar so a
 /// multi-line value (the task `description`) rides the line-oriented surgical
 /// writer untouched. Escapes `\` and `"`, encodes newline as `\n` and tab as
-/// `\t`, drops CR (newlines normalize to `\n`), and hex-escapes as `\xXX` every
-/// code point OUTSIDE YAML's `c-printable` set that could otherwise appear bare:
-/// the other C0 controls (U+0000–U+001F), DEL (U+007F), and the C1 controls
-/// U+0080–U+0084 / U+0086–U+009F (U+0085 NEL stays printable). A bare
-/// non-printable is forbidden in a YAML double-quoted scalar and would
-/// invalidate the frontmatter, so the "valid for any input" claim must hold for
-/// pasted control characters too (Codex PR #76).
+/// `\t`, drops CR (newlines normalize to `\n`), and escapes every code point
+/// that is not a safe, non-folding member of YAML's `c-printable` set
+/// (`multiline_needs_escape`) as `\xXX` (≤ U+00FF) or `\uXXXX` (above it): the
+/// other C0 controls, DEL, the C1 controls (incl. NEL), the LS/PS line
+/// separators, and the U+FFFE/U+FFFF noncharacters. A bare one of these is
+/// forbidden or ambiguous in a double-quoted scalar and would invalidate or
+/// silently refold the frontmatter, so the "valid, exact value for any input"
+/// claim holds for pasted control/line-break characters too (Codex PR #76).
 pub fn yaml_quote_multiline(value: &str) -> String {
     let mut inner = String::with_capacity(value.len() + 2);
     for c in value.chars() {
@@ -42,11 +55,13 @@ pub fn yaml_quote_multiline(value: &str) -> String {
             '\n' => inner.push_str("\\n"),
             '\t' => inner.push_str("\\t"),
             '\r' => {} // CR dropped; newlines normalize to \n
-            ctrl if (ctrl as u32) < 0x20
-                || ctrl == '\u{7f}'
-                || matches!(ctrl as u32, 0x80..=0x84 | 0x86..=0x9f) =>
-            {
-                inner.push_str(&format!("\\x{:02x}", ctrl as u32));
+            c if multiline_needs_escape(c) => {
+                let u = c as u32;
+                if u <= 0xff {
+                    inner.push_str(&format!("\\x{u:02x}"));
+                } else {
+                    inner.push_str(&format!("\\u{u:04x}"));
+                }
             }
             other => inner.push(other),
         }
@@ -928,10 +943,9 @@ mod tests {
         // C1 controls U+0080–U+0084 and U+0086–U+009F are OUTSIDE YAML's
         // c-printable set, so a bare one invalidates the frontmatter just like a
         // C0 control — Obsidian can reject the Task's whole property block. They
-        // must be `\xXX`-escaped and round-trip (Codex PR #76). U+0085 (NEL) IS
-        // printable, so it need not be escaped — the invariant tested is only
-        // that the round-trip is exact.
-        let s = "a\u{80}b\u{84}c\u{86}d\u{9f}e\u{85}f";
+        // must be `\xXX`-escaped and round-trip (Codex PR #76). (NEL U+0085 is
+        // exercised by the line-break test below.)
+        let s = "a\u{80}b\u{84}c\u{86}d\u{9f}e";
         let quoted = yaml_quote_multiline(s);
         assert!(
             !quoted
@@ -941,6 +955,29 @@ mod tests {
         );
         assert!(quoted.contains("\\x80"));
         assert!(quoted.contains("\\x9f"));
+        assert_eq!(yaml_unquote_multiline(&quoted), s);
+    }
+
+    #[test]
+    fn yaml_quote_multiline_escapes_line_breaks_and_noncharacters() {
+        // NEL (U+0085), LS (U+2028), PS (U+2029) are line breaks under YAML 1.1
+        // (which Obsidian's js-yaml largely follows) — a bare one can FOLD and
+        // silently change the value. U+FFFE / U+FFFF are not c-printable at all
+        // and can invalidate the frontmatter. None may reach the raw output; all
+        // must round-trip exactly (Codex PR #76).
+        let s = "a\u{85}b\u{2028}c\u{2029}d\u{fffe}e\u{ffff}f";
+        let quoted = yaml_quote_multiline(s);
+        assert!(quoted.contains("\\x85")); // NEL (<= 0xFF → \xXX)
+        assert!(quoted.contains("\\u2028")); // LS  (> 0xFF → \uXXXX)
+        assert!(quoted.contains("\\u2029")); // PS
+        assert!(quoted.contains("\\ufffe")); // BMP noncharacter
+        assert!(quoted.contains("\\uffff"));
+        assert!(
+            !quoted
+                .chars()
+                .any(|c| matches!(c as u32, 0x85 | 0x2028 | 0x2029 | 0xfffe | 0xffff)),
+            "no raw line-break or noncharacter survives in the quoted scalar"
+        );
         assert_eq!(yaml_unquote_multiline(&quoted), s);
     }
 
