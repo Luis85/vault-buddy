@@ -52,10 +52,18 @@
             "u.md",
             "---\ntype: Task\nstatus: new\ntitle: \"U\"\ncreated: 2026-07-08\n---\n",
         );
+        // A malformed value must degrade to None IN CORE (not just the
+        // frontend) so TaskDto/MCP never expose it (Codex, PR #75).
+        write(
+            root,
+            "m.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"M\"\ncreated: 2026-07-08\nscheduled: next week\n---\n",
+        );
         let items = list_tasks(root, None);
         let sched = |title: &str| items.iter().find(|t| t.title == title).unwrap().scheduled.clone();
         assert_eq!(sched("T"), Some("2026-07-20".to_string()));
         assert_eq!(sched("U"), None); // absent → None
+        assert_eq!(sched("M"), None); // malformed → None (filtered in core)
     }
 ```
 
@@ -69,16 +77,19 @@ Expected: FAIL — `no field 'scheduled' on type 'TaskItem'`.
 ```rust
     pub due: Option<String>,
     /// The do/plan date (`YYYY-MM-DD`) — when the user plans to WORK the task,
-    /// distinct from `due` (the deadline). Lenient read like `due`; `None` when
-    /// absent or unparseable.
+    /// distinct from `due` (the deadline). Read then validator-filtered, so it is
+    /// `None` when absent OR unparseable (an honest DTO/MCP boundary).
     pub scheduled: Option<String>,
     pub priority: Option<String>,
 ```
 
-In `collect_task_file`, after `let due = scalar_field(&content, "due");` add:
+In `collect_task_file`, after `let due = scalar_field(&content, "due");` add (`is_valid_due` is already imported in `list.rs` for `due_key`):
 
 ```rust
-    let scheduled = scalar_field(&content, "scheduled");
+    // Filter through the date validator so a malformed value (e.g. "next week")
+    // becomes None at the DTO/MCP boundary, honoring the "invalid → None"
+    // contract in CORE — not only in the frontend's scheduledOf (Codex, PR #75).
+    let scheduled = scalar_field(&content, "scheduled").filter(|s| is_valid_due(s));
 ```
 
 In the `out.push(TaskItem { ... })` initializer, add `scheduled,` immediately after `due,`.
@@ -766,6 +777,18 @@ describe("rescheduleOverdue", () => {
     expect(ok.scheduled).toBe(localToday()); // landed
     expect(bad.scheduled).toBe("2026-07-02"); // reverted (only this one)
   });
+  it("holds back a busy row and never silently drops it", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push((args as { path: string }).path); return null; } });
+    const free = agg({ path: "free", title: "Free", scheduled: "2026-07-01" });
+    const busyRow = agg({ path: "busy", title: "Busy", scheduled: "2026-07-02" });
+    const busy = ref(new Set(["busy"]));
+    const { rescheduleOverdue } = useTaskSchedule({ tasks: ref([free, busyRow]), sortInPlace: () => {}, busy });
+    await rescheduleOverdue([free, busyRow]);
+    expect(calls).toEqual(["free"]); // the busy row is NOT written…
+    expect(free.scheduled).toBe(localToday());
+    expect(busyRow.scheduled).toBe("2026-07-02"); // …left untouched (still overdue) and named in the toast
+  });
 });
 ```
 
@@ -844,38 +867,46 @@ export function useTaskSchedule(opts: {
 
   // Reschedule EVERY task in `overdue` to today — genuinely best-effort:
   // independent per-task writes that do NOT stop on a rejection (unlike the
-  // rank materialize's fail-fast batch), revert only the failed task, and name
-  // all failures in one toast. A row already mid-write (a slow toggle) is
-  // skipped rather than raced.
+  // rank materialize's fail-fast batch), reverting only the failed task. A row
+  // with a write already in flight can't be safely re-written here (two
+  // read-modify-write saves would race), so it's held out of the batch — but it
+  // is NOT dropped silently: it's named in the summary alongside any failures,
+  // so the "reschedule all" action never reports success while quietly leaving a
+  // task overdue (Codex, PR #75). The user can retry once its save lands.
   async function rescheduleOverdue(overdue: AggTask[]): Promise<void> {
     const today = localToday();
+    const skipped = overdue.filter((t) => busy.value.has(t.path)).map((t) => t.title);
     const targets = overdue.filter((t) => !busy.value.has(t.path));
-    if (targets.length === 0) return;
-    const prev = new Map(targets.map((t) => [t.path, t.scheduled] as const));
-    for (const t of targets) {
-      t.scheduled = today;
-      busy.value.add(t.path);
-    }
-    sortInPlace();
-    const failed: string[] = [];
-    for (const t of targets) {
-      try {
-        reflectStampedId(
-          t,
-          await invoke<string | null>("update_task", {
-            id: t.vaultId, path: t.path, patch: { scheduled: today },
-          }),
-        );
-      } catch (e) {
-        t.scheduled = prev.get(t.path) ?? null;
-        failed.push(t.title);
-        logWarning(`rescheduleOverdue failed for ${t.title}: ${String(e)}`);
-      } finally {
-        busy.value.delete(t.path);
+    if (targets.length > 0) {
+      const prev = new Map(targets.map((t) => [t.path, t.scheduled] as const));
+      for (const t of targets) {
+        t.scheduled = today;
+        busy.value.add(t.path);
       }
+      sortInPlace();
+      for (const t of targets) {
+        try {
+          reflectStampedId(
+            t,
+            await invoke<string | null>("update_task", {
+              id: t.vaultId, path: t.path, patch: { scheduled: today },
+            }),
+          );
+        } catch (e) {
+          t.scheduled = prev.get(t.path) ?? null;
+          skipped.push(t.title); // write-failed → still overdue → named
+          logWarning(`rescheduleOverdue failed for ${t.title}: ${String(e)}`);
+        } finally {
+          busy.value.delete(t.path);
+        }
+      }
+      sortInPlace();
     }
-    sortInPlace();
-    if (failed.length > 0) notifications.error(`Couldn't reschedule: ${failed.join(", ")}.`);
+    // One honest summary: every task still overdue — write-failed OR held back
+    // for a busy save — is named; nothing is silently left behind.
+    if (skipped.length > 0) {
+      notifications.error(`Couldn't reschedule (still overdue): ${skipped.join(", ")}.`);
+    }
   }
 
   return { quickSchedule, rescheduleOverdue };
@@ -1253,7 +1284,7 @@ applies it optimistically."
 
 - [ ] **Step 3: Update the PRD + use case.** In `docs/prds/task-management.md`, note the do-date/Planner increment shipped (Task Model gains `scheduled`; the Dashboard's Today/Overdue/Upcoming now derive from the do-date). In the aggregated-dashboard use case, note the cross-vault planner landed.
 
-- [ ] **Step 4: Update docs/Gaps.md.** Record: (a) "This Evening" sub-bucket + a distinct "Someday" horizon are deferred (each needs a second signal); (b) the two duplicated `RESERVED_TASK_KEYS` constants (`disk.rs` + `id.rs`) should be single-sourced (small cleanup); (c) if not already tracked, the local-midnight bucketing edge (buckets use `localToday()`, so a task's bucket can shift a day at local midnight — acceptable, matches `add_task`'s local-date rule); (d) **the `scheduled`-as-id-property clobber edge** — a vault that had hand-configured its task-id property to the literal `scheduled` (now a reserved managed field) still has `scheduled: <stable-id>` on disk; reserving stops future gen/read and the read is harmless (`scheduledOf` rejects a non-date), but a schedule/clear write on such a task overwrites the id. Accepted edge: no auto-migration (mass vault mutation is out of policy) and no hard block (near-zero exposure); remedy = re-point the id property to a non-reserved name before scheduling. Note it explicitly as a non-never-clobber case so the invariant docs stay honest.
+- [ ] **Step 4: Update docs/Gaps.md.** Record: (a) "This Evening" sub-bucket + a distinct "Someday" horizon are deferred (each needs a second signal); (b) the two duplicated `RESERVED_TASK_KEYS` constants (`disk.rs` + `id.rs`) should be single-sourced (small cleanup); (c) if not already tracked, the local-midnight bucketing edge (buckets use `localToday()`, so a task's bucket can shift a day at local midnight — acceptable, matches `add_task`'s local-date rule); (d) **the `scheduled`-as-id-property clobber edge** — a vault that had hand-configured its task-id property to the literal `scheduled` (now a reserved managed field) still has `scheduled: <stable-id>` on disk; reserving stops future gen/read and the read is harmless (`scheduledOf` rejects a non-date), but a schedule/clear write on such a task overwrites the id. Accepted edge: no auto-migration (mass vault mutation is out of policy) and no hard block (near-zero exposure); remedy = re-point the id property to a non-reserved name before scheduling. Note it explicitly as a non-never-clobber case so the invariant docs stay honest; (e) the pre-existing asymmetry that `due` stores the RAW frontmatter scalar in `TaskItem`/`TaskDto` (filtered only frontend-side by `dueOf`), whereas `scheduled` is validator-filtered in core — a small cleanup would filter `due` in core too, but changing `due`'s DTO/MCP contract is out of scope here.
 
 - [ ] **Step 5: Run every quality gate; update baselines only where a gate instructs.**
 

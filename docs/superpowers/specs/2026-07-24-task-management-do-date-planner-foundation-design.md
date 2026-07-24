@@ -44,7 +44,7 @@ in full. Each later increment gets its own spec/plan when it is picked up.
 
 | # | Increment | Core of it |
 | --- | --- | --- |
-| **1** | **Do-date foundation + Plan-my-day dashboard** *(this spec)* | A `scheduled` (do) date distinct from the `due` deadline; the date grouping becomes a do-date **Planner** (Overdue / Today / Upcoming / Anytime / Done); a cross-vault plan-my-day surface where each vault reads as a project; one-click **reschedule overdue → today**; quick-schedule (Today / Tomorrow / pick) on any row; deadlines become calm countdown chips that never move a task between buckets. |
+| **1** | **Do-date foundation + Plan-my-day dashboard** *(this spec)* | A `scheduled` (do) date distinct from the `due` deadline; the date grouping becomes a do-date **Planner** (Overdue / Today / Upcoming / Anytime / Done); a cross-vault plan-my-day surface where each vault reads as a project; one-click **reschedule overdue → today**; quick-schedule (Today / Tomorrow / pick) on any row; the `due` deadline stays a calm red-when-overdue label that never moves a task between buckets. |
 | **2** | **Pinned Focus widget** | A new always-on-top mini window showing Today in your manual order — complete / reorder / reschedule inline — with a configurable source. Reuses the three-window discipline (positioned-while-hidden, own webview/root). Its own spec, informed by the floating-widget research. |
 | **3** | **Fast capture & keyboard flow** | Natural-language quick-add (`ship draft tomorrow p1 #work`) with a live highlighted preview; a Ctrl-K command palette that lists actions *with* their shortcuts; single-key row verbs (`t`=today, `s`=schedule, `x`=complete…) with optimistic sub-100 ms feel; completion delight. |
 | **4** | **Rituals & smart lists** | A guided *plan- / shutdown-my-day* flow that reflects a 1–2 sentence summary into the Obsidian **daily note** (the one thing a daily-note-native companion can do better than any standalone app); a "Won't Do" status; saved smart filters; optional time-estimates + a "realistic day" nudge. |
@@ -78,8 +78,10 @@ today," one durable concept.
   Tomorrow / pick-a-date / clear, from a row; **reschedule all overdue → today**
   as one section action; schedule on create (composer) and on edit (inline
   editor).
-- **Calm deadlines:** `due` renders as a countdown chip on the row (red once
-  passed) wherever the task sits; a passed deadline never yanks a task between
+- **Calm deadlines:** `due` keeps its existing short date label on the row that
+  **reddens once passed** (`isOverdue`) — a red-when-overdue deadline marker,
+  *not* a relative countdown (the existing `dueLabel` renders "Jul 15", and this
+  increment does not change it); a passed deadline never yanks a task between
   planner buckets.
 
 ### Non-goals (this increment — each is a later increment)
@@ -116,8 +118,13 @@ today," one durable concept.
   `^\d{4}-\d{2}-\d{2}$` (no calendar validity — `2026-02-31` is tolerated like
   Obsidian's own picker and like `is_valid_due`); anything else (a
   hand-authored `next week`) degrades to "unscheduled" rather than erroring.
-  Core reads it via the existing lenient scalar reader; the frontend gets a
-  `scheduledOf(t)` accessor beside `dueOf` in `taskFields.ts`.
+  **Core filters it through `is_valid_due` before it reaches `TaskItem`/`TaskDto`**
+  (`scalar_field(...).filter(is_valid_due)`), so the DTO and MCP `list_tasks`
+  expose `None` for a malformed value — an honest boundary at the machine edge,
+  not a raw pass-through masked only in the frontend. (`due` itself stores the
+  raw scalar today and is filtered frontend-side; that pre-existing asymmetry is
+  noted in Gaps, and we make the new field right rather than copy it.) The
+  frontend `scheduledOf(t)` accessor beside `dueOf` stays as a matching guard.
 - **Write = strict + never-clobber**, riding the existing surgical multi-key
   writer (`set_fields` / `update_task_fields`): `Some(date)` rewrites or inserts
   the `scheduled:` line, `None`/clear removes it, everything else byte-preserved.
@@ -378,7 +385,8 @@ keeps it (no stored value is rewritten).
    default; unit tests (existing suite green).
 4. Frontend verbs: quick-schedule menu, reschedule-overdue batch
    (`useTaskSchedule`), composer + editor do-date fields.
-5. Row presentation: do-date + deadline chips, the Today empty-state nudge.
+5. Row presentation: the additive do-date chip only (the existing `due`
+   element is left unchanged; no empty-Today hint — see §5).
 6. Docs + baselines (AGENTS.md, CONTEXT.md, PRD, use case, Gaps).
 
 Phases 1–3 (the model) and 4–5 (the verbs + UI) are independently reviewable — a
