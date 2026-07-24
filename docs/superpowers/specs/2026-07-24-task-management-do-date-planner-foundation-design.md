@@ -70,7 +70,10 @@ today," one durable concept.
   bucketing by that deadline exactly as it does today.
 - **Cross-vault Plan-my-day:** the aggregate view is the hero planning surface —
   every vault's tasks in one Overdue/Today/Upcoming/Anytime plan, each row
-  showing its vault (its "project"); a per-vault filter narrows to one project.
+  showing its vault (its "project"); to focus a single project, open that
+  vault's own per-vault Tasks view (both modes share this planner). (An
+  in-aggregate vault filter is a small, noted follow-up — see Non-goals — not
+  in this increment's scope.)
 - **Plan-my-day verbs without Obsidian:** quick-schedule a task to Today /
   Tomorrow / pick-a-date / clear, from a row; **reschedule all overdue → today**
   as one section action; schedule on create (composer) and on edit (inline
@@ -90,6 +93,11 @@ today," one durable concept.
   deferred; both want a second signal (a time-of-day, a someday marker) and the
   foundation is intentionally *one* new field. Called out here so a reviewer
   knows the omission is chosen, not missed.
+- An **in-aggregate vault filter** (narrowing the merged planner to one vault's
+  tasks). Oversight this increment ships = the per-row vault chip + the
+  per-vault Tasks view; a click-the-vault-chip filter mirroring the tag filter
+  is a clean follow-up but is not built here (no `vaultFilter` state/control is
+  added), so the goal copy above must not promise it.
 - Any change to the task file format beyond adding `scheduled`; any change to
   status-toggle / list / tag / order behavior.
 
@@ -115,10 +123,22 @@ today," one durable concept.
   the `scheduled:` line, `None`/clear removes it, everything else byte-preserved.
   No new write machinery — `scheduled` is just another key the generalized
   writer already supports.
-- **Reserved for templates:** `scheduled` joins the reserved task-key set that
-  `render_task`'s extra-frontmatter template filter drops, so a per-vault
-  template can never redefine the managed do-date (same guard `due`/`priority`
-  already have).
+- **Reserved in BOTH reserved-key sets.** `scheduled` is added to the template
+  reserved set (`disk.rs::RESERVED_TASK_KEYS`, so a per-vault extra-frontmatter
+  template can't redefine the managed do-date, same guard `due`/`priority`
+  have) AND — critically — to the **task-ID-property** reserved set
+  (`id.rs::RESERVED_TASK_KEYS`, used by `is_valid_id_property`). These are two
+  *separate* constants today. Without the second, a vault that had configured
+  its task-id property as `scheduled` would, after this feature, emit a
+  duplicate `scheduled:` on create and let a schedule edit clobber the id.
+  **Existing conflicting configs degrade safely:** `id_property_for_generation`
+  re-validates the property on every create/edit, so once `scheduled` is
+  reserved a vault pointing its id at `scheduled` simply gets id generation OFF
+  (logged), never a collision — the same defensive posture any reserved id
+  property already gets; `set_task_id_config` also rejects setting it going
+  forward. (Single-sourcing the two duplicated reserved lists is a noted small
+  cleanup, not required here; this increment adds `scheduled` to both and
+  cross-references them.)
 - **DTO:** `TaskItem`/`TaskDto` gains `scheduled: string | null` (camelCase
   across Rust↔TS, the existing precedent); `add_task` and `update_task` accept
   an optional `scheduled` plus a `clearScheduled` flag mirroring `clearDue`.
@@ -175,8 +195,11 @@ plan date** = `scheduled ?? due`":
   differs.)
 - Each aggregate row keeps its **vault-attribution chip** (already shipped) — the
   vault *is* the project, so oversight is "which project is this task in" at a
-  glance. The existing per-vault filter (and future saved filters) narrow to one
-  project.
+  glance. The task view's current filters are **title + tag only** (there is no
+  vault filter today, and this increment adds none — see Non-goals); to narrow
+  to one project, open that vault's own per-vault Tasks view, which shares the
+  same planner. A dedicated in-aggregate vault filter (e.g. click a row's vault
+  chip to narrow, mirroring the tag-click filter) is the natural follow-up.
 - No new IPC for aggregation — it stays the frontend fan-out over `list_vaults`
   + per-vault `list_tasks` the aggregate already uses; `scheduled` simply rides
   the `TaskItem` payload.
@@ -209,18 +232,27 @@ plan date** = `scheduled ?? due`":
   "Due," sent in the same changed-fields patch (`clearScheduled` for an emptied
   value), through the one `update_task` call.
 
-### 5. Row presentation (calm, scannable)
+### 5. Row presentation (additive, non-regressing)
 
-- The row shows, in priority order: title, tag chips, then a **do-date chip**
-  ("Today", "Tomorrow", "Sat", a date) and a **deadline chip** (a countdown /
-  "Due <date>", red once passed). When do-date and deadline coincide, collapse
-  to one chip to avoid noise. Chips reuse the `Chip` primitive + status tokens
-  (`danger` for a passed deadline). This is display-only over the new fields —
+- The row gains **exactly one new element: a do-date chip** (`scheduledOf(task)`
+  → "Today" / "Tomorrow" / "Sat" / a date), rendered **only when the task has a
+  `scheduled` date** and it **differs from `due`** (collapse: when scheduled ==
+  due the existing due element already shows that date, so the do-date chip is
+  suppressed to avoid a duplicate). It reuses the `Chip` primitive; display-only,
   no logic beyond formatting.
-- Empty/degraded states reuse `EmptyState`; the planner's "nothing scheduled"
-  Today bucket gets a friendly empty hint ("Nothing planned for today — pull
-  something from Anytime or Upcoming") rather than a blank, nudging the plan-my-
-  day loop.
+- **The existing due element is UNCHANGED.** `TaskRow` already renders `due` as a
+  short label (`dueLabel`) that turns `danger`-red once overdue (`isOverdue`) —
+  which *is* the calm deadline countdown; it is conceptually the "deadline chip"
+  and needs no code change. Consequently a task with a `due` and no `scheduled`
+  renders **byte-identically to today** — the do-date chip simply has nothing to
+  show. This is what keeps the compatibility promise honest at the *rendering*
+  level, not merely at bucket placement: the only rows that look different are
+  ones the user has explicitly scheduled.
+- Empty/degraded states reuse `EmptyState`; the planner's Today bucket gets a
+  friendly empty hint ("Nothing planned for today — pull something from Anytime
+  or Upcoming") rather than a blank, nudging the plan-my-day loop. (A vault that
+  never schedules never triggers the bucket headers, so it keeps its flat list —
+  the existing `dateBuckets` header rule, preserved by `plannerBuckets`.)
 
 ## Architecture
 
@@ -266,10 +298,12 @@ is untouched.
 ## Testing
 
 - **Rust (`core`):** `scheduled` parse (valid / invalid-degrades-to-none /
-  quoted / commented), `render_task` emits it in the right position and omits it
-  when absent, the template filter drops a `scheduled` key, the field-write
+  quoted / commented), `render_task` emits it after `due` and omits it when
+  absent, the template filter drops a `scheduled` key, the field-write
   round-trips (set / rewrite / clear) byte-preserving the rest — the exact
-  battery `due` already has, extended.
+  battery `due` already has, extended. **Plus `is_valid_id_property("scheduled")`
+  is now `false`** (and `id_property_for_generation(true, "scheduled")` → `None`),
+  the regression guard for the reserved-key catch above.
 - **Frontend (Vitest):** `plannerBuckets` (effective `scheduled ?? due`;
   overdue/today/upcoming/anytime/done placement; a scheduled-future +
   overdue-deadline task lands in Upcoming with the red chip); quick-schedule
@@ -278,12 +312,14 @@ is untouched.
   reverts while the rest still land, with the failure named in a toast;
   composer/editor send `scheduled`/`clearScheduled`; the aggregate's default
   grouping (unset `"all"` key) is Plan while an already-persisted aggregate
-  choice is respected. **Behavior is preserved for
-  scheduled-less tasks** — one with no `scheduled` lands in the same bucket and
-  renders the same as today (the `scheduled ?? due` fallback). The only
-  deliberate assertion changes are the display-label renames (No date → Anytime,
-  the Dates → Plan control label); beyond those, a test that must change a
-  bucket-*placement* assertion signals a behavior slip, not a layout change.
+  choice is respected. **Behavior AND rendering are preserved for scheduled-less
+  tasks** — one with no `scheduled` lands in the same bucket (the `scheduled ??
+  due` fallback) AND its row is byte-identical, because the do-date chip renders
+  only when a scheduled date is present and the existing `due` element is
+  untouched. The only deliberate assertion changes are the display-label renames
+  (No date → Anytime, the Dates → Plan control label); beyond those, a test that
+  must change a bucket-*placement* or row-render assertion for a scheduled-less
+  task signals a behavior slip, not a layout change.
 - **Windows** remains where the end-to-end write + Obsidian round-trip are
   eyeballed — called out for the reviewer, not gating.
 
