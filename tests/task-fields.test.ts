@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TaskItem } from "../src/types";
-import { plannerDateOf, relativeDateLabel, scheduledOf, shortDate } from "../src/utils/taskFields";
+import {
+  comingSaturday,
+  localDatePlus,
+  plannerDateOf,
+  relativeDateLabel,
+  scheduledOf,
+  shortDate,
+} from "../src/utils/taskFields";
 
 function task(p: Partial<TaskItem>): TaskItem {
   return {
@@ -48,5 +55,43 @@ describe("relativeDateLabel", () => {
     // this fixture is what actually PINS the guard against a future regression.
     expect(relativeDateLabel("2026-02-31", "2026-03-01")).toBe(shortDate("2026-02-31"));
     expect(relativeDateLabel("2026-02-31", "2026-03-01")).toBe("Feb 31");
+  });
+});
+
+// Real clock-fixed tests for localDatePlus/comingSaturday: previously these two
+// only appeared in task-schedule-menu.test.ts as self-comparisons (asserting
+// TaskScheduleMenu's "Tomorrow"/"This weekend" buttons emit the SAME value
+// localDatePlus(1)/comingSaturday() compute), which passes vacuously even if
+// the helper itself were wrong. These fix the system clock and check the
+// actual calendar output instead.
+describe("localDatePlus", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("returns the correct next-day date across a year rollover", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 11, 31, 12, 0, 0)); // Dec 31, 2026 (local noon)
+    expect(localDatePlus(1)).toBe("2027-01-01");
+  });
+
+  it("returns the correct next-day date across a month rollover", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 31, 12, 0, 0)); // Jan 31, 2026 (local noon)
+    expect(localDatePlus(1)).toBe("2026-02-01");
+  });
+});
+
+describe("comingSaturday", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("returns the upcoming Saturday from a known Wednesday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 22, 12, 0, 0)); // Jul 22, 2026 is a Wednesday
+    expect(comingSaturday()).toBe("2026-07-25");
+  });
+
+  it("returns today when today is already Saturday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 25, 12, 0, 0)); // Jul 25, 2026 is a Saturday
+    expect(comingSaturday()).toBe("2026-07-25");
   });
 });
