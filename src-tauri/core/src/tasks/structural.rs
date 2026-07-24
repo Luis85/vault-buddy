@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 /// the move/field writers get from `set_fields`' `type: Task` precondition
 /// (Codex P1, PR #76). A missing file surfaces as an error (the row the user
 /// clicked should exist), never a silent success.
-#[allow(dead_code)]
 pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     // A destructive write must NEVER follow a symlink at the leaf: if `path` is
     // a symlink to a different valid Task inside the root, canonicalize would
@@ -58,7 +57,6 @@ pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
 /// existing value (Codex P2, PR #76). Written through the collision-safe
 /// never-clobber writer, so a name clash takes the ` (N)` suffix. `today` names
 /// the new file (clock-free core).
-#[allow(dead_code)]
 pub fn duplicate_task(
     root: &Path,
     path: &Path,

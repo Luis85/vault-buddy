@@ -606,6 +606,55 @@ pub async fn update_task(
     .map_err(|e| format!("update_task: task failed: {e}"))?
 }
 
+/// Permanently delete a task file. The app's first destructive vault write —
+/// gated behind a hardened confirm in the detail view; see docs/Gaps.md for
+/// the deliberate departure from vault-is-sacred. ASYNC: the fs removal is off
+/// the main thread like the other task writes.
+#[tauri::command]
+pub async fn delete_task(id: String, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (vault_path, root, _cfg) = tasks_root_for(&id)?;
+        if root.exists() {
+            capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+        }
+        tasks::delete_task(&root, Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("delete_task: task failed: {e}"))?
+}
+
+/// Duplicate a task file into the same list. Returns the landed (possibly
+/// suffixed) path so the detail view's success toast can offer to open it.
+/// ASYNC: the read + collision-safe fsync'd write is off the main thread.
+#[tauri::command]
+pub async fn duplicate_task(id: String, path: String) -> Result<String, String> {
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (vault_path, root, cfg) = tasks_root_for(&id)?;
+        if root.exists() {
+            capture_paths::assert_root_inside_vault(&vault_path, &root)?;
+        }
+        // Touch the id property only when the configured name is a valid,
+        // non-reserved id key — never a foreign/reserved field. `ids_enabled`
+        // then decides regenerate (on) vs. strip (off) inside the core fn.
+        let prop_name = cfg.task_id_property_name();
+        let id_property = tasks::is_valid_id_property(prop_name).then_some(prop_name);
+        let new_path = tasks::duplicate_task(
+            &root,
+            Path::new(&path),
+            &today,
+            id_property,
+            cfg.task_id_enabled,
+        )?;
+        Ok(new_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("duplicate_task: task failed: {e}"))?
+}
+
 /// Open a task document in Obsidian from its list row. Read-only: canonical
 /// containment inside the vault's tasks root (list_tasks hands out canonical
 /// paths, so the vault-relative part is computed against the CANONICAL vault

@@ -24,4 +24,5 @@ pub use lists::{
     rename_task_list, task_lists, DeleteListOutcome,
 };
 pub use parse::{is_valid_due, is_valid_tag, note_tags};
+pub use structural::{delete_task, duplicate_task};
 pub use writer::{set_fields, set_status};
