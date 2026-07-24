@@ -1,9 +1,14 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { mount } from "@vue/test-utils";
 import { createPinia,setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
 
+vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
+
+import TaskListPicker from "../src/components/TaskListPicker.vue";
 import { useTaskDetail } from "../src/composables/useTaskDetail";
+import { logWarning } from "../src/logging";
 import type { AggTask } from "../src/types";
 
 const task = (o: Partial<AggTask> = {}): AggTask => ({
@@ -108,5 +113,303 @@ describe("useTaskDetail", () => {
   it("openInObsidian surfaces a launch error without throwing", async () => {
     mockIPC((cmd) => { if (cmd === "open_task") throw new Error("launch fail"); return undefined; });
     await expect(useTaskDetail(ref(task())).openInObsidian()).resolves.toBeUndefined();
+  });
+});
+
+describe("TaskDetail.vue", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("renders the description and gates delete behind a confirm", async () => {
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "update_task") return null;
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ description: "hello" }) } });
+    await new Promise((r) => setTimeout(r));
+    expect((wrapper.find('[data-testid="task-detail-description"]').element as HTMLTextAreaElement).value).toBe("hello");
+    // First delete click reveals the confirm; the command is not sent yet.
+    await wrapper.find('[data-testid="task-detail-delete"]').trigger("click");
+    expect(calls.some((c) => c[0] === "delete_task")).toBe(false);
+    await wrapper.find('[data-testid="task-detail-delete-confirm"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(calls.some((c) => c[0] === "delete_task")).toBe(true);
+  });
+
+  it("save sends a description change in the patch", async () => {
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "update_task") return null;
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ description: null }) } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-description"]').setValue("new notes");
+    await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    const call = calls.find((c) => c[0] === "update_task");
+    expect(call[1].patch).toEqual({ description: "new notes" });
+  });
+
+  it("save clears the description when it's emptied out", async () => {
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "update_task") return null;
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ description: "hello" }) } });
+    await new Promise((r) => setTimeout(r));
+    // Whitespace-only counts as emptied (trimmed before the emptiness check).
+    await wrapper.get('[data-testid="task-detail-description"]').setValue("   ");
+    await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    const call = calls.find((c) => c[0] === "update_task");
+    expect(call[1].patch).toEqual({ clearDescription: true });
+  });
+
+  it("disables Save when the draft is unchanged", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("disables Save when the title is blank, even though another field is dirty", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-due"]').setValue("2026-08-01");
+    expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(false);
+    await wrapper.get('[data-testid="task-detail-title"]').setValue("   ");
+    expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(true);
+    // Belt-and-suspenders: onSave's own guard blocks the write too, even if a
+    // disabled button were somehow actuated (it isn't, in a real browser).
+    await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+  });
+
+  it("save sends the scheduled (do) date and tags in the patch", async () => {
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "update_task") return null;
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-scheduled"]').setValue("2026-08-02");
+    await wrapper.get('[data-testid="task-detail-tags"]').setValue("work, home");
+    await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    const call = calls.find((c) => c[0] === "update_task");
+    expect(call[1].patch).toEqual({ scheduled: "2026-08-02", tags: ["work", "home"] });
+  });
+
+  it("onMounted defaults to no archived lists when the config omits the field", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return ["Home"];
+      // Older cached config shape predating archivedLists (AGENTS.md notes this
+      // field is optional for exactly this reason) — must fall back to [].
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home"]);
+  });
+
+  it("a non-Escape key while the delete confirm is open leaves it open", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+    await wrapper.get('[data-testid="task-detail-delete-confirm"]').trigger("keydown", { key: "Enter" });
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(true);
+  });
+
+  it("clicking a priority button updates the selection and dirties the draft", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ priority: "high" }) } });
+    await new Promise((r) => setTimeout(r));
+    const highBtn = wrapper.get('[data-testid="task-detail-priority-high"]');
+    const lowBtn = wrapper.get('[data-testid="task-detail-priority-low"]');
+    expect(highBtn.attributes("aria-checked")).toBe("true"); // seeded from the task's priority
+    await lowBtn.trigger("click");
+    expect(lowBtn.attributes("aria-checked")).toBe("true");
+    expect(highBtn.attributes("aria-checked")).toBe("false");
+    expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("Duplicate calls duplicate_task", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "duplicate_task") return "/v/Tasks/t (copy).md";
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-duplicate"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(calls).toContain("duplicate_task");
+  });
+
+  it("Open in Obsidian launches the task and closes the panel", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-open"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(calls).toContain("open_task");
+    expect(calls).toContain("close_panel");
+  });
+
+  it("onMounted keeps the task's own list even when it's archived", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return ["Home", "Old"];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ list: "Old" }) } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home", "Old"]);
+  });
+
+  it("onMounted drops archived lists other than the task's own", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return ["Home", "Old"];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ list: "" }) } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home"]);
+  });
+
+  it("onMounted logs and leaves an empty picker when list_task_lists rejects", async () => {
+    (logWarning as ReturnType<typeof vi.fn>).mockClear();
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") throw new Error("boom");
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual([]);
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("task detail: could not load task lists"),
+    );
+  });
+
+  it("Cancel dismisses the delete confirm without deleting", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="task-detail-delete-cancel"]').trigger("click");
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(false);
+    expect(calls).not.toContain("delete_task");
+  });
+
+  it("Escape closes the delete confirm without deleting", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="task-detail-delete-confirm"]').trigger("keydown", { key: "Escape" });
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(false);
+    expect(calls).not.toContain("delete_task");
+  });
+
+  it("changing the list dirties the draft and moves the task on save", async () => {
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return ["Home", "Work"];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "move_task_to_list") return { path: "/v/Tasks/Home/t.md", id: null };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ list: "" }) } });
+    try {
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-list"]').trigger("click");
+      await new Promise((r) => setTimeout(r));
+      (document.body.querySelector('[data-testid="task-detail-list-option-Home"]') as HTMLElement).click();
+      await new Promise((r) => setTimeout(r));
+      expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(false);
+      await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
+      await new Promise((r) => setTimeout(r));
+      expect(calls.some((c) => c[0] === "move_task_to_list")).toBe(true);
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
   });
 });
