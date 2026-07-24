@@ -87,6 +87,16 @@ pub(super) fn description_field(content: &str) -> Option<String> {
             if raw.starts_with(['|', '>']) {
                 return None; // block scalar — not a single-line value we expose
             }
+            if raw.starts_with(['[', '{']) {
+                // A flow collection (`[a, b]` / `{k: v}`) is structured YAML, not a
+                // scalar string — Obsidian/js-yaml parses it as a sequence/mapping.
+                // Surfacing the raw syntax as text would misreport the value AND a
+                // later detail save would canonicalize it into quoted text, so
+                // degrade to no description like the other unsupported forms (Codex
+                // P2, PR #76). Quoted values start with `"`/`'`, so a bracket INSIDE
+                // quotes (`"[not a list]"`) still reaches the quoted branch below.
+                return None;
+            }
             let decoded = if raw.starts_with('"') {
                 // A double-quoted scalar that doesn't close on THIS physical line
                 // is multi-line (its continuation is on the following indented
@@ -226,6 +236,27 @@ mod tests {
             super::description_field("---\ntype: Task\ndescription: \"all one line\"\n---\n")
                 .as_deref(),
             Some("all one line")
+        );
+    }
+
+    #[test]
+    fn description_field_rejects_flow_collections() {
+        // A flow sequence/mapping is structured YAML, not a scalar string —
+        // Obsidian parses it as a list/map, so exposing the raw syntax as text
+        // would misreport the value and a later save would canonicalize the
+        // structure into quoted text (Codex P2, PR #76).
+        for v in ["[first, second]", "{text: note}", "[]", "{}", "[a"] {
+            assert_eq!(
+                super::description_field(&format!("---\ntype: Task\ndescription: {v}\n---\n")),
+                None,
+                "flow collection `{v}` must read as no description"
+            );
+        }
+        // A bracket INSIDE a quoted scalar is content, not a flow collection.
+        assert_eq!(
+            super::description_field("---\ntype: Task\ndescription: \"[not a list]\"\n---\n")
+                .as_deref(),
+            Some("[not a list]")
         );
     }
 }

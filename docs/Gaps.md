@@ -456,6 +456,28 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-79 · Low · `delete_task`'s identity re-check leaves an irreducible re-stat→unlink residual (accepted)
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`). The one destructive
+vault write validates a task's bytes + inode identity from a single open handle,
+then re-stats the path (no-follow) immediately before `remove_file` and refuses
+on a symlink or an identity mismatch (`is_different_file`) — so a swap during the
+validation window is caught, not deleted (Codex P1, PR #76). TWO residual windows
+remain, both irreducible in portable `std`: (a) between `symlink_metadata(path)`
+and `canonicalize(path)`, a swap of the clicked leaf to a symlink pointing at
+ANOTHER valid task would let `canonicalize` resolve to that target (the identity
+re-check is self-consistent on the target, so it passes) — closing this
+deterministically needs `O_NOFOLLOW` on the ORIGINAL path (libc FFI, Unix-only)
+rather than a canonical re-open; (b) between the pre-unlink re-stat and
+`remove_file` itself, since `std` has no unlink-by-handle (`funlinkat` /
+`NtCreateFile`+`FILE_DELETE_ON_CLOSE`). **Why Low / accepted:** the whole of
+`delete_task` runs at machine speed with NO user pause inside it — the delete
+confirm happens client-side, before the IPC call — so both windows are
+microseconds on a single-user desktop with no adversarial local process racing
+the buddy; the earlier deterministic confirm-time symlink attack is already
+closed (GAP is not that). A fully-atomic unlink (platform FFI: `funlinkat` on
+Unix, delete-on-close handle on Windows) is the tracked fix if the exposure ever
+proves real; the identity re-verification is the proportionate portable close.
+
 ### GAP-78 · Low · A duplicated/edited Task keeps a SECOND case-variant ID key when the source has two
 `src-tauri/core/src/tasks/disk.rs` (`duplicate_task` and `update_task_fields`
 id-key resolution) via `parse::frontmatter_scalar_ci`, which returns only the
