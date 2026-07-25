@@ -305,9 +305,15 @@ spec's own guarantee that a cycle rejection writes nothing (Codex P2, PR #77).
 **Phase 2 — enable (idempotent, additive):** if IDs are off, enable them (a
 `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
 `set_task_id_config` pattern) using the vault's configured — or defaulted
-`task-id` — property name. Enabling is surfaced honestly: the Detail surface
-notes that setting a parent turned Task IDs on for the vault, so the config
-change is never silent.
+`task-id` — property name.
+
+**Enabling is reported explicitly, because it cannot be inferred.** The write
+returns an `idsEnabled` flag saying *this call turned Task IDs on*. The frontend
+cannot deduce it from a newly-returned id — an already-enabled vault with an
+unstamped parent produces the identical shape — so without the flag the user
+could discover IDs enabled, and subsequently **locked** (§2a), with none of the
+disclosure this design promises (Codex P2, PR #77). Both write paths carry it and
+both surface the note: **Set parent** and **Add subtask**.
 
 **Phase 3 — write:**
 
@@ -479,6 +485,19 @@ bounded walk matters twice: the vault is user-editable, so a cycle can already
 exist on disk before VB ever sees it, and `ancestors` is also what the detail
 surface would use for any future breadcrumb.
 
+**Nodes on a pre-existing cycle are dropped from the index.** A hand-authored
+`A → B → A` already on disk resolves two real edges, and bounding `ancestors`
+only stops the *walk* — it does not make either edge unresolved, so both rows
+would render each other as parent and subtask, contradicting this spec's own
+promise that such rows fall back to top-level (Codex P2, PR #77). So after edges
+are resolved, `parent_index` detects every node whose ancestor walk revisits
+itself and **omits those nodes' edges entirely**. Both rows then render
+parentless — visibly wrong data the user can see and fix, rather than a
+confidently-rendered loop. The same rule runs frontend-side, so the two surfaces
+agree. Cycle-free by construction, the index is also what
+`would_create_cycle` validates against, which keeps a new assignment's verdict
+consistent with what the user is actually looking at.
+
 **Ambiguous ids.** Two Task documents can carry the same id — not from anything
 VB does (`duplicate_task` regenerates, and `ensure_id` never overwrites) but from
 a file copied in Explorer/Finder, a sync conflict, or a hand edit. VB's own
@@ -525,7 +544,9 @@ Additive, no new read command:
 - **`update_task`'s return** extends from the task's own id to also carry the
   **effective `parentId`/`parentLink`** actually written, so the detail row
   reflects a freshly-stamped parent without a reload — the same reason it already
-  returns the stamped id.
+  returns the stamped id — plus **`idsEnabled`**, true only when *this call*
+  turned Task IDs on (§2). `add_task` returns the same flag alongside the created
+  task.
 - **A parent-only patch must not be mistaken for an empty one.** `update_task`
   no-ops an empty patch, and the Parent picker's Change/Clear sends exactly
   `{parentPath}` or `{clearParent: true}` with no ordinary field updates — so the
@@ -650,9 +671,21 @@ already sorted.
   parent-set). The tidier alternative — best-effort clearing each child's parent
   keys, as `delete_task_list` relocates its tasks — is recorded in Gaps as the
   tracked option if orphan clutter ever proves real.
-- **Move between Lists** — unchanged, with one honest consequence of the
-  vault-relative link form (§1): moving a **parent** changes its path, so the
-  `parent` wikilink recorded on each of its children goes stale. `parent-id` is
+- **Move between Lists** — a moved **child** recomposes its own link; a moved
+  **parent** does not touch its children. The two differ because of cost, not
+  principle. When a child using the markdown fallback moves between Lists at
+  different depths, its destination's `../` count is wrong even though the parent
+  never moved (Codex P2, PR #77) — but that is **one file**, and
+  `move_task_to_list` already performs a post-move content write on exactly that
+  file (`backfill_task_id`). So the landed child's `parent` link is recomposed
+  there, written only when it actually differs, and best-effort/warn-only like
+  the id backfill — a link repair must never fail the move that carried it.
+  Recomposing a *parent's* children is the case that stays untouched: that is an
+  unbounded batch write on the move path, the same thing this spec declines to
+  bolt onto delete.
+
+  So the residual staleness is narrower than before: moving a **parent** changes
+  its path, so the `parent` link recorded on each of its children goes stale. `parent-id` is
   authoritative, so **VB's hierarchy is completely unaffected** — only Obsidian's
   click-through degrades, and it degrades *visibly* (an unresolved link) rather
   than silently navigating to the wrong Task, which is exactly the failure the
@@ -740,7 +773,12 @@ percent-encoded markdown link for a List containing `#`, `|`, `[`, `]`, or `^`,
 with the fallback's LABEL backslash-escaping `\`, `[`, `]` in the parent title**;
 `RESERVED_TASK_KEYS` filtering for both keys;
 `would_create_cycle` (self, direct, transitive, and a pre-existing on-disk cycle
-terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
+terminating); **`parent_index` DROPPING the edges of every node on a
+pre-existing cycle, so both rows resolve parentless**; **a child on the markdown
+fallback recomposing its own link when it moves to a different depth, and the
+write being skipped when the link is unchanged**; **`quote_id_if_needed` quoting
+an inherited `null`-spelled id so the strict reader does not read it back as
+absent**; `ancestors` bounded by its visited set; `parent_index` ignoring
 unresolvable ids; **`ambiguous_ids` detecting a duplicated own-id, `parent_index`
 omitting it, and a cycle walk therefore never following a collapsed edge**;
 **an ARCHIVED task's edges present in the hierarchy index and counted by the
@@ -782,7 +820,11 @@ phase 1 and the lock must not be written under the stale property. Add-subtask w
 enable, stamp the parent, and create a child carrying a resolvable `parent-id` —
 the bootstrap regression for the create path.**
 
-**Frontend (Vitest):** **an IDs-OFF parent-set AND an IDs-OFF Add-subtask each
+**Frontend (Vitest):** **an `idsEnabled: true` response surfaces the
+"Task IDs were turned on for this vault" note on BOTH Set parent and Add
+subtask, and an `idsEnabled: false` one does not**; **a hand-authored on-disk
+cycle rendering both rows as top-level (no parent chip, no subtask count) rather
+than as each other's parent**; **an IDs-OFF parent-set AND an IDs-OFF Add-subtask each
 write the returned id onto the parent's cached row, so the new relationship (and
 the progress line) render without a reload — two tests, one per path**; **a
 duplicate id in one vault resolving to NO parent and NO children, matching

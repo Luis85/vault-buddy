@@ -567,7 +567,40 @@ pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_> {
             idx.insert(t.path.as_path(), parent_path);
         }
     }
+    drop_cyclic_edges(&mut idx);
     idx
+}
+
+/// Remove the edges of every node lying on a cycle. A hand-authored A -> B -> A
+/// resolves two REAL edges; bounding `ancestors` only stops the walk, it does not
+/// make either edge unresolved, so both rows would render each other as parent
+/// and subtask. Dropping them makes both render parentless — visibly wrong data
+/// the user can see and fix, rather than a confidently-rendered loop (design
+/// spec §3). It also leaves the index cycle-free, so `would_create_cycle`
+/// validates against exactly what the user is looking at.
+fn drop_cyclic_edges(idx: &mut ParentIndex<'_>) {
+    let cyclic: Vec<&Path> = idx
+        .keys()
+        .copied()
+        .filter(|start| {
+            // Walk up; if we come back to `start`, it is on a cycle.
+            let mut seen = HashSet::new();
+            let mut cur = *start;
+            while let Some(&next) = idx.get(cur) {
+                if next == *start {
+                    return true;
+                }
+                if !seen.insert(next) {
+                    return false; // a different cycle upstream, not ours
+                }
+                cur = next;
+            }
+            false
+        })
+        .collect();
+    for path in cyclic {
+        idx.remove(path);
+    }
 }
 
 /// Ancestor paths of `start`, nearest first, EXCLUDING `start`. Bounded by a
@@ -648,11 +681,27 @@ mod tests {
     }
 
     #[test]
-    fn a_preexisting_on_disk_cycle_terminates() {
+    fn a_preexisting_on_disk_cycle_drops_both_edges() {
+        // Bounding the walk is not enough: both rows must resolve PARENTLESS, or
+        // they render each other as parent and subtask (design spec §3).
         let tasks = vec![t("a", Some("a"), Some("b")), t("b", Some("b"), Some("a"))];
         let idx = parent_index(&tasks);
-        let anc = ancestors(&idx, &p("a")); // must not loop forever
-        assert!(anc.len() <= 2);
+        assert!(idx.is_empty(), "cyclic nodes contribute no edges");
+        assert!(ancestors(&idx, &p("a")).is_empty());
+    }
+
+    #[test]
+    fn a_cycle_does_not_drop_unrelated_edges() {
+        // c -> d is fine even though a <-> b loop elsewhere.
+        let tasks = vec![
+            t("a", Some("a"), Some("b")),
+            t("b", Some("b"), Some("a")),
+            t("c", Some("c"), Some("d")),
+            t("d", Some("d"), None),
+        ];
+        let idx = parent_index(&tasks);
+        assert_eq!(idx.get(p("c").as_path()), Some(&p("d").as_path()));
+        assert!(idx.get(p("a").as_path()).is_none());
     }
 
     #[test]
@@ -901,6 +950,11 @@ Run: `cd src-tauri/core && cargo test --lib services::tasks`
 pub struct ParentSet {
     pub parent_id: Option<String>,
     pub parent_link: Option<String>,
+    /// True only when THIS call turned Task IDs on for the vault. The frontend
+    /// cannot infer it — an already-enabled vault with an unstamped parent
+    /// returns the identical shape — and without it the user discovers IDs
+    /// enabled AND locked (Task 6) with no disclosure (design spec §2).
+    pub ids_enabled: bool,
 }
 
 /// Set (or clear, with `parent_path: None`) a task's parent.
@@ -921,7 +975,7 @@ pub fn set_task_parent(
     let Some(parent_path) = parent_path else {
         // Clear: no parent to validate, no ids needed.
         tasks::update_task_fields(&root, &child, &[("parent-id", None), ("parent", None)], None)?;
-        return Ok(ParentSet { parent_id: None, parent_link: None });
+        return Ok(ParentSet { parent_id: None, parent_link: None, ids_enabled: false });
     };
     let parent = canonical_task_in_root(&root, parent_path)?;
     if parent == child {
@@ -981,7 +1035,11 @@ pub fn set_task_parent(
         ],
         Some(&prop),
     )?;
-    Ok(ParentSet { parent_id: Some(resolved.parent_id), parent_link: Some(resolved.link) })
+    Ok(ParentSet {
+        parent_id: Some(resolved.parent_id),
+        parent_link: Some(resolved.link),
+        ids_enabled: resolved.ids_enabled,
+    })
 }
 
 /// Validate-under-lock, enable, stamp the parent, compose the link. Returns with
@@ -1028,7 +1086,8 @@ fn resolve_parent_for_write(
         return Err("That would make a task its own ancestor.".to_string());
     }
 
-    if !fresh.task_id_enabled {
+    let ids_enabled = !fresh.task_id_enabled;
+    if ids_enabled {
         // MUST NOT re-acquire the lock — it is not reentrant and a nested
         // acquire self-deadlocks. This is the *_locked variant.
         enable_task_ids_locked(vault_id)?;
@@ -1039,7 +1098,7 @@ fn resolve_parent_for_write(
     // relative to the note containing it (design spec §1).
     let link = tasks::compose_parent_link(parent, child, vault, &read_title(parent))
         .ok_or("The parent task is outside the vault.")?;
-    Ok(ResolvedParent { parent_id, link })
+    Ok(ResolvedParent { parent_id, link, ids_enabled })
 }
 ```
 
@@ -1055,7 +1114,12 @@ both writers quote identically):
 /// the lenient reader rejects, unresolving the link the instant it is written
 /// (Codex P2, PR #77).
 fn quote_id_if_needed(id: &str) -> String {
+    // A YAML null spelling passes the charset whitelist but would be READ BACK as
+    // absent by the strict parent decoder, unresolving the link immediately — so
+    // it must be quoted despite looking plain (Codex P2, PR #77).
+    let yaml_null = matches!(id, "null" | "Null" | "NULL" | "~");
     let plain = !id.is_empty()
+        && !yaml_null
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if plain { id.to_string() } else { crate::yaml_scalar::yaml_quote(id) }
 }
@@ -1065,6 +1129,9 @@ fn quote_id_if_needed_keeps_base36_bare_and_quotes_the_rest() {
     assert_eq!(quote_id_if_needed("k3m9x2qp"), "k3m9x2qp");
     assert_eq!(quote_id_if_needed("[legacy]"), "\"[legacy]\"");
     assert_eq!(quote_id_if_needed("has space"), "\"has space\"");
+    // Passes the charset check, but bare it would read back as YAML null.
+    assert_eq!(quote_id_if_needed("null"), "\"null\"");
+    assert_eq!(quote_id_if_needed("NULL"), "\"NULL\"");
 }
 ```
 
@@ -1090,7 +1157,37 @@ Helpers to add beside it: `canonical_task_in_root` (canonicalize + containment +
 
 Run: `cd src-tauri/core && cargo test --lib services::tasks`
 
-- [ ] **Step 5: Full gates + commit**
+- [ ] **Step 5: Recompose a moved child's own parent link**
+
+The markdown fallback's destination is relative to the child's directory, so a
+child moving between Lists at different depths breaks its own link even though
+the parent never moved (Codex P2, PR #77). This is ONE file, and
+`move_task_to_list` already does a post-move content write on exactly it
+(`backfill_task_id`), so recompose there — best-effort/warn-only like the
+backfill, and only written when the link actually differs. (A moved *parent's*
+children stay untouched: that is the unbounded batch write this spec declines.)
+
+```rust
+    #[test]
+    fn moving_a_child_recomposes_its_own_fallback_link() {
+        // Child moves Tasks/Deep/Sub -> Tasks, so the ../ depth changes.
+        let (root, child) = fixture_child_under("Deep/Sub", "Tasks/Project#1/p.md");
+        let landed = move_task_to_list(&root, &child, "", Some("task-id")).unwrap();
+        let out = std::fs::read_to_string(&landed.path).unwrap();
+        assert!(out.contains("](Tasks/Project%231/p.md)"), "got {out}"); // depth 0, no ../
+    }
+
+    #[test]
+    fn moving_a_child_with_an_unchanged_link_writes_nothing_extra() {
+        // A wikilink is vault-relative, so a move cannot stale it — no rewrite.
+        let (root, child) = fixture_child_under("Work", "Tasks/Plain/p.md");
+        let before = std::fs::read_to_string(&child).unwrap();
+        let landed = move_task_to_list(&root, &child, "Home", Some("task-id")).unwrap();
+        assert_eq!(std::fs::read_to_string(&landed.path).unwrap(), before);
+    }
+```
+
+- [ ] **Step 6: Full gates + commit**
 
 ```bash
 cd src-tauri && cargo fmt && cd core && cargo test --lib && cargo clippy --all-targets -- -D warnings
@@ -1289,6 +1386,9 @@ pub struct TaskWriteResult {
     pub id: Option<String>,
     pub parent_id: Option<String>,
     pub parent_link: Option<String>,
+    /// True only when this call turned Task IDs on — the frontend surfaces the
+    /// disclosure note and cannot infer this (design spec §2).
+    pub ids_enabled: bool,
 }
 ```
 
@@ -1430,6 +1530,17 @@ function ambiguousIds(tasks: AggTask[], vaultId: string): Set<string> {
 ```
 
 **On success, write the response's `parentId` onto the selected PARENT row's cached `id` as well as the child's `parentId`** — in the IDs-off default the parent's cached id is `null` until the backend stamps it, and resolution compares ids, so skipping this leaves the new relationship invisible until a reload.
+
+**When the response's `idsEnabled` is true, surface the disclosure note** ("Task IDs were turned on for this vault so subtasks can reference their parent") via `notifications`. The flag cannot be inferred from a returned id, and without the note the user discovers IDs enabled — and locked (Task 6) — with no warning. The same applies to Add subtask in Task 9.
+
+```ts
+it("surfaces the note when the write turned Task IDs on, and not otherwise", async () => {
+  mockIPC((cmd) => (cmd === "update_task" ? { id: null, parentId: "p", parentLink: null, idsEnabled: true } : undefined));
+  const notify = vi.spyOn(useNotificationsStore(), "notify");
+  await useTaskHierarchy(ref(child), ref([parent, child])).setParent("/v1/p.md");
+  expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("Task IDs"), expect.anything());
+});
+```
 
 - [ ] **Step 3: Build `TaskParentPicker.vue`**
 
@@ -1607,7 +1718,7 @@ it("stamps the current task's cached id from the created child (IDs-off)", async
 
 A `SectionHeader` "Subtasks", the progress line, child rows (status checkbox + title button), and an inline "Add subtask" title input (IME-guarded Enter, Escape that `stopPropagation`s — the `TaskViewControls` create-list flow is the model). Every write goes through the shared `busy` guard.
 
-**On a successful add, copy the created child's `parentId` onto the current task's cached `id`** before the hierarchy re-resolves — the parent may have just been stamped by the very call that created the child.
+**On a successful add, copy the created child's `parentId` onto the current task's cached `id`** before the hierarchy re-resolves — the parent may have just been stamped by the very call that created the child. **And surface the same `idsEnabled` disclosure note** the parent-set path shows (Task 8) — Add subtask is the more likely first hierarchy operation, so it is the more important of the two.
 
 - [ ] **Step 4: Watch the LOC cap**
 
@@ -1691,7 +1802,7 @@ git add -A && git commit -m "feat(ui): show subtask counts and parent chips in t
 **Files:**
 - Modify: `AGENTS.md`, `CONTEXT.md`, `docs/prds/task-management.md`, `docs/use-cases/per-vault-task-list.md`, `docs/Gaps.md`
 
-- [ ] **Step 1: AGENTS.md** — in the tasks-domain section, document the two keys, the authoritative-id/navigational-link split, the validate→enable→write ordering, the ID-config lock, and ambiguous-id handling. Update the IPC table (`update_task` return, `add_task` parent) and the sanctioned-writes list (the parent write is the surgical field writer, not a new capability).
+- [ ] **Step 1: AGENTS.md** — in the tasks-domain section, document the two keys, the authoritative-id/navigational-link split, the validate→enable→write ordering, the ID-config lock, ambiguous-id and cyclic-edge handling, the strict-guard-vs-lenient-view read split, and that `move_task_to_list` now recomposes the landed child's own parent link. Update the IPC table (`update_task` return, `add_task` parent) and the sanctioned-writes list (the parent write is the surgical field writer, not a new capability).
 
 - [ ] **Step 2: CONTEXT.md** — add **Parent Task** and **Subtask** to the ubiquitous language, both in the Task-document sense.
 
