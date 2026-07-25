@@ -26,9 +26,20 @@ export function useTaskDetailTaskSet(task: Ref<AggTask>) {
       // reads those fields back off THIS array — a clone with the same path
       // would silently desync, leaving the just-written relationship
       // invisible until the next reload even though the write succeeded.
-      allTasks.value = items.map((t) =>
-        t.path === task.value.path ? task.value : { ...t, vaultId: task.value.vaultId, vaultName: "" },
-      );
+      // Identity alone isn't the whole fix, though: THIS reload only ever
+      // runs (mount aside) right after a write that bootstrapped Task IDs for
+      // the whole vault, precisely because `task.value` is stale — it still
+      // carries its pre-write id/parentId/parentLink. Keeping the old object
+      // AS-IS would preserve identity while re-freezing the very staleness
+      // this reload exists to clear. So the fresh DTO's fields are adopted
+      // onto `task.value` IN PLACE (mutate, never replace — Object.assign
+      // leaves any property absent from its source untouched, so vaultId/
+      // vaultName — AggTask-only, absent on the TaskItem DTO — survive).
+      allTasks.value = items.map((t) => {
+        if (t.path !== task.value.path) return { ...t, vaultId: task.value.vaultId, vaultName: "" };
+        Object.assign(task.value, t);
+        return task.value;
+      });
     } catch (e) {
       logWarning(`task detail: could not load the task set: ${String(e)}`);
     }

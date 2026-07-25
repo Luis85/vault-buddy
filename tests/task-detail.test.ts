@@ -1067,6 +1067,48 @@ describe("TaskDetail.vue Parent row", () => {
     }
   });
 
+  it("adopts the bootstrap write's fresh ids so the Parent row resolves without a remount", async () => {
+    // The headline path of the whole subtasks slice: a vault that starts with
+    // Task IDs OFF (every fixture row's id is null, the task() default) and
+    // the FIRST parent assignment bootstraps ids for the whole vault. On that
+    // path setParent skips its cheap two-row patch and relies entirely on
+    // reload() — this guards that reload() actually ADOPTS the freshly
+    // loaded ids onto the current task instead of discarding them in favor of
+    // the pre-write object it already held (the bug: Parent stayed "No
+    // parent" until the view was remounted even though the write succeeded).
+    const self = task({ vaultId: "v1", path: "/v1/Tasks/self.md", title: "Self" });
+    const other = task({ vaultId: "v1", path: "/v1/Tasks/other.md", title: "Other Task" });
+    let listTasksCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") {
+        listTasksCalls += 1;
+        // First call: the initial mount load — still IDs-off, matching the
+        // vault on disk. Second call: the reload triggered by setParent's
+        // idsEnabled bootstrap — the real backend would have just stamped
+        // both rows on disk by the time this fires.
+        return listTasksCalls === 1
+          ? [self, other]
+          : [
+              { ...self, id: "sid", parentId: "oid" },
+              { ...other, id: "oid" },
+            ];
+      }
+      if (cmd === "update_task") {
+        return { id: "sid", parentId: "oid", parentLink: "[[Tasks/other]]", idsEnabled: true };
+      }
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    await wrapper.get(`[data-testid="task-parent-picker-option-${other.path}"]`).trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Other Task");
+  });
+
   it("disables the parent Change/Clear controls while a DIFFERENT detail write is in flight (shared busy guard)", async () => {
     // Same invariant as the composable-level test, checked at the rendered
     // control: Change/Clear must use useTaskDetail's OWN busy ref, not an
