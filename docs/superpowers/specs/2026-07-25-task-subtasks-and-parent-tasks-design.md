@@ -245,10 +245,10 @@ spec's own guarantee that a cycle rejection writes nothing (Codex P2, PR #77).
   enabled flag and is unchanged here. This is an internal read inside
   `set_task_parent`, used only to validate one write.
 
-  With dormant ids read, the pre-stamp check is complete: every recorded edge is
-  visible, and a child that genuinely has no id cannot be any task's recorded
-  parent, so the only remaining self-reference is self-parent — already rejected
-  by path above.
+  The check runs **over paths** (§3), so an id-less task's own outgoing edge is
+  still represented and the check is never skipped for want of an id. With
+  dormant ids read and the graph keyed on paths, every recorded edge is visible
+  and the pre-stamp check is complete.
 
 **Phase 2 — enable (idempotent, additive):** if IDs are off, enable them (a
 `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
@@ -268,15 +268,33 @@ change is never silent.
 2. **The child** — the same call that writes its `parent-id`/`parent` passes
    `ensure_id`, so a legacy child picks up its own id in the same write.
 
-**On transactionality.** Phases 2–3 are three separate writes and this app has no
-journal, so they are not atomic; the ordering is chosen instead so that **every
-partial state is benign and self-correcting**. Enabling IDs and stamping an id
-are both additive and idempotent — exactly what any later edit would do anyway —
-and the one meaningful write, the child's pair, comes last. A failure or crash
-mid-sequence can therefore leave an enabled flag and/or a stamped parent id, but
-it can **never** leave a `parent-id` that no task answers to. Claiming true
-transactionality here would be dishonest; guaranteeing no dangling reference is
-both achievable and the property that actually matters.
+**Phases 2–3 run under one `ConfigWriteLock`, held across both.** A concurrent
+`set_task_id_config` would otherwise interleave: it could scan, see no parent
+links yet, allow a disable or property re-point, and commit it while this
+assignment is still mid-flight — orphaning the new hierarchy the instant it is
+written. Serializing only phase 2's config read-modify-write is not enough, and
+an assignment that finds IDs *already enabled* would not take the lock at all
+(Codex P2, PR #77). So `set_task_parent` acquires the lock once, before phase 2,
+and holds it through the child's write; `set_task_id_config` holds the same lock
+across **both** its parent-link scan and its write (§2a), which makes the two
+mutually exclusive in either interleaving.
+
+**Implementation note — do not re-acquire.** The lock is not reentrant, so the
+enable step inside the held scope must be a `*_locked` helper that performs the
+read-modify-write *without* taking the lock again; a nested acquire would
+self-deadlock. This briefly serializes unrelated config writes (capture settings
+and the like) for the duration of two small task-file writes — an accepted,
+bounded cost for closing the race.
+
+**On transactionality.** Phases 2–3 are still three separate writes and this app
+has no journal, so they are not atomic even under the lock; the ordering is
+chosen so that **every partial state is benign and self-correcting**. Enabling
+IDs and stamping an id are both additive and idempotent — exactly what any later
+edit would do anyway — and the one meaningful write, the child's pair, comes
+last. A failure or crash mid-sequence can therefore leave an enabled flag and/or
+a stamped parent id, but it can **never** leave a `parent-id` that no task
+answers to. Claiming true transactionality here would be dishonest; guaranteeing
+no dangling reference is both achievable and the property that actually matters.
 
 ### 2a. The ID configuration is locked while hierarchies exist
 
@@ -297,7 +315,10 @@ guard must too).
 
 `set_task_id_config` therefore **refuses any change to the vault's ID
 configuration — the property name or the enabled flag — while the vault has tasks
-carrying `parent-id`**, with an inline error naming the count and the remedy.
+carrying `parent-id`**, with an inline error naming the count and the remedy. It
+holds the `ConfigWriteLock` across **both** the parent-link scan and the write,
+so a concurrent `set_task_parent` (which holds the same lock through its phases
+2–3, §2) cannot slip a new hierarchy in between this scan and its commit.
 Rationale, weighed against the alternatives:
 
 - **Auto-migrating** (rewriting every task's id property and every reference) is
@@ -322,26 +343,42 @@ the tracked future option in Gaps if this ever proves too strict in practice.
 All of it is pure and Linux-testable, in a new `core/src/tasks/hierarchy.rs`:
 
 ```rust
-/// Maps a task's own id -> its parent's id, for ONE vault's tasks. Tasks with
-/// no id or no parent-id contribute no entry, and an id carried by MORE THAN
-/// ONE task is omitted entirely (see "Ambiguous ids" below).
-pub type ParentIndex<'a> = std::collections::HashMap<&'a str, &'a str>;
+/// Child PATH -> parent PATH, for ONE vault's tasks. Keyed on paths, with the
+/// edges resolved THROUGH ids (each task's `parent-id` is looked up against the
+/// set's own ids). An id carried by more than one task resolves to nothing (see
+/// "Ambiguous ids" below).
+pub type ParentIndex<'a> = std::collections::HashMap<&'a Path, &'a Path>;
 
 pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_>;
 
 /// Ids carried by more than one task in the set — ambiguous, so unusable as a
-/// parent reference. Callers surface these; the index omits them.
+/// parent reference. Callers surface these; the index resolves no edge to them.
 pub fn ambiguous_ids(tasks: &[TaskItem]) -> std::collections::HashSet<&str>;
 
-/// Ancestor ids of `start`, nearest first, EXCLUDING `start` itself. Bounded by
-/// a visited set so a pre-existing hand-authored cycle terminates instead of
+/// Ancestor paths of `start`, nearest first, EXCLUDING `start` itself. Bounded
+/// by a visited set so a pre-existing hand-authored cycle terminates instead of
 /// looping forever.
-pub fn ancestors<'a>(index: &ParentIndex<'a>, start: &'a str) -> Vec<&'a str>;
+pub fn ancestors<'a>(index: &ParentIndex<'a>, start: &'a Path) -> Vec<&'a Path>;
 
 /// True when making `parent` the parent of `child` would create a cycle:
 /// `parent == child`, or `child` is an ancestor of `parent`.
-pub fn would_create_cycle(index: &ParentIndex<'_>, child: &str, parent: &str) -> bool;
+pub fn would_create_cycle(index: &ParentIndex<'_>, child: &Path, parent: &Path) -> bool;
 ```
+
+**Why the graph is keyed on paths, not ids.** Ids are how an edge is *recorded*
+on disk, but they are not a total addressing scheme: a task can lack an id while
+still naming a parent. Consider a hand-authored or legacy `P` with no id of its
+own but carrying `parent-id: c`, alongside `C(id: c)`. An id-keyed index — keyed
+on each task's *own* id — would drop P's outgoing edge entirely, and a cycle
+check would additionally be *skipped* for want of a parent id. Making P the
+parent of C would then pass, and phase 3 would stamp P and write `C.parent-id =
+P` — closing a P↔C cycle the check had just called clean (Codex P2, PR #77).
+
+Every task has a path, so a path-keyed graph represents every node — id-less
+ones included — and resolving each `parent-id` through the id→path map keeps
+ids as what they are: the on-disk encoding of an edge, not the identity of a
+node. Lacking an id only means a task cannot be *referenced* as a parent; it
+never means the task has no parent of its own.
 
 `would_create_cycle` is the gate `set_task_parent` consults before writing. The
 bounded walk matters twice: the vault is user-editable, so a cycle can already
@@ -552,6 +589,9 @@ with the fallback's LABEL backslash-escaping `\`, `[`, `]` in the parent title**
 terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
 unresolvable ids; **`ambiguous_ids` detecting a duplicated own-id, `parent_index`
 omitting it, and a cycle walk therefore never following a collapsed edge**;
+**an ID-LESS task's outgoing edge still present in the path-keyed index — the
+`P(no id, parent-id: c)` + `C(id: c)` case, where making P the parent of C must
+be refused as a cycle rather than skipped for want of a parent id**;
 `render_task` with and without a parent (byte-identical to today when absent);
 duplicate preserving the parent pair.
 
@@ -567,7 +607,11 @@ IDs still disabled and NO id stamped on either task** — the regression that
 proves validation precedes every side effect. **Dormant ids (§2): with IDs
 disabled but hand-authored `A(id=a, parent-id=b)` / `B(id=b)` on disk, making A
 the parent of B is REFUSED as a cycle** — the regression proving validation reads
-the id property even while generation is off.
+the id property even while generation is off. **Lock scope: `set_task_parent`
+holds the `ConfigWriteLock` across phases 2–3 and `set_task_id_config` holds it
+across scan-and-write, so the two serialize in either interleaving — and the
+enable step inside the held scope must NOT re-acquire it (a nested acquire
+self-deadlocks; assert the happy path completes rather than hanging).**
 
 **Frontend (Vitest):** parent chip navigation; the picker sending a **path**
 (and working with no ids surfaced); picker disabling cycle-invalid options when
