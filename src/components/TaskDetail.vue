@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, onMounted, ref, toRef } from "vue";
+import { computed, nextTick, onMounted, ref, toRef } from "vue";
 
 import { useTaskDetail } from "../composables/useTaskDetail";
 import { logWarning } from "../logging";
@@ -17,6 +17,13 @@ import TaskListPicker from "./TaskListPicker.vue";
 const props = defineProps<{ task: AggTask }>();
 const taskRef = toRef(props, "task");
 const { busy, save, remove, duplicate, openInObsidian } = useTaskDetail(taskRef);
+
+// The title trigger in the Tasks list unmounts when this surface opens, so
+// keyboard focus would fall back to <body> and a screen-reader user would get
+// no signal of the view change. Focus the labelled region on mount (NOT the
+// title input — that invites an accidental edit) so focus stays in-panel and
+// the surface is announced. Mirrors Search.vue's on-mount focus.
+const rootEl = ref<HTMLElement | null>(null);
 
 const normPriority = (p: string | null) => (p === "high" || p === "low" ? p : "normal");
 
@@ -36,6 +43,7 @@ const allLists = ref<string[]>([]);
 const listOrder = ref<string[]>([]);
 const archivedLists = ref<string[]>([]);
 onMounted(async () => {
+  rootEl.value?.focus();
   try {
     const [all, cfg] = await Promise.all([
       invoke<string[]>("list_task_lists", { id: props.task.vaultId }),
@@ -97,10 +105,19 @@ async function onSave() {
 // Escape bubbles to the panel's own close handler like every other view).
 const confirming = ref(false);
 const confirmBtn = ref<HTMLButtonElement | null>(null);
+const deleteBtn = ref<HTMLButtonElement | null>(null);
 async function openConfirm() {
   confirming.value = true;
   await new Promise((r) => setTimeout(r));
   confirmBtn.value?.focus();
+}
+// Closing the confirm unmounts the confirm cluster; return focus to the Delete
+// trigger it came from rather than dropping it to <body> (the GAP-27 pattern
+// TaskScheduleMenu follows). Shared by Cancel and the Escape path.
+async function cancelConfirm() {
+  confirming.value = false;
+  await nextTick();
+  deleteBtn.value?.focus();
 }
 function onDeleteKeydown(e: KeyboardEvent) {
   // Only swallow Escape while the confirm is OPEN. When it is closed, let Escape
@@ -112,14 +129,18 @@ function onDeleteKeydown(e: KeyboardEvent) {
     // Don't cancel the warning mid-delete: the unlink is already in flight and
     // can't be undone, so keep the confirmation up. The disabled Cancel button
     // blocks the mouse path; this blocks the keyboard path (Codex P2, PR #76).
-    if (!busy.value) confirming.value = false;
+    if (!busy.value) void cancelConfirm();
   }
 }
 </script>
 
 <template>
   <div
-    class="flex flex-col gap-3 text-fg"
+    ref="rootEl"
+    role="region"
+    aria-label="Task detail"
+    tabindex="-1"
+    class="flex flex-col gap-3 text-fg focus:outline-none"
     @keydown="onDeleteKeydown"
   >
     <input
@@ -197,43 +218,24 @@ function onDeleteKeydown(e: KeyboardEvent) {
       />
     </div>
 
+    <!-- While confirming a permanent delete the whole row BECOMES the confirm:
+         Save/Open/Duplicate are hidden so the only choices are Cancel and the
+         irreversible Delete — a focused confirm, not one buried among still-
+         clickable verbs, and no six-control row to crowd/wrap on the compact
+         panel (frontend review, PR #76). -->
     <div class="flex items-center gap-2 pt-1">
-      <button
-        type="button"
-        data-testid="task-detail-save"
-        :disabled="!titleValid || !dirty || busy"
-        class="cursor-pointer rounded-control bg-accent-strong/80 px-3 py-1 text-xs font-semibold text-white hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
-        @click="onSave"
-      >
-        Save
-      </button>
-      <button
-        type="button"
-        data-testid="task-detail-open"
-        :disabled="busy"
-        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
-        @click="openInObsidian"
-      >
-        Open in Obsidian
-      </button>
-      <button
-        type="button"
-        data-testid="task-detail-duplicate"
-        :disabled="busy"
-        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
-        @click="duplicate"
-      >
-        Duplicate
-      </button>
-      <div class="ml-auto flex items-center gap-1">
-        <template v-if="confirming">
-          <span class="text-micro text-fg-muted">Delete permanently?</span>
+      <template v-if="confirming">
+        <span
+          id="task-detail-delete-prompt"
+          class="text-xs text-danger-fg"
+        >Delete permanently? This can't be undone.</span>
+        <div class="ml-auto flex items-center gap-1">
           <button
             type="button"
             data-testid="task-detail-delete-cancel"
             :disabled="busy"
             class="cursor-pointer rounded-control px-2 py-1 text-xs text-fg-muted hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
-            @click="confirming = false"
+            @click="cancelConfirm"
           >
             Cancel
           </button>
@@ -242,23 +244,56 @@ function onDeleteKeydown(e: KeyboardEvent) {
             type="button"
             data-testid="task-detail-delete-confirm"
             :disabled="busy"
+            aria-label="Delete permanently"
+            aria-describedby="task-detail-delete-prompt"
             class="cursor-pointer rounded-control bg-danger/80 px-2 py-1 text-xs font-semibold text-danger-fg hover:bg-danger focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50"
             @click="remove"
           >
+            {{ busy ? "Deleting…" : "Delete" }}
+          </button>
+        </div>
+      </template>
+      <template v-else>
+        <button
+          type="button"
+          data-testid="task-detail-save"
+          :disabled="!titleValid || !dirty || busy"
+          class="cursor-pointer rounded-control bg-accent-strong/80 px-3 py-1 text-xs font-semibold text-white hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+          @click="onSave"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          data-testid="task-detail-open"
+          :disabled="busy"
+          class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+          @click="openInObsidian"
+        >
+          Open in Obsidian
+        </button>
+        <button
+          type="button"
+          data-testid="task-detail-duplicate"
+          :disabled="busy"
+          class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+          @click="duplicate"
+        >
+          Duplicate
+        </button>
+        <div class="ml-auto">
+          <button
+            ref="deleteBtn"
+            type="button"
+            data-testid="task-detail-delete"
+            :disabled="busy"
+            class="cursor-pointer rounded-control border border-danger/40 px-3 py-1 text-xs text-danger-fg hover:bg-danger/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
+            @click="openConfirm"
+          >
             Delete
           </button>
-        </template>
-        <button
-          v-else
-          type="button"
-          data-testid="task-detail-delete"
-          :disabled="busy"
-          class="cursor-pointer rounded-control border border-danger/40 px-3 py-1 text-xs text-danger-fg hover:bg-danger/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
-          @click="openConfirm"
-        >
-          Delete
-        </button>
-      </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>

@@ -709,4 +709,95 @@ describe("TaskDetail.vue", () => {
     // listOrder first (Zebra, Middle), then the unordered rest alphabetically.
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Zebra", "Middle", "Alpha"]);
   });
+
+  it("moves focus into the labelled region on mount (keeps keyboard focus in-panel)", async () => {
+    // The list's title trigger unmounts when this opens, so without this focus
+    // falls to <body>: a keyboard user restarts from the panel top and a screen
+    // reader announces nothing (frontend review, PR #76).
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
+    try {
+      await new Promise((r) => setTimeout(r));
+      const root = wrapper.get('[aria-label="Task detail"]');
+      expect(root.attributes("role")).toBe("region");
+      expect(root.attributes("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(root.element); // focus landed in-panel, not on <body>
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("hides Save/Open/Duplicate while the delete confirm is open (a focused confirm)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.find('[data-testid="task-detail-save"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+    // Confirming → the verbs are gone; only Cancel + the irreversible Delete remain.
+    expect(wrapper.find('[data-testid="task-detail-save"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="task-detail-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="task-detail-duplicate"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(true);
+  });
+
+  it("labels the confirm distinctly and restores focus to the trigger on cancel", async () => {
+    // The confirm's accessible name must differ from the "Delete" trigger the
+    // user just pressed, and cancelling must return focus to that trigger rather
+    // than drop it to <body> (frontend review, PR #76).
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() }, attachTo: document.body });
+    try {
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+      expect(wrapper.get('[data-testid="task-detail-delete-confirm"]').attributes("aria-label")).toBe(
+        "Delete permanently",
+      );
+      await wrapper.get('[data-testid="task-detail-delete-cancel"]').trigger("click");
+      await new Promise((r) => setTimeout(r)); // cancelConfirm awaits nextTick before focusing
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="task-detail-delete"]').element);
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("shows a Deleting… label on the confirm while the unlink is in flight", async () => {
+    let resolveDelete: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "delete_task")
+        return new Promise<void>((r) => {
+          resolveDelete = () => r();
+        });
+      return undefined;
+    });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    useVaultsStore().view = "taskDetail";
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+    await wrapper.get('[data-testid="task-detail-delete-confirm"]').trigger("click"); // slow delete
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-delete-confirm"]').text()).toBe("Deleting…");
+    resolveDelete?.();
+    await new Promise((r) => setTimeout(r));
+  });
 });
