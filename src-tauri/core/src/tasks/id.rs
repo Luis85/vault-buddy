@@ -52,6 +52,15 @@ pub fn is_valid_id_property(name: &str) -> bool {
 /// NUMBER by Obsidian/Dataview while the source id is still a string, so
 /// equality silently stops matching). Every GENERATED id is letter-first base36,
 /// so the common case still writes bare (Codex P2 x3, PR #77).
+///
+/// The quoting encoder is `yaml_quote_multiline`, NOT `yaml_quote`, because it
+/// must be the exact inverse of the decoder that produced the value: the strict
+/// reader decodes through `yaml_unquote_multiline`, so `task-id: "a\nb"` yields a
+/// REAL newline, and `yaml_quote` flattens `\n`/`\r` back to spaces. That
+/// round-trip loss is silent and fatal here — `parent-id: "a b"` no longer equals
+/// the parent's own id, orphaning the relationship the instant it is written.
+/// The two encoders agree on every value that has no control characters, so this
+/// changes nothing for ordinary ids (Codex P2, PR #77).
 pub fn quote_id_if_needed(id: &str) -> String {
     let plain_charset = !id.is_empty()
         && id
@@ -65,7 +74,7 @@ pub fn quote_id_if_needed(id: &str) -> String {
     if plain_charset && letter_first && !keyword {
         id.to_string()
     } else {
-        crate::yaml_scalar::yaml_quote(id)
+        crate::yaml_scalar::yaml_quote_multiline(id)
     }
 }
 
@@ -92,6 +101,36 @@ pub fn id_property_for_generation(enabled: bool, property: &str) -> Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quote_id_if_needed_round_trips_a_value_through_the_strict_reader() {
+        // The encoder must be the exact inverse of the decoder that produced the
+        // value, or a preserved id changes meaning on its way into `parent-id`.
+        // `yaml_quote` FLATTENS \n and \r to spaces, while the reader
+        // (`strict_scalar_field` -> `yaml_unquote_multiline`) decodes them to the
+        // real control characters — so `task-id: "a\nb"` was re-emitted as
+        // `parent-id: "a b"`, which no longer equals the parent's own id and
+        // orphans the relationship the instant it is created (Codex P2, PR #77).
+        let doc = |v: &str| format!("---\ntype: Task\ntask-id: {v}\n---\n");
+        for encoded_on_disk in [
+            r#""a\nb""#,   // newline
+            r#""a\rb""#,   // carriage return
+            r#""a\tb""#,   // tab
+            r#""a\x1bb""#, // ESC — a C0 control the encoder must not emit raw
+        ] {
+            let decoded =
+                super::super::parse::strict_scalar_field(&doc(encoded_on_disk), "task-id", false)
+                    .expect("the reader accepts a single-line double-quoted scalar");
+            let re_encoded = quote_id_if_needed(&decoded);
+            let re_decoded =
+                super::super::parse::strict_scalar_field(&doc(&re_encoded), "task-id", false)
+                    .expect("what we write must be readable again");
+            assert_eq!(
+                re_decoded, decoded,
+                "{encoded_on_disk} must survive decode -> encode -> decode unchanged"
+            );
+        }
+    }
 
     #[test]
     fn quote_id_if_needed_keeps_generated_ids_bare_and_quotes_typed_tokens() {
