@@ -147,6 +147,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         set_task_status(&root, &p, "archived").unwrap();
@@ -170,6 +171,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -227,6 +229,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(!std::fs::read_to_string(&p).unwrap().contains("scheduled"));
@@ -260,6 +263,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -304,6 +308,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -354,6 +359,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
@@ -395,6 +401,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -457,6 +464,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap();
             let content = std::fs::read_to_string(&p).unwrap();
@@ -493,6 +501,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,

@@ -242,6 +242,7 @@ pub fn add_task(
         cfg.task_extra_frontmatter.as_deref(),
         cfg.task_body_template.as_deref(),
         scheduled,
+        None,
     )
     .map_err(|e| format!("Could not create task: {e}"))?;
     Ok(TaskDto {

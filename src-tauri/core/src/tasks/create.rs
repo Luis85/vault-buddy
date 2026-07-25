@@ -44,8 +44,14 @@ pub fn task_basename(title: &str, today: &str) -> String {
 /// bare `due:` is never emitted. `tags` renders as a single canonical flow
 /// line (`tags: [a, b]`) after `due`/`priority`, only when non-empty. When
 /// `task_id` is `Some((property, id))`, a `<property>: <id>` line is written
-/// immediately after `created:`. `scheduled` (the last param) is emitted
-/// after `due`, only when present.
+/// immediately after `created:`. `scheduled` is emitted after `due`, only
+/// when present. `parent` (the last param) is `Some((parent_id, link))` —
+/// both already composed/validated by the caller — and writes a
+/// `parent-id:`/`parent:` pair immediately after the `task_id` line (with
+/// identity, before the widened `due`/`scheduled`/`priority`/`tags` fields);
+/// `parent-id` is charset-safe base36 like `task_id` and needs no quoting,
+/// while `parent` (an arbitrary wikilink/markdown link) is YAML-quoted.
+/// Absent → no lines, byte-identical to today's output.
 ///
 /// `extra_frontmatter` is `{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`
 /// rendered via `render_extra_frontmatter`, which resolves the placeholders,
@@ -68,6 +74,7 @@ pub fn render_task(
     extra_frontmatter: Option<&str>,
     body_template: Option<&str>,
     scheduled: Option<&str>,
+    parent: Option<(&str, &str)>,
 ) -> String {
     let mut extra = String::new();
     // The generated ID (when enabled) sits right after `created`, before the
@@ -75,6 +82,13 @@ pub fn render_task(
     // validated on save, so neither needs YAML quoting.
     if let Some((prop, id)) = task_id {
         extra.push_str(&format!("{prop}: {id}\n"));
+    }
+    if let Some((pid, link)) = parent {
+        extra.push_str(&format!("parent-id: {pid}\n"));
+        extra.push_str(&format!(
+            "parent: {}\n",
+            crate::yaml_scalar::yaml_quote(link)
+        ));
     }
     if let Some(d) = due {
         extra.push_str(&format!("due: {d}\n"));
@@ -127,7 +141,10 @@ pub fn render_task(
 /// overwrite an existing file — a name clash takes the ` (N)` suffix instead.
 /// `tags` (already validated by the caller) is threaded through to
 /// `render_task` verbatim. When `task_id` is `Some((property, id))`, a
-/// `<property>: <id>` line is written immediately after `created:`.
+/// `<property>: <id>` line is written immediately after `created:`. `parent`
+/// (the last param) is `Some((parent_id, link))`, already
+/// composed/validated by the caller, and passes straight through to
+/// `render_task` (see there for where it lands).
 /// `extra_frontmatter`/`body_template` pass straight through to `render_task`
 /// (see there for the placeholder-rendering contract).
 #[allow(clippy::too_many_arguments)]
@@ -142,6 +159,7 @@ pub fn create_task(
     extra_frontmatter: Option<&str>,
     body_template: Option<&str>,
     scheduled: Option<&str>,
+    parent: Option<(&str, &str)>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let target = root.join(format!("{}.md", task_basename(title, today)));
@@ -157,6 +175,7 @@ pub fn create_task(
             extra_frontmatter,
             body_template,
             scheduled,
+            parent,
         ),
     )
 }
@@ -210,6 +229,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(
             doc,
@@ -230,6 +250,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(doc.contains("title: \"Ship: v1\"\n"));
     }
@@ -244,6 +265,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -268,6 +290,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(p1.file_name().unwrap(), "2026-07-08-buy-milk.md");
@@ -288,6 +311,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_ne!(p1, p2);
@@ -297,7 +321,18 @@ mod tests {
 
     #[test]
     fn render_includes_due_and_priority_only_when_present() {
-        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None, None);
+        let plain = render_task(
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             plain,
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
@@ -308,6 +343,7 @@ mod tests {
             Some("2026-07-15"),
             Some("high"),
             &[],
+            None,
             None,
             None,
             None,
@@ -329,6 +365,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(plain.contains("due: 2026-07-15\npriority: high\n"));
         assert!(!plain.contains("scheduled"));
@@ -343,6 +380,7 @@ mod tests {
             None,
             None,
             Some("2026-07-20"),
+            None,
         );
         assert!(sched.contains("due: 2026-07-15\nscheduled: 2026-07-20\npriority: high\n"));
         // Scheduled with no due lands right after created.
@@ -356,13 +394,25 @@ mod tests {
             None,
             None,
             Some("2026-07-20"),
+            None,
         );
         assert!(no_due.contains("created: 2026-07-09\nscheduled: 2026-07-20\n---\n"));
     }
 
     #[test]
     fn render_includes_flow_tags_only_when_present() {
-        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None, None);
+        let plain = render_task(
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             plain,
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-09\n---\n\n"
@@ -373,6 +423,7 @@ mod tests {
             Some("2026-07-15"),
             None,
             &["work".to_string(), "home/errands".to_string()],
+            None,
             None,
             None,
             None,
@@ -393,10 +444,22 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(doc.contains("created: 2026-07-09\ntask-id: k3n7p2qz\n"));
         // Absent → byte-identical to the pre-id output (no id line).
-        let plain = render_task("A", "2026-07-09", None, None, &[], None, None, None, None);
+        let plain = render_task(
+            "A",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(!plain.contains("task-id"));
         assert_eq!(
             plain,
@@ -419,6 +482,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(std::fs::read_to_string(&p)
@@ -434,6 +498,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -456,6 +521,7 @@ mod tests {
             None,
             Some("project: Alpha\nstatus: HIJACK"),
             Some("- [ ] {{title}} by {{date}}"),
+            None,
             None,
         );
         assert!(out.contains("project: Alpha"));
@@ -483,6 +549,7 @@ mod tests {
             Some("project: Alpha\nparent-id: fake0000\nparent: \"[[Nope]]\""),
             None,
             None,
+            None,
         );
         assert!(out.contains("project: Alpha"));
         assert!(
@@ -492,6 +559,58 @@ mod tests {
         assert!(
             !out.contains("parent: \"[[Nope]]\""),
             "reserved dropped: {out}"
+        );
+    }
+
+    #[test]
+    fn render_task_writes_the_parent_pair_after_created() {
+        let out = render_task(
+            "Child",
+            "2026-07-25",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            Some(("ab12cd34", "[[Tasks/p]]")),
+        );
+        assert!(out.contains("parent-id: ab12cd34"));
+        assert!(out.contains("parent: \"[[Tasks/p]]\"")); // YAML-quoted
+    }
+
+    #[test]
+    fn render_task_without_a_parent_is_byte_identical_to_today() {
+        // The additive guarantee: a Task with no parent must be unchanged.
+        let with_none = render_task(
+            "T",
+            "2026-07-25",
+            Some("2026-08-01"),
+            Some("high"),
+            &["a".to_string()],
+            Some(("task-id", "aaa11111")),
+            None,
+            None,
+            Some("2026-07-30"),
+            None,
+        );
+        assert!(!with_none.contains("parent"));
+        // NOTE (brief deviation): the task-4 brief's literal here was missing
+        // the trailing blank-body newline. render_task's format string is
+        // `...{extra}---\n\n{body}` — with no body_template the body is "",
+        // so the fence is ALWAYS followed by TWO newlines, never one. Every
+        // other pinned no-body-template test in this file agrees (e.g.
+        // `render_writes_type_task_status_new_quoted_title`,
+        // `task_default_output_is_byte_identical_with_no_template`, and the
+        // `plain` cases in `render_includes_due_and_priority_only_when_present`
+        // / `render_includes_flow_tags_only_when_present` /
+        // `render_writes_the_id_property_after_created_when_present`), all
+        // ending `---\n\n`. Corrected here to match that established,
+        // unchanged format rather than silently redefining it.
+        assert_eq!(
+            with_none,
+            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-25\ntask-id: aaa11111\ndue: 2026-08-01\nscheduled: 2026-07-30\npriority: high\ntags: [a]\n---\n\n"
         );
     }
 }

@@ -574,4 +574,24 @@ mod tests {
         let out_off = std::fs::read_to_string(&off).unwrap();
         assert!(out_off.contains("task-id: {source: jira, ref: ABC-1}"));
     }
+
+    #[test]
+    fn duplicate_task_preserves_the_parent_pair() {
+        // A copy is a SIBLING: identity (title/status/id) resets, the parent
+        // link does not, so the copy stays under the same parent.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("c.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: \"C\"\nparent-id: ab12cd34\nparent: \"[[Tasks/p]]\"\n---\n\nbody\n",
+        )
+        .unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-25", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("parent-id: ab12cd34"));
+        assert!(out.contains("parent: \"[[Tasks/p]]\""));
+        assert!(out.contains("title: \"C (copy)\"")); // identity did reset
+    }
 }
