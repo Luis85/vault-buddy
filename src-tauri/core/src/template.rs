@@ -5,21 +5,9 @@
 //! managed keys, and re-emits Obsidian-compatible mapping lines, so a user's
 //! extra frontmatter can never break the fence or redefine a managed key.
 
+use crate::yaml_scalar::yaml_quote;
 use serde_yaml_ng::{Mapping, Value};
 use std::collections::HashMap;
-
-/// Double-quote a YAML scalar, escaping `\` and `"` and flattening newlines to
-/// spaces. The home for the app's frontmatter quoting: `render_note`/
-/// `render_task`/`render_frontmatter`'s managed fields all use it, and
-/// `capture_note` re-exports it so its existing callers keep the
-/// `capture_note::yaml_quote` path.
-pub fn yaml_quote(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace(['\n', '\r'], " ");
-    format!("\"{escaped}\"")
-}
 
 /// A sentinel wrapping a Private-Use-Area delimiter (U+E000) — a valid YAML
 /// plain-scalar character (YAML c-printable includes U+E000–U+FFFD) that cannot

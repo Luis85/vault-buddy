@@ -5,7 +5,7 @@ import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskEditorPatch, TaskPatch } from "../types";
-import { applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
+import { applyMovedTask, applyScalarFields, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 
 // The per-row write actions of the Tasks view (toggle / archive / open /
 // inline-editor save) plus the busy guard and editing-row state they share.
@@ -97,6 +97,21 @@ export function useTaskActions(opts: {
     }
   }
 
+  // A title click's routing: plain opens the in-panel detail home ("manage
+  // without opening Obsidian"); Ctrl/⌘-click keeps the old muscle memory and
+  // jumps straight to Obsidian, the one additive power-user shortcut.
+  // Ctrl/⌘-click jumps to Obsidian (a read — safe mid-write). A plain click opens
+  // the in-panel detail home, BUT NOT while the row's own write is in flight: a
+  // pending row write (toggle/archive/edit/schedule) holds task.path in `busy`,
+  // and opening Detail spins up a FRESH busy guard that could race it — both
+  // writers replace the WHOLE document, and a late field write can even recreate
+  // a file Detail just deleted (Codex P1, PR #76). The row write is optimistic and
+  // brief, so a click during it simply no-ops and can be retried.
+  function onOpenTask(task: AggTask, ev: MouseEvent) {
+    if (ev.ctrlKey || ev.metaKey) void openInObsidian(task);
+    else if (!isBusy(task.path)) vaultsStore.openTaskDetail(task);
+  }
+
   // Inline editor: one row at a time; opening another row discards unsaved
   // edits in the first (the file is the source of truth, edits are cheap).
   // Keyed on `${bucketKey}:${path}` (not a bare path) so a task rendered in
@@ -120,29 +135,14 @@ export function useTaskActions(opts: {
     editingPath.value = null;
   };
 
-  // due and scheduled apply the identical set/clear shape — single-sourced
-  // here instead of mirrored per field, which had tripped the
-  // complexFunctions CRAP gate (GAP-74).
-  function applyDateField(
-    task: AggTask,
-    patch: TaskPatch,
-    field: "due" | "scheduled",
-    setKey: "due" | "scheduled",
-    clearKey: "clearDue" | "clearScheduled",
-  ) {
-    if (patch[clearKey]) task[field] = null;
-    else if (patch[setKey]) task[field] = patch[setKey]!;
-  }
-
   // Optimistic field save: apply locally (re-sort/re-bucket live), revert +
-  // toast on failure. Returns whether the write landed.
+  // toast on failure. Returns whether the write landed. The set/clear
+  // reflection itself is single-sourced in utils/taskMutations (shared with
+  // useTaskDetail's save) — this had tripped the complexFunctions CRAP gate
+  // (GAP-74) as an inline block before the extraction.
   async function applyFieldPatch(task: AggTask, patch: TaskPatch): Promise<boolean> {
     const before = { title: task.title, due: task.due, scheduled: task.scheduled, priority: task.priority, tags: task.tags };
-    if (patch.title) task.title = patch.title;
-    applyDateField(task, patch, "due", "due", "clearDue");
-    applyDateField(task, patch, "scheduled", "scheduled", "clearScheduled");
-    if (patch.priority) task.priority = patch.priority === "normal" ? null : patch.priority;
-    if (patch.tags !== undefined) task.tags = patch.tags;
+    applyScalarFields(task, patch);
     sortInPlace();
     try {
       // update_task returns the task's current ID (freshly stamped when the
@@ -220,7 +220,7 @@ export function useTaskActions(opts: {
     isBusy,
     toggle,
     archive,
-    openInObsidian,
+    onOpenTask,
     editingKey,
     editingPath,
     rowKey,

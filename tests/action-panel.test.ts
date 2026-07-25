@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
+import TaskDetail from "../src/components/TaskDetail.vue";
 import Tasks from "../src/components/Tasks.vue";
 import UpdateView from "../src/components/UpdateView.vue";
 import { useCaptureStore } from "../src/stores/capture";
@@ -46,6 +47,27 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Update"); // the view title
     expect(wrapper.findComponent(UpdateView).exists()).toBe(true);
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+  });
+
+  it("disables the header Back button while a Task Detail write is in flight", async () => {
+    // Leaving the detail view mid-write would let the write finish off-screen
+    // against a stale, remounted Tasks list — so Back is inert until it settles
+    // (Codex P2, PR #76).
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openTaskDetail({
+      path: "p", title: "T", status: "new", created: "2026-07-01", done: false,
+      due: null, scheduled: null, priority: null, tags: [], list: "", order: null,
+      id: null, description: null, vaultId: "v1", vaultName: "V",
+    });
+    store.taskDetailBusy = true;
+    const wrapper = mount(ActionPanel, { global: { stubs: { TaskDetail: true } } });
+    const back = () => wrapper.find('[data-testid="back-button"]').element as HTMLButtonElement;
+    expect(back().disabled).toBe(true);
+    store.taskDetailBusy = false; // write settled
+    await wrapper.vm.$nextTick();
+    expect(back().disabled).toBe(false);
   });
 
   it("lists each vault with both actions and a count badge", () => {
@@ -621,6 +643,29 @@ describe("ActionPanel", () => {
     await wrapper.get('[data-testid="back-button"]').trigger("click");
     expect(store.view).toBe("list");
     expect(store.pendingImports).toEqual([]);
+  });
+
+  it("routes the taskDetail view to TaskDetail, titled with the task's own title", async () => {
+    // A title click's destination (Task 12) — the header shows the task's
+    // title (not a static label), and the back button returns via store.back().
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openTaskDetail({
+      path: "C:/v/Tasks/t.md", title: "Buy milk", status: "new", created: "2026-07-01",
+      done: false, due: null, scheduled: null, priority: null, tags: [], list: "",
+      order: null, id: null, description: null, vaultId: "d4e5f6", vaultName: "Personal",
+    });
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { TaskDetail: true } },
+    });
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Buy milk");
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    expect(wrapper.findComponent(TaskDetail).exists()).toBe(true);
+    await wrapper.get('[data-testid="back-button"]').trigger("click");
+    expect(store.view).toBe("tasks"); // back() returns to the list it came from
   });
 });
 

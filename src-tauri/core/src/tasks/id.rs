@@ -3,23 +3,6 @@
 //! property, giving tasks a stable identifier for Dataview/links without a
 //! vault scan or a cross-device sequential collision.
 
-/// Reserved frontmatter keys the ID property must never collide with — the
-/// structured task fields the surgical writer and reader own. Using one as
-/// the ID property would let the ID writer clobber a real field.
-// keep in sync with disk.rs::RESERVED_TASK_KEYS
-const RESERVED_TASK_KEYS: &[&str] = &[
-    "type",
-    "status",
-    "title",
-    "created",
-    "due",
-    "scheduled",
-    "priority",
-    "tags",
-    "tag",
-    "order",
-];
-
 /// A short random task ID: 8 base36 characters (`0-9a-z`) from the OS CSPRNG.
 pub fn new_task_id() -> String {
     const ALPHA: &[u8; 26] = b"abcdefghijklmnopqrstuvwxyz";
@@ -48,7 +31,7 @@ pub fn is_valid_id_property(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && !RESERVED_TASK_KEYS.contains(&name.to_ascii_lowercase().as_str())
+        && !super::RESERVED_TASK_KEYS.contains(&name.to_ascii_lowercase().as_str())
 }
 
 /// The frontmatter property a generated id should be written under, or `None`
@@ -104,6 +87,7 @@ mod tests {
         assert_eq!(id_property_for_generation(true, "Status"), None); // case-folded reserved
         assert_eq!(id_property_for_generation(true, ""), None); // empty/invalid charset
         assert_eq!(id_property_for_generation(true, "scheduled"), None); // reserved (do-date)
+        assert_eq!(id_property_for_generation(true, "description"), None); // reserved (detail)
     }
 
     #[test]
@@ -124,6 +108,7 @@ mod tests {
             "tags",
             "tag",
             "order",
+            "description",
         ] {
             assert!(
                 !is_valid_id_property(reserved),

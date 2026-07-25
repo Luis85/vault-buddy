@@ -454,6 +454,8 @@ pub fn run() {
             task_commands::count_open_tasks,
             task_commands::open_task,
             task_commands::update_task,
+            task_commands::delete_task,
+            task_commands::duplicate_task,
             task_commands::list_task_lists,
             task_commands::create_task_list,
             task_commands::move_task_to_list,

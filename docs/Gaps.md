@@ -456,6 +456,120 @@ callers depend on.
   `delete_task_list`'s per-file move re-canonicalizes the root (2N realpath
   calls vs N fsync'd writes — negligible).
 
+### GAP-80 · Low · `delete_task` is a permanent unlink, not a recoverable trash (accepted departure)
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`). The app's first
+destructive vault write removes the task file with `std::fs::remove_file` — an
+irreversible unlink, NOT a move to the OS Recycle Bin or a vault `.trash/`
+folder (Obsidian's own delete convention). It is heavily gated: canonical
+containment, `type: Task` re-validation, a file-identity re-check at unlink
+time (GAP-79), a no-follow symlink refusal, and a two-step hardened confirm in
+the Task Detail surface — so an *accidental* delete takes a deliberate
+confirm-through. But a delete that IS confirmed cannot be undone from within
+the app. **Why Low / accepted:** delete is an explicit, confirmed, single-file
+action the user opts into (unlike a background write), and the guards make a
+stray click safe. **Future refinement:** route deletes to the OS trash (a
+`trash`-style crate) or a vault `.trash/` folder so a confirmed delete stays
+recoverable — the posture Obsidian itself takes — tracked here as the
+follow-up, deliberately out of this increment's scope.
+
+### GAP-81 · Low · A hand-authored multi-line / block / flow `description` reads as empty in Task Detail
+`src-tauri/core/src/tasks/description.rs` (`description_field`). The reader
+supports only SINGLE-LINE scalar forms (plain, single-quoted, double-quoted);
+a block scalar (`description: |` / `>`), a multi-line quoted scalar, and a flow
+collection (`[..]` / `{..}`) all degrade to `None` — deliberately, so the field
+never surfaces a partial/wrong value or a bare `|`/`>` marker. So a task whose
+`description` was hand-authored in one of those forms shows a BLANK description
+in the Task Detail surface. There is no corruption: `set_fields` consumes a
+block scalar / block list / multi-line quoted value whole on the next save (its
+`skip_block_scalar` path), so saving a new description cleanly REPLACES the old
+block rather than orphaning its continuation lines — the original multi-line
+content is simply not displayed, and is replaced on that save. The app only
+ever WRITES escaped single-line scalars (`core::yaml_scalar`). **Why Low:**
+hand-authored multi-line descriptions are rare and the failure mode is "not
+shown / replaced on edit", never broken frontmatter. **Future enhancement:**
+teach `description_field` + the detail editor to round-trip a multi-line
+description (a textarea ↔ a block scalar). **Related payload note:** every
+`list_tasks` row now carries its full `description`, so a vault with long
+descriptions inflates the list payload and the MCP DTO — acceptable for now
+(descriptions are short free text), with a lazy `get_task` command the fallback
+if it ever bites.
+
+### GAP-79 · Low · `delete_task`'s identity re-check leaves an irreducible re-stat→unlink residual (accepted)
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`). The one destructive
+vault write validates a task's bytes + inode identity from a single open handle,
+then re-stats the path (no-follow) immediately before `remove_file` and refuses
+on a symlink or an identity mismatch (`is_different_file`) — so a swap during the
+validation window is caught, not deleted (Codex P1, PR #76). TWO residual windows
+remain, both irreducible in portable `std`: (a) between `symlink_metadata(path)`
+and `canonicalize(path)`, a swap of the clicked leaf to a symlink pointing at
+ANOTHER valid task would let `canonicalize` resolve to that target (the identity
+re-check is self-consistent on the target, so it passes) — closing this
+deterministically needs `O_NOFOLLOW` on the ORIGINAL path (libc FFI, Unix-only)
+rather than a canonical re-open; (b) between the pre-unlink re-stat and
+`remove_file` itself, since `std` has no unlink-by-handle (`funlinkat` /
+`NtCreateFile`+`FILE_DELETE_ON_CLOSE`). **Why Low / accepted:** the whole of
+`delete_task` runs at machine speed with NO user pause inside it — the delete
+confirm happens client-side, before the IPC call — so both windows are
+microseconds on a single-user desktop with no adversarial local process racing
+the buddy; the earlier deterministic confirm-time symlink attack is already
+closed (GAP is not that). A fully-atomic unlink (platform FFI: `funlinkat` on
+Unix, delete-on-close handle on Windows) is the tracked fix if the exposure ever
+proves real; the identity re-verification is the proportionate portable close.
+
+### GAP-78 · Low · A duplicated/edited Task keeps a SECOND case-variant ID key when the source has two
+`src-tauri/core/src/tasks/disk.rs` (`duplicate_task` and `update_task_fields`
+id-key resolution) via `parse::frontmatter_scalar_ci`, which returns only the
+FIRST case-insensitive match. If a source task carries two physically distinct
+frontmatter keys that differ only in case AND both match the configured id
+property name (e.g. a legacy `Task-ID: aaa` line followed by `task-id: bbb`),
+the id-stamp/strip path rewrites or removes only the first: with IDs enabled the
+duplicate/edit gets a fresh id on `Task-ID:` while `task-id: bbb` survives (two
+id-ish keys; Obsidian may resolve the stale one → two tasks sharing a stable
+identity); with IDs disabled a strip leaves the second key behind (incomplete
+strip). **Why Low / document-only:** the trigger is pathological — the app
+writes exactly ONE id key in its configured casing and Obsidian's Properties UI
+normalizes keys, so two case-variant id keys only arise from hand-authoring or
+an external tool that violates the "one id property per task" invariant at the
+source. **Why not fix only `duplicate_task`:** the single-occurrence
+`frontmatter_scalar_ci` + `set_fields` assumption is IDENTICAL in the
+already-shipped `update_task_fields` edit path (and the `ensure_id`/backfill
+sites that share it), so a fix belongs across all of them at once — a shared
+"collect every case-insensitive occurrence, rewrite one + remove the rest"
+helper — not bolted onto the newest write path in isolation. Codex (P2, PR #76)
+raised it against `duplicate_task`; documenting it here (consistent with the
+GAP-68/GAP-77 id-edge precedent) is the proportionate call, with the shared
+multi-occurrence helper the tracked fix if the exposure ever proves real.
+
+### GAP-77 · Low · Reserving `description` disables ID generation for a (formerly settable) `description`-as-id-property config
+`src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
+`id_property_for_generation`). The Task Detail increment
+(docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md)
+adds `description` as a managed frontmatter field and reserves it in the shared
+`RESERVED_TASK_KEYS` set (so BOTH the id-property validator and the template
+filter refuse it — see the closing note). Before this increment `is_valid_id_property`
+did NOT reserve `description`, so the supported `set_task_id_config` command
+would ACCEPT `description` as a task-id property. A vault that had
+`task_id_enabled` ON and its id property set to the literal `description`
+therefore has on-disk tasks carrying `description: <stable-id>`.
+**Consequence:** reserving `description` makes `id_property_for_generation`
+re-validate and turn id generation OFF for that vault (logged); `list_tasks`
+stops surfacing the stored ids (the property is no longer read) and
+creates/edits stop stamping, while the stored config still reads `enabled`.
+This is the exact shape of GAP-68 (`scheduled`-as-id). **Why Low / document-only:**
+the exposure is near-zero (it needs the id property *named* the literal
+`description`, a nonsensical choice for a stable-handle property), and the
+remedy — re-point the id property to a non-reserved name — is a one-line
+settings change. As with GAP-68 we deliberately do NOT auto-migrate (rewriting
+every task's id property is the mass vault mutation this app forbids) nor
+hard-block (punishing the overwhelmingly common vaults for a config essentially
+no one has). Codex (PR #76) re-raised migrate/block; document-only is the
+proportionate, precedent-consistent call. A non-mutating startup detection +
+warning is the tracked future option if the exposure ever proves real.
+`description` is reserved in the template set too (it is a managed detail-view
+field, like `due`/`status`), so a task template cannot seed it — which also
+avoids a template block-scalar `description` orphaning on the first detail-view
+save (Codex P2, PR #76).
+
 ### GAP-68 · Low · A do-date write can overwrite a stable Task ID in the (formerly settable) `scheduled`-as-id-property config
 `src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
 `id_property_for_generation`) and `src-tauri/core/src/tasks/disk.rs`
@@ -579,6 +693,24 @@ was closed out in a later pass: it now logs the path via `log::warn!` and
 returns the same path-free copy as `start_capture_blocking`.
 
 ## 4. Frontend defects & races
+
+### GAP-82 · Low · Task Detail (like every panel sub-view) loses unsaved edits on panel auto-hide + reopen
+`src/components/TaskDetail.vue` + the `panel-shown` refresh
+(`src/stores/vaults.ts` `refresh()` → `showList()`). Editing a field in the
+Task Detail surface and then clicking outside the panel — or switching
+applications — triggers the focus-out auto-hide; reopening the panel emits
+`panel-shown`, whose `refresh()` defaults to `showList()` and unmounts
+`TaskDetail`, discarding its component-local draft + `dirty` state without
+warning. This is NOT specific to Task Detail: the panel keeps no history or
+draft state, so EVERY sub-view (the inline `TaskEditor`, `RecordMode` config,
+the import picker, …) resets to the list on reopen — the detail view simply has
+a larger draft to lose. **Why Low:** the reopen-resets-to-list behavior is
+long-standing and consistent; the user's edits are one explicit Save away, and
+the surface makes Save prominent. **Future work (cross-cutting):** persist a
+dirty draft across reopen, or confirm / autosave before a dirty exit — an
+app-wide panel concern (it should cover the inline editor too), deliberately
+not bolted onto TaskDetail alone. Codex raised it (P2, PR #76) against Task
+Detail specifically.
 
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
@@ -1144,24 +1276,19 @@ plus the still-bespoke favorite star.
   `for_each_dated_capture_mp3` and a shared temp-open helper — the repo's
   own `vault_walk.rs` header warns about exactly this drift class.
 
-### GAP-70 · Low · `RESERVED_TASK_KEYS` is duplicated verbatim across `disk.rs` and `id.rs`
-`src-tauri/core/src/tasks/disk.rs:48-59` and
-`src-tauri/core/src/tasks/id.rs:10-21` each define their own `const
-RESERVED_TASK_KEYS: &[&str]`, both currently the identical ten entries
-(`type`/`status`/`title`/`created`/`due`/`scheduled`/`priority`/`tags`/
-`tag`/`order`). The do-date increment added `scheduled` to BOTH by hand;
-today the only thing keeping them aligned is a pair of `// keep in sync
-with <other file>::RESERVED_TASK_KEYS` comments — a reviewer convention,
-not a compiler-enforced one. A future widened field (the next
-`due`/`scheduled`-shaped addition) that updates one list and forgets the
-other reopens exactly the class of edge GAP-68 documents: an id-property
-validator that doesn't know about a new reserved key would let it be
-configured as a task-id property, and the template-frontmatter filter that
-doesn't know about it would let a user's extra-frontmatter template
-redefine it. **Fix:** hoist one `pub(crate) const RESERVED_TASK_KEYS` (or a
-shared function) into a common module both `disk.rs` and `id.rs` import —
-mechanical, no behavior change; deferred here since the do-date increment's
-own reciprocal comments keep the two lists in sync today.
+### GAP-70 · ~~Low~~ FIXED 2026-07-25 · `RESERVED_TASK_KEYS` was duplicated verbatim across two guard sites
+Two `const RESERVED_TASK_KEYS: &[&str]` arrays (the template-frontmatter
+filter and the id-property validator) were kept aligned only by a pair of
+`// keep in sync with <other file>::RESERVED_TASK_KEYS` comments — a reviewer
+convention, not a compiler-enforced one. The Task Detail increment's move of
+one array (`disk.rs`→`create.rs`) left the other's sync comment pointing at a
+file that no longer held the const, half-breaking the only guard (Codex, PR
+#76). **Fixed:** hoisted a single `const RESERVED_TASK_KEYS` into
+`src-tauri/core/src/tasks/mod.rs`, referenced as `super::RESERVED_TASK_KEYS`
+by both `create::render_task` (template filter) and `id::is_valid_id_property`
+(id-property validator) — the two can no longer drift, and the id.rs tests
+that iterate every reserved key guard against a silent removal. Mechanical, no
+behavior change.
 
 ### GAP-72 · Low · `due` stays an unfiltered raw scalar in `TaskItem`/`TaskDto`; `scheduled` is core-validated at the same boundary
 `src-tauri/core/src/tasks/list.rs` (`collect_task_file`). Line 129,

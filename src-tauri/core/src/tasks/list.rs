@@ -3,7 +3,7 @@
 //! is deliberately the frontend's job, not the sort's).
 
 use super::doc::is_task;
-use super::parse::{is_valid_due, note_tags, scalar_field, scalar_field_ci};
+use super::parse::{is_valid_due, note_tags, scalar_field, scalar_id_ci};
 use crate::capture_note::note_field;
 use std::path::{Path, PathBuf};
 
@@ -33,6 +33,9 @@ pub struct TaskItem {
     /// the vault has task IDs enabled; `None` when the feature is off (the
     /// property is never read) or the file simply has no value there.
     pub id: Option<String>,
+    /// Free-text detail, decoded from the `description:` frontmatter scalar
+    /// (multi-line, `#`-tolerant). `None` when absent/empty.
+    pub description: Option<String>,
 }
 
 /// Sort tier for a priority value: high first, low last, anything else
@@ -149,14 +152,13 @@ fn collect_task_file(
     let order = scalar_field(&content, "order")
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|f| f.is_finite());
-    // Case-insensitive, top-level-only via the SAME scalar_field_ci the
-    // id-stamp path uses, or a task stamped under a different casing than the
-    // configured property has a stable id on disk that never surfaces (Codex
-    // review, PR #59). Blank counts as ABSENT, agreeing with the stamp's
-    // non-empty predicate — a bare `task-id:` must not surface "" as the id.
-    let id = id_property
-        .and_then(|p| scalar_field_ci(&content, p))
-        .filter(|v| !v.is_empty());
+    // Case-insensitive, top-level-only via `scalar_id_ci`, which agrees with
+    // the id-stamp path: a task stamped under a different casing still surfaces
+    // (Codex review, PR #59), a blank `task-id:` counts as ABSENT, and a
+    // NON-SCALAR value (a block or flow collection) is NOT surfaced as an id —
+    // else a duplicate that preserved a flow-valued property (never-clobber)
+    // would read as sharing the source's stable id (Codex P2, PR #76).
+    let id = id_property.and_then(|p| scalar_id_ci(&content, p));
     out.push(TaskItem {
         path: path.to_path_buf(),
         title,
@@ -170,6 +172,7 @@ fn collect_task_file(
         list,
         order,
         id,
+        description: super::description::description_field(&content),
     });
 }
 
@@ -659,10 +662,10 @@ mod tests {
     #[test]
     fn list_tasks_treats_a_blank_id_property_as_absent() {
         // A bare `task-id:` (an Obsidian property panel / template leaves the
-        // key valueless) reads as Some("") through scalar_field_ci. The STAMP
-        // path treats that as missing and generates; the read must agree —
-        // surfacing "" as TaskDto.id would hand the UI/MCP an unusable id
-        // until the next edit (review, PR #59).
+        // key valueless) reads as Some("") through scalar_id_ci's inner read.
+        // The STAMP path treats that as missing and generates; the read must
+        // agree — surfacing "" as TaskDto.id would hand the UI/MCP an unusable
+        // id until the next edit (review, PR #59).
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(
@@ -671,5 +674,29 @@ mod tests {
             "---\ntype: Task\nstatus: new\ntitle: \"Blank\"\ncreated: 2026-07-08\ntask-id:\n---\n",
         );
         assert_eq!(list_tasks(root, Some("task-id"))[0].id, None);
+    }
+
+    #[test]
+    fn list_tasks_does_not_surface_a_non_scalar_id_as_an_id() {
+        // A block- or flow-valued id property is the user's structure, not a
+        // stable id — it must read as None so a duplicate that preserved a flow
+        // value can't appear to share the source's id (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "flow.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Flow\"\ncreated: 2026-07-08\ntask-id: {source: jira}\n---\n",
+        );
+        write(
+            root,
+            "block.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Block\"\ncreated: 2026-07-08\ntask-id:\n  source: jira\n---\n",
+        );
+        let items = list_tasks(root, Some("task-id"));
+        assert_eq!(items.len(), 2);
+        for t in &items {
+            assert_eq!(t.id, None, "{}: a non-scalar id must not surface", t.title);
+        }
     }
 }

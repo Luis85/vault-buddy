@@ -4,17 +4,46 @@
 //! discipline as the capture note and transcript sidecar. See
 //! docs/superpowers/specs/2026-07-08-task-management-vertical-slice-design.md.
 
+mod create;
+mod description;
 mod disk;
 mod doc;
 mod id;
 mod list;
 mod lists;
 mod parse;
+mod structural;
 mod writer;
 
-pub use disk::{
-    backfill_task_id, create_task, render_task, set_task_status, task_basename, update_task_fields,
-};
+/// The reserved structured-task frontmatter keys — the fields the surgical
+/// reader/writer own. ONE source of truth for the two guards that must agree
+/// on this set (a divergence reopens the GAP-68/GAP-77 class): the
+/// template-frontmatter filter (`create::render_task` drops any of these a
+/// user template tries to seed, so `set_fields` is never confused about which
+/// key it owns) and the task-ID-property validator (`id::is_valid_id_property`
+/// refuses one as the ID property, so the ID writer can't clobber a real
+/// field). `description` is included: it is a MANAGED detail-view field like
+/// `due`/`status`, so a template seeding it — a block scalar especially —
+/// would orphan its content on the first surgical save (Codex PR #76). Held
+/// in the parent module (not duplicated per guard) so the two can never drift
+/// — the compiler enforces what a `// keep in sync` comment only asked for
+/// (GAP-70).
+const RESERVED_TASK_KEYS: &[&str] = &[
+    "type",
+    "status",
+    "title",
+    "created",
+    "due",
+    "scheduled",
+    "priority",
+    "tags",
+    "tag",
+    "order",
+    "description",
+];
+
+pub use create::{create_task, render_task, task_basename};
+pub use disk::{backfill_task_id, set_task_status, update_task_fields};
 pub use doc::is_task;
 pub use id::{id_property_for_generation, is_valid_id_property, new_task_id};
 pub use list::{list_tasks, priority_rank, TaskItem};
@@ -23,4 +52,5 @@ pub use lists::{
     rename_task_list, task_lists, DeleteListOutcome,
 };
 pub use parse::{is_valid_due, is_valid_tag, note_tags};
+pub use structural::{delete_task, duplicate_task};
 pub use writer::{set_fields, set_status};

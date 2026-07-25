@@ -12,7 +12,11 @@
   increment; a Do Date (`scheduled`, distinct from Due Date) plus a
   do-date-aware Plan grouping (Overdue / Today / Upcoming / Anytime / Done —
   the default grouping the aggregate view opens on) in the do-date/planner-
-  foundation increment. The standalone Task Dashboard (Inbox / Completed
+  foundation increment; and the Task Detail surface — a full-height per-Task
+  home opened by a title click (Ctrl/⌘-click still opens the Task in
+  Obsidian), adding an editable `description` frontmatter field and the first
+  per-Task lifecycle verbs (Duplicate and permanent Delete) — in the
+  task-detail increment. The standalone Task Dashboard (Inbox / Completed
   Today / Recently Created / High Priority / Recently Modified as separate
   summary widgets), templates, Task Tags on non-Task notes / Todos, and the
   AI features below remain unbuilt. See
@@ -240,8 +244,24 @@ A Todo is a plain checklist line — no properties, no filename, no identity bey
 - Edit content
 - Move
 - Archive
-- Delete
-- Duplicate
+- Delete — **shipped** (the task-detail increment): the app's first
+  destructive vault write — a permanent file removal that re-validates
+  containment and `type: Task` (and re-verifies the file's identity at unlink
+  time) immediately before the irreversible remove and refuses a symlink leaf,
+  gated behind a hardened confirm on the Task Detail surface
+- Duplicate — **shipped** (the task-detail increment): a faithful,
+  collision-safe copy — body, extra frontmatter, description, and unknown keys
+  preserved; only identity reset (title `(copy)`, status `new`, Task ID
+  regenerated or stripped)
+- Description — **shipped** (the task-detail increment): an editable free-text
+  `description` frontmatter property, distinct from the Note body that Task
+  Management still never writes
+
+The **Task Detail** surface (the task-detail increment) is where these edits
+live: a plain click on a Task's title opens a full-height per-Task home
+(Ctrl/⌘-click still opens the Task in Obsidian) that shows and edits title,
+description, Do Date / deadline, priority, tags, and List, and offers
+Open-in-Obsidian / Duplicate / Delete.
 
 ### Task Tags
 

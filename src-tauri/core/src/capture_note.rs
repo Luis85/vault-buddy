@@ -35,11 +35,11 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
-// yaml_quote now lives in `crate::template` (the frontmatter-primitives home)
+// yaml_quote now lives in `crate::yaml_scalar` (the frontmatter-primitives home)
 // so `template::substitute_yaml` can quote values without a template↔capture_note
 // module cycle; re-exported here to keep the `capture_note::yaml_quote` path for
 // callers (document_import, tasks::disk) and this module's own field quoting.
-pub use crate::template::yaml_quote;
+pub use crate::yaml_scalar::{yaml_quote, yaml_quote_multiline};
 
 /// Read one top-level `key:` scalar from a note's leading `---` frontmatter
 /// block, undoing `yaml_quote`'s escaping. Returns None if the note has no
@@ -48,6 +48,16 @@ pub use crate::template::yaml_quote;
 /// it needs no general YAML parser (indented list items are skipped, and the
 /// search stops at the closing `---` so the note body is never scanned).
 pub fn note_field(content: &str, key: &str) -> Option<String> {
+    raw_scalar_field(content, key).map(unquote_yaml)
+}
+
+/// The RAW top-level frontmatter scalar value for `key` (trimmed, with its quotes
+/// and escapes intact) — the line-finding `note_field` and the tasks
+/// title-decoder both share. Callers that want the plain double-quoted form
+/// decoded use `note_field`; a caller needing the FULL YAML escape set (e.g.
+/// `\u` in a duplicated title) reads this raw and runs its own decoder, since
+/// `unquote_yaml` handles only `\"`/`\\` (Codex P2, PR #76).
+pub(crate) fn raw_scalar_field<'a>(content: &'a str, key: &str) -> Option<&'a str> {
     let mut lines = content.lines();
     // Frontmatter must be the very first line.
     if lines.next()?.trim_end() != "---" {
@@ -61,7 +71,7 @@ pub fn note_field(content: &str, key: &str) -> Option<String> {
         // `strip_prefix` on the raw line matches top-level keys only: an
         // indented `  - device` list item has a leading space and can't match.
         if let Some(rest) = line.strip_prefix(&prefix) {
-            return Some(unquote_yaml(rest.trim()));
+            return Some(rest.trim());
         }
     }
     None

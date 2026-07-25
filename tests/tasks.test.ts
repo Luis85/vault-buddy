@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useVaultsStore } from "../src/stores/vaults";
 import type { TaskItem } from "../src/types";
 import { localToday } from "../src/utils/taskFields";
 import { aggTask, mountAggregate, mountAggregateAttached, mountView, sample } from "./helpers/taskMount";
@@ -25,13 +26,14 @@ const many = (n: number): TaskItem[] =>
     list: "",
     order: null,
     id: null,
+    description: null,
   }));
 
 // Two due-in-the-past tasks land in Overdue given a real localToday() — no
 // fake timers needed as long as the sandbox clock is after 2026-01-02.
 const overdueFixture = (): TaskItem[] => [
-  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
-  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null },
+  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
+  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
 ];
 
 describe("Tasks", () => {
@@ -238,10 +240,24 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "候選" } });
   });
 
-  it("opens a task in Obsidian when its title is clicked and closes the panel", async () => {
+  it("opens the task detail view on a plain title click", async () => {
     const { wrapper, calls } = mountView();
     await flushPromises();
     await wrapper.get('[data-testid="task-open"]').trigger("click");
+    await flushPromises();
+    // "Manage without opening Obsidian" — a plain click stays in-app now; the
+    // old direct-to-Obsidian jump is the Ctrl/Cmd-click below.
+    const store = useVaultsStore();
+    expect(store.view).toBe("taskDetail");
+    expect(store.taskDetailTask?.path).toBe("C:/v/Tasks/2026-07-08-b.md");
+    expect(calls.find((c) => c.cmd === "open_task")).toBeUndefined();
+    expect(calls.find((c) => c.cmd === "close_panel")).toBeUndefined();
+  });
+
+  it("opens a task in Obsidian on Ctrl/Cmd-click and closes the panel", async () => {
+    const { wrapper, calls } = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="task-open"]').trigger("click", { ctrlKey: true });
     await flushPromises();
     expect(calls.find((c) => c.cmd === "open_task")).toEqual({
       cmd: "open_task",
@@ -252,7 +268,7 @@ describe("Tasks", () => {
     expect(calls.find((c) => c.cmd === "close_panel")).toBeTruthy();
   });
 
-  it("toasts and keeps the panel open when open_task fails", async () => {
+  it("toasts and keeps the panel open when a Ctrl/Cmd-click's open_task fails", async () => {
     const notifications = useNotificationsStore();
     const { wrapper, calls } = mountView({
       open_task: () => {
@@ -260,7 +276,7 @@ describe("Tasks", () => {
       },
     });
     await flushPromises();
-    await wrapper.get('[data-testid="task-open"]').trigger("click");
+    await wrapper.get('[data-testid="task-open"]').trigger("click", { metaKey: true });
     await flushPromises();
     expect(notifications.items.some((n) => n.kind === "error")).toBe(true);
     // A failed launch must NOT hide the panel — the error toast is there.
@@ -949,7 +965,7 @@ describe("Tasks", () => {
 
   it("tag and title filters combine (AND)", async () => {
     const tagged = (n: number, tags: string[]): TaskItem => ({
-      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null,
+      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null, description: null,
     });
     const { wrapper } = mountView({
       list_tasks: () => [tagged(0, ["work"]), tagged(1, ["work"]), tagged(2, []), tagged(3, []), tagged(4, []), tagged(5, [])],
@@ -1975,8 +1991,9 @@ describe("Tasks", () => {
   it("row actions carry the ROW's vault id in aggregate mode", async () => {
     const { wrapper, calls } = mountAggregate();
     await flushPromises();
-    // First row is Beta task (vb): open + archive must hit vb, not va.
-    await wrapper.get('[data-testid="task-open"]').trigger("click");
+    // First row is Beta task (vb): open + archive must hit vb, not va. Open
+    // needs Ctrl/Cmd now — a plain click routes to the in-panel detail view.
+    await wrapper.get('[data-testid="task-open"]').trigger("click", { ctrlKey: true });
     await flushPromises();
     expect(calls.find((c) => c.cmd === "open_task")?.args).toMatchObject({ id: "vb", path: "C:/vb/Tasks/Beta-task.md" });
     await wrapper.get('[data-testid="task-archive"]').trigger("click");

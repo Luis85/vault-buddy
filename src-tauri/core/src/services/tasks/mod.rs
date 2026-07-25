@@ -31,6 +31,9 @@ pub struct TaskDto {
     /// The generated id under the vault's configured property; `None` when
     /// task IDs are off (the property is never read) or simply absent.
     pub id: Option<String>,
+    /// Free-text detail (the `description:` frontmatter field). `None` when
+    /// absent. Additive for the frontend and MCP `list_tasks` alike.
+    pub description: Option<String>,
 }
 
 impl TaskDto {
@@ -48,6 +51,7 @@ impl TaskDto {
             list: t.list,
             order: t.order,
             id: t.id,
+            description: t.description,
         }
     }
 }
@@ -249,6 +253,10 @@ pub fn add_task(
         // actually landed in the file (or None when IDs are off), not a
         // fresh read.
         id: generated_id,
+        // A newly created task has no description — it is a MANAGED detail-view
+        // field, reserved from templates (like due/status), and is set later in
+        // the detail view (Codex PR #76).
+        description: None,
     })
 }
 

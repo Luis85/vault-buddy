@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 
 import type { AggTask, TaskEditorPatch, TaskItem } from "../types";
 import { copyToClipboard } from "../utils/clipboard";
-import { dueOf, parseTagsInput, scheduledOf } from "../utils/taskFields";
+import { buildTaskPatch, dueOf, scheduledOf } from "../utils/taskFields";
 import TaskListPicker from "./TaskListPicker.vue";
 
 // Presentational inline editor: owns its own draft field state (seeded from
@@ -34,34 +34,17 @@ const editList = ref(props.task.list);
 // tags change (Codex, PR #46). Mirrors the add-task composer's disabled Add.
 const titleValid = computed(() => editTitle.value.trim().length > 0);
 
-// due and scheduled use the identical changed-fields shape (draft vs.
-// original, blank means clear) — single-sourced here instead of mirrored
-// per field, which had tripped the complexFunctions CRAP gate (GAP-74).
-function diffDateField(
-  patch: TaskEditorPatch,
-  draft: string,
-  original: string | null,
-  setKey: "due" | "scheduled",
-  clearKey: "clearDue" | "clearScheduled",
-) {
-  if (draft === (original ?? "")) return;
-  if (draft === "") patch[clearKey] = true;
-  else patch[setKey] = draft;
-}
-
 function buildPatch(): TaskEditorPatch {
-  const patch: TaskEditorPatch = {};
-  const title = editTitle.value.trim();
-  if (title && title !== props.task.title) patch.title = title;
-  diffDateField(patch, editDue.value, dueOf(props.task), "due", "clearDue");
-  diffDateField(patch, editScheduled.value, scheduledOf(props.task), "scheduled", "clearScheduled");
-  if (editPriority.value !== normalizedPriority(props.task)) patch.priority = editPriority.value;
-  const parsedTags = parseTagsInput(editTags.value);
-  if (parsedTags.join(" ") !== props.task.tags.join(" ")) patch.tags = parsedTags;
-  // Changed-fields rule, same as everything above: the move rides the patch
-  // only when the pick differs from where the task lives.
-  if (editList.value !== props.task.list) patch.list = editList.value;
-  return patch;
+  // The changed-fields diff (blank date → clear*, only-differing keys) is
+  // single-sourced in buildTaskPatch and shared with the detail view.
+  return buildTaskPatch(props.task, {
+    title: editTitle.value,
+    due: editDue.value,
+    scheduled: editScheduled.value,
+    priority: editPriority.value,
+    tags: editTags.value,
+    list: editList.value,
+  });
 }
 
 function save() {

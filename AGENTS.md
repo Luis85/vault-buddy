@@ -248,7 +248,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 71 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 73 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -257,7 +257,7 @@ Keep this table in sync when adding/removing commands.
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
 | `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async — each row now also carries `scheduled`)*, `add_task` *(async — takes an optional `list` and an optional `scheduled` do-date, validated like `due`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank and the `scheduled`/`clearScheduled` do-date fields (validated like `due`/`clearDue`, `clearScheduled` winning); stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)* |
+| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async — each row now also carries `scheduled`)*, `add_task` *(async — takes an optional `list` and an optional `scheduled` do-date, validated like `due`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank and the `scheduled`/`clearScheduled` do-date fields (validated like `due`/`clearDue`, `clearScheduled` winning); stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)*, `delete_task` *(async — the app's FIRST destructive vault write; canonical-containment + `is_task` re-validation immediately before the irreversible remove, and REFUSES a symlink leaf (no-follow) so it can never delete through a link at the target; gated behind the detail view's hardened confirm)*, `duplicate_task` *(async — faithful collision-safe copy via the never-clobber writer: body/extra-frontmatter/description/unknown keys preserved, only identity reset (title `(copy)` / status `new` / id regenerated-or-stripped, non-scalar id left untouched); returns the landed (possibly ` (N)`-suffixed) path for the success toast's Open action)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
@@ -496,7 +496,7 @@ Invariants:
 Hard rule, amended by the Knowledge Intake increment: **the vault domain
 never writes into a vault** — opening notes and creating daily notes is
 delegated to Obsidian via `obsidian://` URIs, and every launched URI is
-logged (`uri::launch`) as the audit trail. Six sanctioned write paths
+logged (`uri::launch`) as the audit trail. Eight sanctioned write paths
 exist, each documented in its own domain section below:
 
 1. the **capture** domain — recordings and companion notes;
@@ -508,21 +508,33 @@ exist, each documented in its own domain section below:
    the folder only if empty, keeping one that still holds sub-lists/foreign
    files);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
-   (status toggle, rename, due/priority/tags edit, the manual `order`
-   rank, and the ensure-id task-ID stamp — one generalized writer);
+   (status toggle, rename, due/priority/tags/**description** edit, the manual
+   `order` rank, and the ensure-id task-ID stamp — one generalized writer);
 5. the **tasks** domain — the in-root task file move between list folders
    (`move_task_to_list`: `rename_noreplace` + ` (N)` suffix retry, never
    clobbers, same-list no-op; also backfills a missing task ID on the landed
    file when the vault opts in);
-6. the **document-import** domain — a Pandoc-converted markdown note plus
+6. the **tasks** domain — the permanent **delete** of a task file
+   (`delete_task`: the app's FIRST destructive vault write — canonical
+   containment + `type: Task` re-validation + a file-identity re-check at
+   unlink time + a no-follow symlink refusal, behind the detail view's
+   hardened two-step confirm; an irreversible unlink, not a trash — GAP-79 /
+   GAP-80);
+7. the **tasks** domain — the faithful collision-safe **duplicate** of a task
+   file (`duplicate_task`: copies the bytes and resets ONLY identity — title
+   `(copy)` / status `new` / Task ID regenerated-or-stripped, non-scalar id
+   left untouched);
+8. the **document-import** domain — a Pandoc-converted markdown note plus
    its extracted-media sibling folder.
 
 They all ride the same never-clobber/atomic machinery in
 `core::capture_note` / `core::capture_paths` (exclusive-create temps,
 `rename_noreplace`, suffix retry) — except where a write documents its own
 deliberate variant: `rename_task_list` REFUSES a collision instead of
-suffix-retrying (the name is user-chosen), and `delete_task_list` removes
-an already-empty folder. Any other code touching vault contents
+suffix-retrying (the name is user-chosen), `delete_task_list` removes
+an already-empty folder, and `delete_task` is a guarded REMOVE (not a create)
+— the one destructive path, which is why it re-validates identity at unlink
+time. Any other code touching vault contents
 directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-04-increment-2-knowledge-intake-meeting-recording-design.md`,
 `docs/superpowers/specs/2026-07-04-increment-3-local-speech-to-text-design.md`,
@@ -1083,9 +1095,10 @@ It reads leniently through the same `is_valid_due` shape check (a malformed
 value reads as unscheduled — no calendar validity, so `2026-02-31` is
 tolerated like `due`), is emitted between `due` and `priority`, is written only
 when present (clearing it removes the line, `due`'s semantics), and is reserved
-in BOTH `RESERVED_TASK_KEYS` sets — the template-frontmatter filter (`disk.rs`)
-and the task-ID-property validator (`id.rs`, kept in sync via reciprocal
-comments) — so it can never be smuggled in as a template key nor configured as
+in the shared `RESERVED_TASK_KEYS` set (`tasks/mod.rs`, single-sourced — used
+by both the template-frontmatter filter in `create::render_task` and the
+task-ID-property validator `id::is_valid_id_property`, GAP-70) — so it can
+never be smuggled in as a template key nor configured as
 an id property (the formerly-settable `scheduled`-as-id-property edge — it was
 command-settable before this increment — is docs/Gaps.md GAP-68). The IPC write params (`scheduled`/`clearScheduled`)
 and the frontend planner/grouping that consume it are documented as those
@@ -1114,6 +1127,38 @@ inline error naming the offending token instead of dropping it, so a bad tag
 can never silently vanish on save. `Some([])` from the editor/patch clears —
 removes the line (or block) entirely, same "absent means gone" semantics as
 `due`.
+
+- **The `description` field, delete/duplicate, and the Task Detail surface
+  (the task-detail increment).** `description` is a fifth optional widened
+  field: an editable free-text detail, distinct from the note BODY (which the
+  app still never writes). READ by `core::tasks::description_field` (its own
+  module), which decodes each SINGLE-LINE YAML scalar form as Obsidian's
+  js-yaml does — plain (a whitespace-preceded OR leading `#` is a comment,
+  `null`/`~` reads as none), single-quoted, and double-quoted (unescaped,
+  trailing comment dropped) — and degrades a block scalar (`|`/`>`), a
+  multi-line quoted scalar, or a flow collection (`[..]`/`{..}`) to `None`
+  rather than surfacing a partial/wrong value (GAP-81). WRITTEN as one escaped
+  single-line scalar via `core::yaml_scalar::yaml_quote_multiline`; the surgical
+  `set_fields` writer handles it like any other key and CONSUMES a hand-authored
+  block on rewrite (`skip_block_scalar`), so nothing orphans. `description` is
+  RESERVED in the shared `RESERVED_TASK_KEYS` set (used by both the
+  template-frontmatter filter and the task-ID-property validator) so it can
+  never be smuggled in as a template key nor configured as the id property. `update_task`'s patch carries `description`
+  / `clearDescription` (a whitespace-only draft clears — it's treated as absent,
+  so Save returns to disabled instead of writing forever) and every `list_tasks`
+  row carries its `description`. Two MORE sanctioned vault writes join
+  create/field-write/move: **`delete_task`** — the app's FIRST destructive vault
+  write (a permanent `remove_file`, NOT a trash — GAP-80; a no-follow
+  symlink-leaf refusal, canonical containment, `type: Task` re-validation, and a
+  file-identity re-check at unlink time — GAP-79) — and **`duplicate_task`** — a
+  faithful collision-safe copy that resets ONLY identity (title `(copy)` /
+  status `new` / id regenerated-or-stripped, non-scalar id untouched). Both are
+  async, containment-gated task commands. Frontend: the **Task Detail** surface
+  (`TaskDetail.vue`, the `taskDetail` view) is a full-height per-task home opened
+  by a title click (`useTaskActions`' `onOpenTask`: plain → detail, Ctrl/⌘ →
+  Obsidian); it edits title, description, dates, priority, tags, and list and
+  offers Open / Duplicate / Delete under one shared `busy` guard, all through the
+  `useTaskDetail` composable (`save`/`remove`/`duplicate`/`openInObsidian`).
 
 - **Two sanctioned vault writes, same discipline as capture/transcript.**
   *Create* (`create_task`, now threading through optional `due`/`priority`)
@@ -1770,7 +1815,11 @@ show/hide state, owned by Rust. So the `vaults` store lost `panelOpen`/
 re-runs discovery and defaults the view to the vault list, unless a one-shot
 `requestView(view)` asked otherwise — a failed update install `requestView`s
 `settings` so the reopen lands on the error/retry UI instead of being reset to
-the list. It also drains a drag-dropped document path via `take_pending_import`
+the list. It also KEEPS the `taskDetail` view (rather than the list default)
+while a detail write is in flight (`taskDetailBusy`), so a panel auto-hide→reopen
+can't unmount `TaskDetail` and let the write finish off-screen against a stale,
+remounted Tasks list — the OS focus-out auto-hide the disabled header Back
+button can't cover (Codex P2, PR #76). It also drains a drag-dropped document path via `take_pending_import`
 (a one-shot Rust stash filled by `begin_document_import`) BEFORE the list
 default, routing to the `importPicker` view with `pendingImportPath` set so a
 buddy drop survives the `panel-shown` refresh. It also bumps `shownNonce`; because the panel window is only
@@ -1778,16 +1827,22 @@ hidden/shown (never unmounted), `ActionPanel` watches `shownNonce` to clear
 transient UI a close used to reset (an open record dialog, the filter, a
 lingering rename prompt). The store still holds the list and the panel view
 state (`view: list | settings | captureSettings | recordings | recordMode |
-transcriptions | tasks | search | importPicker | documentImport | update`, with
-`captureSettingsVaultId` /
+transcriptions | tasks | taskDetail | search | importPicker | documentImport |
+update`, with `captureSettingsVaultId` /
 `recordingsVaultId` / `recordModeVaultId` / `tasksVaultId` /
-`pendingImportPath`) because that must
+`taskDetailTask` / `pendingImportPath`) because that must
 survive the panel window being hidden. Views form a fixed one-parent-per-view
 tree (no history stack): the vault-row capture button `openRecordMode`s (titled
 "Capture knowledge" — Meeting / Voice Note / Import Document / Browse recordings,
 Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
-per-vault todo view, `importPicker` (parent: the list) is the import vault
+per-vault todo view, a plain click on a task's title `openTaskDetail`s the
+`taskDetail` view (parent: `tasks` — it keeps `tasksVaultId` so `back()`
+returns to the task list; `taskDetailTask` holds the row for the view across
+in-panel navigation, but a `panel-shown` refresh runs `showList()` which
+resets to the list and clears it — the detail view does NOT survive a panel
+hide→show, GAP-82) while Ctrl/⌘-click opens the task in Obsidian instead,
+`importPicker` (parent: the list) is the import vault
 chooser (drop mode when the queue holds a dropped file; vault-first mode on
 an empty queue — the buddy-menu entry — where picking a vault opens the OS
 file picker), `documentImport` (parent: the list) is the focused Pandoc setup screen

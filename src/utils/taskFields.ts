@@ -1,4 +1,4 @@
-import type { TaskItem } from "../types";
+import type { TaskEditorPatch, TaskItem } from "../types";
 
 // Pure task-field helpers shared by the Tasks container and its TaskRow /
 // TaskEditor children — single-sourced here so a component split doesn't
@@ -89,4 +89,49 @@ export function parseTagsInput(s: string): string[] {
     out.push(t);
   }
   return out;
+}
+
+/** The editable draft the inline editor and the detail view both hold. */
+export interface TaskDraft {
+  title: string;
+  due: string;
+  scheduled: string;
+  priority: string; // "high" | "normal" | "low"
+  tags: string; // comma/space free-text input
+  list: string;
+}
+
+// due and scheduled use the identical changed-fields shape (draft vs. original,
+// blank means clear) — single-sourced so buildTaskPatch stays under the
+// complexFunctions CRAP gate (GAP-74).
+function diffDateField(
+  patch: TaskEditorPatch,
+  draft: string,
+  original: string | null,
+  setKey: "due" | "scheduled",
+  clearKey: "clearDue" | "clearScheduled",
+) {
+  if (draft === (original ?? "")) return;
+  if (draft === "") patch[clearKey] = true;
+  else patch[setKey] = draft;
+}
+
+/**
+ * The changed-fields patch shared by the inline editor and the detail view —
+ * only keys whose draft differs from the task are emitted (an emptied date →
+ * clear*). The detail view augments the result with `description` separately.
+ */
+export function buildTaskPatch(task: TaskItem, draft: TaskDraft): TaskEditorPatch {
+  const patch: TaskEditorPatch = {};
+  const title = draft.title.trim();
+  if (title && title !== task.title) patch.title = title;
+  diffDateField(patch, draft.due, dueOf(task), "due", "clearDue");
+  diffDateField(patch, draft.scheduled, scheduledOf(task), "scheduled", "clearScheduled");
+  const normPriority =
+    task.priority === "high" || task.priority === "low" ? task.priority : "normal";
+  if (draft.priority !== normPriority) patch.priority = draft.priority;
+  const parsedTags = parseTagsInput(draft.tags);
+  if (parsedTags.join(" ") !== task.tags.join(" ")) patch.tags = parsedTags;
+  if (draft.list !== task.list) patch.list = draft.list;
+  return patch;
 }
