@@ -145,6 +145,18 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
     percent-encodes every `obsidian://` parameter in `uri.rs`, so this reuses an
     established convention rather than inventing one.
 
+    **The destination is relative to the CHILD's directory, not the vault root.**
+    A markdown destination is resolved from the note containing it, so emitting a
+    vault-relative `Tasks/Project%231/x.md` into a child living in `Tasks/Work`
+    would resolve as `Tasks/Work/Tasks/Project%231/x.md` — a dead link (Codex P2,
+    PR #77). The composer therefore takes the **child's** path too and emits a
+    path relative to the child's directory, with `../` segments as needed. A
+    `../`-relative form is preferred over a root-relative `/…` one because
+    Obsidian's handling of leading-slash destinations depends on its "new link
+    format" setting, whereas a directory-relative path resolves identically under
+    every setting. (The wikilink branch needs none of this — wikilinks resolve by
+    vault-wide name/path lookup, never relative to the containing note.)
+
     **The label is escaped too, not just the target.** A title carrying `[`, `]`,
     or `\` would otherwise produce a malformed link even with the path encoded —
     YAML quoting protects the surrounding *scalar*, but the Markdown inside it is
@@ -303,13 +315,21 @@ read-then-write staleness: phase 1 reads the config and picks the id property
 between and phase 3 would then write both ids under the stale one (Codex P2,
 PR #77). Two options — acquiring the lock before phase 1 would hold it across a
 full vault walk, serializing every unrelated config write for the duration of a
-scan. So instead: **after acquiring the lock, re-read the config and compare it
-to the phase-1 snapshot; if `(task_id_enabled, property)` changed, re-run phase
-1's property validation and cycle check under the lock before proceeding.** This
-costs nothing in the common case (unchanged → proceed), and is cheap exactly when
-it can happen: `set_task_id_config` refuses a change once parent links exist
-(§2a), so the interleaving is only reachable on a vault's *first* hierarchy
-operation, where the index is empty and re-validation is trivial.
+scan. So instead: **after acquiring the lock, re-read the config, and re-run the
+cycle check unconditionally.**
+
+The config re-read catches a settings save that committed between phase 1 and the
+lock; a changed `(task_id_enabled, property)` is a retryable error rather than a
+write under the stale property.
+
+**The cycle re-check runs on every lock acquisition, not only when the config
+changed.** Two *parent assignments* can also overlap — one setting A's parent to
+B while the other sets B's parent to A. Both phase-1 scans pass before either
+writes, so a config-conditional re-check would let the second commit a cycle the
+moment the first releases the lock (Codex P2, PR #77). Because both assignments
+take the same lock, an unconditional re-check under it sees the other's committed
+write and refuses. The extra walk costs one scan on a path that is already doing
+two file writes.
 
 **Implementation note — do not re-acquire.** The lock is not reentrant, so the
 enable step inside the held scope must be a `*_locked` helper that performs the
@@ -361,7 +381,19 @@ carrying `parent-id`**, with an inline error naming the count and the remedy. Th
 scan is the **unfiltered** one (§2): an archived Task's file still carries its
 `parent-id`, so reusing the presentation-filtered `list_tasks` would let the
 settings change through and orphan those links the moment the Task is
-unarchived. It
+unarchived.
+
+**The scan is fallible, and a failure refuses the change.** The read paths in
+this app are deliberately best-effort — an unresolvable root or an unreadable
+file degrades to "nothing here" — which is right for a *view* but wrong for a
+guard: an offline network vault would report "no parent links" and let the
+setting through, orphaning every relationship once access returns (Codex P2,
+PR #77). So this scan returns a `Result` and reports incomplete inspection
+(unresolvable root, or any task file it could not read) as an error, and
+`set_task_id_config` refuses conservatively — "couldn't verify this vault's
+tasks, so the Task ID settings weren't changed." Refusing a rare, deliberate
+settings action on an unreadable vault is a far better failure than silently
+orphaning a hierarchy. It
 holds the `ConfigWriteLock` across **both** the parent-link scan and the write,
 so a concurrent `set_task_parent` (which holds the same lock through its phases
 2–3, §2) cannot slip a new hierarchy in between this scan and its commit.
@@ -531,15 +563,20 @@ toast on failure, and `taskDetailBusy` gating the header Back and the panel's
 `refresh()`. Child rows reuse the row-level busy set so a child's status toggle
 can't race a parent write.
 
-**A parent-set must write the stamped id back onto the PARENT's cached row.** In
+**Every hierarchy write must refresh the PARENT's cached id — on BOTH paths.** In
 the default IDs-off state the loaded parent row has `id: null`; the backend
-enables IDs, stamps the parent, and returns its `parentId`. Updating only the
-child's optimistic fields would leave the parent's cached `id` null — and since
-the frontend resolves parents and children by comparing ids, the relationship the
-user just created would be **invisible until a reload** (Codex P1, PR #77). So the
-response's `parentId` is written onto the selected parent row as well as the
-child's `parentId`. The regression test must run with IDs **off** — a fixture with
-pre-stamped parents cannot catch this.
+enables IDs, stamps the parent, and returns its id. Updating only the child would
+leave the parent's cached `id` null — and since the frontend resolves parents and
+children by comparing ids, the relationship the user just created would be
+**invisible until a reload** (Codex P1 ×2, PR #77). This applies identically to:
+
+- **Set parent** — write the response's `parentId` onto the selected parent row.
+- **Add subtask** — write the created child's `parentId` onto the *current* task's
+  row, so the new child and the progress line resolve immediately.
+
+The second is the same defect as the first in a different path; it was missed
+once already, which is why both are named here. Both regression tests must run
+with IDs **off** — a fixture with pre-stamped parents cannot catch either.
 
 **Drilling detail→detail must remount the surface.** This increment introduces
 the first navigation from one Task Detail to another (a parent chip or a child
@@ -708,13 +745,17 @@ holds the `ConfigWriteLock` across phases 2–3 and `set_task_id_config` holds i
 across scan-and-write, so the two serialize in either interleaving — and the
 enable step inside the held scope must NOT re-acquire it (a nested acquire
 self-deadlocks; assert the happy path completes rather than hanging).**
-**The post-lock config re-check: a property changed between phase 1 and the lock
-must not be written under the stale property. Add-subtask with IDs OFF must
+**The unconditional post-lock cycle re-check: two overlapping assignments (A→B
+and B→A) must not both commit — the second must refuse.** **A failed structural
+scan (unreadable tasks root) REFUSES an ID-settings change rather than reading as
+"no parent links".** **The post-lock config re-check: a property changed between
+phase 1 and the lock must not be written under the stale property. Add-subtask with IDs OFF must
 enable, stamp the parent, and create a child carrying a resolvable `parent-id` —
 the bootstrap regression for the create path.**
 
-**Frontend (Vitest):** **an IDs-OFF parent-set writes the returned id onto the
-parent's cached row, so the new relationship renders without a reload**;
+**Frontend (Vitest):** **an IDs-OFF parent-set AND an IDs-OFF Add-subtask each
+write the returned id onto the parent's cached row, so the new relationship (and
+the progress line) render without a reload — two tests, one per path**;
 **drilling from one detail to another re-seeds the drafts
 — assert the rendered title/description inputs show the NEW task, not the
 previous one, and that a Save after drilling writes the new task's path**;

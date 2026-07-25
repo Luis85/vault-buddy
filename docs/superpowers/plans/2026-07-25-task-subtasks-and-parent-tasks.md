@@ -289,19 +289,39 @@ use std::path::Path;
 /// `|` an alias, `[`/`]` can terminate it, `^` a block ref.
 const WIKILINK_UNSAFE: [char; 5] = ['#', '|', '[', ']', '^'];
 
-pub fn compose(parent_path: &Path, vault_root: &Path, parent_title: &str) -> Option<String> {
+/// `child_path` is the file the link will be WRITTEN INTO — needed only by the
+/// markdown fallback, whose destination Obsidian resolves relative to the
+/// containing note (design spec §1).
+pub fn compose(
+    parent_path: &Path,
+    child_path: &Path,
+    vault_root: &Path,
+    parent_title: &str,
+) -> Option<String> {
     let rel_no_ext = crate::uri::vault_relative_no_ext(parent_path, vault_root)?;
     if !rel_no_ext.contains(WIKILINK_UNSAFE) {
+        // Wikilinks resolve by vault-wide name/path lookup, never relative to the
+        // containing note — no child context needed.
         return Some(format!("[[{rel_no_ext}]]"));
     }
-    // Fallback: percent-encoded target (keeping `/` as the path separator) and a
-    // markdown-escaped label.
-    let encoded = rel_no_ext
-        .split('/')
-        .map(crate::uri::encode)
-        .collect::<Vec<_>>()
-        .join("/");
-    Some(format!("[{}]({encoded}.md)", escape_label(parent_title)))
+    // Fallback: a markdown destination is resolved FROM THE CHILD'S DIRECTORY, so
+    // a vault-relative path would resolve as <child dir>/<vault path> — a dead
+    // link. Emit a `../`-relative path instead; it resolves identically under
+    // every Obsidian "new link format" setting, unlike a leading-slash form.
+    let child_rel = crate::uri::vault_relative(child_path, vault_root)?;
+    let child_dir_depth = child_rel.matches('/').count(); // segments above the file
+    let mut dest = String::new();
+    for _ in 0..child_dir_depth {
+        dest.push_str("../");
+    }
+    dest.push_str(
+        &rel_no_ext
+            .split('/')
+            .map(crate::uri::encode)
+            .collect::<Vec<_>>()
+            .join("/"),
+    );
+    Some(format!("[{}]({dest}.md)", escape_label(parent_title)))
 }
 
 /// Backslash-escape the characters that would break a markdown link label.
@@ -327,8 +347,9 @@ mod tests {
     fn an_ordinary_path_becomes_a_wikilink() {
         let root = PathBuf::from("/v");
         let p = PathBuf::from("/v/Tasks/Work/2026-07-04-ship.md");
+        let c = PathBuf::from("/v/Tasks/Home/child.md");
         assert_eq!(
-            compose(&p, &root, "Ship it"),
+            compose(&p, &c, &root, "Ship it"),
             Some("[[Tasks/Work/2026-07-04-ship]]".to_string())
         );
     }
@@ -339,9 +360,26 @@ mod tests {
         // heading target and silently point click-through at the wrong note.
         let root = PathBuf::from("/v");
         let p = PathBuf::from("/v/Tasks/Project#1/2026-07-04-ship.md");
-        let link = compose(&p, &root, "Ship it").unwrap();
-        assert_eq!(link, "[Ship it](Tasks/Project%231/2026-07-04-ship.md)");
+        let c = PathBuf::from("/v/Tasks/child.md"); // one dir deep
+        let link = compose(&p, &c, &root, "Ship it").unwrap();
+        assert_eq!(link, "[Ship it](../Tasks/Project%231/2026-07-04-ship.md)");
         assert!(!link.starts_with("[[")); // not a wikilink
+    }
+
+    #[test]
+    fn the_fallback_destination_is_relative_to_the_childs_directory() {
+        // REGRESSION (design spec §1): a markdown destination resolves from the
+        // note containing it, so a vault-relative path in a child under
+        // Tasks/Work would resolve as Tasks/Work/Tasks/... — a dead link.
+        let root = PathBuf::from("/v");
+        let p = PathBuf::from("/v/Tasks/Project#1/t.md");
+        let deep = PathBuf::from("/v/Tasks/Work/Sub/child.md"); // three dirs deep
+        let link = compose(&p, &deep, &root, "T").unwrap();
+        assert!(link.contains("](../../../Tasks/Project%231/t.md)"), "got {link}");
+        // A child at the vault root needs no ../ at all.
+        let top = PathBuf::from("/v/child.md");
+        let flat = compose(&p, &top, &root, "T").unwrap();
+        assert!(flat.contains("](Tasks/Project%231/t.md)"), "got {flat}");
     }
 
     #[test]
@@ -350,13 +388,15 @@ mod tests {
         // even though the target is encoded.
         let root = PathBuf::from("/v");
         let p = PathBuf::from("/v/Tasks/A|B/t.md");
-        let link = compose(&p, &root, r#"we [need] this \ now"#).unwrap();
+        let c = PathBuf::from("/v/Tasks/child.md");
+        let link = compose(&p, &c, &root, r#"we [need] this \ now"#).unwrap();
         assert!(link.starts_with(r#"[we \[need\] this \\ now]("#), "got {link}");
     }
 
     #[test]
     fn a_path_outside_the_vault_yields_none() {
-        assert_eq!(compose(Path::new("/other/t.md"), Path::new("/v"), "T"), None);
+        let c = PathBuf::from("/v/Tasks/child.md");
+        assert_eq!(compose(Path::new("/other/t.md"), &c, Path::new("/v"), "T"), None);
     }
 }
 ```
@@ -841,7 +881,7 @@ pub fn set_task_parent(
     }
 
     // ---- Phases 2+3a: the SHARED resolve path (also used by add_task). ----
-    let resolved = resolve_parent_for_write(&vault, &root, &parent, &prop, &cfg, || {
+    let resolved = resolve_parent_for_write(&vault, &root, &parent, &child, &prop, &cfg, || {
         // Re-validation closure, run only if the config changed under the lock.
         let all = tasks::list_tasks_including_archived(&root, Some(&prop));
         tasks::would_create_cycle(&tasks::parent_index(&all), &child, &parent)
@@ -877,6 +917,7 @@ fn resolve_parent_for_write(
     vault: &Path,
     root: &Path,
     parent: &Path,
+    child: &Path, // the file the link is written INTO — the markdown fallback needs it
     prop: &str,
     phase1_cfg: &VaultCaptureConfig,
     recheck_cycle: impl FnOnce() -> bool,
@@ -898,6 +939,10 @@ fn resolve_parent_for_write(
                     flight. Try again."
             .to_string());
     }
+    // UNCONDITIONAL — not only when the config changed. Two parent assignments
+    // can overlap (one setting A->B while the other sets B->A); both phase-1
+    // scans pass before either writes, so only a re-check under this lock sees
+    // the other's committed write and refuses (design spec §2).
     if recheck_cycle() {
         return Err("That would make a task its own ancestor.".to_string());
     }
@@ -909,7 +954,9 @@ fn resolve_parent_for_write(
     }
     let parent_id = tasks::update_task_fields(root, parent, &[], Some(prop))?
         .ok_or("Could not assign an ID to the parent task.")?;
-    let link = tasks::compose_parent_link(parent, vault, &read_title(parent))
+    // The child path is required: the markdown fallback's destination resolves
+    // relative to the note containing it (design spec §1).
+    let link = tasks::compose_parent_link(parent, child, vault, &read_title(parent))
         .ok_or("The parent task is outside the vault.")?;
     Ok(ResolvedParent { parent_id, link })
 }
@@ -989,9 +1036,21 @@ git commit -m "feat(core): add set_task_parent with validate-before-side-effect 
         let (paths, vault) = fixture_with_ids_enabled(&[]);
         let root = tasks_root(&paths, &vault);
         write(&root, "a.md", "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n");
-        assert!(!vault_has_parent_links(&paths, &vault));
+        assert!(!vault_has_parent_links(&paths, &vault).unwrap());
         write(&root, "b.md", "---\ntype: Task\nstatus: new\ntitle: \"B\"\nparent-id: x\n---\n");
-        assert!(vault_has_parent_links(&paths, &vault));
+        assert!(vault_has_parent_links(&paths, &vault).unwrap());
+        // An ARCHIVED task's file still carries parent-id — it must count.
+        write(&root, "c.md", "---\ntype: Task\nstatus: archived\ntitle: \"C\"\nparent-id: y\n---\n");
+        assert!(vault_has_parent_links(&paths, &vault).unwrap());
+    }
+
+    #[test]
+    fn an_unreadable_vault_refuses_rather_than_reporting_no_links() {
+        // Best-effort reads are right for a view, wrong for a guard: an offline
+        // vault must not read as "no parent links" (Codex P2, PR #77).
+        let (paths, vault) = fixture_with_ids_enabled(&[]);
+        remove_tasks_root(&paths, &vault); // simulate an unavailable vault
+        assert!(vault_has_parent_links(&paths, &vault).is_err());
     }
 ```
 
@@ -1001,15 +1060,21 @@ git commit -m "feat(core): add set_task_parent with validate-before-side-effect 
 /// True when ANY task in the vault carries a `parent-id`. The ID configuration
 /// is locked while this holds: changing the property name OR disabling the
 /// feature would make every recorded reference unresolvable (design spec §2a).
-pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> bool {
-    let Ok((_, root)) = resolve_vault_and_tasks_root(paths, vault_id) else {
-        return false;
-    };
+///
+/// FALLIBLE on purpose. The read paths in this app are best-effort — an
+/// unresolvable root degrades to "nothing here" — which is right for a view but
+/// wrong for a guard: an offline network vault would report "no parent links"
+/// and let the setting through, orphaning every relationship once access
+/// returns. An incomplete inspection is an Err, and the caller refuses
+/// conservatively (design spec §2a).
+pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> Result<bool, String> {
+    let (_, root) = resolve_vault_and_tasks_root(paths, vault_id)
+        .map_err(|e| format!("Couldn't read this vault's tasks: {e}"))?;
     // UNFILTERED: an archived task's file still carries parent-id, so reusing
     // the presentation-filtered list would let a settings change orphan it.
-    tasks::list_tasks_including_archived(&root, None)
+    Ok(tasks::list_tasks_including_archived(&root, None)
         .iter()
-        .any(|t| t.parent_id.is_some())
+        .any(|t| t.parent_id.is_some()))
 }
 ```
 
@@ -1026,7 +1091,8 @@ In `set_task_id_config`, hold the config lock across **both** the scan and the w
     let _guard = capture_config::config_write_lock();
     let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
     let changing = cfg.task_id_enabled != enabled || cfg.task_id_property_name() != resolved_property;
-    if changing && services::vault_has_parent_links(&ServicePaths::real(), &id) {
+    // A scan failure REFUSES the change — it must never read as "no links".
+    if changing && services::vault_has_parent_links(&ServicePaths::real(), &id)? {
         return Err("This vault has tasks with a parent, which reference Task IDs \
                     under the current property. Clear those parent links before \
                     changing the Task ID settings."
@@ -1398,15 +1464,48 @@ it("clicking a child's title drills into that child's detail", async () => {
 });
 ```
 
-- [ ] **Step 2: Implement**
+- [ ] **Step 2: Add the IDs-off Add-subtask cache regression**
+
+Same defect class as Task 8's parent-set cache test, in the *create* path — it
+was missed there once already (Codex P1, PR #77):
+
+```ts
+it("stamps the current task's cached id from the created child (IDs-off)", async () => {
+  // First hierarchy op in an IDs-off vault: the backend enables IDs and stamps
+  // the PARENT, returning the child with parentId. Without copying that onto the
+  // parent's cached row, `children` compares against a still-null id and the new
+  // subtask (and the progress line) stay invisible until a reload.
+  const parent = task({ vaultId: "v1", id: null, path: "/v1/p.md", title: "Parent", list: "" });
+  mockIPC((cmd) => {
+    if (cmd === "list_task_lists") return [];
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+    if (cmd === "list_tasks") return [parent];
+    if (cmd === "add_task") return task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" });
+    return undefined;
+  });
+  const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+  const wrapper = mount(TaskDetail, { props: { task: parent } });
+  await new Promise((r) => setTimeout(r));
+  await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
+  await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+  await new Promise((r) => setTimeout(r));
+  expect(parent.id).toBe("pid"); // the parent's cached id was stamped
+  expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1");
+  expect(wrapper.findAll('[data-testid="task-detail-subtask"]')).toHaveLength(1);
+});
+```
+
+- [ ] **Step 3: Implement**
 
 A `SectionHeader` "Subtasks", the progress line, child rows (status checkbox + title button), and an inline "Add subtask" title input (IME-guarded Enter, Escape that `stopPropagation`s — the `TaskViewControls` create-list flow is the model). Every write goes through the shared `busy` guard.
 
-- [ ] **Step 3: Watch the LOC cap**
+**On a successful add, copy the created child's `parentId` onto the current task's cached `id`** before the hierarchy re-resolves — the parent may have just been stamped by the very call that created the child.
+
+- [ ] **Step 4: Watch the LOC cap**
 
 Run: `npm run check:loc`. If `TaskDetail.vue` exceeds its cap, extract the Subtasks block into `TaskSubtasks.vue` (presentational, props + emits) rather than raising the baseline.
 
-- [ ] **Step 4: Run gates + commit**
+- [ ] **Step 5: Run gates + commit**
 
 Run: `npx vitest run tests/task-detail.test.ts && npm run lint && npm run build`
 
@@ -1507,3 +1606,37 @@ Expected: all green, no baseline loosened. If a ratchet regressed, fix the code 
 ```bash
 git add -A && git commit -m "docs(tasks): document subtasks and parent tasks"
 ```
+
+---
+
+## Plan Self-Review
+
+**1. Spec coverage:** every section of
+`2026-07-25-task-subtasks-and-parent-tasks-design.md` maps to a task — §1 data
+model → Tasks 1, 2, 4; §2 path addressing, phase ordering, the shared resolve
+path, the lock → Tasks 5, 7; §2a the ID-config lock → Task 6; §3 hierarchy,
+ambiguity, archived scans → Tasks 1 (Step 9), 3; §4 IPC → Task 7; §5 Detail
+surface, remount-on-drill, cached-id refresh → Tasks 8, 9; §6 list affordances →
+Task 10; §7 lifecycle-verb interaction → Task 4 (Step 4, duplicate preserves the
+pair); docs → Task 11.
+
+**2. Placeholder scan:** no `TBD`/`TODO`/"handle edge cases"; every code step
+carries real code and every test step a real assertion. Two deliberate
+"read-first" notes remain — the `fixture_with_ids_*` helpers in Task 5 (match the
+file's existing services harness rather than inventing one) and the lock-guard
+shape in Task 5 (return the guard vs. take a closure) — both stated as explicit
+decisions with the constraint that makes them safe, not deferred work.
+
+**3. Type consistency:** `compose(parent, child, vault_root, title)` matches its
+call site in `resolve_parent_for_write`, which itself takes `child`;
+`ParentIndex<'a> = HashMap<&'a Path, &'a Path>` is path-keyed at every use;
+`vault_has_parent_links` returns `Result<bool, String>` and its two call sites
+`?`/`unwrap()` accordingly; `TaskWriteResult { id, parentId, parentLink }` is the
+same shape the frontend mocks return; `list_tasks_including_archived` is used by
+every structural scan and `list_tasks` by none of them.
+
+**4. Ordering invariants the tasks must not violate** (each has a named
+regression test): validation precedes every side effect; the cycle re-check is
+unconditional under the lock; hierarchy scans are unfiltered; parent validation
+precedes any scalar field write; both cache-refresh paths (set-parent and
+add-subtask) run with IDs off.
