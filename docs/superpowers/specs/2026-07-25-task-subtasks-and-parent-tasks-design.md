@@ -119,11 +119,19 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
   duplication untouched.
 - **`parent` is the Obsidian affordance**: a wikilink to the parent's file so the
   relationship is clickable inside Obsidian and resolvable by Dataview. It is
-  written from the parent's **filename stem** in Obsidian's short form,
-  `[[<stem>]]`, and — critically — **always YAML-quoted**: unquoted, `parent:
-  [[foo]]` parses as a nested flow *sequence*, not a string. It is emitted
-  through the existing `yaml_quote`, exactly as the document-import frontmatter
-  does for paths.
+  written as the parent's **vault-relative path without the `.md` extension** —
+  `[[Tasks/Work/2026-07-04-prepare-release-cutover]]` — not the bare filename
+  stem. Lists are separate folders and collision suffixing is folder-local, so
+  two Lists can legitimately hold the same stem; a short-form `[[<stem>]]` would
+  then be ambiguous and Obsidian could resolve it to the wrong Task, which is
+  precisely the navigation this field exists to make reliable (Codex P2, PR #77).
+  The path form is unambiguous by construction. It is also — critically —
+  **always YAML-quoted**: unquoted, `parent: [[foo]]` parses as a nested flow
+  *sequence*, not a string. It is emitted through the existing `yaml_quote`,
+  exactly as the document-import frontmatter does for paths. The path is built
+  against the **canonical** vault path, the same way `open_task` derives its
+  vault-relative URI parameter (a lexical path would break `strip_prefix` against
+  the canonical paths `list_tasks` hands out, notably Windows' `\\?\` form).
 - **Drift is benign by construction.** VB keeps the wikilink correct on the moves
   it performs, but a manual rename in Obsidian (or a rare collision-suffixed
   move) can stale it. Because `parent-id` is authoritative, a stale wikilink
@@ -152,13 +160,29 @@ that had configured the literal `parent` as its id property would have id
 generation turn off, remedied by re-pointing the property. Documented in Gaps,
 not auto-migrated — the established, precedent-consistent call.
 
-### 2. Task IDs auto-enable
+### 2. Addressing the parent by PATH, and Task IDs auto-enable
+
+**A parent is named by its path, never by its id.** This is forced, not
+stylistic: `services::list_tasks` resolves the id property through
+`id_property_for_generation(cfg.task_id_enabled, …)`, which yields `None` when
+the feature is off — the per-vault **default** — so `tasks::list_tasks` never
+reads the property and **every `TaskItem.id` is `None`**. A frontend that had to
+name the parent by id could therefore never name one in a fresh vault, and the
+advertised first-use auto-enable could never fire: a bootstrap deadlock (Codex
+P1, PR #77). Paths have no such problem — `TaskItem.path` is always populated,
+and path is already the identity every other task write takes (`update_task`,
+`move_task_to_list`, `delete_task`, `duplicate_task`).
+
+So the frontend sends the **parent's path**; the service resolves it to an
+authoritative id, stamping one if needed, and returns that id so the row can
+reflect it without a reload (the `update_task` precedent).
 
 The hierarchy is keyed on Task IDs, so a vault with IDs off cannot express it.
 Rather than blocking the user behind a settings trip, the first parent-set in a
 vault turns IDs on:
 
-- `services::set_task_parent` resolves the id property through the existing gate
+- `services::set_task_parent(root, child_path, parent_path, cfg)` resolves the id
+  property through the existing gate
   `tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())`.
 - When that yields `None` **because the feature is off**, the service enables it
   (a `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
@@ -172,15 +196,41 @@ vault turns IDs on:
 Enabling is surfaced honestly: the Detail surface notes that setting a parent
 turned on Task IDs for the vault, so the config change is never silent.
 
-Both endpoints are then guaranteed to have ids:
+Both endpoints are then guaranteed to have ids, both paths containment-gated
+like every other task write:
 
 1. **The parent** — `update_task_fields(root, parent_path, &[], Some(prop))`.
    The existing `ensure_id` stamps only when the property has no usable value and
    **returns the effective id**; with an empty `updates` slice and an id already
    present it short-circuits without a write. This is the id that goes into the
-   child.
+   child. The parent's path is also what the wikilink is derived from, so both
+   halves of the pair come from this one resolution.
 2. **The child** — the same call that writes its `parent-id`/`parent` passes
    `ensure_id`, so a legacy child picks up its own id in the same write.
+
+### 2a. Changing the id property once hierarchies exist
+
+Because resolution reads ids from the vault's **configurable** id property,
+re-pointing that property (say `task-id` → `uid`) would make `list_tasks` stop
+reading the values every `parent-id` references: each task's id reads `None`, no
+task answers to the recorded ids, and the whole hierarchy silently renders as
+orphaned while the data sits intact on disk (Codex P2, PR #77).
+
+`set_task_id_config` therefore **refuses a property change while the vault has
+tasks carrying `parent-id`**, with an inline error naming the count and the
+current property. Rationale, weighed against the alternatives:
+
+- **Auto-migrating** (rewriting every task's id property and every reference) is
+  the mass vault mutation this app forbids — the same reasoning that made
+  GAP-68/GAP-77 document-only rather than migrate.
+- **Warning and proceeding** silently breaks a structure the user built; the
+  house posture on settings writes is strict-and-inline, not best-effort.
+- **Refusing** is recoverable and honest: the user clears the parent links (or
+  keeps the property) and is told exactly why. Enabling and *disabling* IDs are
+  unaffected — only re-pointing the property to a different key is refused.
+
+A guided migration remains the tracked future option in Gaps if this ever proves
+too strict in practice.
 
 ### 3. Core: hierarchy resolution and cycle prevention
 
@@ -221,14 +271,21 @@ Additive, no new read command:
   Option<String>` (camelCase `parentId` / `parentLink` over IPC), so every
   existing `list_tasks` caller — the panel and MCP alike — sees the hierarchy
   with no new round-trip.
-- **`update_task`'s `TaskPatchDto`** gains `parent_id: Option<String>` +
+- **`update_task`'s `TaskPatchDto`** gains `parent_path: Option<String>` +
   `clear_parent: bool`, following the established `due`/`scheduled`/`description`
-  set-or-clear shape. The command resolves the wikilink and the cycle check
-  itself — the frontend sends only the target parent's id (or the clear flag) and
-  never composes a wikilink.
-- **`add_task`** gains an optional `parent_id`, so "Add subtask" is one call.
+  set-or-clear shape — but keyed on the parent's **path**, for the bootstrap
+  reason in §2. The command owns everything derived: it resolves the path to an
+  authoritative id (stamping if needed), composes the wikilink, and runs the
+  cycle check. The frontend never composes a wikilink and never needs an id.
+- **`update_task`'s return** extends from the task's own id to also carry the
+  **effective `parentId`/`parentLink`** actually written, so the detail row
+  reflects a freshly-stamped parent without a reload — the same reason it already
+  returns the stamped id.
+- **`add_task`** gains an optional `parent_path`, so "Add subtask" is one call.
 
 Both write commands stay `async` (`spawn_blocking`), like every other task write.
+Both resolve `parent_path` under the same canonical-containment gate as the child
+path, so a parent outside the vault's tasks root is refused rather than linked.
 
 ### 5. Frontend: the Task Detail surface
 
@@ -239,7 +296,15 @@ composable (keeping `TaskDetail.vue` under its LOC cap and the logic unit-testab
   detail, so you can walk up the tree) plus a **Change** / **Clear** control. The
   picker is a searchable list of the vault's other Tasks with the cycle-invalid
   ones (self + descendants) disabled and labelled, so the rule is visible rather
-  than only enforced on save.
+  than only enforced on save. Picking one sends that Task's **`path`** — the
+  field every row already carries whether or not IDs are on (§2) — so the picker
+  works identically in a fresh vault and an ID-enabled one.
+
+  Cycle-invalid options are computed from the ids the frontend *can* see. In a
+  vault with IDs still off no row has an id, so the index is empty and nothing is
+  pre-disabled — correctly, since a vault with no ids has no parent links and
+  therefore no reachable cycle. The core check in §3 remains the authority in
+  every case; the disabling is an affordance, never the gate.
 - **Subtasks section.** A progress line (`2 / 5 done`), each child as a compact
   row (status checkbox + title, clicking the title drills into that child's
   detail), and **Add subtask** — an inline title input that creates a child
@@ -280,9 +345,21 @@ already sorted.
   parent-set). The tidier alternative — best-effort clearing each child's parent
   keys, as `delete_task_list` relocates its tasks — is recorded in Gaps as the
   tracked option if orphan clutter ever proves real.
-- **Move between Lists** — unchanged. The hierarchy is id-keyed and folder-blind,
-  so a child may live in a different List from its parent; no move is implied or
-  blocked.
+- **Move between Lists** — unchanged, with one honest consequence of the
+  vault-relative link form (§1): moving a **parent** changes its path, so the
+  `parent` wikilink recorded on each of its children goes stale. `parent-id` is
+  authoritative, so **VB's hierarchy is completely unaffected** — only Obsidian's
+  click-through degrades, and it degrades *visibly* (an unresolved link) rather
+  than silently navigating to the wrong Task, which is exactly the failure the
+  path form exists to prevent. The link self-heals the next time that parent is
+  set. Refreshing every child's link on a parent move would mean bolting a batch
+  write onto the move path — the same thing this spec declines to do to delete —
+  so it is recorded in Gaps as the tracked option instead.
+
+  This is the deliberate trade of the two link forms: a bare stem survives moves
+  but can silently resolve to the wrong Task; a path is move-fragile but never
+  wrong. Since the id already guarantees correctness, the link is optimized for
+  *never misleading*, not for surviving every edit.
 
 ## Architecture
 
@@ -294,10 +371,14 @@ core/src/tasks/
   mod.rs         +    parent-id + parent in RESERVED_TASK_KEYS
   create.rs      +    render_task writes an optional parent pair
 core/src/services/tasks/
-  mod.rs         +    set_task_parent (id auto-enable, cycle gate, paired write)
-                 +    parent_id on add_task; parentId/parentLink on TaskDto
+  mod.rs         +    set_task_parent (path resolve -> stamp -> cycle gate ->
+                      paired write; id auto-enable)
+                 +    parent_path on add_task; parentId/parentLink on TaskDto
+                 +    set_task_id_config guard: refuse a property CHANGE while
+                      any task carries parent-id (2a)
 src-tauri/src/
-  task_commands.rs +  parent_id/clear_parent on TaskPatchDto; parent on add_task
+  task_commands.rs +  parent_path/clear_parent on TaskPatchDto; parent_path on
+                      add_task; update_task returns the effective parent pair
 src/
   composables/useTaskHierarchy.ts  NEW  index, children, progress, verbs
   components/TaskDetail.vue        +    Parent row + Subtasks section
@@ -322,8 +403,14 @@ moves from envisioned to shipped.
 - A cycle-creating assignment → inline error naming the conflict; nothing written.
 - An invalid/reserved configured id property → inline error naming the property;
   IDs are not silently re-pointed and no parent is written.
+- An id-property **change** while parent links exist → inline error naming the
+  count and current property (§2a); the setting is unchanged.
+- A parent path outside the vault's tasks root → refused by the same containment
+  gate as the child path; nothing written.
 - A parent that vanished between load and write → the write fails like any other
-  missing-file write ("never a silent success"); the child is untouched.
+  missing-file write ("never a silent success"); the child is untouched. Because
+  the parent is stamped before the child is written, a failure to stamp aborts
+  the whole set — the child never gets a `parent-id` no task answers to.
 - A failed parent-set → optimistic state reverts and a toast names the failure,
   matching every other detail write.
 - A pre-existing on-disk cycle → bounded walks terminate; the affected rows
@@ -332,21 +419,27 @@ moves from envisioned to shipped.
 ## Testing
 
 **Core (Rust, Linux):** lenient reads of both keys (quoted, unquoted, empty,
-block, flow, missing); the paired write and the paired clear; wikilink quoting;
-`RESERVED_TASK_KEYS` filtering for both keys; `would_create_cycle` (self, direct,
-transitive, and a pre-existing on-disk cycle terminating); `ancestors` bounded by
-its visited set; `parent_index` ignoring unresolvable ids; `render_task` with and
-without a parent (byte-identical to today when absent); duplicate preserving the
-parent pair.
+block, flow, missing); the paired write and the paired clear; wikilink quoting
+**and the vault-relative path form** (including two Lists holding the same stem,
+the §1 ambiguity case); `RESERVED_TASK_KEYS` filtering for both keys;
+`would_create_cycle` (self, direct, transitive, and a pre-existing on-disk cycle
+terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
+unresolvable ids; `render_task` with and without a parent (byte-identical to
+today when absent); duplicate preserving the parent pair.
 
-**Service:** id auto-enable on first parent-set (and the no-op when already on);
-the invalid-property error path; parent id stamped when the parent lacked one.
+**Service:** **the IDs-off bootstrap — set a parent in a vault with IDs disabled
+and assert it enables IDs, stamps BOTH tasks, and writes a resolvable link**
+(the P1 regression); the no-op when IDs are already on; the invalid-property
+error path; the id-property-change refusal while parent links exist (and that it
+still allows enable/disable); a parent path outside the tasks root refused; a
+failed parent stamp leaving the child unwritten.
 
-**Frontend (Vitest):** parent chip navigation; picker disabling cycle-invalid
-options; add-subtask creating with the parent and inheriting the List; progress
-counting; the shared busy guard covering the parent write; orphan rendering as
-top-level; per-vault scoping of the index in aggregate mode; list badge/chip
-rendering.
+**Frontend (Vitest):** parent chip navigation; the picker sending a **path**
+(and working with no ids surfaced); picker disabling cycle-invalid options when
+ids exist; add-subtask creating with the parent and inheriting the List;
+progress counting; the shared busy guard covering the parent write; orphan
+rendering as top-level; per-vault scoping of the index in aggregate mode; list
+badge/chip rendering.
 
 ## Quality gates & docs
 
@@ -367,13 +460,19 @@ until the user sets a first parent. The only config side-effect is enabling Task
 IDs on first use, which is itself additive (ids are stamped, never overwritten)
 and surfaced to the user. MCP's `list_tasks` gains two fields and no new tool.
 
+The one **restriction** this increment introduces is §2a: once a vault has parent
+links, its Task ID *property name* can no longer be re-pointed (enabling and
+disabling IDs still work). A vault with no hierarchy is entirely unaffected.
+
 ## Suggested phasing for the plan
 
 1. Core reads + `TaskItem`/`TaskDto` fields + reserved keys (additive, no UI).
 2. `hierarchy.rs`: index, bounded ancestors, cycle check.
-3. Service `set_task_parent`: id auto-enable, cycle gate, paired write; the
-   `update_task` / `add_task` IPC surface.
-4. `useTaskHierarchy` + the Detail Parent row and picker.
-5. The Subtasks section + Add subtask.
-6. The list badge + parent chip (incl. per-vault scoping in aggregate mode).
-7. Docs sweep (AGENTS.md, CONTEXT.md, PRD, use-case, Gaps) + final review.
+3. Service `set_task_parent`: **path → resolve/stamp the parent's id** → cycle
+   gate → paired write, plus id auto-enable; the `update_task` / `add_task` IPC
+   surface (path-keyed) and the extended return.
+4. The §2a `set_task_id_config` guard.
+5. `useTaskHierarchy` + the Detail Parent row and path-sending picker.
+6. The Subtasks section + Add subtask.
+7. The list badge + parent chip (incl. per-vault scoping in aggregate mode).
+8. Docs sweep (AGENTS.md, CONTEXT.md, PRD, use-case, Gaps) + final review.
