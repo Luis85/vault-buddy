@@ -143,7 +143,12 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
     path>.md)` when it does. Obsidian resolves markdown links natively and
     percent-encoding represents every character unambiguously; the app already
     percent-encodes every `obsidian://` parameter in `uri.rs`, so this reuses an
-    established convention rather than inventing one.
+    established convention rather than inventing one. Note that encoder is
+    `NON_ALPHANUMERIC`-based, so it also percent-encodes characters a markdown
+    destination would tolerate bare (`-` becomes `%2D`). That is deliberate:
+    over-encoding always resolves correctly while under-encoding does not, and a
+    second, prettier encoder would be a new escaping surface to get wrong. The
+    link stays machine-correct rather than maximally readable.
 
     **The destination is relative to the CHILD's directory, not the vault root.**
     A markdown destination is resolved from the note containing it, so emitting a
@@ -876,10 +881,11 @@ IDs on first use, which is itself additive (ids are stamped, never overwritten)
 and surfaced to the user. MCP's `list_tasks` gains two fields and no new tool.
 
 The one **restriction** this increment introduces is §2a: once a vault has parent
-links, its Task ID configuration is locked — neither the property name nor the
-enabled flag can change until those links are cleared, since either would make
-every recorded reference unresolvable. A vault with no hierarchy keeps today's
-fully-editable ID settings.
+links, its Task ID property cannot be re-pointed and IDs cannot be **disabled**,
+since either would make every recorded reference unresolvable. **Enabling** IDs
+under an unchanged property stays allowed — it can only make references
+resolvable, and refusing it would be the catch-22 §2a describes. A vault with no
+hierarchy keeps today's fully-editable ID settings.
 
 ## Suggested phasing for the plan
 

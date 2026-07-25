@@ -442,7 +442,11 @@ mod tests {
         let p = PathBuf::from("/v/Tasks/Project#1/2026-07-04-ship.md");
         let c = PathBuf::from("/v/Tasks/child.md"); // one dir deep
         let link = compose(&p, &c, &root, "Ship it").unwrap();
-        assert_eq!(link, "[Ship it](../Tasks/Project%231/2026-07-04-ship.md)");
+        // NOTE `uri::encode` is NON_ALPHANUMERIC-based, so it encodes `-` as %2D
+        // too (pinned by uri.rs's own builds_open_file_uri test). Over-encoding
+        // always resolves correctly; under-encoding does not — so we reuse the
+        // established encoder rather than inventing a prettier one.
+        assert_eq!(link, "[Ship it](../Tasks/Project%231/2026%2D07%2D04%2Dship.md)");
         assert!(!link.starts_with("[[")); // not a wikilink
     }
 
@@ -1167,6 +1171,30 @@ the parent never moved (Codex P2, PR #77). This is ONE file, and
 backfill, and only written when the link actually differs. (A moved *parent's*
 children stay untouched: that is the unbounded batch write this spec declines.)
 
+**The repair needs the VAULT root, which `tasks::move_task_to_list` does not
+have.** It receives the TASKS root, and `compose_parent_link` builds a
+vault-relative target. Deriving the vault root as `tasks_root.parent()` is WRONG
+for any non-default configuration — a vault whose tasks folder is `Notes/Tasks`
+would get `Notes` as the "vault root" and emit a target missing a path segment
+(Codex P2, PR #77). So thread the canonical vault path in explicitly: add a
+`vault_root: &Path` parameter to the core function (the service layer already
+resolved it), or perform the repair in `services::move_task_to_list` where both
+roots are in scope. Pick whichever keeps the core function's other callers
+simplest, and **test with a nested tasks folder**, not just the default:
+
+```rust
+    #[test]
+    fn moving_a_child_recomposes_its_link_under_a_NESTED_tasks_folder() {
+        // tasks root = <vault>/Notes/Tasks, so vault_root != tasks_root.parent().
+        // Getting this wrong silently drops a path segment from every link.
+        let (vault, root) = fixture_nested_tasks_root("Notes/Tasks");
+        // …child under a metacharacter List so the markdown fallback is in play…
+        let landed = move_task_to_list(&root, &child, "", Some("task-id")).unwrap();
+        let out = std::fs::read_to_string(&landed.path).unwrap();
+        assert!(out.contains("](Notes/Tasks/"), "link must be vault-relative, got {out}");
+    }
+```
+
 ```rust
     #[test]
     fn moving_a_child_recomposes_its_own_fallback_link() {
@@ -1437,6 +1465,18 @@ Update `src/types.ts` and every frontend caller of `update_task` accordingly (`u
 
 Add `parent_path: Option<String>` to the command and to `services::add_task`.
 
+**Re-resolve the id property AFTER the enable, or the child gets no id of its
+own.** `add_task` reads `cfg` up front and derives `id_property` from that
+snapshot; the shared resolve path may then enable IDs *after* that read. Using
+the stale snapshot passes `None` to `create_task`, so the new child receives a
+`parent-id` but no `task-id` — a Task created in an ID-enabled vault with no
+stable id, which every later structural write would have to backfill (Codex P2,
+PR #77). Derive the child's own id from the POST-enable configuration (the shared
+helper already knows the resolved property — return it, or re-read the config
+after the enable). The bootstrap regression must assert BOTH the returned
+`child.id` and the id property actually present in the child's file on disk, not
+just `parent_id`.
+
 **`add_task` must also return the `idsEnabled` flag.** Add subtask is the most
 likely FIRST hierarchy operation in a vault, so it is the path that most often
 turns Task IDs on — but a plain `TaskDto` gives the frontend no way to know, and
@@ -1478,6 +1518,11 @@ Write this failing test first:
         assert!(!pid.is_empty());
         // …and it RESOLVES: the parent now carries that exact id.
         assert!(std::fs::read_to_string(root.join("p.md")).unwrap().contains(&format!("task-id: {pid}")));
+        // The CHILD also gets its own stable id, derived from the POST-enable
+        // config — a stale pre-enable snapshot would leave it id-less.
+        let cid = child.id.expect("the child gets its own id once IDs are on");
+        assert!(!cid.is_empty());
+        assert!(std::fs::read_to_string(&child.path).unwrap().contains(&format!("task-id: {cid}")));
     }
 ```
 
