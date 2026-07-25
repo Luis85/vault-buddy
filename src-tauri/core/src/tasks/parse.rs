@@ -157,22 +157,16 @@ pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
-/// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
-/// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
-/// case and `is_valid_id_property` accepts case variants, so reads and writes
-/// must agree despite casing. The id-stamp (`update_task_fields`) uses BOTH
-/// halves: the value to decide "already has a usable id" — a bare `task-id:`
-/// reads as `Some("")`, treated as MISSING so a fresh id is still stamped
-/// (Codex, PR #59) — and the on-disk NAME to rewrite a present-but-blank line
-/// under its own casing, so `set_fields` (case-sensitive) matches it instead of
-/// inserting a case-mismatched DUPLICATE the CI read would then shadow.
-/// `list_tasks` reads the id back through `scalar_id_ci` (which rejects a blank
-/// or non-scalar value), so a stable on-disk id stays visible in
-/// `TaskItem.id`. Skips indented/nested lines (a
-/// nested `  task-id:` under a mapping is never the top-level property
-/// `set_fields` would rewrite), then delegates value parsing (comment-strip,
-/// quote-unwrap) to `scalar_field` with the ACTUAL casing found.
-pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String, String)> {
+/// The on-disk casing of the first TOP-LEVEL `key:` line, matched
+/// CASE-INSENSITIVELY — `None` when the key never appears at the top level
+/// before the closing fence, or the fence is missing. Factored out of
+/// `frontmatter_scalar_ci` so `scalar_id_ci` can pair the exact same
+/// case-insensitive key search with the STRICT decode (`strict_scalar_field`)
+/// instead of `frontmatter_scalar_ci`'s lenient `scalar_field` one — the two
+/// disagreeing on an id's decode was Defect A (see `scalar_id_ci`'s doc
+/// comment). Skips indented/nested lines: a nested `  task-id:` under a
+/// mapping is never the top-level property `set_fields` would rewrite.
+fn top_level_key_ci<'a>(content: &'a str, key: &str) -> Option<&'a str> {
     let mut lines = content.lines();
     if lines.next().map(str::trim_end) != Some("---") {
         return None;
@@ -182,19 +176,91 @@ pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String,
         if t == "---" {
             return None; // closing fence — key not found in frontmatter
         }
-        // Top-level keys only: a nested `  task-id:` under a mapping is never
-        // the property set_fields would rewrite, so the id-stamp must skip it.
         if t.starts_with([' ', '\t']) {
             continue;
         }
         if let Some((k, _)) = t.split_once(':') {
             let k = k.trim();
             if k.eq_ignore_ascii_case(key) {
-                return scalar_field(content, k).map(|v| (k.to_string(), v));
+                return Some(k);
             }
         }
     }
     None
+}
+
+/// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
+/// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
+/// case and `is_valid_id_property` accepts case variants, so reads and writes
+/// must agree despite casing. The id-stamp (`update_task_fields`) uses BOTH
+/// halves: the value to decide "already has a usable id" — a bare `task-id:`
+/// reads as `Some("")`, treated as MISSING so a fresh id is still stamped
+/// (Codex, PR #59) — and the on-disk NAME to rewrite a present-but-blank line
+/// under its own casing, so `set_fields` (case-sensitive) matches it instead of
+/// inserting a case-mismatched DUPLICATE the CI read would then shadow.
+/// Delegates the key search to `top_level_key_ci`, then decodes the value via
+/// the lenient `scalar_field` — the pairing `scalar_id_ci` below deliberately
+/// does NOT use (it needs the strict decode instead; see its doc comment).
+pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String, String)> {
+    let on_disk = top_level_key_ci(content, key)?;
+    scalar_field(content, on_disk).map(|v| (on_disk.to_string(), v))
+}
+
+/// STRICT optional-field scalar decode: the FULL YAML escape set (unlike
+/// `scalar_field`'s shallow one-layer outer-quote strip), for the two places
+/// where a wrong or partially-decoded value is worse than none — a parent
+/// reference (`tasks/parent.rs`, which calls this via its `scalar` wrapper)
+/// and a task's own id (`scalar_id_ci` below). Sharing this decoder between
+/// the two is the fix for Defect A: `scalar_field`'s outer-quote strip is
+/// `&stripped[1..len-1]`, a single character sliced off each end, which
+/// leaves an embedded YAML `''` doubled-quote escape intact — a task stamped
+/// `task-id: 'a''b'` read as `a''b` while a child's identical
+/// `parent-id: 'a''b'`, decoded through the parent-id reader's full decode,
+/// read as the correct `a'b`. The two could never compare equal, so
+/// `parent_index` silently resolved no edge. Routing both reads through this
+/// one decoder makes them agree by construction.
+///
+/// Deliberately NOT `decode_scalar_lenient`: that decoder exists for TITLES,
+/// where falling back to raw text is right because a title must never
+/// vanish. A parent reference (and an id) is the opposite: a wrong value
+/// manufactures a phantom relationship, so unsupported/null-ish forms yield
+/// `None` here, matching `description_field`'s rules (Codex P2, PR #77).
+///
+/// `link` gates the `[[wikilink]]` flow-sequence exemption: only
+/// `parent_link_field` (via `parent.rs::scalar`) passes `true` — the form
+/// users type for `parent`, never parsed for meaning. Every other caller —
+/// `parent_id_field` and `scalar_id_ci` — passes `false`: an id must be a
+/// plain scalar, so a wikilink-shaped value is exactly the kind of flow
+/// value the block/flow guard below exists to reject.
+pub(super) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Option<String> {
+    let raw = crate::capture_note::raw_scalar_field(content, key)?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // A block (`|`/`>`) or flow (`{..}`) value is the user's own structure,
+    // not our scalar. `[[wikilink]]` is exempt ONLY when `link` is set.
+    let wikilink_exempt = link && raw.starts_with("[[");
+    if !wikilink_exempt && (raw.starts_with(['|', '>', '{']) || raw.starts_with('[')) {
+        return None;
+    }
+    // A leading `#` is a YAML comment — the property is null.
+    if raw.starts_with('#') {
+        return None;
+    }
+    let decoded = if raw.starts_with('"') {
+        // An unterminated quoted scalar is multi-line; reject rather than
+        // surfacing its first line.
+        crate::yaml_scalar::yaml_unquote_multiline(super::description::double_quoted_slice(raw)?)
+    } else if raw.starts_with('\'') {
+        super::description::decode_single_quoted(raw)?
+    } else {
+        let stripped = strip_inline_comment(raw).trim();
+        if matches!(stripped, "null" | "Null" | "NULL" | "~") {
+            return None;
+        }
+        stripped.to_string()
+    };
+    (!decoded.trim().is_empty()).then_some(decoded)
 }
 
 /// True when the top-level `key:` line (exact, ON-DISK casing) opens a BLOCK
@@ -270,20 +336,28 @@ pub(super) fn key_opens_flow(content: &str, key: &str) -> bool {
 }
 
 /// Read the configured id property as a stable PLAIN-SCALAR id (on-disk casing
-/// insensitive). Returns None when the property is absent, blank, or holds a
+/// insensitive), decoded through `strict_scalar_field` — the SAME strict
+/// decoder a `parent-id` reference uses (`tasks/parent.rs`), NOT the lenient
+/// `scalar_field` that `frontmatter_scalar_ci` pairs with the structured
+/// fields (due/priority/created/status/title). This is Defect A's fix: the
+/// two used to disagree — `scalar_field`'s outer-quote strip is shallow, so a
+/// task's own id and an identical on-disk `parent-id` string could decode to
+/// two different values and never compare equal, silently breaking
+/// `parent_index`'s edge resolution (see `strict_scalar_field`'s doc
+/// comment). Returns None when the property is absent, blank, or holds a
 /// NON-SCALAR value — a block (`key:` then indented lines) or flow (`key: {..}`
 /// / `[..]`) collection is the user's structure, not an id, and must never
 /// surface AS an id. Without this, a duplicate that PRESERVED a flow-valued
 /// property (the never-clobber posture) would read as sharing the source's
-/// stable id — two tasks with one id (Codex P2, PR #76). The scalar READ now
+/// stable id — two tasks with one id (Codex P2, PR #76). The scalar READ
 /// agrees with the write guards (`key_opens_block`/`key_opens_flow`):
 /// non-scalar = non-id on both sides.
 pub(super) fn scalar_id_ci(content: &str, key: &str) -> Option<String> {
-    let (on_disk, value) = frontmatter_scalar_ci(content, key)?;
-    if value.is_empty() || key_opens_block(content, &on_disk) || key_opens_flow(content, &on_disk) {
+    let on_disk = top_level_key_ci(content, key)?;
+    if key_opens_block(content, on_disk) || key_opens_flow(content, on_disk) {
         return None;
     }
-    Some(value)
+    strict_scalar_field(content, on_disk, false)
 }
 
 /// Parse one frontmatter tags-ish key. None when the key is absent; Some of
@@ -459,6 +533,22 @@ mod tests {
             )
             .as_deref(),
             Some("abc")
+        );
+    }
+
+    #[test]
+    fn scalar_id_ci_decodes_a_doubled_single_quote_escape_fully() {
+        // Defect A: scalar_field's outer-quote strip is SHALLOW
+        // (`&stripped[1..len-1]`), leaving an embedded `''` doubled-quote
+        // escape intact — `'a''b'` decoded to `a''b` instead of the correct
+        // YAML `a'b`. A `parent-id` reference (tasks/parent.rs::scalar) does
+        // the full decode, so the two sides of an id comparison disagreed on
+        // identical on-disk text and `parent_index` could never resolve the
+        // edge. `scalar_id_ci` must decode identically to the parent-id
+        // reader.
+        assert_eq!(
+            scalar_id_ci("---\ntype: Task\ntask-id: 'a''b'\n---\n", "task-id").as_deref(),
+            Some("a'b")
         );
     }
 

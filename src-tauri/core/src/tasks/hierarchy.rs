@@ -32,7 +32,11 @@ pub fn ambiguous_ids(tasks: &[TaskItem]) -> HashSet<&str> {
         .collect()
 }
 
-pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_> {
+/// Child PATH -> parent PATH, resolved through UNambiguous ids only, WITHOUT
+/// dropping cyclic edges. Shared by `parent_index` (which drops them, for
+/// display) and `parent_index_for_validation` (which keeps them, for
+/// `would_create_cycle` — see that function's doc comment for why).
+fn resolve_edges(tasks: &[TaskItem]) -> ParentIndex<'_> {
     let ambiguous = ambiguous_ids(tasks);
     // id -> path, for the UNambiguous ids only.
     let by_id: HashMap<&str, &Path> = tasks
@@ -53,8 +57,33 @@ pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_> {
             idx.insert(t.path.as_path(), parent_path);
         }
     }
+    idx
+}
+
+/// The DISPLAY index: edges resolved through unambiguous ids, with every edge
+/// touching a cycle dropped (`drop_cyclic_edges`) so both rows of a
+/// pre-existing on-disk cycle render parentless instead of confidently
+/// showing each other as parent/subtask.
+///
+/// **Not for validation.** A proposed new edge must be checked against the
+/// complete graph, cycle and all — see `parent_index_for_validation` and
+/// `would_create_cycle`'s doc comment (Defect B).
+pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_> {
+    let mut idx = resolve_edges(tasks);
     drop_cyclic_edges(&mut idx);
     idx
+}
+
+/// The VALIDATION index: the counterpart to `parent_index` that
+/// `would_create_cycle` must be given instead. Edges are resolved through
+/// unambiguous ids exactly like `parent_index` (a duplicate id genuinely
+/// identifies no single task, cycle or not, so it is dropped here too) —
+/// but, UNLIKE `parent_index`, cyclic edges are RETAINED. `ancestors` is
+/// already bounded by a visited set, so walking a graph that still contains
+/// a cycle terminates safely; nothing else needs to change for this to be
+/// safe to hand to `would_create_cycle`.
+pub fn parent_index_for_validation(tasks: &[TaskItem]) -> ParentIndex<'_> {
+    resolve_edges(tasks)
 }
 
 /// Remove the edges of every node lying on a cycle. A hand-authored A -> B -> A
@@ -62,8 +91,9 @@ pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_> {
 /// make either edge unresolved, so both rows would render each other as parent
 /// and subtask. Dropping them makes both render parentless — visibly wrong data
 /// the user can see and fix, rather than a confidently-rendered loop (design
-/// spec §3). It also leaves the index cycle-free, so `would_create_cycle`
-/// validates against exactly what the user is looking at.
+/// spec §3). Used by `parent_index` (display) only — NOT by
+/// `parent_index_for_validation`, which must keep cyclic edges visible to
+/// `would_create_cycle` (Defect B; see that function's doc comment).
 fn drop_cyclic_edges(idx: &mut ParentIndex<'_>) {
     let cyclic: Vec<&Path> = idx
         .keys()
@@ -106,6 +136,20 @@ pub fn ancestors<'a>(index: &ParentIndex<'a>, start: &'a Path) -> Vec<&'a Path> 
 }
 
 /// True when making `parent` the parent of `child` would create a cycle.
+///
+/// **Callers MUST pass `parent_index_for_validation`'s output here, never
+/// the display `parent_index`'s.** (Defect B.) `parent_index` drops every
+/// edge touching a pre-existing on-disk cycle so the UI can render both rows
+/// parentless — but that makes it BLIND to the cycle for validation purposes.
+/// Concrete failure this prevents (verified by trace): a vault has a
+/// hand-authored `A -> B -> A` plus `C -> A`. `parent_index` drops `A -> B`
+/// and `B -> A`. Validating "would making C the parent of B create a cycle"
+/// against that filtered index walks `ancestors(C) = [A]`, never reaching B,
+/// and WRONGLY ACCEPTS — writing `B -> C -> A -> B`, a real cycle the app
+/// just created. `parent_index_for_validation` retains the cyclic edges (it
+/// still drops AMBIGUOUS ids, which identify nothing either way), so the walk
+/// sees the real graph; `ancestors`' visited-set bound is what keeps that walk
+/// safe, not the index being acyclic.
 pub fn would_create_cycle(index: &ParentIndex<'_>, child: &Path, parent: &Path) -> bool {
     child == parent || ancestors(index, parent).contains(&child)
 }
@@ -207,5 +251,56 @@ mod tests {
     fn an_unresolvable_parent_id_yields_no_edge() {
         let tasks = vec![t("orphan", Some("o"), Some("gone"))];
         assert!(parent_index(&tasks).is_empty());
+    }
+
+    #[test]
+    fn would_create_cycle_needs_the_validation_index_not_the_display_one() {
+        // Defect B, verified by trace: a vault has a hand-authored A -> B -> A
+        // plus C -> A. `parent_index` (DISPLAY) drops both edges of the A<->B
+        // cycle so the rows render parentless — correct for the UI — but
+        // `would_create_cycle` must not validate a NEW write against that
+        // filtered graph. Under the display index, ancestors(C) = [A] never
+        // sees B, so asking "would making C the parent of B create a cycle"
+        // is wrongly ACCEPTED — writing B -> C -> A -> B, a real cycle.
+        let tasks = vec![
+            t("a", Some("a"), Some("b")), // A -> B
+            t("b", Some("b"), Some("a")), // B -> A (hand-authored cycle)
+            t("c", Some("c"), Some("a")), // C -> A
+        ];
+
+        // Pin the split: the DISPLAY index still drops the cyclic A<->B edges
+        // (the unrelated C -> A survives, per
+        // `a_cycle_does_not_drop_unrelated_edges` above).
+        let display = parent_index(&tasks);
+        assert!(!display.contains_key(p("a").as_path()));
+        assert!(!display.contains_key(p("b").as_path()));
+        assert_eq!(display.get(p("c").as_path()), Some(&p("a").as_path()));
+
+        // The VALIDATION index keeps the cyclic edges too.
+        let validation = parent_index_for_validation(&tasks);
+        assert_eq!(validation.get(p("a").as_path()), Some(&p("b").as_path()));
+        assert_eq!(validation.get(p("b").as_path()), Some(&p("a").as_path()));
+        assert_eq!(validation.get(p("c").as_path()), Some(&p("a").as_path()));
+
+        // Assigning B's parent to C would close B -> C -> A -> B: the
+        // validation index correctly refuses it...
+        assert!(would_create_cycle(&validation, &p("b"), &p("c")));
+        // ...which is exactly what the display index gets WRONG (this is the
+        // defect itself, pinned so a future change can't reintroduce it by
+        // swapping which index gets passed to would_create_cycle).
+        assert!(!would_create_cycle(&display, &p("b"), &p("c")));
+    }
+
+    #[test]
+    fn parent_index_for_validation_still_drops_ambiguous_ids() {
+        // The validation index retains cyclic edges (see above) but must
+        // still drop AMBIGUOUS ids — a duplicate id genuinely identifies no
+        // single task, cycle or not.
+        let tasks = vec![
+            t("x", Some("dup"), None),
+            t("y", Some("dup"), None),
+            t("z", Some("z"), Some("dup")),
+        ];
+        assert!(parent_index_for_validation(&tasks).is_empty());
     }
 }

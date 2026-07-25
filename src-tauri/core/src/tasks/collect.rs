@@ -368,6 +368,43 @@ mod tests {
     }
 
     #[test]
+    fn parent_index_resolves_an_edge_through_matching_quoted_ids() {
+        // Defect A regression: a task's OWN id is read via `scalar_id_ci`
+        // (parse.rs), a `parent-id` reference via `parent::parent_id_field`
+        // (parent.rs) — the two must decode an identical on-disk YAML scalar
+        // to the identical string, or `parent_index` can never resolve the
+        // edge. `'a''b'` is the YAML doubled-single-quote escape for `a'b`;
+        // the old `scalar_id_ci` (via `scalar_field`'s shallow one-layer
+        // quote strip) decoded it to `a''b` instead, so it never matched the
+        // parent-id side's full decode and the edge silently vanished.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "parent.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Parent\"\ncreated: 2026-07-25\ntask-id: 'a''b'\n---\n",
+        );
+        write(
+            root,
+            "child.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Child\"\ncreated: 2026-07-25\nparent-id: 'a''b'\n---\n",
+        );
+        let items = list_tasks(root, Some("task-id"));
+        let parent_item = items.iter().find(|t| t.title == "Parent").unwrap();
+        let child_item = items.iter().find(|t| t.title == "Child").unwrap();
+        // Both sides must decode to the SAME string.
+        assert_eq!(parent_item.id.as_deref(), Some("a'b"));
+        assert_eq!(child_item.parent_id.as_deref(), Some("a'b"));
+
+        let idx = crate::tasks::parent_index(&items);
+        assert_eq!(
+            idx.get(child_item.path.as_path()),
+            Some(&parent_item.path.as_path()),
+            "the child must resolve a real edge to the parent"
+        );
+    }
+
+    #[test]
     fn list_tasks_does_not_surface_a_non_scalar_id_as_an_id() {
         // A block- or flow-valued id property is the user's structure, not a
         // stable id — it must read as None so a duplicate that preserved a flow

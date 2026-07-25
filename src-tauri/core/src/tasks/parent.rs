@@ -34,38 +34,15 @@ pub(super) fn parent_link_field(content: &str) -> Option<String> {
 /// any other flow value, not silently accepted as if it were the link
 /// (finding 5: the exemption previously applied to both keys because they
 /// shared one undiscriminated `scalar` helper).
+///
+/// The decode itself now lives in `parse::strict_scalar_field` (Defect A): a
+/// task's OWN id (`scalar_id_ci`) must decode a quoted YAML scalar
+/// IDENTICALLY to a `parent-id` reference, or the two sides of an id
+/// comparison can never agree — see that function's doc comment. This is a
+/// thin named wrapper so `parent_id_field`/`parent_link_field` read
+/// naturally; it carries no logic of its own anymore.
 fn scalar(content: &str, key: &str, link: bool) -> Option<String> {
-    let raw = crate::capture_note::raw_scalar_field(content, key)?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    // A block (`|`/`>`) or flow (`{..}`) value is the user's own structure,
-    // not our scalar. `[[wikilink]]` is exempt ONLY when `link` is set.
-    let wikilink_exempt = link && raw.starts_with("[[");
-    if !wikilink_exempt && (raw.starts_with(['|', '>', '{']) || raw.starts_with('[')) {
-        return None;
-    }
-    // A leading `#` is a YAML comment — the property is null.
-    if raw.starts_with('#') {
-        return None;
-    }
-    let decoded = if raw.starts_with('"') {
-        // An unterminated quoted scalar is multi-line; reject rather than
-        // surfacing its first line.
-        crate::yaml_scalar::yaml_unquote_multiline(super::description::double_quoted_slice(raw)?)
-    } else if raw.starts_with('\'') {
-        super::description::decode_single_quoted(raw)?
-    } else {
-        // strip_inline_comment lives in `parse` (a sibling module, like
-        // `description`) — reached directly rather than through
-        // `description`'s former re-export (finding 7).
-        let stripped = super::parse::strip_inline_comment(raw).trim();
-        if matches!(stripped, "null" | "Null" | "NULL" | "~") {
-            return None;
-        }
-        stripped.to_string()
-    };
-    (!decoded.trim().is_empty()).then_some(decoded)
+    super::parse::strict_scalar_field(content, key, link)
 }
 
 #[cfg(test)]
