@@ -97,16 +97,12 @@ pub fn set_task_parent(
                 &root,
                 &child,
                 &[
-                    // ensure_id preserves ANY usable existing value, so an
-                    // inherited `task-id: "[legacy]"` would otherwise emit a
-                    // bare flow sequence the reader rejects. quote_id_if_needed
-                    // keeps generated base36 bare — the same helper the create
-                    // path writes its pair through, so the two agree by
-                    // construction.
-                    (
-                        "parent-id",
-                        Some(&tasks::quote_id_if_needed(&resolved.parent_id) as &str),
-                    ),
+                    // `parent_id_ref` is already the exact YAML text that
+                    // means the same thing as the parent's OWN id line
+                    // (`tasks::mirror_id_reference`, resolved once above
+                    // alongside `parent_id`) — not re-derived here, so this
+                    // call site can't drift from how it was decided.
+                    ("parent-id", Some(resolved.parent_id_ref.as_str())),
                     (
                         "parent",
                         Some(&crate::yaml_scalar::yaml_quote(&resolved.link) as &str),
@@ -221,6 +217,15 @@ pub(super) struct ParentWriteCtx<'a> {
 /// the link it will display.
 pub(super) struct ResolvedParent {
     pub parent_id: String,
+    /// The exact YAML text to write as the CHILD's `parent-id:` value —
+    /// `tasks::mirror_id_reference`'s output, NOT simply `parent_id` itself.
+    /// The two differ whenever the parent's id line is implicitly typed or
+    /// tag-decorated: `parent_id` is the DECODED string (e.g. "123" for a
+    /// source `task-id: 123`), which loses exactly the information that
+    /// decides the source's true YAML type — writing IT back through a
+    /// charset heuristic would retype a NUMBER as a STRING. `parent_id_ref`
+    /// carries the already-resolved, meaning-preserving text instead.
+    pub parent_id_ref: String,
     pub link: String,
     pub ids_enabled: bool,
 }
@@ -295,6 +300,18 @@ pub(super) fn resolve_parent_for_write<T>(
     // not be clobbered — there is no id to point the child at.
     let parent_id = tasks::update_task_fields(ctx.root, parent, &[], Some(ctx.prop))?
         .ok_or_else(|| "Could not assign an ID to the parent task.".to_string())?;
+    // Re-read: `update_task_fields` above GUARANTEES the property now holds
+    // `parent_id` on disk — either it was already there (untouched, since a
+    // no-op `updates` slice short-circuits the write) or it was just stamped
+    // — so this sees the parent's CURRENT raw id line either way.
+    // `mirror_id_reference` needs that raw text, not just the decoded
+    // `parent_id`, to tell an implicitly-typed/tag-decorated source (which
+    // must be mirrored verbatim to preserve its YAML type) from a quoted one
+    // (unaffected, decode-then-requote is already correct there) — see its
+    // own doc comment.
+    let parent_content_after =
+        std::fs::read_to_string(parent).map_err(|e| format!("Cannot re-read parent task: {e}"))?;
+    let parent_id_ref = tasks::mirror_id_reference(&parent_content_after, ctx.prop, &parent_id);
     // The link is vault-relative, and `parent`/`child` are canonical — so the
     // vault root must be canonical too or `strip_prefix` fails on a registry
     // path that differs only by symlink (the same reason `open_task` computes
@@ -306,6 +323,7 @@ pub(super) fn resolve_parent_for_write<T>(
 
     let resolved = ResolvedParent {
         parent_id,
+        parent_id_ref,
         link,
         ids_enabled,
     };
@@ -429,7 +447,10 @@ pub(super) fn add_subtask(
                 cfg.task_extra_frontmatter.as_deref(),
                 cfg.task_body_template.as_deref(),
                 scheduled,
-                Some((&resolved.parent_id, &resolved.link)),
+                // `parent_id_ref`, not `parent_id`: `render_task` writes this
+                // verbatim (see its doc comment), so the caller — here — must
+                // hand it the already meaning-preserving encoding.
+                Some((resolved.parent_id_ref.as_str(), &resolved.link)),
             )
             .map_err(|e| format!("Could not create task: {e}"))?;
             Ok((written, child_id))

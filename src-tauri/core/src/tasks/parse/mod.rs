@@ -14,7 +14,9 @@ use crate::capture_note::note_field;
 use std::collections::HashSet;
 
 mod scalar;
-pub(super) use scalar::{frontmatter_scalar_ci, key_opens_block, key_opens_flow, scalar_id_ci};
+pub(super) use scalar::{
+    frontmatter_scalar_ci, key_opens_block, key_opens_flow, scalar_id_ci, top_level_raw_value_ci,
+};
 pub(crate) use scalar::{id_property_unassignable, strict_scalar_field};
 
 /// True iff `s` is a plain `YYYY-MM-DD` (digits and hyphens in position — no

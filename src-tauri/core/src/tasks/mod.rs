@@ -55,7 +55,7 @@ pub use hierarchy::{
     ambiguous_ids, ancestors, parent_index, parent_index_for_validation, would_create_cycle,
     ParentIndex,
 };
-pub use id::{id_property_for_generation, is_valid_id_property, new_task_id, quote_id_if_needed};
+pub use id::{id_property_for_generation, is_valid_id_property, mirror_id_reference, new_task_id};
 pub use list::{list_tasks, list_tasks_structural, priority_rank, TaskItem};
 pub use lists::{
     create_task_list, delete_task_list, is_valid_list_name, move_task_to_list, normalize_list_rel,

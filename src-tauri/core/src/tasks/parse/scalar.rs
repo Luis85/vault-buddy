@@ -44,6 +44,22 @@ fn top_level_key_ci<'a>(content: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+/// The RAW (un-decoded, comment still attached, quotes/tags/anchors intact)
+/// text after the colon on the first TOP-LEVEL `key:` line, matched
+/// CASE-INSENSITIVELY. Composes `top_level_key_ci` (for the case-insensitive
+/// search) with `capture_note::raw_scalar_field` (for the value, keyed on the
+/// now-known EXACT on-disk casing — its own `strip_prefix` match is already
+/// top-level-only, so this adds no additional scan). Used by
+/// `tasks::id::mirror_id_reference` to decide how to re-encode an inherited
+/// id for a child's `parent-id`: the DECODED value alone cannot tell an
+/// implicitly-typed `123` from an explicitly-quoted `"123"`, but a decoder
+/// resolves the two to different YAML types, so the decision needs the raw
+/// source text, not just its decoded string.
+pub(in crate::tasks) fn top_level_raw_value_ci<'a>(content: &'a str, key: &str) -> Option<&'a str> {
+    let on_disk = top_level_key_ci(content, key)?;
+    crate::capture_note::raw_scalar_field(content, on_disk)
+}
+
 /// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
 /// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
 /// case and `is_valid_id_property` accepts case variants, so reads and writes
@@ -104,6 +120,17 @@ pub(crate) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Optio
     // not our scalar. `[[wikilink]]` is exempt ONLY when `link` is set.
     let wikilink_exempt = link && raw.starts_with("[[");
     if !wikilink_exempt && (raw.starts_with(['|', '>', '{']) || raw.starts_with('[')) {
+        return None;
+    }
+    // A leading `*` is a YAML ALIAS — its value lives wherever the matching
+    // `&name` anchor was defined elsewhere in the SAME document, which this
+    // per-key line scan has no way to resolve. Decoding it as the literal
+    // text "*name" would be worse than useless for a reference: mirroring
+    // that text into another document (a child's `parent-id`) either
+    // dangles (no such anchor there) or silently binds to a DIFFERENT node
+    // if that document happens to define its own anchor under the same
+    // name. Treated like a block/flow value — not a usable scalar here.
+    if raw.starts_with('*') {
         return None;
     }
     // A leading `#` is a YAML comment — the property is null.
@@ -460,6 +487,28 @@ mod tests {
     }
 
     #[test]
+    fn strict_scalar_field_rejects_an_alias_value() {
+        // `task-id: *stable` is a YAML ALIAS: its value lives wherever the
+        // matching `&stable` anchor was defined elsewhere in the document, so
+        // a single-key line scan cannot resolve it — decoding it as the
+        // literal text "*stable" would be worse than useless for a
+        // REFERENCE (mirroring that text into a child's own frontmatter would
+        // either dangle, or silently bind to a DIFFERENT node if the child
+        // happens to define its own anchor under the same name). Treated like
+        // a block/flow value: not a usable scalar (review, PR #77).
+        assert_eq!(
+            strict_scalar_field("---\ntype: Task\ntask-id: *stable\n---\n", "task-id", false),
+            None
+        );
+        // The `link` exemption is for `[[wikilink]]` only — an alias must
+        // still be rejected on the `parent` key too.
+        assert_eq!(
+            strict_scalar_field("---\ntype: Task\nparent: *stable\n---\n", "parent", true),
+            None
+        );
+    }
+
+    #[test]
     fn strict_scalar_field_rejects_trailing_content_after_a_double_quoted_scalar() {
         // double_quoted_slice only locates the closing quote — it says
         // nothing about what follows. Without a trailing check, `"abc"junk`
@@ -558,6 +607,61 @@ mod tests {
         assert_eq!(
             strict_scalar_field(ok, "parent", true).as_deref(),
             Some("[[Tasks/p]]")
+        );
+    }
+
+    #[test]
+    fn id_property_unassignable_refuses_an_alias_valued_property() {
+        // Cascades from strict_scalar_field's alias rejection above: an
+        // ALIAS-valued id property must be treated like a block/flow value —
+        // `ensure_id` (disk.rs) must never overwrite it (it might be a real,
+        // if unresolvable-from-here, reference) and must never report it as
+        // a usable id, and `services::tasks::parent`'s phase-1 forecast must
+        // refuse a parent assignment through it rather than mirroring the
+        // literal "*stable" text into a child (review, PR #77).
+        assert!(id_property_unassignable(
+            "---\ntype: Task\ntask-id: *stable\n---\n",
+            "task-id"
+        ));
+    }
+
+    #[test]
+    fn top_level_raw_value_ci_returns_the_undecoded_text_case_insensitively() {
+        // Comment, quotes, a tag, and an anchor all survive intact — this
+        // is deliberately the layer BELOW strict_scalar_field's decode.
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\nTask-ID: 123 # note\n---\n", "task-id"),
+            Some("123 # note")
+        );
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\ntask-id: \"abc\"\n---\n", "TASK-ID"),
+            Some("\"abc\"")
+        );
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\ntask-id: !!str 123\n---\n", "task-id"),
+            Some("!!str 123")
+        );
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\ntask-id: &stable abc\n---\n", "task-id"),
+            Some("&stable abc")
+        );
+    }
+
+    #[test]
+    fn top_level_raw_value_ci_is_none_when_absent_or_nested() {
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\n---\n", "task-id"),
+            None
+        );
+        // An indented key is never the top-level property.
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\nmeta:\n  task-id: nope\n---\n", "task-id"),
+            None
+        );
+        // Body-only occurrence (after the closing fence) doesn't count.
+        assert_eq!(
+            top_level_raw_value_ci("---\ntype: Task\n---\ntask-id: sneaky\n", "task-id"),
+            None
         );
     }
 

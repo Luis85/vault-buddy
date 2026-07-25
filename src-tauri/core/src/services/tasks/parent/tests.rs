@@ -342,6 +342,51 @@ fn enables_ids_stamps_both_and_writes_a_resolvable_pair() {
     assert!(child.contains("parent: \"[[")); // a link was written
 }
 
+#[test]
+fn add_subtask_mirrors_an_implicitly_typed_parent_id_bare() {
+    // The CREATE-path counterpart of the Set-path regression pinned in
+    // services/tasks/update.rs's own tests: render_task's `parent` argument
+    // used to be re-quoted internally from the parent id's DECODED string,
+    // losing the fact that an unquoted `task-id: 123` is the NUMBER 123 in
+    // the source, not the string "123" — so "Add subtask" under a
+    // number-typed parent id wrote a child that could never equality-match
+    // it in a Dataview query (review, PR #77).
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &[]);
+    let (vault_path, root, cfg) = tasks_root_for(&paths, &vault).unwrap();
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id: 123\n---\n",
+    );
+    let (_, path, _child_id) = add_subtask(
+        &paths,
+        &vault,
+        &vault_path,
+        &root,
+        &cfg,
+        &parent,
+        &root,
+        "Child",
+        "2026-07-25",
+        None,
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
+    let out = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        out.contains("parent-id: 123\n"),
+        "add_subtask must mirror the parent's own unquoted, number-typed \
+         token, got: {out}"
+    );
+    assert!(
+        !out.contains("parent-id: \"123\""),
+        "must not retype it as a string: {out}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn add_subtask_resolves_the_child_link_through_a_symlinked_vault_registration() {

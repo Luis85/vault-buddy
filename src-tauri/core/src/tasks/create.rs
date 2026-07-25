@@ -45,13 +45,19 @@ pub fn task_basename(title: &str, today: &str) -> String {
 /// line (`tags: [a, b]`) after `due`/`priority`, only when non-empty. When
 /// `task_id` is `Some((property, id))`, a `<property>: <id>` line is written
 /// immediately after `created:`. `scheduled` is emitted after `due`, only
-/// when present. `parent` (the last param) is `Some((parent_id, link))` —
-/// both already composed/validated by the caller — and writes a
+/// when present. `parent` (the last param) is `Some((parent_id_ref, link))` —
+/// both already composed/validated/ENCODED by the caller — and writes a
 /// `parent-id:`/`parent:` pair immediately after the `task_id` line (with
-/// identity, before the widened `due`/`scheduled`/`priority`/`tags` fields);
-/// `parent-id` goes through `id::quote_id_if_needed` (an INHERITED id need not
-/// be base36), and `parent` (an arbitrary wikilink/markdown link) is YAML-quoted.
-/// Absent → no lines, byte-identical to today's output.
+/// identity, before the widened `due`/`scheduled`/`priority`/`tags` fields).
+/// `parent_id_ref` is written EXACTLY as given, with no further transform:
+/// `render_task` has no access to the parent's own file content, so it
+/// cannot decide how to re-encode an inherited id itself — the caller
+/// resolves that via `tasks::mirror_id_reference` before calling here (an
+/// inherited id need not be base36, and its meaning depends on how it was
+/// written in the PARENT's file, not just its decoded text — see that
+/// function's doc comment). `parent` (an arbitrary wikilink/markdown link,
+/// which has no analogous on-disk form to preserve) is still YAML-quoted
+/// here. Absent → no lines, byte-identical to today's output.
 ///
 /// `extra_frontmatter` is `{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`
 /// rendered via `render_extra_frontmatter`, which resolves the placeholders,
@@ -83,14 +89,11 @@ pub fn render_task(
     if let Some((prop, id)) = task_id {
         extra.push_str(&format!("{prop}: {id}\n"));
     }
-    if let Some((pid, link)) = parent {
-        // NOT necessarily base36: ensure_id preserves any usable existing id,
-        // so an inherited `[legacy]` or `123` must be quoted or it becomes a
-        // flow sequence / a number on read-back (Codex P2, PR #77).
-        extra.push_str(&format!(
-            "parent-id: {}\n",
-            super::id::quote_id_if_needed(pid)
-        ));
+    if let Some((parent_id_ref, link)) = parent {
+        // `parent_id_ref` arrives pre-encoded (`tasks::mirror_id_reference`) —
+        // written verbatim, since this function has no access to the
+        // parent's file content and so cannot make that decision itself.
+        extra.push_str(&format!("parent-id: {parent_id_ref}\n"));
         extra.push_str(&format!(
             "parent: {}\n",
             crate::yaml_scalar::yaml_quote(link)
@@ -148,9 +151,10 @@ pub fn render_task(
 /// `tags` (already validated by the caller) is threaded through to
 /// `render_task` verbatim. When `task_id` is `Some((property, id))`, a
 /// `<property>: <id>` line is written immediately after `created:`. `parent`
-/// (the last param) is `Some((parent_id, link))`, already
-/// composed/validated by the caller, and passes straight through to
-/// `render_task` (see there for where it lands).
+/// (the last param) is `Some((parent_id_ref, link))`, already
+/// composed/validated/ENCODED by the caller, and passes straight through to
+/// `render_task` (see there for where it lands and why it is written
+/// verbatim).
 /// `extra_frontmatter`/`body_template` pass straight through to `render_task`
 /// (see there for the placeholder-rendering contract).
 #[allow(clippy::too_many_arguments)]
@@ -584,6 +588,36 @@ mod tests {
         );
         assert!(out.contains("parent-id: ab12cd34"));
         assert!(out.contains("parent: \"[[Tasks/p]]\"")); // YAML-quoted
+    }
+
+    #[test]
+    fn render_task_writes_the_parent_id_ref_verbatim_with_no_further_transform() {
+        // The caller (tasks::mirror_id_reference) is responsible for
+        // encoding the value correctly — render_task has no access to the
+        // parent's file content and must not re-derive its own quoting.
+        // Passing an already-quoted string here and getting it back
+        // UNCHANGED (not double-quoted) pins that render_task no longer
+        // applies quote_id_if_needed internally.
+        let out = render_task(
+            "Child",
+            "2026-07-25",
+            None,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            Some(("\"[legacy]\"", "[[Tasks/p]]")),
+        );
+        assert!(
+            out.contains("parent-id: \"[legacy]\"\n"),
+            "must be written verbatim, not re-quoted, got: {out}"
+        );
+        assert!(
+            !out.contains("\"\\\"[legacy]\\\"\""),
+            "must not double-quote: {out}"
+        );
     }
 
     #[test]

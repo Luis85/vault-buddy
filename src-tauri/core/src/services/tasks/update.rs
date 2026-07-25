@@ -153,14 +153,15 @@ pub fn update_task(
                     // child picks up its own id in the same write — reported
                     // back so `TaskWriteResult.id` reflects a bootstrap even
                     // when `updates` above was empty (a parent-only patch).
+                    // `parent_id_ref` is already the exact YAML text that
+                    // means the same thing as the parent's own id line
+                    // (`tasks::mirror_id_reference`, resolved once inside
+                    // `resolve_parent_for_write` alongside `parent_id`).
                     tasks::update_task_fields(
                         &root,
                         &child_p,
                         &[
-                            (
-                                "parent-id",
-                                Some(&tasks::quote_id_if_needed(&resolved.parent_id) as &str),
-                            ),
+                            ("parent-id", Some(resolved.parent_id_ref.as_str())),
                             (
                                 "parent",
                                 Some(&crate::yaml_scalar::yaml_quote(&resolved.link) as &str),
@@ -333,6 +334,134 @@ mod tests {
         assert!(std::fs::read_to_string(&child)
             .unwrap()
             .contains(&format!("task-id: {cid}")));
+    }
+
+    #[test]
+    fn a_parent_set_mirrors_an_implicitly_typed_id_bare_so_types_agree() {
+        // review, PR #77: `task-id: 123` is UNQUOTED, so YAML resolves
+        // it as the NUMBER 123 — not the string "123" the old decode-then-
+        // requote pipeline assumed. That pipeline decoded the parent's id to
+        // the Rust string "123" and re-derived a YAML form from THAT decoded
+        // string alone (a charset/keyword heuristic), losing the fact that
+        // the source was never quoted, and wrote `parent-id: "123"` — a
+        // STRING — so an equality-based Dataview query between the two
+        // properties stopped matching.
+        //
+        // The assertion below is about the RAW on-disk text the child
+        // receives, not a decode-and-compare round trip:
+        // `parent_id_field(&child) == Some("123")` would ALSO pass under the
+        // OLD, buggy `parent-id: "123"` output (both decode to the identical
+        // Rust string "123"), which is exactly what let a type-mismatching
+        // bug hide behind a passing round-trip test once already.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+        let root = tasks_root(&paths, &vault);
+        let parent = root.join("p.md");
+        std::fs::write(
+            &parent,
+            "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id: 123\n---\n",
+        )
+        .unwrap();
+        let child = root.join("c.md");
+        update_task(&paths, &vault, &child, &[], ParentOp::Set(parent)).unwrap();
+        let out = std::fs::read_to_string(&child).unwrap();
+        assert!(
+            out.contains("parent-id: 123\n"),
+            "must mirror the parent's own unquoted, number-typed token, got: {out}"
+        );
+        assert!(
+            !out.contains("parent-id: \"123\""),
+            "must not retype the number as a string: {out}"
+        );
+    }
+
+    #[test]
+    fn a_parent_set_mirrors_a_tag_decorated_id_verbatim() {
+        // `task-id: !!str 123` forces the SOURCE to resolve as the STRING
+        // "123" via an explicit YAML tag. The old pipeline's strict decoder
+        // does not understand tags — it treats the whole thing as opaque
+        // plain-scalar text — so it decoded to the literal Rust string
+        // "!!str 123" (tag syntax included) and quoted THAT for the child:
+        // `parent-id: "!!str 123"`, a string whose CONTENT is tag syntax,
+        // resolving to neither "123" nor anything the parent's own value
+        // equals. Mirroring the raw text lets the child's copy resolve
+        // through the identical tag.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+        let root = tasks_root(&paths, &vault);
+        let parent = root.join("p.md");
+        std::fs::write(
+            &parent,
+            "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id: !!str 123\n---\n",
+        )
+        .unwrap();
+        let child = root.join("c.md");
+        update_task(&paths, &vault, &child, &[], ParentOp::Set(parent)).unwrap();
+        let out = std::fs::read_to_string(&child).unwrap();
+        assert!(
+            out.contains("parent-id: !!str 123\n"),
+            "must mirror the parent's tag-decorated token verbatim, got: {out}"
+        );
+    }
+
+    #[test]
+    fn a_parent_set_strips_the_anchor_but_mirrors_the_value() {
+        // `&stable abc` NAMES the node "stable" so a `*stable` alias
+        // elsewhere in the SAME document can reference it. Copying the
+        // annotation verbatim into the child's own frontmatter would define
+        // a SECOND anchor of that name there. The value itself, `abc`, is
+        // what a reference may legitimately copy — decoding the anchor away
+        // and mirroring `abc` resolves identically to the parent's own value
+        // (both the string "abc").
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+        let root = tasks_root(&paths, &vault);
+        let parent = root.join("p.md");
+        std::fs::write(
+            &parent,
+            "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id: &stable abc\n---\n",
+        )
+        .unwrap();
+        let child = root.join("c.md");
+        update_task(&paths, &vault, &child, &[], ParentOp::Set(parent)).unwrap();
+        let out = std::fs::read_to_string(&child).unwrap();
+        assert!(
+            out.contains("parent-id: abc\n"),
+            "must strip the anchor annotation and mirror only its value, got: {out}"
+        );
+        assert!(
+            !out.contains("&stable"),
+            "must never define a second anchor of the same name: {out}"
+        );
+    }
+
+    #[test]
+    fn a_parent_set_strips_a_trailing_comment_before_mirroring() {
+        // Trap check: `raw_scalar_field` (capture_note.rs) does NOT strip a
+        // trailing inline comment on the raw text it returns — it only trims
+        // whitespace. Mirroring that raw text VERBATIM would copy the
+        // parent's own edit-history comment into the child's
+        // machine-managed `parent-id` line.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+        let root = tasks_root(&paths, &vault);
+        let parent = root.join("p.md");
+        std::fs::write(
+            &parent,
+            "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id: 123 # was xyz\n---\n",
+        )
+        .unwrap();
+        let child = root.join("c.md");
+        update_task(&paths, &vault, &child, &[], ParentOp::Set(parent)).unwrap();
+        let out = std::fs::read_to_string(&child).unwrap();
+        assert!(
+            out.contains("parent-id: 123\n"),
+            "must strip the trailing comment before mirroring, got: {out}"
+        );
+        assert!(
+            !out.contains("was xyz"),
+            "the parent's own comment must never leak into the child: {out}"
+        );
     }
 
     #[test]
