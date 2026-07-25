@@ -81,12 +81,41 @@ pub(super) fn parent_link_field(content: &str) -> Option<String> {
     scalar(content, "parent")
 }
 
+/// STRICT optional-field decode — deliberately NOT `decode_scalar_lenient`.
+/// That decoder exists for TITLES, where falling back to raw text is right
+/// because a title must never vanish. A parent reference is the opposite: a
+/// wrong value manufactures a phantom relationship and would make
+/// `vault_has_parent_links` block ID settings forever. So unsupported and
+/// null-ish forms yield None, matching `description_field`'s rules (Codex P2,
+/// PR #77).
 fn scalar(content: &str, key: &str) -> Option<String> {
-    let raw = crate::capture_note::raw_scalar_field(content, key)?;
-    if raw.is_empty() || raw.starts_with(['[', '{', '|', '>']) && !raw.starts_with("[[") {
+    let raw = crate::capture_note::raw_scalar_field(content, key)?.trim();
+    if raw.is_empty() {
         return None;
     }
-    let decoded = super::description::decode_scalar_lenient(raw);
+    // A block (`|`/`>`) or flow (`{..}`) value is the user's own structure, not
+    // our scalar. `[[wikilink]]` is exempt: it is the form users type for the
+    // `parent` link, and that value is never parsed for meaning.
+    if raw.starts_with(['|', '>', '{']) || (raw.starts_with('[') && !raw.starts_with("[[")) {
+        return None;
+    }
+    // A leading `#` is a YAML comment — the property is null.
+    if raw.starts_with('#') {
+        return None;
+    }
+    let decoded = if raw.starts_with('"') {
+        // An unterminated quoted scalar is multi-line; reject rather than
+        // surfacing its first line.
+        crate::yaml_scalar::yaml_unquote_multiline(super::description::double_quoted_slice(raw)?)
+    } else if raw.starts_with('\'') {
+        super::description::decode_single_quoted(raw)?
+    } else {
+        let stripped = super::description::strip_inline_comment(raw).trim();
+        if matches!(stripped, "null" | "Null" | "NULL" | "~") {
+            return None;
+        }
+        stripped.to_string()
+    };
     (!decoded.trim().is_empty()).then_some(decoded)
 }
 
@@ -108,6 +137,23 @@ mod tests {
         // A block or flow value is the user's own frontmatter, not our scalar.
         assert_eq!(parent_id_field("---\ntype: Task\nparent-id:\n  a: b\n---\n"), None);
         assert_eq!(parent_id_field("---\ntype: Task\nparent-id: {a: b}\n---\n"), None);
+    }
+
+    #[test]
+    fn null_comment_and_unterminated_forms_read_as_no_parent() {
+        // A parent reference is a REFERENCE: a wrong value is worse than none.
+        // These would otherwise become phantom ids and permanently block the
+        // ID-settings guard (Codex P2, PR #77).
+        for body in [
+            "parent-id: # note",
+            "parent-id: null",
+            "parent-id: ~",
+            "parent-id: NULL",
+            "parent-id: \"unterminated",
+        ] {
+            let c = format!("---\ntype: Task\n{body}\n---\n");
+            assert_eq!(parent_id_field(&c), None, "{body} must read as no parent");
+        }
     }
 
     #[test]
@@ -221,7 +267,7 @@ In `src/types.ts`, add to the `TaskItem` interface:
   parentLink: string | null;
 ```
 
-- [ ] **Step 9: Add an UNFILTERED walk for structural scans**
+- [ ] **Step 9: Add ONE strict, fallible structural scan for every guard**
 
 `list_tasks` drops `status: archived` at `list.rs:128` — it is a *presentation*
 function. But an archived Task's file still carries its `parent-id`, so every
@@ -229,26 +275,60 @@ hierarchy scan (the cycle index in Task 5, the settings guard in Task 6) must se
 them: otherwise a cycle routed `A → B(archived) → C` is invisible, and the guard
 lets an ID-settings change through that orphans archived links.
 
-Write the failing test:
+`list_tasks` is a PRESENTATION function in two ways that are both wrong for a
+guard: it drops archived Tasks (whose files still carry `parent-id`), and
+`collect_task_file` silently SKIPS a file it cannot read. Either one yields a
+quietly incomplete graph, so a cycle can pass validation and be written. The rule:
+**a view may degrade; a guard must refuse.**
+
+Write the failing tests:
 
 ```rust
     #[test]
-    fn list_tasks_including_archived_keeps_archived_rows() {
+    fn structural_scan_keeps_archived_rows() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(root, "a.md", "---\ntype: Task\nstatus: new\ntitle: \"Open\"\n---\n");
         write(root, "b.md", "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\nparent-id: x\n---\n");
         assert_eq!(list_tasks(root, None).len(), 1); // presentation: archived hidden
-        let all = list_tasks_including_archived(root, None);
+        let all = list_tasks_structural(root, None).unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|t| t.parent_id.as_deref() == Some("x")));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn structural_scan_errors_on_an_unreadable_task() {
+        // One unreadable Task in a network vault must ABORT the scan, not vanish
+        // from the graph — a missing edge lets a cycle through (Codex P2, PR #77).
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "a.md", "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n");
+        let locked = root.join("b.md");
+        std::fs::write(&locked, "---\ntype: Task\nstatus: new\ntitle: \"B\"\n---\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let out = list_tasks_structural(root, None);
+        // Restore before asserting so the tempdir can clean up either way.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(out.is_err(), "an unreadable task must fail the structural scan");
+        assert!(list_tasks(root, None).len() >= 1); // the VIEW still degrades gracefully
+    }
 ```
 
-Implement by extracting the archived filter into a flag: keep `list_tasks(root,
-id_property)` as-is (delegating with `include_archived: false`) and add
-`list_tasks_including_archived(root, id_property)`. One walk implementation, two
-entry points — do not copy the walk.
+Implement one walk with two entry points — do NOT copy the walk:
+
+- `list_tasks(root, id_property) -> Vec<TaskItem>` — unchanged: filters archived,
+  skips unreadable files. Every existing caller keeps today's behavior.
+- `list_tasks_structural(root, id_property) -> Result<Vec<TaskItem>, String>` —
+  includes archived, and returns `Err` naming the path if any `type: Task`
+  document cannot be read.
+
+Thread a mode through the shared walk (e.g. `include_archived: bool` plus an
+`&mut Option<String>` first-error slot, or a small `ScanMode` enum) so the two
+entry points cannot drift. **Every hierarchy guard uses the structural variant**
+— the cycle index (both the pre-lock and post-lock checks) and the §2a settings
+guard — so a future guard cannot pick up the lenient walk by accident.
 
 - [ ] **Step 10: Run the full core suite + gates**
 
@@ -860,9 +940,10 @@ pub fn set_task_parent(
     // Read ids UNCONDITIONALLY — hand-authored tasks carry ids even while
     // generation is off, and an index built from the gated walk would be empty,
     // passing the cycle check vacuously (design spec §2).
-    // UNFILTERED: list_tasks hides archived tasks, but their files still carry
-    // parent-id, so a cycle through an archived task would be invisible.
-    let all = tasks::list_tasks_including_archived(&root, Some(&prop));
+    // STRUCTURAL: includes archived tasks (their files still carry parent-id)
+    // and FAILS on an unreadable task — validating against a partial graph would
+    // let a cycle through (design spec §2).
+    let all = tasks::list_tasks_structural(&root, Some(&prop))?;
     let ambiguous = tasks::ambiguous_ids(&all);
     let parent_existing_id = read_own_id(&parent, &prop);
     if let Some(pid) = parent_existing_id.as_deref() {
@@ -883,8 +964,8 @@ pub fn set_task_parent(
     // ---- Phases 2+3a: the SHARED resolve path (also used by add_task). ----
     let resolved = resolve_parent_for_write(&vault, &root, &parent, &child, &prop, &cfg, || {
         // Re-validation closure, run only if the config changed under the lock.
-        let all = tasks::list_tasks_including_archived(&root, Some(&prop));
-        tasks::would_create_cycle(&tasks::parent_index(&all), &child, &parent)
+        let all = tasks::list_tasks_structural(&root, Some(&prop))?;
+        Ok::<bool, String>(tasks::would_create_cycle(&tasks::parent_index(&all), &child, &parent))
     })?;
 
     // ---- Phase 3b: write the child's pair. ----
@@ -920,7 +1001,7 @@ fn resolve_parent_for_write(
     child: &Path, // the file the link is written INTO — the markdown fallback needs it
     prop: &str,
     phase1_cfg: &VaultCaptureConfig,
-    recheck_cycle: impl FnOnce() -> bool,
+    recheck_cycle: impl FnOnce() -> Result<bool, String>,
 ) -> Result<ResolvedParent, String> {
     // ONE lock across the config re-check, the enable, and the stamp. A
     // concurrent set_task_id_config holds the same lock across its scan AND
@@ -943,7 +1024,7 @@ fn resolve_parent_for_write(
     // can overlap (one setting A->B while the other sets B->A); both phase-1
     // scans pass before either writes, so only a re-check under this lock sees
     // the other's committed write and refuses (design spec §2).
-    if recheck_cycle() {
+    if recheck_cycle()? {
         return Err("That would make a task its own ancestor.".to_string());
     }
 
@@ -1070,9 +1151,9 @@ git commit -m "feat(core): add set_task_parent with validate-before-side-effect 
 pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> Result<bool, String> {
     let (_, root) = resolve_vault_and_tasks_root(paths, vault_id)
         .map_err(|e| format!("Couldn't read this vault's tasks: {e}"))?;
-    // UNFILTERED: an archived task's file still carries parent-id, so reusing
-    // the presentation-filtered list would let a settings change orphan it.
-    Ok(tasks::list_tasks_including_archived(&root, None)
+    // STRUCTURAL: archived tasks counted (their files still carry parent-id),
+    // and an unreadable task is an ERROR — never "no links" (design spec §2a).
+    Ok(tasks::list_tasks_structural(&root, None)?
         .iter()
         .any(|t| t.parent_id.is_some()))
 }
@@ -1276,6 +1357,18 @@ it("resolves the parent and children per vault, ignoring cross-vault ids", () =>
   expect(h.children.value.map((t) => t.path)).toEqual(["/v1/c.md"]);
 });
 
+it("resolves nothing through a duplicated id, matching core's ambiguity rule", () => {
+  // Two files share "p" after a manual copy or sync conflict. Core renders the
+  // child as an orphan; the frontend must agree rather than picking one
+  // duplicate and showing a confident but wrong parent (Codex P2, PR #77).
+  const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p1.md", title: "One" });
+  const p2 = task({ vaultId: "v1", id: "p", path: "/v1/p2.md", title: "Two" });
+  const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+  const all = ref([p1, p2, child]);
+  expect(useTaskHierarchy(ref(child), all).parent.value).toBeNull();
+  expect(useTaskHierarchy(ref(p1), all).children.value).toEqual([]);
+});
+
 it("counts progress over children", () => {
   const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
   const c1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", done: true, status: "done" });
@@ -1320,6 +1413,21 @@ it("writes the stamped id onto the PARENT's cached row (IDs-off bootstrap)", asy
 - [ ] **Step 2: Implement the composable**
 
 Mirror `useTaskDetail`'s discipline exactly: one shared `busy` guard, optimistic update, revert + `notifications.error` on failure, `logWarning`. Scope every lookup by `vaultId` before comparing ids.
+
+**Apply core's ambiguity rule too, not just vault scoping.** Core treats an id carried by two Tasks as unresolvable, so a child naming it renders as an orphan. A frontend that only scoped by vault would pick one duplicate and confidently show a Parent chip, children, and progress for a relationship core considers nonexistent — the two surfaces disagreeing about the same vault (Codex P2, PR #77). Build the same **per-vault** ambiguous-id set and omit those ids before resolving:
+
+```ts
+// Same rule as core::tasks::ambiguous_ids, per vault: an id carried by more than
+// one task identifies nothing, so it resolves no relationship.
+function ambiguousIds(tasks: AggTask[], vaultId: string): Set<string> {
+  const seen = new Map<string, number>();
+  for (const t of tasks) {
+    if (t.vaultId !== vaultId || !t.id) continue;
+    seen.set(t.id, (seen.get(t.id) ?? 0) + 1);
+  }
+  return new Set([...seen].filter(([, n]) => n > 1).map(([id]) => id));
+}
+```
 
 **On success, write the response's `parentId` onto the selected PARENT row's cached `id` as well as the child's `parentId`** — in the IDs-off default the parent's cached id is `null` until the backend stamps it, and resolution compares ids, so skipping this leaves the new relationship invisible until a reload.
 
@@ -1632,11 +1740,23 @@ call site in `resolve_parent_for_write`, which itself takes `child`;
 `ParentIndex<'a> = HashMap<&'a Path, &'a Path>` is path-keyed at every use;
 `vault_has_parent_links` returns `Result<bool, String>` and its two call sites
 `?`/`unwrap()` accordingly; `TaskWriteResult { id, parentId, parentLink }` is the
-same shape the frontend mocks return; `list_tasks_including_archived` is used by
-every structural scan and `list_tasks` by none of them.
+same shape the frontend mocks return; `list_tasks_structural` (fallible,
+archived-inclusive) is used by every hierarchy guard — the pre-lock index, the
+post-lock re-check, and the settings guard — and the lenient `list_tasks` by none
+of them; the recheck closure returns `Result<bool, String>` to match.
 
-**4. Ordering invariants the tasks must not violate** (each has a named
-regression test): validation precedes every side effect; the cycle re-check is
-unconditional under the lock; hierarchy scans are unfiltered; parent validation
-precedes any scalar field write; both cache-refresh paths (set-parent and
-add-subtask) run with IDs off.
+**4. Invariants the tasks must not violate** (each has a named regression test):
+validation precedes every side effect; the cycle re-check is unconditional under
+the lock; parent validation precedes any scalar field write; both cache-refresh
+paths (set-parent and add-subtask) run with IDs off.
+
+**5. The recurring failure mode in this design — a view's helper reused in a
+guard.** Three separate findings shared one cause: `list_tasks` filters archived
+Tasks and silently skips unreadable ones (right for a list, fatal for a cycle
+check), and `decode_scalar_lenient` falls back to raw text (right for a title
+that must never vanish, fatal for a reference that must never be invented). Both
+are now split explicitly — `list_tasks_structural` for guards, the strict
+optional-field decode for references — and the ambiguity rule is implemented on
+both sides of the IPC boundary. **A view may degrade; a guard must refuse.** When
+implementing, check any helper borrowed from a presentation path against that
+line before reusing it.

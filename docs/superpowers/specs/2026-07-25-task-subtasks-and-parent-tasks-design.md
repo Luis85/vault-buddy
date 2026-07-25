@@ -179,7 +179,15 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
   and it self-heals the next time that parent is set. This asymmetry is the whole
   point of the hybrid.
 
-**Reading** is lenient, matching the rest of the vault domain: both keys are read
+**Reading** uses the **strict optional-field decoder**, not the title one. This
+distinction matters: `decode_scalar_lenient` exists for *titles*, where falling
+back to raw text is right because a title must never vanish. A `parent-id` is a
+**reference** — a wrong value is strictly worse than none, since it manufactures
+a phantom relationship and would make `vault_has_parent_links` block ID settings
+forever (Codex P2, PR #77). So the parent readers follow `description_field`'s
+rules and yield `None` for a comment-only value (`parent-id: # note`), a YAML
+null (`null`/`Null`/`NULL`/`~`), a block or flow value, and a multiline or
+unterminated quoted scalar. Concretely: both keys are read
 as single-line scalars via the `description`-style decode (`raw_scalar_field` +
 `decode_scalar_lenient`); an empty, block (`|`/`>`), or flow (`[..]`/`{..}`)
 value reads as **absent** rather than surfacing a partial/wrong value.
@@ -273,15 +281,26 @@ spec's own guarantee that a cycle rejection writes nothing (Codex P2, PR #77).
   dormant ids read and the graph keyed on paths, every recorded edge is visible
   and the pre-stamp check is complete.
 
-  **The scan must include archived Tasks.** `list_tasks` deliberately drops
-  `status: archived` documents — it is a *presentation* function — but an
-  archived Task's file still carries its `parent-id`. Building the validation
-  index from the filtered list would silently erase every edge through an
-  archived Task, so a cycle routed through one (`A → B(archived) → C`) would be
-  invisible and the write would create it. Hierarchy scans therefore use an
-  **unfiltered** walk of every `type: Task` document; the archived filter belongs
-  to the views, not to a structural invariant (Codex P2, PR #77 — raised against
-  the §2a guard, which has the same root cause and the same fix).
+  **One strict structural scan backs every hierarchy guard.** `list_tasks` is a
+  *presentation* function in two ways that are both wrong for a guard, and each
+  was found separately (Codex P2 ×3, PR #77) before the shared cause was clear:
+
+  - it **drops `status: archived`** documents, though an archived Task's file
+    still carries its `parent-id` — so an edge through an archived Task
+    (`A → B(archived) → C`) would vanish from the index and the write would
+    create the cycle it just failed to see; and
+  - it is **best-effort on read**: `collect_task_file` silently skips a file it
+    cannot open, so one temporarily unreadable Task in a network vault yields a
+    quietly incomplete graph, and an assignment can pass both cycle checks and
+    create a cycle that only becomes visible when the file is readable again.
+
+  Both are correct for a list the user is looking at and unacceptable for a
+  structural invariant. So hierarchy work uses a single
+  **`list_tasks_structural`**: unfiltered (archived included) and **fallible** —
+  any `type: Task` document it cannot read is an error, not an omission. It backs
+  the pre-lock index, the post-lock re-check, and the §2a settings guard alike, so
+  a future guard cannot pick up the lenient walk by accident. The rule to carry
+  forward: **a view may degrade; a guard must refuse.**
 
 **Phase 2 — enable (idempotent, additive):** if IDs are off, enable them (a
 `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
@@ -383,17 +402,14 @@ scan is the **unfiltered** one (§2): an archived Task's file still carries its
 settings change through and orphan those links the moment the Task is
 unarchived.
 
-**The scan is fallible, and a failure refuses the change.** The read paths in
-this app are deliberately best-effort — an unresolvable root or an unreadable
-file degrades to "nothing here" — which is right for a *view* but wrong for a
-guard: an offline network vault would report "no parent links" and let the
-setting through, orphaning every relationship once access returns (Codex P2,
-PR #77). So this scan returns a `Result` and reports incomplete inspection
-(unresolvable root, or any task file it could not read) as an error, and
-`set_task_id_config` refuses conservatively — "couldn't verify this vault's
-tasks, so the Task ID settings weren't changed." Refusing a rare, deliberate
-settings action on an unreadable vault is a far better failure than silently
-orphaning a hierarchy. It
+**The scan is `list_tasks_structural` (§2) — fallible, and a failure refuses the
+change.** An unresolvable root or an unreadable task file is an error, never
+"nothing here": otherwise an offline network vault would report "no parent links"
+and let the setting through, orphaning every relationship once access returns
+(Codex P2, PR #77). `set_task_id_config` refuses conservatively — "couldn't verify
+this vault's tasks, so the Task ID settings weren't changed." Refusing a rare,
+deliberate settings action on an unreadable vault is a far better failure than
+silently orphaning a hierarchy. It
 holds the `ConfigWriteLock` across **both** the parent-link scan and the write,
 so a concurrent `set_task_parent` (which holds the same lock through its phases
 2–3, §2) cannot slip a new hierarchy in between this scan and its commit.
@@ -563,6 +579,15 @@ toast on failure, and `taskDetailBusy` gating the header Back and the panel's
 `refresh()`. Child rows reuse the row-level busy set so a child's status toggle
 can't race a parent write.
 
+**The frontend index applies core's ambiguity rule, not just vault scoping.**
+Core treats an id carried by two Tasks as unresolvable (§3), so a child naming it
+renders as an orphan. A frontend that merely scoped lookups by vault would pick
+one duplicate and confidently show a Parent chip, children, and progress for a
+relationship core considers nonexistent — the two surfaces disagreeing about the
+same vault (Codex P2, PR #77). `useTaskHierarchy` therefore builds the **same
+per-vault ambiguous-id set** and omits those ids before resolving anything. One
+rule, two implementations, pinned by a duplicate-id test on each side.
+
 **Every hierarchy write must refresh the PARENT's cached id — on BOTH paths.** In
 the default IDs-off state the loaded parent row has `id: null`; the backend
 enables IDs, stamps the parent, and returns its id. Updating only the child would
@@ -720,7 +745,11 @@ unresolvable ids; **`ambiguous_ids` detecting a duplicated own-id, `parent_index
 omitting it, and a cycle walk therefore never following a collapsed edge**;
 **an ARCHIVED task's edges present in the hierarchy index and counted by the
 settings guard (the unfiltered scan, §2) — including a cycle routed
-`A → B(archived) → C`**; **a `parent-id` whose value is not plain-safe
+`A → B(archived) → C`**; **an UNREADABLE task file making
+`list_tasks_structural` return `Err`, so both the cycle check and the settings
+guard refuse rather than validating against a partial graph**; **the strict
+optional-field read: `parent-id: # note`, `parent-id: null`, and an unterminated
+quoted scalar each read as NO parent rather than as a phantom id**; **a `parent-id` whose value is not plain-safe
 (a hand-authored `task-id: "[legacy]"`) written QUOTED and reading back
 equal**; **an ID-LESS task's outgoing edge still present in the path-keyed index — the
 `P(no id, parent-id: c)` + `C(id: c)` case, where making P the parent of C must
@@ -755,7 +784,9 @@ the bootstrap regression for the create path.**
 
 **Frontend (Vitest):** **an IDs-OFF parent-set AND an IDs-OFF Add-subtask each
 write the returned id onto the parent's cached row, so the new relationship (and
-the progress line) render without a reload — two tests, one per path**;
+the progress line) render without a reload — two tests, one per path**; **a
+duplicate id in one vault resolving to NO parent and NO children, matching
+core's ambiguity rule rather than picking a duplicate**;
 **drilling from one detail to another re-seeds the drafts
 — assert the rendered title/description inputs show the NEW task, not the
 previous one, and that a Save after drilling writes the new task's path**;
