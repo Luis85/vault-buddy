@@ -153,6 +153,17 @@ mod tests {
     }
 
     #[test]
+    fn a_quoted_parent_link_rejects_trailing_junk_after_the_close() {
+        // Fix for the id-focused strict decoder's trailing-junk bug
+        // (parse::scalar's strict_scalar_field): a quoted `parent` value
+        // shares the same double-quoted branch as `parent-id`/`task-id`, so
+        // it must reject stray text after the closing quote instead of
+        // silently keeping just the quoted prefix.
+        let c = "---\ntype: Task\nparent: \"[[Tasks/p]]\"junk\n---\n";
+        assert_eq!(parent_link_field(c), None);
+    }
+
+    #[test]
     fn parent_id_only_document_leaves_parent_link_field_none() {
         // The two keys are kept apart solely by raw_scalar_field's exact
         // "parent:"-prefix match (parent-id's line starts with "parent-",

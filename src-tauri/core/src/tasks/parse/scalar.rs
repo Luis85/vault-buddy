@@ -113,10 +113,24 @@ pub(crate) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Optio
     let decoded = if raw.starts_with('"') {
         // An unterminated quoted scalar is multi-line; reject rather than
         // surfacing its first line.
-        crate::yaml_scalar::yaml_unquote_multiline(super::super::description::double_quoted_slice(
-            raw,
-        )?)
+        let span = super::super::description::double_quoted_slice(raw)?;
+        // double_quoted_slice only locates the closing quote — it says
+        // nothing about what follows. `"abc"junk` is not one valid YAML
+        // scalar, so decoding just the quoted prefix would surface a USABLE
+        // id for what is actually garbage, exactly the "worse than useless"
+        // outcome the multi-line-scalar rejection above already guards
+        // against for a parent reference.
+        if !trailing_is_blank_or_comment(&raw[span.len()..]) {
+            return None;
+        }
+        crate::yaml_scalar::yaml_unquote_multiline(span)
     } else if raw.starts_with('\'') {
+        // Same reasoning, single-quoted: decode_single_quoted also stops at
+        // the first unescaped closing quote and is silent about the rest.
+        let span = super::super::description::single_quoted_slice(raw)?;
+        if !trailing_is_blank_or_comment(&raw[span.len()..]) {
+            return None;
+        }
         super::super::description::decode_single_quoted(raw)?
     } else {
         // A PLAIN scalar can continue onto following indented lines: YAML folds
@@ -136,6 +150,26 @@ pub(crate) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Optio
         stripped.to_string()
     };
     (!decoded.trim().is_empty()).then_some(decoded)
+}
+
+/// True when `remainder` — everything on the raw value's line AFTER a quoted
+/// scalar's closing quote — is trailing content real YAML actually allows:
+/// nothing at all, or a comment separated from the quote by at least one
+/// whitespace character. A `#` glued directly onto the quote (no separating
+/// whitespace) is NOT a valid YAML comment start, so it is rejected exactly
+/// like any other stray text — `double_quoted_slice`/`single_quoted_slice`
+/// only find where the scalar's own closing quote is; they say nothing about
+/// what follows it, which is precisely why a caller must ask this too before
+/// trusting the decoded value.
+fn trailing_is_blank_or_comment(remainder: &str) -> bool {
+    match remainder.chars().next() {
+        None => true,
+        Some(c) if c.is_whitespace() => {
+            let rest = remainder.trim_start();
+            rest.is_empty() || rest.starts_with('#')
+        }
+        Some(_) => false,
+    }
 }
 
 /// True when the top-level `key`'s PLAIN value continues onto the next line —
@@ -422,6 +456,108 @@ mod tests {
         assert_eq!(
             scalar_id_ci("---\ntype: Task\ntask-id: 'a''b'\n---\n", "task-id").as_deref(),
             Some("a'b")
+        );
+    }
+
+    #[test]
+    fn strict_scalar_field_rejects_trailing_content_after_a_double_quoted_scalar() {
+        // double_quoted_slice only locates the closing quote — it says
+        // nothing about what follows. Without a trailing check, `"abc"junk`
+        // decoded to the USABLE id `abc`: not a valid YAML scalar, but a
+        // child could still resolve to this phantom parent, and
+        // set_task_parent could persist a reference Obsidian/Dataview will
+        // never agree exists.
+        let doc = "---\ntype: Task\ntask-id: \"abc\"junk\n---\n";
+        assert_eq!(strict_scalar_field(doc, "task-id", false), None);
+    }
+
+    #[test]
+    fn strict_scalar_field_rejects_trailing_content_after_a_single_quoted_scalar() {
+        // Same flaw, the single-quoted branch: decode_single_quoted also
+        // stops at the first unescaped closing quote and is silent about
+        // whatever comes after it.
+        let doc = "---\ntype: Task\ntask-id: 'abc'junk\n---\n";
+        assert_eq!(strict_scalar_field(doc, "task-id", false), None);
+    }
+
+    #[test]
+    fn strict_scalar_field_still_accepts_a_real_comment_after_a_quoted_scalar() {
+        // The fix must reject stray trailing text without rejecting the
+        // ordinary, YAML-legal case: a comment separated from the quote by
+        // whitespace.
+        assert_eq!(
+            strict_scalar_field(
+                "---\ntype: Task\ntask-id: \"abc\" # note\n---\n",
+                "task-id",
+                false
+            )
+            .as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            strict_scalar_field(
+                "---\ntype: Task\ntask-id: 'abc' # note\n---\n",
+                "task-id",
+                false
+            )
+            .as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn strict_scalar_field_rejects_a_hash_glued_directly_to_the_closing_quote() {
+        // YAML requires a comment's `#` to be separated from the previous
+        // token by whitespace; a `#` glued straight onto the closing quote is
+        // stray trailing text, not a comment, so it must reject exactly like
+        // any other junk rather than being treated as an (empty) comment.
+        assert_eq!(
+            strict_scalar_field(
+                "---\ntype: Task\ntask-id: \"abc\"#note\n---\n",
+                "task-id",
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn strict_scalar_field_rejects_a_space_then_non_comment_text_after_the_close() {
+        // A separating space alone does not make trailing text a comment —
+        // only a space THEN a `#` does. `"abc" bogus` is still stray text,
+        // not `"abc"` followed by a legal comment, on both quoted forms.
+        assert_eq!(
+            strict_scalar_field(
+                "---\ntype: Task\ntask-id: \"abc\" bogus\n---\n",
+                "task-id",
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            strict_scalar_field(
+                "---\ntype: Task\ntask-id: 'abc' bogus\n---\n",
+                "task-id",
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn strict_scalar_field_rejects_trailing_content_after_a_quoted_wikilink_too() {
+        // The `link` parameter only widens which UNQUOTED forms are exempt
+        // from the block/flow guard (a bare `[[wikilink]]`) — it must not
+        // loosen the quoted branches' own trailing-content rule, or a quoted
+        // `parent` value could silently drop the same junk a `parent-id`/
+        // `task-id` scalar no longer can.
+        let doc = "---\ntype: Task\nparent: \"[[Tasks/p]]\"junk\n---\n";
+        assert_eq!(strict_scalar_field(doc, "parent", true), None);
+        // The unmangled quoted wikilink must still read fine.
+        let ok = "---\ntype: Task\nparent: \"[[Tasks/p]]\"\n---\n";
+        assert_eq!(
+            strict_scalar_field(ok, "parent", true).as_deref(),
+            Some("[[Tasks/p]]")
         );
     }
 

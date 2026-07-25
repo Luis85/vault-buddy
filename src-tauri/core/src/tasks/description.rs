@@ -23,6 +23,31 @@ pub(super) fn double_quoted_slice(s: &str) -> Option<&str> {
     None
 }
 
+/// Extract the `'...'` span of a single-quoted scalar starting at `s[0] ==
+/// '\''`, through its closing quote — a `'` that is NOT doubled (`''`
+/// collapses to one embedded literal `'` and is not the close). Mirrors
+/// `double_quoted_slice`, but a single-quoted scalar escapes by DOUBLING the
+/// quote character rather than a backslash prefix. None when unterminated.
+/// Used by `parse::scalar`'s strict decoder to find where the scalar ends so
+/// it can reject stray text after it — `decode_single_quoted` below only
+/// tells you the decoded value, never where it stopped reading.
+pub(super) fn single_quoted_slice(s: &str) -> Option<&str> {
+    let b = s.as_bytes();
+    let mut i = 1;
+    while i < b.len() {
+        if b[i] == b'\'' {
+            if b.get(i + 1) == Some(&b'\'') {
+                i += 2; // doubled '' — an escaped literal quote, not the close
+            } else {
+                return Some(&s[..=i]);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
 /// Decode a single-quoted YAML scalar starting at `s[0] == '\''`: the content up
 /// to the closing quote (a `'` that is NOT doubled), collapsing each `''` to one
 /// `'`. A trailing ` # comment` after the close is dropped. None when
@@ -163,6 +188,21 @@ pub(super) fn description_field(content: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::single_quoted_slice;
+
+    #[test]
+    fn single_quoted_slice_stops_at_the_first_unescaped_close_and_keeps_a_doubled_quote() {
+        assert_eq!(single_quoted_slice("'abc'"), Some("'abc'"));
+        // A doubled `''` is an escaped literal quote, not the close.
+        assert_eq!(single_quoted_slice("'a''b'"), Some("'a''b'"));
+        // Anything after the real closing quote is NOT part of the span —
+        // callers that need to know whether that remainder is legal trailing
+        // content read past `span.len()` themselves.
+        assert_eq!(single_quoted_slice("'abc'junk"), Some("'abc'"));
+        // Unterminated (no closing quote at all) is None.
+        assert_eq!(single_quoted_slice("'abc"), None);
+    }
+
     #[test]
     fn description_field_decodes_a_multiline_scalar_and_ignores_comment_hash() {
         let content = "---\ntype: Task\ndescription: \"fix bug #42\\nsee notes\"\n---\n\nbody\n";
