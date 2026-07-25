@@ -1,6 +1,11 @@
 mod capture_commands;
 mod capture_config_commands;
 mod commands;
+// Test-only structural pin (Task 6b, fix 2): no production code depends on
+// it, so it's excluded from non-test builds entirely rather than adding to
+// every release build's compiled surface.
+#[cfg(test)]
+mod config_lock_guard;
 mod diagnostics;
 mod document_commands;
 mod mcp_commands;

@@ -338,8 +338,15 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
 /// belongs to set_capture_config). Mirrors set_tasks_config, plus the extra
 /// fields; blank/whitespace-only template text normalizes to None, the same
 /// "unset" posture as every other template field.
+///
+/// ASYNC (GAP-22 class, widened by the config-lock collapse): `config_write_lock()`
+/// can now be held across a full task-vault scan by `services::set_task_parent`
+/// (see `core/src/services/tasks/parent.rs`), so this fsync'd write must not
+/// sit on the main thread. The lock's scope is unchanged — everything below it
+/// stays synchronous, no `.await` in between — only the command itself moves
+/// off the main thread, the `set_panel_size` posture.
 #[tauri::command]
-pub fn set_documents_config(
+pub async fn set_documents_config(
     id: String,
     documents_folder: Option<String>,
     document_date_folders: bool,
@@ -389,8 +396,13 @@ pub fn set_documents_config(
 
 /// App-global Pandoc path override (None → PATH lookup). Serialized behind
 /// `config_write_lock()`; round-tripped by serialize_config (Task 1).
+///
+/// ASYNC for the same reason as `set_documents_config` above: the shared
+/// `config_write_lock()` can now be held across a full task-vault scan, so
+/// this fsync'd write must run off the main thread. No `.await` follows the
+/// lock, so its scope is unchanged.
 #[tauri::command]
-pub fn set_pandoc_path(pandoc_path: Option<String>) -> Result<(), String> {
+pub async fn set_pandoc_path(pandoc_path: Option<String>) -> Result<(), String> {
     let path = pandoc_path
         .as_deref()
         .map(str::trim)

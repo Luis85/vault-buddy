@@ -47,8 +47,17 @@ pub fn get_tasks_config(id: String) -> TasksConfigDto {
 /// vault BEFORE writing (an invalid folder is an inline error, nothing is
 /// saved), serialized behind `config_write_lock()` so a concurrent per-vault
 /// write isn't lost. Read-modify-write preserves the vault's other config.
+///
+/// ASYNC (GAP-22 class, widened by the config-lock collapse): this vault's
+/// own `config_write_lock()` can now be held across a full recursive scan of
+/// every task file in the vault (`services::set_task_parent` — see
+/// `core/src/services/tasks/parent.rs`), so a debounced folder-setting
+/// autosave landing mid-scan must not freeze the main thread behind it. The
+/// lock's scope is unchanged (still synchronous, no `.await` in between) —
+/// only the command itself moves off the main thread, mirroring
+/// `set_task_lists_config` right below.
 #[tauri::command]
-pub fn set_tasks_config(id: String, tasks_folder: Option<String>) -> Result<(), String> {
+pub async fn set_tasks_config(id: String, tasks_folder: Option<String>) -> Result<(), String> {
     let vault = crate::commands::find_vault(&id)?;
     let folder = tasks_folder
         .as_deref()

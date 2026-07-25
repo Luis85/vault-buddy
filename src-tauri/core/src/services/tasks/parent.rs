@@ -2,8 +2,9 @@
 //! parent) plus the shared resolve-the-parent helper the create path will
 //! reuse, and the post-move link repair. Its own module because the ordering
 //! discipline it encodes — every validation before every side effect, one
-//! `ConfigWriteLock` held across the enable, the parent stamp and the caller's
-//! own write — is a responsibility of its own, not another task-service verb.
+//! `capture_config::config_write_lock()` held across the enable, the parent
+//! stamp and the caller's own write — is a responsibility of its own, not
+//! another task-service verb.
 //! Spec: docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md §2.
 
 use std::path::{Path, PathBuf};
@@ -782,8 +783,23 @@ mod tests {
                 })
             };
 
-            thread_a.join().unwrap().unwrap();
-            thread_b.join().unwrap().unwrap();
+            // Assert on thread A's Result explicitly, naming the invariant, rather
+            // than a bare `.unwrap()`: when the lock discipline this test guards
+            // breaks, the two threads' unsynchronized config.json writes collide
+            // and set_task_parent comes back Err (an incidental temp-file race,
+            // e.g. "No such file or directory") well before the desync assertion
+            // below ever runs — a plain `.unwrap()` would panic on that Err with
+            // the raw IO message, burying the actual invariant that broke.
+            let a_result = thread_a.join().unwrap();
+            let b_result = thread_b.join().unwrap();
+            a_result.expect(
+                "thread A's set_task_parent failed instead of losing the race cleanly to \
+                 the desync assertion below — both threads must serialize through the ONE \
+                 config_write_lock(), so a write racing outside it is the invariant this \
+                 test exists to catch, surfacing here as config.json read-modify-write \
+                 corruption rather than a clean, well-ordered outcome",
+            );
+            b_result.unwrap();
 
             let enabled = config_for(&paths, &vault).task_id_enabled;
             let child_has_parent_id = std::fs::read_to_string(&child)
