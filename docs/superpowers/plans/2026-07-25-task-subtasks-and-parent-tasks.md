@@ -1489,7 +1489,7 @@ git add -A && git commit -m "feat(shell): path-keyed parent on update_task and a
 - Test: `tests/task-hierarchy.test.ts` (new), `tests/task-detail.test.ts`
 
 **Interfaces:**
-- Produces: `useTaskHierarchy(task, allTasks, busy)` → `{ parent, children, progress, setParent(path|null) }`.
+- Produces: `useTaskHierarchy(task, allTasks, busy, reload)` → `{ parent, children, progress, setParent(path|null) }`. `reload` is the container's task-set loader, called instead of the two-row patch when a write reports `idsEnabled` (see below).
 - **The `busy` ref is PASSED IN, not created here.** `TaskDetail.vue` already
   gets one from `useTaskDetail`; it passes that same ref to `useTaskHierarchy`
   so **one** guard serializes every write on the task. A second, independent
@@ -1583,6 +1583,28 @@ it("shares ONE busy guard with useTaskDetail, so a save and a parent write canno
   await pending;
 });
 
+it("reloads the whole task set when the write enabled ids, not just the two rows", async () => {
+  // The cached set was loaded id-suppressed, so a pre-existing dormant hierarchy
+  // stays orphaned unless everything is re-read (Codex P2, PR #77).
+  let reloads = 0;
+  const reload = async () => { reloads += 1; };
+  mockIPC((cmd) => (cmd === "update_task" ? { id: null, parentId: "pid", parentLink: null, idsEnabled: true } : undefined));
+  const h = useTaskHierarchy(ref(child), ref([parent, child]), busy, reload);
+  await h.setParent("/v1/p.md");
+  expect(reloads).toBe(1);
+});
+
+it("does NOT reload when ids were already enabled (cheap optimistic patch)", async () => {
+  let reloads = 0;
+  const reload = async () => { reloads += 1; };
+  mockIPC((cmd) => (cmd === "update_task" ? { id: null, parentId: "pid", parentLink: null, idsEnabled: false } : undefined));
+  const all = ref([parent, child]);
+  const h = useTaskHierarchy(ref(child), all, busy, reload);
+  await h.setParent("/v1/p.md");
+  expect(reloads).toBe(0);
+  expect(all.value.find((t) => t.path === "/v1/p.md")!.id).toBe("pid");
+});
+
 it("writes the stamped id onto the PARENT's cached row (IDs-off bootstrap)", async () => {
   // With IDs off — the default — the loaded parent row has id: null. The backend
   // enables IDs and stamps it, returning parentId. If only the child is updated,
@@ -1655,6 +1677,18 @@ function dropCyclicEdges(edges: Map<string, string>): void {
 ```
 
 **On success, write the response's `parentId` onto the selected PARENT row's cached `id` as well as the child's `parentId`** — in the IDs-off default the parent's cached id is `null` until the backend stamps it, and resolution compares ids, so skipping this leaves the new relationship invisible until a reload.
+
+**But when `idsEnabled` is true, RELOAD the vault's task set instead of patching two rows.** That response means the whole cached set was loaded while ids were suppressed, so *every* task's cached `id` is `null` — not just the parent's. Patching two rows would reveal the relationship just created while leaving any pre-existing dormant hierarchy (hand-authored ids + parent links that were invisible precisely because ids were off) still orphaned on screen, and the picker's cycle-invalid set incomplete (Codex P2, PR #77). One reload makes the whole view consistent in a single step; it happens at most once per vault, on the transition.
+
+So `useTaskHierarchy` takes a `reload: () => Promise<void>` — the container's existing task-set loader — and its success path is:
+
+```ts
+if (res.idsEnabled) {
+  await reload();          // the whole set was id-suppressed; two-row patching is not enough
+} else {
+  applyParentPatch(...);   // the cheap optimistic path for every later write
+}
+```
 
 **When the response's `idsEnabled` is true, surface the disclosure note** ("Task IDs were turned on for this vault so subtasks can reference their parent") via `notifications`. The flag cannot be inferred from a returned id, and without the note the user discovers IDs enabled — and locked (Task 6) — with no warning. The same applies to Add subtask in Task 9.
 
@@ -1843,7 +1877,7 @@ it("stamps the current task's cached id from the created child (IDs-off)", async
 
 A `SectionHeader` "Subtasks", the progress line, child rows (status checkbox + title button), and an inline "Add subtask" title input (IME-guarded Enter, Escape that `stopPropagation`s — the `TaskViewControls` create-list flow is the model). Every write goes through the shared `busy` guard.
 
-**On a successful add, copy the created child's `parentId` onto the current task's cached `id`** before the hierarchy re-resolves — the parent may have just been stamped by the very call that created the child. **And surface the same `idsEnabled` disclosure note** the parent-set path shows (Task 8) — Add subtask is the more likely first hierarchy operation, so it is the more important of the two.
+**On a successful add, copy the created child's `parentId` onto the current task's cached `id`** before the hierarchy re-resolves — the parent may have just been stamped by the very call that created the child. **And surface the same `idsEnabled` disclosure note** the parent-set path shows (Task 8) — Add subtask is the more likely first hierarchy operation, so it is the more important of the two. **It must also take the same reload-instead-of-patch branch** when `idsEnabled` is true, for the same reason: the whole cached set was loaded id-suppressed.
 
 - [ ] **Step 4: Watch the LOC cap**
 
