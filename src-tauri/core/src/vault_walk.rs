@@ -65,16 +65,13 @@ fn walk_dir(
     if !walked.insert(dir.to_path_buf()) {
         return Flow::Continue; // already walked — reparse-point cycle guard
     }
-    let mut entries = match dir_entries_checked(dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            // Record it — the CALLER decides whether an incomplete walk
-            // matters (see the doc comment above) — but keep walking the
-            // rest of the vault, same lenient posture as always.
-            unreadable.push(format!("{}: {e}", dir.display()));
-            return Flow::Continue;
-        }
-    };
+    // Partial entries AND the failure, not one or the other: the CALLER decides
+    // whether an incomplete walk matters (see the doc comment above), while the
+    // entries that *were* readable keep flowing to presentation callers.
+    let (mut entries, failure) = dir_entries_checked(dir);
+    if let Some(e) = failure {
+        unreadable.push(e);
+    }
     entries.sort_by(|a, b| a.2.cmp(&b.2));
     for (path, ft, name) in entries {
         if ft.is_dir() {
@@ -103,37 +100,52 @@ fn walk_dir(
 }
 
 /// `dir`'s entries as `(path, file_type, name)`, no-follow — `file_type()`
-/// reads the dirent WITHOUT following symlinks, so a symlinked dir/junction
-/// can never let a scan escape the vault. `Err` only when `read_dir` itself
-/// fails (permissions, an unavailable network share); an individual entry
-/// whose own `file_type()` call fails is skipped, matching `dir_entries`'
-/// historical per-entry leniency below.
+/// reads the dirent WITHOUT following symlinks, so a symlinked dir/junction can
+/// never let a scan escape the vault.
+///
+/// Returns every readable entry PLUS the first failure, so a caller never has to
+/// trade one for the other. `read_dir` succeeding only means the directory
+/// opened: iteration and `file_type()` can each fail afterwards on a transient
+/// network-vault I/O error. Silently dropping those would let a structural scan
+/// treat a partial graph as complete, so a guard could approve a write past
+/// hidden `parent-id` edges — but failing the WHOLE directory is equally wrong
+/// in the other direction, costing presentation callers (the recordings browser,
+/// list folders, search) every valid sibling because of one bad entry, where
+/// they used to lose only that entry (Codex P2 ×2, PR #77).
+///
+/// So a per-entry failure is recorded and the scan CONTINUES over its siblings:
+/// the view keeps everything reachable, and the guard still refuses because the
+/// error is reported alongside.
 pub(crate) fn dir_entries_checked(
     dir: &Path,
-) -> std::io::Result<Vec<(PathBuf, std::fs::FileType, String)>> {
+) -> (Vec<(PathBuf, std::fs::FileType, String)>, Option<String>) {
     let mut out = Vec::new();
-    // Per-ENTRY failures are propagated, not skipped. `read_dir` succeeding only
-    // means the directory opened; iteration and `file_type()` can each fail
-    // afterwards on a transient network-vault I/O error. Dropping those (a
-    // `flatten()` and an `if let Ok`) would omit a file or a whole subtree while
-    // still reporting success, so a structural scan would treat a partial graph
-    // as complete and a guard could approve a write past hidden `parent-id`
-    // edges (Codex P2, PR #77). The lenient `dir_entries` wrapper still discards
-    // all of this for presentation callers.
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let ft = entry.file_type()?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        out.push((entry.path(), ft, name));
+    let read = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        // The directory itself would not open — there is nothing partial to keep.
+        Err(e) => return (out, Some(format!("{}: {e}", dir.display()))),
+    };
+    let mut failure: Option<String> = None;
+    for entry in read {
+        match entry.and_then(|e| {
+            let ft = e.file_type()?;
+            Ok((e.path(), ft, e.file_name().to_string_lossy().into_owned()))
+        }) {
+            Ok(triple) => out.push(triple),
+            // Keep the first reason; keep collecting the siblings.
+            Err(e) => {
+                failure.get_or_insert_with(|| format!("{}: {e}", dir.display()));
+            }
+        }
     }
-    Ok(out)
+    (out, failure)
 }
 
-/// Lenient wrapper: an unreadable directory degrades to an empty Vec — scan
-/// noise, the documented exception to the no-swallow rule — for every
-/// caller that doesn't need to know (the lists enumeration, `capture_mp3s`).
-/// `walk_vault` above does NOT use this: it needs the checked variant to
-/// report what it skipped.
+/// Lenient wrapper: every entry that could be read, failures discarded — scan
+/// noise, the documented exception to the no-swallow rule — for every caller
+/// that doesn't need to know (the lists enumeration, `capture_mp3s`).
+/// `walk_vault` above does NOT use this: it needs the failure to report what it
+/// could not see.
 pub(crate) fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
-    dir_entries_checked(dir).unwrap_or_default()
+    dir_entries_checked(dir).0
 }

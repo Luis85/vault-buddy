@@ -1638,7 +1638,7 @@ it("writes the stamped id onto the PARENT's cached row (IDs-off bootstrap)", asy
 
 Mirror `useTaskDetail`'s discipline exactly: one shared `busy` guard, optimistic update, revert + `notifications.error` on failure, `logWarning`. Scope every lookup by `vaultId` before comparing ids.
 
-**Apply core's ambiguity rule too, not just vault scoping.** Core treats an id carried by two Tasks as unresolvable, so a child naming it renders as an orphan. A frontend that only scoped by vault would pick one duplicate and confidently show a Parent chip, children, and progress for a relationship core considers nonexistent — the two surfaces disagreeing about the same vault (Codex P2, PR #77). Build the same **per-vault** ambiguous-id set and omit those ids before resolving:
+**Put the resolution rule in a SHARED pure helper, `src/utils/taskHierarchy.ts` (`buildParentIndex`), not inside this composable** — Task 10's main-list badge/chip consumes the identical rule, and a second implementation would disagree with this one. Apply core's ambiguity rule there too, not just vault scoping. Core treats an id carried by two Tasks as unresolvable, so a child naming it renders as an orphan. A frontend that only scoped by vault would pick one duplicate and confidently show a Parent chip, children, and progress for a relationship core considers nonexistent — the two surfaces disagreeing about the same vault (Codex P2, PR #77). Build the same **per-vault** ambiguous-id set and omit those ids before resolving:
 
 ```ts
 // Same rule as core::tasks::ambiguous_ids, per vault: an id carried by more than
@@ -1946,6 +1946,25 @@ it("shows a parent chip on a child that opens the parent's detail", async () => 
   await chip.trigger("click");
   expect(store.taskDetailTask?.path).toBe("/v1/p.md");
 });
+it("shows no chip or count for a duplicated id (matches core and Detail)", async () => {
+  // The list consumes the SAME index builder, so an ambiguous id resolves
+  // nothing here exactly as it does in core (Codex P2, PR #77).
+  const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p1.md", title: "One" });
+  const p2 = task({ vaultId: "v1", id: "p", path: "/v1/p2.md", title: "Two" });
+  const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+  const w = await mountTasks([p1, p2, child]);
+  expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+  expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+});
+
+it("shows no chip or count for a hand-authored cycle", async () => {
+  const a = task({ vaultId: "v1", id: "a", parentId: "b", path: "/v1/a.md" });
+  const b = task({ vaultId: "v1", id: "b", parentId: "a", path: "/v1/b.md" });
+  const w = await mountTasks([a, b]);
+  expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+  expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+});
+
 it("scopes the index per vault in aggregate mode", async () => {
   // Ids are unique only WITHIN a vault, so the aggregate view must never link a
   // child in one vault to a same-id task in another.
@@ -1964,9 +1983,31 @@ it("renders a child whose parent id resolves to nothing as an ordinary top-level
 });
 ```
 
-- [ ] **Step 2: Implement**
+- [ ] **Step 2: Implement — reusing the SAME index builder, not a third one**
 
-Pass a derived per-vault index down from `Tasks.vue`. The badge counts **open** (not-done) children and is hidden at zero. The chip shows the parent's title and calls `openTaskDetail`. Use `CountBadge` / `Chip`; change nothing about sorting, grouping, filtering, or drag-reorder.
+The list must not grow its own resolution rule. Task 8 put per-vault scoping, the
+ambiguous-id rule, and the cyclic-edge drop inside `useTaskHierarchy`; a list
+index that applied only vault scoping would show parent chips and subtask counts
+for exactly the relationships core and Task Detail deliberately render as
+unresolved — a third implementation of one rule, disagreeing with the other two
+(Codex P2, PR #77).
+
+So extract the builder from `useTaskHierarchy` into a shared pure helper in
+`src/utils/taskHierarchy.ts`:
+
+```ts
+/// Per-vault child-path -> parent-path edges, with ambiguous ids and cyclic
+/// nodes removed. THE one frontend resolution rule — mirrors
+/// core::tasks::hierarchy::parent_index. useTaskHierarchy (Detail) and
+/// Tasks.vue (the list) both consume this; neither reimplements it.
+export function buildParentIndex(tasks: AggTask[]): Map<string, string>;
+```
+
+`useTaskHierarchy` calls it, `Tasks.vue` calls it, and the badge/chip derive from
+its output. Move Task 8's `ambiguousIds` / `dropCyclicEdges` helpers into the same
+module as its internals.
+
+The badge counts **open** (not-done) children and is hidden at zero. The chip shows the parent's title and calls `openTaskDetail`. Use `CountBadge` / `Chip`; change nothing about sorting, grouping, filtering, or drag-reorder.
 
 - [ ] **Step 3: Run gates + commit**
 
