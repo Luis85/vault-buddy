@@ -1118,8 +1118,10 @@ fn resolve_parent_for_write(
 }
 ```
 
-Add this helper beside the writer (and use it in the `create_task` path too, so
-both writers quote identically):
+**`quote_id_if_needed` ALREADY EXISTS** — it lives in `tasks/id.rs` and the
+create path (`render_task`) already uses it, so both writers quote identically by
+construction. Call `super::id::quote_id_if_needed(..)`; do NOT define a second
+copy. It is reproduced here only so you can see the contract you are relying on:
 
 ```rust
 /// Emit an id bare when it is a plain-safe token, quoted otherwise. Every

@@ -289,8 +289,14 @@ fn plain_scalar_continues(content: &str, key: &str) -> bool {
             return false; // closing fence
         }
         if at_key {
-            // The line immediately after the key's own line.
-            return !t.trim().is_empty() && t.starts_with([' ', '\t']);
+            // YAML permits a plain scalar to continue ACROSS blank lines
+            // (`key: abc`, blank, indented `def` folds to "abc\ndef"), so a
+            // blank is not the end of the value — keep scanning and let the
+            // first non-blank line decide (Codex P2, PR #77).
+            if t.trim().is_empty() {
+                continue;
+            }
+            return t.starts_with([' ', '\t']);
         }
         if t.starts_with([' ', '\t']) {
             continue; // nested line, not a top-level key

@@ -49,8 +49,8 @@ pub fn task_basename(title: &str, today: &str) -> String {
 /// both already composed/validated by the caller — and writes a
 /// `parent-id:`/`parent:` pair immediately after the `task_id` line (with
 /// identity, before the widened `due`/`scheduled`/`priority`/`tags` fields);
-/// `parent-id` is charset-safe base36 like `task_id` and needs no quoting,
-/// while `parent` (an arbitrary wikilink/markdown link) is YAML-quoted.
+/// `parent-id` goes through `id::quote_id_if_needed` (an INHERITED id need not
+/// be base36), and `parent` (an arbitrary wikilink/markdown link) is YAML-quoted.
 /// Absent → no lines, byte-identical to today's output.
 ///
 /// `extra_frontmatter` is `{{title}}`/`{{date}}`/`{{due}}`/`{{priority}}`
@@ -84,7 +84,13 @@ pub fn render_task(
         extra.push_str(&format!("{prop}: {id}\n"));
     }
     if let Some((pid, link)) = parent {
-        extra.push_str(&format!("parent-id: {pid}\n"));
+        // NOT necessarily base36: ensure_id preserves any usable existing id,
+        // so an inherited `[legacy]` or `123` must be quoted or it becomes a
+        // flow sequence / a number on read-back (Codex P2, PR #77).
+        extra.push_str(&format!(
+            "parent-id: {}\n",
+            super::id::quote_id_if_needed(pid)
+        ));
         extra.push_str(&format!(
             "parent: {}\n",
             crate::yaml_scalar::yaml_quote(link)

@@ -79,9 +79,16 @@ mod tests {
         // parent (Codex P2, PR #77). Reject, like the other multi-line forms.
         let c = "---\ntype: Task\nparent-id: abc\n  def\ntitle: T\n---\n";
         assert_eq!(parent_id_field(c), None);
+        // A BLANK line does not end a plain scalar either — YAML folds
+        // `abc`, blank, indented `def` into "abc\ndef" (Codex P2, PR #77).
+        let blank = "---\ntype: Task\nparent-id: abc\n\n  def\ntitle: T\n---\n";
+        assert_eq!(parent_id_field(blank), None);
         // A single-line plain value is of course still fine.
         let ok = "---\ntype: Task\nparent-id: abc\ntitle: T\n---\n";
         assert_eq!(parent_id_field(ok), Some("abc".to_string()));
+        // …and a blank line followed by a TOP-LEVEL key is not a continuation.
+        let sep = "---\ntype: Task\nparent-id: abc\n\ntitle: T\n---\n";
+        assert_eq!(parent_id_field(sep), Some("abc".to_string()));
     }
 
     #[test]

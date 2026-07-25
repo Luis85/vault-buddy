@@ -34,6 +34,41 @@ pub fn is_valid_id_property(name: &str) -> bool {
         && !super::RESERVED_TASK_KEYS.contains(&name.to_ascii_lowercase().as_str())
 }
 
+/// Emit an id bare ONLY when the token is provably not implicitly typed by
+/// YAML; quote it otherwise. Shared by every path that writes an id VALUE
+/// (`render_task`'s create path and the surgical parent writer), so the two
+/// cannot disagree about when quoting is needed.
+///
+/// Inverted on purpose: enumerating YAML's implicit types (null, bool, int,
+/// float, hex, sexagesimal, `.inf`/`.nan`, timestamp) is a losing game, but
+/// "starts with an ASCII letter" rules out every numeric and date form in one
+/// stroke, since all of them begin with a digit, `.`, `-` or `+`. That leaves
+/// only the bool/null keywords to name explicitly.
+///
+/// This matters beyond our own ids: `ensure_id` preserves ANY usable existing
+/// value, so a hand-authored `task-id: "[legacy]"` or `"123"` would otherwise be
+/// re-emitted bare as `parent-id: [legacy]` (a flow sequence the strict reader
+/// rejects outright, orphaning the child) or `parent-id: 123` (retyped as a
+/// NUMBER by Obsidian/Dataview while the source id is still a string, so
+/// equality silently stops matching). Every GENERATED id is letter-first base36,
+/// so the common case still writes bare (Codex P2 x3, PR #77).
+pub(super) fn quote_id_if_needed(id: &str) -> String {
+    let plain_charset = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let letter_first = id.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+    let keyword = matches!(
+        id.to_ascii_lowercase().as_str(),
+        "null" | "nil" | "true" | "false" | "yes" | "no" | "on" | "off" | "y" | "n"
+    );
+    if plain_charset && letter_first && !keyword {
+        id.to_string()
+    } else {
+        crate::yaml_scalar::yaml_quote(id)
+    }
+}
+
 /// The frontmatter property a generated id should be written under, or `None`
 /// when id generation is OFF or the configured property is not a safe,
 /// non-reserved key. One chokepoint so the create (`add_task`) and edit
@@ -57,6 +92,33 @@ pub fn id_property_for_generation(enabled: bool, property: &str) -> Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quote_id_if_needed_keeps_generated_ids_bare_and_quotes_typed_tokens() {
+        // Generated ids are letter-first base36 — the common case stays clean.
+        assert_eq!(quote_id_if_needed("k3m9x2qp"), "k3m9x2qp");
+        assert_eq!(quote_id_if_needed("uid_2"), "uid_2");
+        // Syntax that would break or retype the value.
+        assert_eq!(quote_id_if_needed("[legacy]"), "\"[legacy]\"");
+        assert_eq!(quote_id_if_needed("has space"), "\"has space\"");
+        for kw in [
+            "null", "NULL", "true", "False", "yes", "no", "on", "off", "y", "n",
+        ] {
+            assert_eq!(
+                quote_id_if_needed(kw),
+                format!("\"{kw}\""),
+                "{kw} must be quoted"
+            );
+        }
+        // Numeric / date / special forms — all caught by the letter-first rule.
+        for typed in ["123", "0x1F", "1e3", "2026-07-25", "-5", "1:30", ".inf"] {
+            assert_eq!(
+                quote_id_if_needed(typed),
+                format!("\"{typed}\""),
+                "{typed} must be quoted"
+            );
+        }
+    }
 
     #[test]
     fn new_task_id_is_8_base36_chars_and_unique() {
