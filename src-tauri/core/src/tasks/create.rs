@@ -466,4 +466,32 @@ mod tests {
         // Still a valid task (closed fence + type: Task).
         assert!(out.contains("---\ntype: Task\n"));
     }
+
+    #[test]
+    fn task_extra_frontmatter_drops_the_parent_keys() {
+        // finding 3: parent-id/parent are reserved (RESERVED_TASK_KEYS) —
+        // a user template seeding either must never smuggle a fake parent
+        // link past the surgical writer, mirroring the status: HIJACK case
+        // above.
+        let out = render_task(
+            "Buy milk",
+            "2026-07-08",
+            None,
+            None,
+            &[],
+            None,
+            Some("project: Alpha\nparent-id: fake0000\nparent: \"[[Nope]]\""),
+            None,
+            None,
+        );
+        assert!(out.contains("project: Alpha"));
+        assert!(
+            !out.contains("parent-id: fake0000"),
+            "reserved dropped: {out}"
+        );
+        assert!(
+            !out.contains("parent: \"[[Nope]]\""),
+            "reserved dropped: {out}"
+        );
+    }
 }

@@ -2,7 +2,7 @@
 //! YAML scalar form exactly as Obsidian's js-yaml does; reject the multi-line
 //! forms (block / line-spanning quoted) rather than expose a partial value.
 
-pub(super) use super::parse::strip_inline_comment;
+use super::parse::strip_inline_comment;
 use crate::yaml_scalar::yaml_unquote_multiline;
 
 /// Extract the `"..."` span of a double-quoted scalar starting at `s[0] == '"'`,

@@ -48,7 +48,7 @@ fn collect_dirs(
             out.push(rel_to_list(rel));
         }
     }
-    let mut entries = crate::transcript::dir_entries(dir);
+    let mut entries = crate::vault_walk::dir_entries(dir);
     entries.sort_by(|a, b| a.2.cmp(&b.2));
     for (path, ft, name) in entries {
         if !ft.is_dir() || name.starts_with('.') {
@@ -321,7 +321,7 @@ pub fn delete_task_list(
     }
     // Collect the direct task files first (don't mutate while iterating).
     let mut task_files: Vec<PathBuf> = Vec::new();
-    for (path, ft, name) in crate::transcript::dir_entries(&list_dir) {
+    for (path, ft, name) in crate::vault_walk::dir_entries(&list_dir) {
         if ft.is_file() && name.ends_with(".md") {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if super::doc::is_task(&content) {

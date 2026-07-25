@@ -136,33 +136,53 @@ impl ScanMode {
 /// (`Flow::Stop`) instead of scanning the rest of a vault it already knows it
 /// must reject.
 fn scan(root: &Path, id_property: Option<&str>, mode: ScanMode) -> Result<Vec<TaskItem>, String> {
+    let canon_root = match std::fs::canonicalize(root) {
+        Ok(p) => p,
+        // A missing tasks folder is legitimately empty in EITHER mode — a
+        // vault that has never created one has no graph to protect yet
+        // (finding 1). Any OTHER root failure (EACCES, an unavailable
+        // network share) must not read as "no tasks" in Structural mode: a
+        // settings guard would then conclude no parent links exist and
+        // permit an unsafe id-property change on the strength of a scan
+        // that never actually ran. View mode keeps today's exact
+        // best-effort/empty behavior regardless of the error kind.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound || !mode.strict() => {
+            return Ok(Vec::new())
+        }
+        Err(e) => return Err(format!("Cannot resolve tasks folder: {e}")),
+    };
     let mut out = Vec::new();
     let mut first_error: Option<String> = None;
-    // A missing/unresolvable root → empty list (best-effort, unchanged) even
-    // in Structural mode — a vault with no tasks folder yet has no graph to
-    // protect.
-    if let Ok(canon_root) = std::fs::canonicalize(root) {
-        crate::vault_walk::walk_vault(&canon_root, &mut |path, name| {
-            collect_task_file(
-                path,
-                name,
-                &canon_root,
-                id_property,
-                mode,
-                &mut first_error,
-                &mut out,
-            );
-            if first_error.is_some() {
-                crate::vault_walk::Flow::Stop
-            } else {
-                crate::vault_walk::Flow::Continue
-            }
-        });
+    let unreadable_dirs = crate::vault_walk::walk_vault(&canon_root, &mut |path, name| {
+        collect_task_file(
+            path,
+            name,
+            &canon_root,
+            id_property,
+            mode,
+            &mut first_error,
+            &mut out,
+        );
+        if first_error.is_some() {
+            crate::vault_walk::Flow::Stop
+        } else {
+            crate::vault_walk::Flow::Continue
+        }
+    });
+    if let Some(e) = first_error {
+        return Err(e);
     }
-    match first_error {
-        Some(e) => Err(e),
-        None => Ok(out),
+    // A directory the walk could not fully enumerate hides possible
+    // `parent-id` edges just as an unreadable FILE does — in Structural mode
+    // that must refuse rather than report a silently-partial graph as
+    // complete (finding 2). View mode (list_tasks) ignores it, same as
+    // always.
+    if mode.strict() {
+        if let Some(first) = unreadable_dirs.first() {
+            return Err(format!("Cannot fully scan the tasks folder: {first}"));
+        }
     }
+    Ok(out)
 }
 
 /// Open first. Open tasks: due ascending (no/invalid due last), then
@@ -521,5 +541,107 @@ mod tests {
             "an unreadable task must fail the structural scan"
         );
         assert!(!list_tasks(root, None).is_empty()); // the VIEW still degrades gracefully
+    }
+
+    // uid-independent counterpart to structural_scan_errors_on_an_unreadable_task
+    // above: read_to_string fails with InvalidData for non-UTF-8 bytes
+    // regardless of uid/permissions, so this exercises the strict-error
+    // guarantee even when tests run as root (the chmod test above self-skips
+    // there) — finding 4.
+    #[test]
+    fn structural_scan_errors_on_a_non_utf8_task_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
+        );
+        std::fs::write(root.join("b.md"), [0xff, 0xfe]).unwrap();
+        let out = list_tasks_structural(root, None);
+        assert!(
+            out.is_err(),
+            "a non-UTF-8 task file must fail the structural scan"
+        );
+        assert!(!list_tasks(root, None).is_empty()); // the VIEW still degrades gracefully
+    }
+
+    // finding 1: a missing tasks folder is legitimately empty in EITHER mode
+    // — the guard has no graph to protect yet. Also covers finding 9 (no
+    // prior test of list_tasks_structural on a missing root).
+    #[test]
+    fn list_tasks_structural_missing_root_is_ok_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = list_tasks_structural(&dir.path().join("nope"), None).unwrap();
+        assert!(out.is_empty());
+    }
+
+    // finding 1: `canonicalize` succeeds here (the path exists) — it is
+    // finding 2's directory-error reporting that must catch a root that
+    // exists but cannot be enumerated as a directory, not finding 1's
+    // canonicalize-error branch (which never sees an Err in this case).
+    // Verifying the REAL mechanism, not assuming which one fires, per the
+    // review's own caution.
+    #[test]
+    fn list_tasks_structural_errors_when_root_is_not_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("not-a-dir");
+        std::fs::write(&root, b"i am a file, not the tasks folder").unwrap();
+        let out = list_tasks_structural(&root, None);
+        assert!(
+            out.is_err(),
+            "a non-directory root must fail the structural scan"
+        );
+    }
+
+    // finding 2: a failed directory READ must not silently drop the whole
+    // subtree — a cycle routed through a task inside it would be invisible
+    // to the guard. The VIEW walk keeps today's lenient behavior: list_tasks
+    // still returns whatever it could reach.
+    #[cfg(unix)]
+    #[test]
+    fn structural_scan_errors_on_an_unreadable_subdirectory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "top.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Top\"\n---\n",
+        );
+        write(
+            &root.join("Sub"),
+            "hidden.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Hidden\"\n---\n",
+        );
+        let sub = root.join("Sub");
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // If a read still succeeds despite the mode, perms are being bypassed
+        // (root) and the wall this test relies on doesn't hold — skip. Root
+        // bypasses DAC, so probe and skip under root; CI's rust-core runs
+        // non-root and exercises the assertions (same idiom as
+        // move_task_fails_and_rolls_back_when_source_cannot_be_removed in
+        // tasks/lists.rs).
+        let bypassed = std::fs::read_dir(&sub).is_ok();
+        if bypassed {
+            std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let structural = list_tasks_structural(root, None);
+        // Restore before asserting so the tempdir can clean up either way.
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            structural.is_err(),
+            "an unreadable subdirectory must fail the structural scan"
+        );
+        let view: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(
+            view,
+            vec!["Top"],
+            "the VIEW still returns the tasks it could reach"
+        );
     }
 }

@@ -15,7 +15,6 @@ use std::path::Path;
 /// exactly. In Structural mode, a non-task still degrades silently (it isn't
 /// a hierarchy edge), but an UNREADABLE file records the first error into
 /// `first_error` — the caller aborts the walk as soon as it sees one set.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn collect_task_file(
     path: &Path,
     name: &str,

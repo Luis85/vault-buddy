@@ -109,6 +109,8 @@ mod tests {
             "tag",
             "order",
             "description",
+            "parent-id",
+            "parent",
         ] {
             assert!(
                 !is_valid_id_property(reserved),

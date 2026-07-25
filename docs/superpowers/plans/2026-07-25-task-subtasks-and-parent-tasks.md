@@ -1223,6 +1223,24 @@ git commit -m "feat(core): add set_task_parent with validate-before-side-effect 
     }
 
     #[test]
+    fn enabling_ids_under_an_unchanged_property_is_allowed_with_parent_links() {
+        // The catch-22 guard: a hand-authored hierarchy is INVISIBLE while ids
+        // are off, so refusing the enable would leave the user unable to reveal
+        // it without deleting it first (Codex P2, PR #77). Only a property
+        // change or a disable can orphan links.
+        let (paths, vault) = fixture_with_ids_disabled(&[]);
+        let root = tasks_root(&paths, &vault);
+        write(&root, "a.md", "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n");
+        write(&root, "b.md", "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n");
+        // enable, same property -> ALLOWED
+        assert!(set_task_id_config(&vault, true, "task-id").is_ok());
+        // disable -> refused (would hide every own id and orphan the links)
+        assert!(set_task_id_config(&vault, false, "task-id").is_err());
+        // re-point the property -> refused
+        assert!(set_task_id_config(&vault, true, "uid").is_err());
+    }
+
+    #[test]
     fn an_unreadable_vault_refuses_rather_than_reporting_no_links() {
         // Best-effort reads are right for a view, wrong for a guard: an offline
         // vault must not read as "no parent links" (Codex P2, PR #77).
@@ -1268,9 +1286,18 @@ In `set_task_id_config`, hold the config lock across **both** the scan and the w
     // orphaning that hierarchy immediately (design spec §2a).
     let _guard = capture_config::config_write_lock();
     let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
-    let changing = cfg.task_id_enabled != enabled || cfg.task_id_property_name() != resolved_property;
+    // Only a PROPERTY CHANGE or a DISABLE can orphan existing links. ENABLING
+    // under an unchanged property is always safe — it makes recorded parent-id
+    // references resolvable rather than breaking them. Refusing it would trap a
+    // user whose hand-authored hierarchy is invisible precisely BECAUSE ids are
+    // off: they could not turn ids on without first deleting the very links they
+    // were trying to see (Codex P2, PR #77).
+    let property_changing = cfg.task_id_property_name() != resolved_property;
+    let disabling = cfg.task_id_enabled && !enabled;
     // A scan failure REFUSES the change — it must never read as "no links".
-    if changing && services::vault_has_parent_links(&ServicePaths::real(), &id)? {
+    if (property_changing || disabling)
+        && services::vault_has_parent_links(&ServicePaths::real(), &id)?
+    {
         return Err("This vault has tasks with a parent, which reference Task IDs \
                     under the current property. Clear those parent links before \
                     changing the Task ID settings."
@@ -1462,7 +1489,16 @@ git add -A && git commit -m "feat(shell): path-keyed parent on update_task and a
 - Test: `tests/task-hierarchy.test.ts` (new), `tests/task-detail.test.ts`
 
 **Interfaces:**
-- Produces: `useTaskHierarchy(task, allTasks)` → `{ parent, children, progress, setParent(path|null), busy }`.
+- Produces: `useTaskHierarchy(task, allTasks, busy)` → `{ parent, children, progress, setParent(path|null) }`.
+- **The `busy` ref is PASSED IN, not created here.** `TaskDetail.vue` already
+  gets one from `useTaskDetail`; it passes that same ref to `useTaskHierarchy`
+  so **one** guard serializes every write on the task. A second, independent
+  guard would let a field Save and a Change/Clear Parent overlap on the same
+  document: both atomic writers read the old content and the later replacement
+  discards the other's edit (Codex P2, PR #77). This also keeps
+  `vaults.taskDetailBusy` — which gates the header Back and the panel's
+  `refresh()` — correct for parent writes for free, since `useTaskDetail`
+  already mirrors that ref to the store.
 
 - [ ] **Step 1: Write the failing composable tests**
 
@@ -1524,6 +1560,27 @@ it("sends the parent PATH and clears with clearParent", async () => {
   expect(calls[0][1].patch).toEqual({ parentPath: "/v1/p.md" });
   await h.setParent(null);
   expect(calls[1][1].patch).toEqual({ clearParent: true });
+});
+
+it("shares ONE busy guard with useTaskDetail, so a save and a parent write cannot overlap", async () => {
+  // Two guards would let both writers read the old document and the later
+  // replacement discard the other's edit (Codex P2, PR #77).
+  let resolveSave: (() => void) | undefined;
+  mockIPC((cmd) =>
+    cmd === "update_task"
+      ? new Promise((r) => { resolveSave = () => r({ id: null, parentId: null, parentLink: null, idsEnabled: false }); })
+      : undefined,
+  );
+  const t = ref(child);
+  const detail = useTaskDetail(t);
+  const hierarchy = useTaskHierarchy(t, ref([parent, child]), detail.busy);
+  const pending = detail.save({ title: "New" }); // slow field write holds the guard
+  await new Promise((r) => setTimeout(r));
+  expect(detail.busy.value).toBe(true);
+  await hierarchy.setParent("/v1/p.md"); // must be suppressed, not raced
+  expect(calls.filter((c) => c[0] === "update_task")).toHaveLength(1);
+  resolveSave?.();
+  await pending;
 });
 
 it("writes the stamped id onto the PARENT's cached row (IDs-off bootstrap)", async () => {

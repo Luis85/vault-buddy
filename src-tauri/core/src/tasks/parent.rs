@@ -4,15 +4,19 @@
 
 /// The raw `parent-id` scalar, or `None` when absent/empty/non-scalar. Lenient
 /// like every other widened field: a block (`|`/`>`) or flow (`[..]`/`{..}`)
-/// value degrades to None rather than surfacing a partial value.
+/// value degrades to None rather than surfacing a partial value. NOT the link
+/// field — a `[[wikilink]]`-shaped value here is not exempt (finding 5): an
+/// id must be a plain scalar, and a wikilink is exactly the kind of flow
+/// value the block/flow guard exists to reject.
 pub(super) fn parent_id_field(content: &str) -> Option<String> {
-    scalar(content, "parent-id")
+    scalar(content, "parent-id", false)
 }
 
 /// The raw `parent` link scalar. Carried through to the DTO verbatim — the app
-/// never interprets it.
+/// never interprets it. The only caller that gets the `[[wikilink]]` flow
+/// exemption (see `scalar`'s `link` parameter).
 pub(super) fn parent_link_field(content: &str) -> Option<String> {
-    scalar(content, "parent")
+    scalar(content, "parent", true)
 }
 
 /// STRICT optional-field decode — deliberately NOT `decode_scalar_lenient`.
@@ -22,15 +26,23 @@ pub(super) fn parent_link_field(content: &str) -> Option<String> {
 /// `vault_has_parent_links` block ID settings forever. So unsupported and
 /// null-ish forms yield None, matching `description_field`'s rules (Codex P2,
 /// PR #77).
-fn scalar(content: &str, key: &str) -> Option<String> {
+///
+/// `link` gates the `[[wikilink]]` flow-sequence exemption: only
+/// `parent_link_field` passes `true` (that IS the form users type for
+/// `parent`, never parsed for meaning). `parent_id_field` passes `false` — an
+/// id must be a plain scalar, so `parent-id: [[Some Task]]` is rejected like
+/// any other flow value, not silently accepted as if it were the link
+/// (finding 5: the exemption previously applied to both keys because they
+/// shared one undiscriminated `scalar` helper).
+fn scalar(content: &str, key: &str, link: bool) -> Option<String> {
     let raw = crate::capture_note::raw_scalar_field(content, key)?.trim();
     if raw.is_empty() {
         return None;
     }
-    // A block (`|`/`>`) or flow (`{..}`) value is the user's own structure, not
-    // our scalar. `[[wikilink]]` is exempt: it is the form users type for the
-    // `parent` link, and that value is never parsed for meaning.
-    if raw.starts_with(['|', '>', '{']) || (raw.starts_with('[') && !raw.starts_with("[[")) {
+    // A block (`|`/`>`) or flow (`{..}`) value is the user's own structure,
+    // not our scalar. `[[wikilink]]` is exempt ONLY when `link` is set.
+    let wikilink_exempt = link && raw.starts_with("[[");
+    if !wikilink_exempt && (raw.starts_with(['|', '>', '{']) || raw.starts_with('[')) {
         return None;
     }
     // A leading `#` is a YAML comment — the property is null.
@@ -44,7 +56,10 @@ fn scalar(content: &str, key: &str) -> Option<String> {
     } else if raw.starts_with('\'') {
         super::description::decode_single_quoted(raw)?
     } else {
-        let stripped = super::description::strip_inline_comment(raw).trim();
+        // strip_inline_comment lives in `parse` (a sibling module, like
+        // `description`) — reached directly rather than through
+        // `description`'s former re-export (finding 7).
+        let stripped = super::parse::strip_inline_comment(raw).trim();
         if matches!(stripped, "null" | "Null" | "NULL" | "~") {
             return None;
         }
@@ -87,6 +102,7 @@ mod tests {
         for body in [
             "parent-id: # note",
             "parent-id: null",
+            "parent-id: Null",
             "parent-id: ~",
             "parent-id: NULL",
             "parent-id: \"unterminated",
@@ -103,5 +119,45 @@ mod tests {
         // for meaning, so a lenient read costs nothing.
         let c = "---\ntype: Task\nparent: [[Tasks/p]]\n---\n";
         assert_eq!(parent_link_field(c), Some("[[Tasks/p]]".to_string()));
+    }
+
+    #[test]
+    fn a_wikilink_is_not_a_valid_parent_id() {
+        // finding 5: the `[[…]]` exemption belongs to the `parent` LINK field
+        // only — a task id must be a plain scalar, so a wikilink-shaped
+        // `parent-id` must read as None, unlike `parent` itself.
+        let c = "---\ntype: Task\nparent-id: [[Some Task]]\nparent: [[Some Task]]\n---\n";
+        assert_eq!(parent_id_field(c), None);
+        assert_eq!(parent_link_field(c), Some("[[Some Task]]".to_string()));
+    }
+
+    #[test]
+    fn reads_a_single_quoted_value() {
+        let c = "---\ntype: Task\nparent-id: 'ab12cd34'\n---\n";
+        assert_eq!(parent_id_field(c), Some("ab12cd34".to_string()));
+    }
+
+    #[test]
+    fn strips_a_trailing_inline_comment() {
+        let c = "---\ntype: Task\nparent-id: abc # was xyz\n---\n";
+        assert_eq!(parent_id_field(c), Some("abc".to_string()));
+    }
+
+    #[test]
+    fn a_flow_sequence_is_rejected_for_the_link_field_too() {
+        // Not a wikilink form (single bracket, not double) — the block/flow
+        // rejection applies to `parent` exactly as it does to `parent-id`.
+        let c = "---\ntype: Task\nparent: [a, b]\n---\n";
+        assert_eq!(parent_link_field(c), None);
+    }
+
+    #[test]
+    fn parent_id_only_document_leaves_parent_link_field_none() {
+        // The two keys are kept apart solely by raw_scalar_field's exact
+        // "parent:"-prefix match (parent-id's line starts with "parent-",
+        // never "parent:") — nothing else pins that a `parent-id`-only
+        // document can't bleed into `parent_link_field` (finding 8).
+        let c = "---\ntype: Task\nparent-id: ab12cd34\n---\n";
+        assert_eq!(parent_link_field(c), None);
     }
 }
