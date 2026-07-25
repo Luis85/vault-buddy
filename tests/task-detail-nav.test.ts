@@ -61,4 +61,23 @@ describe("task detail navigation", () => {
     expect(s.view).toBe("tasks");
     expect(s.tasksVaultId).toBe("v1");
   });
+
+  it("refresh() keeps Task Detail (not showList) while a detail write is in flight", async () => {
+    // A panel auto-hide + reopen mid-write must not reset to the list and let the
+    // write finish off-screen against a stale, remounted Tasks list (Codex P2, PR #76).
+    mockIPC((cmd) => {
+      if (cmd === "take_pending_import") return [];
+      if (cmd === "list_vaults") return [];
+      return undefined; // take_add_document_request → falsy, counts → none
+    });
+    const s = useVaultsStore();
+    s.openTaskDetail(task());
+    s.taskDetailBusy = true;
+    await s.refresh();
+    expect(s.view).toBe("taskDetail"); // kept
+    // Once the write settles, a normal refresh resets to the list.
+    s.taskDetailBusy = false;
+    await s.refresh();
+    expect(s.view).toBe("list");
+  });
 });

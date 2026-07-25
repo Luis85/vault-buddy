@@ -4,7 +4,7 @@
 //! on (`set_fields`, `task_basename`, the collision-safe note writer).
 
 use super::writer::set_fields;
-use crate::yaml_scalar::yaml_quote;
+use crate::yaml_scalar::yaml_quote_multiline;
 use std::path::{Path, PathBuf};
 
 /// Permanently delete a task file — the app's ONLY destructive vault write.
@@ -180,7 +180,11 @@ pub fn duplicate_task(
         .map(super::description::decode_scalar_lenient)
         .unwrap_or(stem);
     let new_title = format!("{title} (copy)");
-    let quoted = yaml_quote(&new_title);
+    // Re-encode with the EXACT-value escaper (the inverse of the full-escape
+    // decoder above), not the lossy single-line `yaml_quote`: a decoded control
+    // char (`"a\nb"` → real newline) must round-trip as its escape rather than be
+    // flattened or written raw as invalid YAML (Codex P2, PR #76).
+    let quoted = yaml_quote_multiline(&new_title);
     // A fresh id when IDs are on; `None` strips the configured property so the
     // copy can never inherit the source id.
     let new_id = if ids_enabled {
@@ -376,6 +380,32 @@ mod tests {
         let new = duplicate_task(&root, &src, "2026-07-25", None, false).unwrap();
         let out = std::fs::read_to_string(&new).unwrap();
         assert!(out.contains("title: \"café (copy)\""), "got: {out}");
+    }
+
+    #[test]
+    fn duplicate_task_round_trips_a_control_char_in_the_title() {
+        // A decoded control char (a newline from `\n`) must be RE-ESCAPED, not
+        // flattened or written raw as invalid YAML — yaml_quote_multiline is the
+        // exact inverse of the full-escape decoder (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: \"a\\nb\"\n---\n",
+        )
+        .unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-25", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        // The newline stays an escape on ONE physical line (a valid scalar)...
+        assert!(out.contains("title: \"a\\nb (copy)\""), "got: {out}");
+        // ...and round-trips: reading the copied title back decodes to the value.
+        assert_eq!(
+            crate::capture_note::raw_scalar_field(&out, "title")
+                .map(super::super::description::decode_scalar_lenient),
+            Some("a\nb (copy)".to_string())
+        );
     }
 
     #[cfg(unix)]

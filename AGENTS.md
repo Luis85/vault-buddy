@@ -1814,7 +1814,11 @@ show/hide state, owned by Rust. So the `vaults` store lost `panelOpen`/
 re-runs discovery and defaults the view to the vault list, unless a one-shot
 `requestView(view)` asked otherwise — a failed update install `requestView`s
 `settings` so the reopen lands on the error/retry UI instead of being reset to
-the list. It also drains a drag-dropped document path via `take_pending_import`
+the list. It also KEEPS the `taskDetail` view (rather than the list default)
+while a detail write is in flight (`taskDetailBusy`), so a panel auto-hide→reopen
+can't unmount `TaskDetail` and let the write finish off-screen against a stale,
+remounted Tasks list — the OS focus-out auto-hide the disabled header Back
+button can't cover (Codex P2, PR #76). It also drains a drag-dropped document path via `take_pending_import`
 (a one-shot Rust stash filled by `begin_document_import`) BEFORE the list
 default, routing to the `importPicker` view with `pendingImportPath` set so a
 buddy drop survives the `panel-shown` refresh. It also bumps `shownNonce`; because the panel window is only

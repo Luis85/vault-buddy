@@ -141,6 +141,13 @@ export const useVaultsStore = defineStore("vaults", {
         this.captureSettingsVaultId = this.pendingCaptureVaultId;
         this.pendingView = null;
         this.pendingCaptureVaultId = null;
+      } else if (this.view === "taskDetail" && this.taskDetailBusy) {
+        // A Task Detail write is in flight: a panel auto-hide + reopen must NOT
+        // reset to the list. showList() would unmount TaskDetail and let the write
+        // finish off-screen against a stale, remounted Tasks list (the header Back
+        // button is already disabled for the same reason, but the OS focus-out
+        // auto-hide is a separate trigger). Keep the detail surface so the write
+        // completes on the mounted view (Codex P2, PR #76).
       } else {
         this.showList();
       }
