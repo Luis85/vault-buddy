@@ -698,4 +698,104 @@ mod tests {
         assert!(!child.contains("parent-id"));
         assert!(!child.contains("parent:"));
     }
+
+    /// TASK 6b regression pin. The defect: config.json read-modify-writes were
+    /// serialized by TWO mutexes that did not exclude each other — this core
+    /// `config_write_lock()`, taken here, and a separate shell-only
+    /// `ConfigWriteLock` the IPC settings commands took instead. A capture
+    /// settings save could read `task_id_enabled: false`, race this function's
+    /// enable, and write `false` back over it via `config_merge::
+    /// merge_capture_owned`'s `task_id_enabled: existing.task_id_enabled` —
+    /// while the child it raced already carried a stamped `parent-id`,
+    /// orphaning the reference the instant it was created.
+    ///
+    /// HONESTY NOTE (can't-go-red, by design): both threads below take
+    /// `config_write_lock()` — the ONE lock the shell now takes at every
+    /// config-write site after the fix. That is deliberate, not an oversight:
+    /// core has only ever had this one lock; the second mutex was a shell
+    /// (`src-tauri/src`) type built on `tauri::State`/`AppHandle`, which
+    /// cannot be constructed or invoked from a `core`-crate unit test — there
+    /// is no way to reach the actual pre-fix code path from here. So this
+    /// test passes identically before and after the fix; it does not catch
+    /// today's bug, it PINS the invariant so a future core write path that
+    /// forgets to take this lock reopens the same race. The fix itself is
+    /// structural, not something a core test can observe: `capture_commands::
+    /// ConfigWriteLock` no longer exists anywhere in the compiled shell crate
+    /// (see the task report), so there is no second lock left to pick by
+    /// mistake. The task report also documents a manual, uncommitted
+    /// experiment confirming this harness DOES fail reliably when thread B is
+    /// changed to skip the lock — proof the apparatus below is sensitive to
+    /// the class of bug being fixed, even though it cannot reach the specific
+    /// pre-fix shell code.
+    #[test]
+    fn concurrent_capture_save_and_parent_assignment_never_desync_task_id_enabled() {
+        // Iterated (not asserted once): both threads share one lock, so every
+        // ordering the OS scheduler produces must converge on a consistent
+        // state — this stress-tests that claim across many orderings rather
+        // than trusting a single lucky interleaving, and would also surface a
+        // hang/deadlock if the lock were ever made reentrant-unsafe.
+        for _ in 0..50 {
+            let dir = tempfile::tempdir().unwrap();
+            let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["p.md", "c.md"]);
+            let root = tasks_root(&paths, &vault);
+            let parent = root.join("p.md");
+            let child = root.join("c.md");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+            let thread_a = {
+                let paths = paths.clone();
+                let vault = vault.clone();
+                let (parent, child) = (parent.clone(), child.clone());
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    set_task_parent(&paths, &vault, &child, Some(&parent))
+                })
+            };
+
+            let thread_b = {
+                let paths = paths.clone();
+                let vault = vault.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || -> Result<(), String> {
+                    barrier.wait();
+                    // Mirrors set_capture_config exactly: read, change a
+                    // capture-owned field, merge (which preserves
+                    // task_id_enabled — config_merge.rs's clobbering line),
+                    // write — all under the ONE process-wide lock, with the
+                    // read INSIDE it so a concurrent writer's commit is never
+                    // read as stale (the same rule set_capture_config's own
+                    // doc comment states).
+                    let _guard = capture_config::config_write_lock();
+                    let existing = capture_config::vault_config(&app_config(&paths), &vault);
+                    let incoming = VaultCaptureConfig {
+                        bitrate_kbps: 192,
+                        ..VaultCaptureConfig::default()
+                    };
+                    let merged = capture_config::merge_capture_owned(&existing, incoming);
+                    capture_config::update_vault_config_at(
+                        paths.config_json.as_ref().unwrap(),
+                        &vault,
+                        merged,
+                    )
+                    .map_err(|e| e.to_string())
+                })
+            };
+
+            thread_a.join().unwrap().unwrap();
+            thread_b.join().unwrap().unwrap();
+
+            let enabled = config_for(&paths, &vault).task_id_enabled;
+            let child_has_parent_id = std::fs::read_to_string(&child)
+                .unwrap()
+                .contains("parent-id:");
+            assert_eq!(
+                child_has_parent_id, enabled,
+                "interleaving a capture save with a parent assignment left the \
+                 vault inconsistent: child parent-id present={child_has_parent_id} \
+                 but vault task_id_enabled={enabled} — a child must never carry a \
+                 parent-id in a vault whose Task IDs are off"
+            );
+        }
+    }
 }

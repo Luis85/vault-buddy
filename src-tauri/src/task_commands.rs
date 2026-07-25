@@ -1,9 +1,6 @@
 use std::path::{Path, PathBuf};
 use vault_buddy_core::services::{self, ServicePaths, TaskDto};
-use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_note, capture_paths, tasks, uri};
-
-use crate::capture_commands::ConfigWriteLock;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,14 +45,10 @@ pub fn get_tasks_config(id: String) -> TasksConfigDto {
 
 /// Persist the vault's tasks folder. Validates the folder stays inside the
 /// vault BEFORE writing (an invalid folder is an inline error, nothing is
-/// saved), serialized behind ConfigWriteLock so a concurrent per-vault write
-/// isn't lost. Read-modify-write preserves the vault's other config.
+/// saved), serialized behind `config_write_lock()` so a concurrent per-vault
+/// write isn't lost. Read-modify-write preserves the vault's other config.
 #[tauri::command]
-pub fn set_tasks_config(
-    lock: tauri::State<ConfigWriteLock>,
-    id: String,
-    tasks_folder: Option<String>,
-) -> Result<(), String> {
+pub fn set_tasks_config(id: String, tasks_folder: Option<String>) -> Result<(), String> {
     let vault = crate::commands::find_vault(&id)?;
     let folder = tasks_folder
         .as_deref()
@@ -72,7 +65,7 @@ pub fn set_tasks_config(
     let effective = folder.as_deref().unwrap_or("Tasks");
     let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
     capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.tasks_folder = folder;
     capture_config::update_vault_config(&id, value)
@@ -80,7 +73,7 @@ pub fn set_tasks_config(
 
 /// Persist the vault's lists settings object (default list + list order +
 /// archived lists), preserving the tasks folder and every other per-vault
-/// field via the same read-modify-write under ConfigWriteLock that
+/// field via the same read-modify-write under `config_write_lock()` that
 /// set_tasks_config uses. Its own command — not a widened set_tasks_config —
 /// so a lists-config failure can't block the folder save and vice versa (the
 /// CaptureSettings pattern of independent field-level saves).
@@ -99,7 +92,6 @@ pub fn set_tasks_config(
 /// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
 #[tauri::command]
 pub async fn set_task_lists_config(
-    lock: tauri::State<'_, ConfigWriteLock>,
     id: String,
     default_list: Option<String>,
     list_order: Vec<String>,
@@ -118,7 +110,7 @@ pub async fn set_task_lists_config(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.default_list = default_list;
     value.list_order = list_order;
@@ -158,31 +150,24 @@ fn resolve_archived_lists(existing: Vec<String>, incoming: Option<Vec<String>>) 
 /// live in `services::set_task_id_config` (core) now — see its doc comment
 /// and design spec §2a. That move is what lets the guard share ONE lock
 /// (`capture_config::config_write_lock()`) with `services::set_task_parent`
-/// across both the scan and the commit; the shell's own `ConfigWriteLock`
-/// (below) is a different mutex and can't stand in for it.
+/// across both the scan and the commit.
 ///
-/// This command still takes `find_vault` and the Tauri `ConfigWriteLock` —
-/// the latter serializes THIS command against its sibling settings commands
-/// (set_tasks_config/set_task_lists_config/set_task_template_config), which
-/// core's lock alone does not (they never take it). The two locks are always
-/// taken in the SAME order — this shell lock first, then core's lock inside
-/// the delegated call — and no other path in the codebase takes core's lock
-/// and then reaches for this one, so the pair cannot deadlock. The body stays
-/// synchronous inside this `async fn` (a `MutexGuard` is `!Send` and must
-/// never be held across an `.await`): `services::set_task_id_config` is
-/// itself a plain synchronous call, so both guards are acquired and released
-/// before this function returns, with no `.await` in between.
+/// This command takes `find_vault` but deliberately does NOT also take
+/// `config_write_lock()`: `services::set_task_id_config` acquires it
+/// internally, the lock is not reentrant (a second `.lock()` from the same
+/// thread while the first guard is still alive blocks forever), and every
+/// OTHER config-write command in this file takes the lock directly. This is
+/// the one site where doing the same would self-deadlock the very call it is
+/// about to make.
 ///
 /// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
 #[tauri::command]
 pub async fn set_task_id_config(
-    lock: tauri::State<'_, ConfigWriteLock>,
     id: String,
     enabled: bool,
     property: Option<String>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
-    let _guard = lock_ignoring_poison(&lock.0);
     services::set_task_id_config(&ServicePaths::real(), &id, enabled, property.as_deref())
 }
 
@@ -192,7 +177,6 @@ pub async fn set_task_id_config(
 /// fsync'd config write.
 #[tauri::command]
 pub async fn set_task_template_config(
-    lock: tauri::State<'_, ConfigWriteLock>,
     id: String,
     extra_frontmatter: Option<String>,
     body_template: Option<String>,
@@ -204,7 +188,7 @@ pub async fn set_task_template_config(
             .filter(|v| !v.is_empty())
             .map(str::to_string)
     };
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
     value.task_extra_frontmatter = clean(extra_frontmatter);
     value.task_body_template = clean(body_template);

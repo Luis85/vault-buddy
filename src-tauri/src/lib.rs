@@ -329,7 +329,6 @@ pub fn run() {
         ))
         .manage(capture_commands::CaptureState::default())
         .manage(transcription::TranscriptionState::default())
-        .manage(capture_commands::ConfigWriteLock::default())
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
         .manage(document_commands::DocumentImportPending::default())

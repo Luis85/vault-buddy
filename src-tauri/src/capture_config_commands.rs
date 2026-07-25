@@ -11,10 +11,7 @@
 //! it lives beside its per-vault sibling instead.
 
 use std::path::Path;
-use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths};
-
-use crate::capture_commands::ConfigWriteLock;
 
 pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
 pub const TRANSCRIPTION_MODELS: [&str; 4] = ["base", "small", "medium", "turbo"];
@@ -92,11 +89,7 @@ fn clean_folder(raw: &Option<String>) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn set_capture_config(
-    lock: tauri::State<ConfigWriteLock>,
-    id: String,
-    cfg: CaptureConfigDto,
-) -> Result<(), String> {
+pub fn set_capture_config(id: String, cfg: CaptureConfigDto) -> Result<(), String> {
     let mode = capture_config::RecordingMode::from_key(&cfg.mode)
         .ok_or_else(|| format!("Unknown recording mode: {}", cfg.mode))?;
     if !BITRATES_KBPS.contains(&cfg.bitrate_kbps) {
@@ -116,7 +109,7 @@ pub fn set_capture_config(
     for folder in [&meeting_folder, &voice_note_folder].into_iter().flatten() {
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     // Preserve fields CaptureConfigDto doesn't carry (tasks are configured on
     // their own surface) so saving capture settings can't reset them. The read
     // must sit INSIDE the lock: a concurrent set_tasks_config also
@@ -207,11 +200,8 @@ pub fn get_transcription_config() -> TranscriptionConfigDto {
 /// sibling app-global-section writer (mcp/document-import), so a concurrent
 /// vault- or other-section save can't clobber this one or vice versa.
 #[tauri::command]
-pub fn set_transcription_config(
-    lock: tauri::State<ConfigWriteLock>,
-    cfg: TranscriptionConfigDto,
-) -> Result<(), String> {
-    let _guard = lock_ignoring_poison(&lock.0);
+pub fn set_transcription_config(cfg: TranscriptionConfigDto) -> Result<(), String> {
+    let _guard = capture_config::config_write_lock();
     let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
     let result = capture_config::update_transcription_config_at(
         &path,

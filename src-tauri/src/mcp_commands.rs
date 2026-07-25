@@ -10,8 +10,6 @@ use tauri::{AppHandle, Emitter, Manager};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, services, uri};
 
-use crate::capture_commands::ConfigWriteLock;
-
 #[derive(Default)]
 pub struct McpServerState(pub Mutex<McpInner>);
 
@@ -163,7 +161,7 @@ pub fn start_if_enabled(app: &AppHandle) {
     }
     if cfg.token.is_empty() {
         cfg.token = vault_buddy_mcp::token::generate_token();
-        if let Err(e) = persist(app, cfg.clone()) {
+        if let Err(e) = persist(cfg.clone()) {
             log::error!("mcp: could not persist a self-healed token: {e}");
             return;
         }
@@ -171,9 +169,11 @@ pub fn start_if_enabled(app: &AppHandle) {
     start_from_config(app, &cfg);
 }
 
-fn persist(app: &AppHandle, cfg: capture_config::McpConfig) -> Result<(), String> {
-    let lock = app.state::<ConfigWriteLock>();
-    let _guard = lock_ignoring_poison(&lock.0);
+/// No longer takes an `AppHandle`: the config write lock is now the single
+/// process-wide `capture_config::config_write_lock()`, not a Tauri-managed
+/// `State` that needed one to look up.
+fn persist(cfg: capture_config::McpConfig) -> Result<(), String> {
+    let _guard = capture_config::config_write_lock();
     let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
     capture_config::update_mcp_config_at(&path, cfg)
         .map_err(|e| format!("Could not save MCP settings: {e}"))
@@ -200,7 +200,7 @@ pub async fn set_mcp_config(app: AppHandle, input: McpConfigInput) -> Result<Mcp
     if next.enabled && next.token.is_empty() {
         next.token = vault_buddy_mcp::token::generate_token();
     }
-    persist(&app, next.clone())?;
+    persist(next.clone())?;
 
     // Mirror the grant into shared state first — the call-time authority for
     // any session that lives through the transition.
@@ -238,7 +238,7 @@ pub async fn set_mcp_config(app: AppHandle, input: McpConfigInput) -> Result<Mcp
 pub async fn regenerate_mcp_token(app: AppHandle) -> Result<McpConfigDto, String> {
     let mut cfg = capture_config::load_config().mcp;
     cfg.token = vault_buddy_mcp::token::generate_token();
-    persist(&app, cfg.clone())?;
+    persist(cfg.clone())?;
     let app2 = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         stop_running(&app2);

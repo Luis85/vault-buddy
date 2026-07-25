@@ -10,7 +10,6 @@ use tauri::{AppHandle, Manager};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery, document_import};
 
-use crate::capture_commands::ConfigWriteLock;
 use crate::pandoc::{
     pandoc_args, pandoc_command, resolve_working_pandoc, run_capturing, sandbox_supported, Capture,
     CONVERT_TIMEOUT, STRIP_IMAGES_FILTER, STRIP_IMAGES_LUA,
@@ -33,7 +32,7 @@ pub struct PandocStatus {
 /// exists-reservation into a corrupt/partial publish. The inner mutex is an
 /// `Arc` so its guard can be held on the `spawn_blocking` thread (Tauri
 /// `State` itself can't cross that boundary). Registered as app state in
-/// lib.rs beside ConfigWriteLock: `.manage(ImportLock::default())`.
+/// lib.rs: `.manage(ImportLock::default())`.
 #[derive(Default, Clone)]
 pub struct ImportLock(pub std::sync::Arc<std::sync::Mutex<()>>);
 
@@ -334,14 +333,13 @@ pub fn get_documents_config(id: String) -> DocumentsConfigDto {
 /// Persist the vault's documents folder + layout toggle + the two additive
 /// note templates. Validates containment BEFORE writing (the effective
 /// folder — explicit or the "Documents" default — must stay in the vault),
-/// serialized behind ConfigWriteLock. Read-modify-write preserves the
+/// serialized behind `config_write_lock()`. Read-modify-write preserves the
 /// vault's other config (recording_date_folders included — that field
 /// belongs to set_capture_config). Mirrors set_tasks_config, plus the extra
 /// fields; blank/whitespace-only template text normalizes to None, the same
 /// "unset" posture as every other template field.
 #[tauri::command]
 pub fn set_documents_config(
-    lock: tauri::State<ConfigWriteLock>,
     id: String,
     documents_folder: Option<String>,
     document_date_folders: bool,
@@ -371,7 +369,7 @@ pub fn set_documents_config(
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .map(str::to_string);
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     // merge_documents_owned writes only the documents-owned fields and
     // preserves everything else (recording settings, tasks, lists) — the
     // preserve-vs-write split is unit-tested in core now (GAP-60). This
@@ -390,18 +388,15 @@ pub fn set_documents_config(
 }
 
 /// App-global Pandoc path override (None → PATH lookup). Serialized behind
-/// ConfigWriteLock; round-tripped by serialize_config (Task 1).
+/// `config_write_lock()`; round-tripped by serialize_config (Task 1).
 #[tauri::command]
-pub fn set_pandoc_path(
-    lock: tauri::State<ConfigWriteLock>,
-    pandoc_path: Option<String>,
-) -> Result<(), String> {
+pub fn set_pandoc_path(pandoc_path: Option<String>) -> Result<(), String> {
     let path = pandoc_path
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .map(str::to_string);
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     capture_config::update_document_import_config(capture_config::DocumentImportConfig {
         pandoc_path: path,
     })

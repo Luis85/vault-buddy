@@ -136,12 +136,6 @@ pub fn capture_status(state: tauri::State<CaptureState>) -> StatusPayload {
     }
 }
 
-/// Serializes set_capture_config's read-modify-write of config.json —
-/// concurrent saves for different vaults must not lose each other's
-/// fields (the write path itself is lock-free by design).
-#[derive(Default)]
-pub struct ConfigWriteLock(pub Mutex<()>);
-
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInfoDto {

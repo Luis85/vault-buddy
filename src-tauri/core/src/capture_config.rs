@@ -201,10 +201,17 @@ pub fn write_config(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
 /// wedging every future config write behind one unrelated panic is not. Same
 /// posture as the shell's `lock_ignoring_poison`.
 ///
-/// The shell's Tauri-managed `ConfigWriteLock` is a SEPARATE mutex that
-/// serializes the settings commands among themselves; the Task-ID settings
-/// command joins this one too, so a settings save cannot slip between a
-/// parent assignment's phases (design spec §2 / §2a).
+/// This is now the SINGLE process-wide config-write lock — every config.json
+/// read-modify-write, the shell's IPC settings commands included, takes this
+/// one directly. It used to be paired with a second, separate mutex (the
+/// shell's Tauri-managed `ConfigWriteLock`) that the settings commands took
+/// instead of this one; the two did not exclude each other, so a capture
+/// settings save could read `task_id_enabled: false`, race a
+/// `services::set_task_parent` enable, and write `false` back over it while
+/// the child it raced already carried a stamped `parent-id` — the vault
+/// desynced the instant the hierarchy was created. `ConfigWriteLock` is gone
+/// now, not just unused: with only one lock in the whole process, there is no
+/// wrong one left for a future config writer to pick (design spec §2 / §2a).
 pub fn config_write_lock() -> std::sync::MutexGuard<'static, ()> {
     static CONFIG_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     CONFIG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -231,7 +238,7 @@ pub fn update_vault_config(vault_id: &str, v: VaultCaptureConfig) -> Result<(), 
 
 /// Read-modify-write for the app-global mcp section, mirroring
 /// update_vault_config_at (same no-own-lock rule: IPC callers serialize
-/// behind ConfigWriteLock).
+/// behind `config_write_lock()`).
 pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> {
     let mut cfg = load_config_for_update(path)?;
     cfg.mcp = mcp;
@@ -240,7 +247,7 @@ pub fn update_mcp_config_at(path: &Path, mcp: McpConfig) -> std::io::Result<()> 
 
 /// Read-modify-write for the app-global document-import section, mirroring
 /// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
-/// behind ConfigWriteLock).
+/// behind `config_write_lock()`).
 pub fn update_document_import_config_at(
     path: &Path,
     di: DocumentImportConfig,
@@ -258,7 +265,7 @@ pub fn update_document_import_config(di: DocumentImportConfig) -> Result<(), Str
 
 /// Read-modify-write for the app-global transcription section, mirroring
 /// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
-/// behind ConfigWriteLock).
+/// behind `config_write_lock()`).
 pub fn update_transcription_config_at(
     path: &Path,
     transcription: TranscriptionConfig,
@@ -270,7 +277,7 @@ pub fn update_transcription_config_at(
 
 /// Read-modify-write for the app-global panel section, mirroring
 /// update_mcp_config_at (same no-own-lock rule: IPC callers serialize
-/// behind ConfigWriteLock). This is the config-write helper `set_panel_size`
+/// behind `config_write_lock()`). This is the config-write helper `set_panel_size`
 /// calls — the shell must never invent its own writer.
 pub fn update_panel_config_at(path: &Path, panel: PanelConfig) -> std::io::Result<()> {
     let mut cfg = load_config_for_update(path)?;
