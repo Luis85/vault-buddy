@@ -3,7 +3,7 @@ import { type Ref, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
-import type { AggTask } from "../types";
+import type { AggTask, TaskWriteResult } from "../types";
 import { localToday } from "../utils/taskFields";
 import { reflectStampedId } from "../utils/taskMutations";
 
@@ -30,10 +30,12 @@ export function useTaskSchedule(opts: {
     busy.value.add(task.path);
     try {
       const patch = date === null ? { clearScheduled: true } : { scheduled: date };
-      reflectStampedId(
-        task,
-        await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch }),
-      );
+      const result = await invoke<TaskWriteResult>("update_task", {
+        id: task.vaultId,
+        path: task.path,
+        patch,
+      });
+      reflectStampedId(task, result.id);
     } catch (e) {
       task.scheduled = prev;
       sortInPlace();
@@ -84,12 +86,12 @@ export function useTaskSchedule(opts: {
         sortInPlace();
         for (const t of targets) {
           try {
-            reflectStampedId(
-              t,
-              await invoke<string | null>("update_task", {
-                id: t.vaultId, path: t.path, patch: { scheduled: today },
-              }),
-            );
+            const result = await invoke<TaskWriteResult>("update_task", {
+              id: t.vaultId,
+              path: t.path,
+              patch: { scheduled: today },
+            });
+            reflectStampedId(t, result.id);
           } catch (e) {
             t.scheduled = prev.get(t.path) ?? null;
             skipped.push(t.title); // write-failed → still overdue → named

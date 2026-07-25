@@ -11,7 +11,7 @@ import { useTaskSchedule } from "../composables/useTaskSchedule";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskItem, Vault } from "../types";
+import type { AddTaskResult, AggTask, TaskItem, Vault } from "../types";
 import { crossListDropTargetKey } from "../utils/taskSections";
 import AppIcon from "./AppIcon.vue";
 import TaskComposer from "./TaskComposer.vue";
@@ -327,7 +327,7 @@ async function add(payload: AddPayload) {
     // default — the composer only omits it before its default has loaded, so
     // a quick add during that window still lands in the default list.
     if (payload.list !== undefined) args.list = payload.list;
-    const created = await invoke<TaskItem>("add_task", args);
+    const created = await invoke<AddTaskResult>("add_task", args); // AddTaskResult: TaskItem + idsEnabled (Task 7)
     tasks.value.unshift({
       ...created,
       vaultId: targetVault,

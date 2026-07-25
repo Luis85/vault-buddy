@@ -9,7 +9,11 @@ vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }
 import TaskListPicker from "../src/components/TaskListPicker.vue";
 import { useTaskDetail } from "../src/composables/useTaskDetail";
 import { logWarning } from "../src/logging";
-import type { AggTask } from "../src/types";
+import type { AggTask, TaskWriteResult } from "../src/types";
+
+// update_task's mocked "the write succeeded, no relationship change" reply
+// (Task 7 widened the command's return from a bare id to this object).
+const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 const task = (o: Partial<AggTask> = {}): AggTask => ({
   path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
@@ -22,7 +26,7 @@ describe("useTaskDetail", () => {
 
   it("save sends description and reflects it locally", async () => {
     const calls: any[] = [];
-    mockIPC((cmd, args) => { calls.push([cmd, args]); return cmd === "update_task" ? null : undefined; });
+    mockIPC((cmd, args) => { calls.push([cmd, args]); return cmd === "update_task" ? updateTaskOk : undefined; });
     const t = ref(task());
     const { save } = useTaskDetail(t);
     await save({ description: "notes" });
@@ -81,7 +85,7 @@ describe("useTaskDetail", () => {
     const calls: string[] = [];
     mockIPC((cmd) => {
       calls.push(cmd);
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       if (cmd === "move_task_to_list") return { path: "/v/Tasks/Home/t.md", id: "abc" };
       return undefined;
     });
@@ -108,7 +112,7 @@ describe("useTaskDetail", () => {
     // The fields ARE persisted; only the list move didn't land — surface that
     // specifically rather than a bare error (final review, PR #76).
     mockIPC((cmd) => {
-      if (cmd === "update_task") return null; // fields save OK
+      if (cmd === "update_task") return updateTaskOk; // fields save OK
       if (cmd === "move_task_to_list") throw new Error("move boom"); // the move fails
       return undefined;
     });
@@ -185,7 +189,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -206,7 +210,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -225,7 +229,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -249,7 +253,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -295,7 +299,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;

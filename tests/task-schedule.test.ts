@@ -5,8 +5,12 @@ import { ref } from "vue";
 
 import { useTaskSchedule } from "../src/composables/useTaskSchedule";
 import { useNotificationsStore } from "../src/stores/notifications";
-import type { AggTask } from "../src/types";
+import type { AggTask, TaskWriteResult } from "../src/types";
 import { localToday } from "../src/utils/taskFields";
+
+// update_task's mocked "the write succeeded, no relationship change" reply
+// (Task 7 widened the command's return from a bare id to this object).
+const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 function agg(p: Partial<AggTask>): AggTask {
   return {
@@ -22,7 +26,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("quickSchedule", () => {
   it("writes the do-date optimistically", async () => {
     const calls: unknown[] = [];
-    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push(args); return null; } });
+    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push(args); return updateTaskOk; } });
     const t = agg({ path: "a" });
     const tasks = ref<AggTask[]>([t]);
     const { quickSchedule } = useTaskSchedule({ tasks, sortInPlace: () => {}, busy: ref(new Set()) });
@@ -44,7 +48,7 @@ describe("rescheduleOverdue", () => {
     mockIPC((cmd, args) => {
       if (cmd !== "update_task") return;
       if ((args as { path: string }).path === "bad") throw new Error("nope");
-      return null;
+      return updateTaskOk;
     });
     const ok = agg({ path: "ok", title: "OK", scheduled: "2026-07-01" });
     const bad = agg({ path: "bad", title: "BAD", scheduled: "2026-07-02" });
@@ -55,7 +59,7 @@ describe("rescheduleOverdue", () => {
   });
   it("holds back a busy row and never silently drops it", async () => {
     const calls: string[] = [];
-    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push((args as { path: string }).path); return null; } });
+    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push((args as { path: string }).path); return updateTaskOk; } });
     const free = agg({ path: "free", title: "Free", scheduled: "2026-07-01" });
     const busyRow = agg({ path: "busy", title: "Busy", scheduled: "2026-07-02" });
     const busy = ref(new Set(["busy"]));
@@ -73,7 +77,7 @@ describe("rescheduleOverdue", () => {
   // busy-row hold-and-name test above exactly, but via the editingPath arg.
   it("holds back the row open in the inline editor and never silently drops it (GAP-73c)", async () => {
     const calls: string[] = [];
-    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push((args as { path: string }).path); return null; } });
+    mockIPC((cmd, args) => { if (cmd === "update_task") { calls.push((args as { path: string }).path); return updateTaskOk; } });
     const free = agg({ path: "free", title: "Free", scheduled: "2026-07-01" });
     const editingRow = agg({ path: "editing", title: "Editing", scheduled: "2026-07-02" });
     const { rescheduleOverdue } = useTaskSchedule({ tasks: ref([free, editingRow]), sortInPlace: () => {}, busy: ref(new Set()) });
@@ -98,11 +102,11 @@ describe("rescheduleOverdue", () => {
       if (cmd !== "update_task") return;
       updateCalls++;
       if (updateCalls === 1) {
-        return new Promise<null>((r) => {
-          resolveFirst = () => r(null);
+        return new Promise<TaskWriteResult>((r) => {
+          resolveFirst = () => r(updateTaskOk);
         });
       }
-      return null;
+      return updateTaskOk;
     });
     const a = agg({ path: "a", title: "A", scheduled: "2026-07-01" });
     const b = agg({ path: "b", title: "B", scheduled: "2026-07-02" });

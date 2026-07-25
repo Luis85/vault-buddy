@@ -172,11 +172,22 @@ pub async fn list_tasks(id: String) -> Vec<TaskDto> {
 
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it.
+/// `parent_path` (optional, appended last) is the prospective parent Task's
+/// PATH — never its id: with Task IDs off (the default) no id is surfaced
+/// anywhere, so a path is the only identity the frontend can supply (design
+/// spec §2). `Some` runs the FULL shared resolve-the-parent path in
+/// `services::add_task` (validate, lock, re-check, enable, stamp, compose the
+/// link), not read-only validation alone — Add subtask is very often a
+/// vault's FIRST hierarchy operation. The returned `AddTaskResult` flattens
+/// the created task's fields (backward-compatible wire shape) and adds
+/// `idsEnabled`, true only when THIS call turned Task IDs on — the frontend
+/// cannot infer that from a bare task (Codex P2, PR #77).
 ///
 /// ASYNC (GAP-22 class, Codex PR #46): the fsync'd create + collision retry is
 /// blocking disk I/O — offloaded so a slow/cloud/network vault can't freeze
 /// the panel/buddy event loop. The cheap up-front validation stays inline so
 /// a bad due/scheduled/priority/tag errors before any thread hop.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn add_task(
     id: String,
@@ -186,7 +197,8 @@ pub async fn add_task(
     tags: Option<Vec<String>>,
     list: Option<String>,
     scheduled: Option<String>,
-) -> Result<TaskDto, String> {
+    parent_path: Option<String>,
+) -> Result<services::AddTaskResult, String> {
     // Local calendar date (YYYY-MM-DD), matching every other date-sensitive
     // path in the app (capture uses chrono::Local::now().date_naive()). A UTC
     // date would name a task with tomorrow's/yesterday's date near local
@@ -201,6 +213,8 @@ pub async fn add_task(
     let tags = validated_tags(tags.unwrap_or_default())?;
     // The list is validated in services (normalize_list_rel — the same gate
     // the move uses); None falls back to the vault's configured defaultList.
+    // The parent path's containment/is_task/self-parent/cycle validation all
+    // live in services too — the shell never reaches into the tasks folder.
     tauri::async_runtime::spawn_blocking(move || {
         services::add_task(
             &ServicePaths::real(),
@@ -212,6 +226,7 @@ pub async fn add_task(
             &tags,
             list.as_deref(),
             scheduled.as_deref(),
+            parent_path.as_deref().map(Path::new),
         )
     })
     .await
@@ -254,7 +269,7 @@ pub async fn count_open_tasks(id: String) -> usize {
     })
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskPatchDto {
     #[serde(default)]
@@ -281,30 +296,73 @@ pub struct TaskPatchDto {
     pub description: Option<String>,
     #[serde(default)]
     pub clear_description: bool,
+    /// The parent Task's PATH (never its id — with IDs disabled, the default,
+    /// no id is surfaced anywhere, so a path is the only identity the frontend
+    /// can supply; design spec §2).
+    #[serde(default)]
+    pub parent_path: Option<String>,
+    #[serde(default)]
+    pub clear_parent: bool,
+}
+
+/// Whether a patch has nothing to do: no ordinary field set/cleared AND no
+/// parent relationship change. Checked BEFORE any per-field validation or
+/// vault I/O so a truly empty patch costs nothing. A parent-only patch — the
+/// Parent picker's Change/Clear sends exactly `{parentPath}` or
+/// `{clearParent}` with no ordinary field — must NOT read as empty, or every
+/// picker action silently no-ops (Codex P1, PR #77). Extracted so the
+/// emptiness decision is testable and has ONE definition.
+fn patch_is_empty(patch: &TaskPatchDto) -> bool {
+    patch.title.is_none()
+        && !patch.clear_due
+        && patch.due.is_none()
+        && !patch.clear_scheduled
+        && patch.scheduled.is_none()
+        && patch.priority.is_none()
+        && patch.tags.is_none()
+        && patch.order.is_none()
+        && patch.description.is_none()
+        && !patch.clear_description
+        && patch.parent_path.is_none()
+        && !patch.clear_parent
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
-/// set/clear the do (scheduled) date, set the priority, set/clear tags —
-/// validated up front, then ONE surgical multi-key frontmatter write (title
-/// quoted here; `priority: normal` and a cleared due/scheduled remove their
-/// lines; an empty tags list clears the line/block). An empty patch is a
-/// no-op Ok.
+/// set/clear the do (scheduled) date, set the priority, set/clear tags, and/or
+/// set/clear the parent — validated up front, then dispatched to
+/// `services::update_task` (core), which runs the ordinary field write and
+/// the parent relationship change in the phase order its own doc comment
+/// describes (validate the parent before any write; the field write lands
+/// before the parent write). An empty patch is a no-op Ok — see
+/// `patch_is_empty`, which now ALSO covers `parentPath`/`clearParent` so the
+/// Parent picker's Change/Clear (which sends no ordinary field) never no-ops
+/// (Codex P1, PR #77).
 ///
 /// ASYNC (GAP-22 class, Codex PR #46): validation + patch assembly are cheap
-/// and stay inline (so a bad field errors before any thread hop), but the
-/// vault resolution, containment canonicalize, read, and atomic fsync'd write
-/// are offloaded — a save to a slow/cloud/network vault must not freeze the UI.
+/// and stay inline (so a bad field errors before any thread hop), but vault
+/// resolution, containment, the surgical write(s), and the ID stamp are
+/// offloaded (now inside `services::update_task`) — a save to a slow/cloud/
+/// network vault must not freeze the UI.
 ///
-/// Returns the task's current ID (the freshly-stamped one when the vault opts
-/// in and the task lacked one, or the existing value) so the row can show its
-/// copy-ID affordance immediately instead of only after a view reload; `None`
-/// when IDs are off. An empty patch is `Ok(None)` (Codex, PR #59).
+/// Returns a `TaskWriteResult`: `id` keeps its pre-Task-7 meaning (the task's
+/// current effective id, `None` when IDs are off); `parentId`/`parentLink`
+/// are the pair actually written THIS call (`None` when the patch carried no
+/// relationship change); `idsEnabled` is true only when THIS call turned Task
+/// IDs on for the vault.
 #[tauri::command]
 pub async fn update_task(
     id: String,
     path: String,
     patch: TaskPatchDto,
-) -> Result<Option<String>, String> {
+) -> Result<services::TaskWriteResult, String> {
+    if patch_is_empty(&patch) {
+        return Ok(services::TaskWriteResult {
+            id: None,
+            parent_id: None,
+            parent_link: None,
+            ids_enabled: false,
+        });
+    }
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
     if let Some(title) = &patch.title {
         let t = title.trim();
@@ -362,26 +420,25 @@ pub async fn update_task(
             Some(capture_note::yaml_quote_multiline(desc)),
         ));
     }
-    if updates.is_empty() {
-        return Ok(None);
-    }
+    // Clear wins over set — the same precedence clearDue/clearScheduled/
+    // clearDescription already use above.
+    let parent_op = if patch.clear_parent {
+        services::ParentOp::Clear
+    } else if let Some(p) = patch.parent_path {
+        services::ParentOp::Set(PathBuf::from(p))
+    } else {
+        services::ParentOp::Keep
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        let (vault_path, root, cfg) = tasks_root_for(&id)?;
-        if root.exists() {
-            capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-        }
         let refs: Vec<(&str, Option<&str>)> =
             updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-        // Stamp a generated ID when the vault opted in and the task lacks one:
-        // update_task_fields generates + writes internally only when the
-        // property has no usable value. Any update_task write — a field edit
-        // OR an order-only reorder — stamps. cfg comes from tasks_root_for,
-        // which already loaded config.json for the folder resolution above —
-        // reusing it here avoids a second uncached read and the TOCTOU window
-        // a second read would open against a concurrent config write.
-        let id_property =
-            tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-        tasks::update_task_fields(&root, Path::new(&path), &refs, id_property)
+        services::update_task(
+            &ServicePaths::real(),
+            &id,
+            Path::new(&path),
+            &refs,
+            parent_op,
+        )
     })
     .await
     .map_err(|e| format!("update_task: task failed: {e}"))?
@@ -472,6 +529,25 @@ mod tests {
             Some("2026-07-20".to_string())
         );
         assert!(validated_scheduled(Some("next week".to_string())).is_err());
+    }
+
+    #[test]
+    fn a_parent_only_patch_is_not_treated_as_empty() {
+        // The Parent picker's Change/Clear sends {parentPath} / {clearParent}
+        // with NO ordinary field updates. update_task no-ops an empty patch, so
+        // unless the relationship fields count toward "is there anything to do",
+        // every picker action is a silent no-op (Codex P1, PR #77).
+        let patch = TaskPatchDto {
+            parent_path: Some("/v/Tasks/p.md".into()),
+            ..Default::default()
+        };
+        assert!(!patch_is_empty(&patch));
+        let clearing = TaskPatchDto {
+            clear_parent: true,
+            ..Default::default()
+        };
+        assert!(!patch_is_empty(&clearing));
+        assert!(patch_is_empty(&TaskPatchDto::default()));
     }
 
     // GAP-22: list_tasks/count_open_tasks must be async — the recursive

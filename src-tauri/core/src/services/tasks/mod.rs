@@ -6,12 +6,14 @@ use crate::{capture_config, capture_note, capture_paths, tasks};
 mod id_config;
 mod lists;
 mod parent;
+mod update;
 pub use id_config::{count_parent_links, set_task_id_config};
 pub use lists::{
     create_task_list, delete_task_list, list_task_lists, move_task_to_list, rename_task_list,
     MovedTask,
 };
 pub use parent::{set_task_parent, ParentSet};
+pub use update::{update_task, ParentOp, TaskWriteResult};
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +67,21 @@ impl TaskDto {
             parent_link: t.parent_link,
         }
     }
+}
+
+/// `add_task`'s result: the created task's fields, flattened for wire
+/// compatibility (every existing `add_task` caller keeps reading the task's
+/// fields at the top level — only the new boolean is added), plus whether
+/// THIS call turned Task IDs on for the vault. Add subtask is very often a
+/// vault's FIRST hierarchy operation, so it is the path most likely to flip
+/// that setting as a side effect — and a bare `TaskDto` gives the frontend no
+/// way to know (Codex P2, PR #77).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddTaskResult {
+    #[serde(flatten)]
+    pub task: TaskDto,
+    pub ids_enabled: bool,
 }
 
 /// Resolve a vault id to (vault path, lexically-safe tasks root, the vault's
@@ -134,6 +151,13 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
 /// means the tasks root, overriding any default), `None` falls back to the
 /// vault's configured `default_list` (read-lenient — a hand-edited bad
 /// default degrades to the root with a warning; it must never block adds).
+/// `parent_path` (last, appended to the existing 9-parameter list) is the
+/// prospective parent Task's PATH: `Some` runs the FULL shared
+/// `parent::add_subtask` path (validate, lock, re-check, enable, stamp,
+/// compose the link) — not phase 1's read-only validation alone, since Add
+/// subtask is very often a vault's FIRST hierarchy operation (design spec
+/// §2, Codex P1, PR #77) — while `None` reproduces today's exact bodyless,
+/// parentless create untouched.
 #[allow(clippy::too_many_arguments)]
 pub fn add_task(
     paths: &ServicePaths,
@@ -145,7 +169,8 @@ pub fn add_task(
     tags: &[String],
     list: Option<&str>,
     scheduled: Option<&str>,
-) -> Result<TaskDto, String> {
+    parent_path: Option<&Path>,
+) -> Result<AddTaskResult, String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("A task needs a title.".to_string());
@@ -227,52 +252,90 @@ pub fn add_task(
             Err(e) => return Err(e),
         }
     };
-    // One gate for both write paths (tasks::id_property_for_generation): id
-    // generation is off, or the resolved property is a valid non-reserved key.
-    let id_property =
-        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-    let generated_id = id_property.is_some().then(tasks::new_task_id);
-    let task_id = id_property.zip(generated_id.as_deref());
-    // The vault's additive task template (None/empty → today's exact output,
-    // unchanged — see render_task's byte-identical-with-no-template test).
-    let path = tasks::create_task(
-        &target_root,
-        title,
-        today,
-        due,
-        priority,
-        tags,
-        task_id,
-        cfg.task_extra_frontmatter.as_deref(),
-        cfg.task_body_template.as_deref(),
-        scheduled,
-        None,
-    )
-    .map_err(|e| format!("Could not create task: {e}"))?;
-    Ok(TaskDto {
-        path: path.to_string_lossy().into_owned(),
-        title: title.to_string(),
-        status: "new".to_string(),
-        created: today.to_string(),
-        done: false,
-        due: due.map(str::to_string),
-        scheduled: scheduled.map(str::to_string),
-        priority: priority.map(str::to_string),
-        tags: tags.to_vec(),
-        list: effective_list,
-        order: None,
-        // Already computed above for the write itself — reflects the id that
-        // actually landed in the file (or None when IDs are off), not a
-        // fresh read.
-        id: generated_id,
-        // A newly created task has no description — it is a MANAGED detail-view
-        // field, reserved from templates (like due/status), and is set later in
-        // the detail view (Codex PR #76).
-        description: None,
-        // add_task has no parent write path yet (Task 1 of the subtasks slice
-        // is read-only: readers, reserved keys, and the DTO surface only).
-        parent_id: None,
-        parent_link: None,
+    // Two disjoint create paths, branching on whether a parent was named.
+    // Both must produce (path, the child's own id, parent_id, parent_link,
+    // ids_enabled) — a parentless add reproduces today's exact bodyless
+    // output byte-for-byte (unchanged from before Task 7); a parented add
+    // runs the whole shared resolve-the-parent path (see `add_subtask`'s doc
+    // comment for why phase-1 validation alone is not enough here).
+    let (path, generated_id, parent_id, parent_link, ids_enabled) = match parent_path {
+        None => {
+            // One gate for both write paths (tasks::id_property_for_generation):
+            // id generation is off, or the resolved property is a valid
+            // non-reserved key.
+            let id_property =
+                tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+            let generated_id = id_property.is_some().then(tasks::new_task_id);
+            let task_id = id_property.zip(generated_id.as_deref());
+            // The vault's additive task template (None/empty → today's exact
+            // output, unchanged — see render_task's byte-identical-with-no-
+            // template test).
+            let path = tasks::create_task(
+                &target_root,
+                title,
+                today,
+                due,
+                priority,
+                tags,
+                task_id,
+                cfg.task_extra_frontmatter.as_deref(),
+                cfg.task_body_template.as_deref(),
+                scheduled,
+                None,
+            )
+            .map_err(|e| format!("Could not create task: {e}"))?;
+            (path, generated_id, None, None, false)
+        }
+        Some(parent_path) => {
+            let (resolved, path, child_id) = parent::add_subtask(
+                paths,
+                id,
+                &vault_path,
+                &root,
+                &cfg,
+                parent_path,
+                &target_root,
+                title,
+                today,
+                due,
+                priority,
+                tags,
+                scheduled,
+            )?;
+            (
+                path,
+                Some(child_id),
+                Some(resolved.parent_id),
+                Some(resolved.link),
+                resolved.ids_enabled,
+            )
+        }
+    };
+    Ok(AddTaskResult {
+        task: TaskDto {
+            path: path.to_string_lossy().into_owned(),
+            title: title.to_string(),
+            status: "new".to_string(),
+            created: today.to_string(),
+            done: false,
+            due: due.map(str::to_string),
+            scheduled: scheduled.map(str::to_string),
+            priority: priority.map(str::to_string),
+            tags: tags.to_vec(),
+            list: effective_list,
+            order: None,
+            // Already computed above for the write itself — reflects the id
+            // that actually landed in the file (or None when IDs are off),
+            // not a fresh read.
+            id: generated_id,
+            // A newly created task has no description — it is a MANAGED
+            // detail-view field, reserved from templates (like due/status),
+            // and is set later in the detail view (Codex PR #76).
+            description: None,
+            parent_id,
+            parent_link,
+        },
+        ids_enabled,
     })
 }
 

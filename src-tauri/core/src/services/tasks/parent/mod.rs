@@ -1,10 +1,11 @@
-//! The parent-assignment write path: `set_task_parent` (set or clear a Task's
-//! parent) plus the shared resolve-the-parent helper the create path will
-//! reuse, and the post-move link repair. Its own module because the ordering
-//! discipline it encodes — every validation before every side effect, one
-//! `capture_config::config_write_lock()` held across the enable, the parent
-//! stamp and the caller's own write — is a responsibility of its own, not
-//! another task-service verb.
+//! The parent-assignment write path: `set_task_parent` (set or clear an
+//! EXISTING Task's parent), `add_subtask` (create a brand-new child under a
+//! parent, reusing the same shared resolve path — `add_task` in the parent
+//! module calls this), and the post-move link repair. Its own module because
+//! the ordering discipline it encodes — every validation before every side
+//! effect, one `capture_config::config_write_lock()` held across the enable,
+//! the parent stamp and the caller's own write — is a responsibility of its
+//! own, not another task-service verb.
 //! Spec: docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md §2.
 
 use std::path::{Path, PathBuf};
@@ -44,12 +45,12 @@ pub fn set_task_parent(
     // is only lexical, so a tasks folder resolving outside the vault must fail
     // here rather than be written into.
     super::assert_root_if_exists(&vault_path, &root)?;
-    let child = canonical_task_in_root(&root, child_path)?;
 
     let Some(parent_path) = parent_path else {
         // Clear: no parent to validate, no ids needed. `ensure_id: None` — a
         // clear removes a relationship, it does not edit the task (the same
         // reason a status toggle never stamps).
+        let child = canonical_task_in_root(&root, child_path)?;
         tasks::update_task_fields(
             &root,
             &child,
@@ -62,60 +63,12 @@ pub fn set_task_parent(
             ids_enabled: false,
         });
     };
-    let parent = canonical_task_in_root(&root, parent_path)?;
-    // Compared as canonical PATHS, not ids: this rejection must be available
-    // before anything is stamped, and at this point neither task need have an
-    // id at all (design spec §2).
-    if parent == child {
-        return Err("A task cannot be its own parent.".to_string());
-    }
+    let (parent, child, prop) = validate_parent_assignment(&root, &cfg, child_path, parent_path)?;
 
-    let prop = cfg.task_id_property_name().to_string();
-    if !tasks::is_valid_id_property(&prop) {
-        return Err(format!(
-            "The vault's task ID property {prop:?} is not a valid frontmatter key; \
-             change it in the vault's Task settings first."
-        ));
-    }
-
-    // Read ids UNCONDITIONALLY — hand-authored tasks carry ids even while
-    // generation is off, and an index built from the gated walk would be empty,
-    // passing the cycle check vacuously (design spec §2).
-    // STRUCTURAL: includes archived tasks (their files still carry `parent-id`)
-    // and FAILS on an unreadable task — validating against a partial graph would
-    // let a cycle through (design spec §2).
-    let all = tasks::list_tasks_structural(&root, Some(&prop))?;
-    reject_ambiguous_parent(&all, &parent)?;
-    // The graph is keyed on PATHS with edges resolved through ids, so an id-less
-    // task still contributes its outgoing edge and the check is never skipped
-    // for want of an id (design spec §3).
-    // VALIDATION index, not the display one: `parent_index` drops the edges of a
-    // pre-existing on-disk cycle so both rows render parentless, but validating
-    // against that filtered graph accepts writes that CLOSE a cycle. With
-    // A->B->A and C->A on disk, the dropped edges make ancestors(C) = [A], B is
-    // never seen, and assigning B's parent to C writes B->C->A->B (Codex P2,
-    // PR #77). `parent_index_for_validation` keeps cyclic edges (still dropping
-    // ambiguous ids, which resolve nothing either way); `ancestors` is bounded,
-    // so walking a cyclic graph still terminates.
-    if tasks::would_create_cycle(&tasks::parent_index_for_validation(&all), &child, &parent) {
-        return Err(CYCLE_REFUSED.to_string());
-    }
-    // Forecast phase 3a's ensure_id BEFORE phase 2 enables Task IDs: without
-    // this, a parent whose id property holds a value ensure_id must never
-    // clobber (e.g. a synced external id like `task-id: {source: jira}`) let
-    // phase 2 run first and phase 3a fail second — a refused assignment that
-    // still silently switched the vault's Task IDs on with no stamp and no
-    // disclosure (this sub-case wasn't visible to phase 1 above, which
-    // validates the CHILD/graph, never the parent's own frontmatter).
-    let parent_content =
-        std::fs::read_to_string(&parent).map_err(|e| format!("Cannot read task: {e}"))?;
-    if parent_id_unassignable(&parent_content, &prop) {
-        return Err("Could not assign an ID to the parent task.".to_string());
-    }
-
-    // ---- Phases 2+3: the SHARED resolve path (Task 8's create path reuses
-    // it), with the child's own write passed in as a closure so the lock
-    // outlives it. ----
+    // ---- Phases 2+3: the SHARED resolve path (`add_subtask` below and
+    // `update_task`'s combined-patch path, core/src/services/tasks/update.rs,
+    // both reuse it), with the child's own write passed in as a closure so the
+    // lock outlives it. ----
     let ctx = ParentWriteCtx {
         paths,
         vault_id,
@@ -171,6 +124,80 @@ pub fn set_task_parent(
     })
 }
 
+/// Phase 1 (read-only) validation of a prospective parent assignment against
+/// an EXISTING child: containment + `is_task` for both paths (via
+/// `canonical_task_in_root`), self-parent by path, id-property validity,
+/// ambiguity, cycle, and parent-id assignability — every check
+/// `set_task_parent` ran inline before Task 7, now ALSO shared with
+/// `update_task`'s combined-patch path (`core/src/services/tasks/update.rs`),
+/// which must run this validation BETWEEN validating and an ordinary field
+/// write that has to land first (see that module's doc comment for the
+/// ordering rationale — a rejected parent must not leave a committed title).
+/// Returns the canonicalized `(parent, child, prop)` ready for
+/// `resolve_parent_for_write`. `pub(super)` (not private): `update.rs` is a
+/// SIBLING of this module under `services::tasks`, and `pub(super)` here means
+/// `pub(in services::tasks)` — visible throughout that subtree, not just to
+/// `parent`'s own descendants.
+pub(super) fn validate_parent_assignment(
+    root: &Path,
+    cfg: &VaultCaptureConfig,
+    child_path: &Path,
+    parent_path: &Path,
+) -> Result<(PathBuf, PathBuf, String), String> {
+    let child = canonical_task_in_root(root, child_path)?;
+    let parent = canonical_task_in_root(root, parent_path)?;
+    // Compared as canonical PATHS, not ids: this rejection must be available
+    // before anything is stamped, and at this point neither task need have an
+    // id at all (design spec §2).
+    if parent == child {
+        return Err("A task cannot be its own parent.".to_string());
+    }
+
+    let prop = cfg.task_id_property_name().to_string();
+    if !tasks::is_valid_id_property(&prop) {
+        return Err(format!(
+            "The vault's task ID property {prop:?} is not a valid frontmatter key; \
+             change it in the vault's Task settings first."
+        ));
+    }
+
+    // Read ids UNCONDITIONALLY — hand-authored tasks carry ids even while
+    // generation is off, and an index built from the gated walk would be empty,
+    // passing the cycle check vacuously (design spec §2).
+    // STRUCTURAL: includes archived tasks (their files still carry `parent-id`)
+    // and FAILS on an unreadable task — validating against a partial graph would
+    // let a cycle through (design spec §2).
+    let all = tasks::list_tasks_structural(root, Some(&prop))?;
+    reject_ambiguous_parent(&all, &parent)?;
+    // The graph is keyed on PATHS with edges resolved through ids, so an id-less
+    // task still contributes its outgoing edge and the check is never skipped
+    // for want of an id (design spec §3).
+    // VALIDATION index, not the display one: `parent_index` drops the edges of a
+    // pre-existing on-disk cycle so both rows render parentless, but validating
+    // against that filtered graph accepts writes that CLOSE a cycle. With
+    // A->B->A and C->A on disk, the dropped edges make ancestors(C) = [A], B is
+    // never seen, and assigning B's parent to C writes B->C->A->B (Codex P2,
+    // PR #77). `parent_index_for_validation` keeps cyclic edges (still dropping
+    // ambiguous ids, which resolve nothing either way); `ancestors` is bounded,
+    // so walking a cyclic graph still terminates.
+    if tasks::would_create_cycle(&tasks::parent_index_for_validation(&all), &child, &parent) {
+        return Err(CYCLE_REFUSED.to_string());
+    }
+    // Forecast phase 3a's ensure_id BEFORE phase 2 enables Task IDs: without
+    // this, a parent whose id property holds a value ensure_id must never
+    // clobber (e.g. a synced external id like `task-id: {source: jira}`) let
+    // phase 2 run first and phase 3a fail second — a refused assignment that
+    // still silently switched the vault's Task IDs on with no stamp and no
+    // disclosure (this sub-case wasn't visible to phase 1 above, which
+    // validates the CHILD/graph, never the parent's own frontmatter).
+    let parent_content =
+        std::fs::read_to_string(&parent).map_err(|e| format!("Cannot read task: {e}"))?;
+    if parent_id_unassignable(&parent_content, &prop) {
+        return Err("Could not assign an ID to the parent task.".to_string());
+    }
+    Ok((parent, child, prop))
+}
+
 /// The one refusal message both cycle checks (pre-lock and under-lock) use —
 /// the user cannot tell the two apart, and they must never drift.
 const CYCLE_REFUSED: &str = "That would make a task its own ancestor.";
@@ -203,11 +230,11 @@ pub(super) struct ResolvedParent {
 /// it. The guard outliving the caller's write is the point: dropping it at the
 /// end of this function would reopen the very race the re-check closes.
 ///
-/// Shared by `set_task_parent` (writes onto an existing child) and, later, the
-/// create path (passes the pair into `create_task`). Add-subtask is very often
-/// a vault's FIRST hierarchy operation — IDs off, parent unstamped — so the
-/// create path must run this WHOLE path, not just the read-only validation
-/// (design spec §2).
+/// Shared by `set_task_parent` (writes onto an existing child) and
+/// `add_subtask` below (passes the pair into `create_task`). Add-subtask is
+/// very often a vault's FIRST hierarchy operation — IDs off, parent unstamped
+/// — so the create path must run this WHOLE path, not just the read-only
+/// validation (design spec §2).
 pub(super) fn resolve_parent_for_write<T>(
     ctx: &ParentWriteCtx<'_>,
     parent: &Path,
@@ -285,6 +312,109 @@ pub(super) fn resolve_parent_for_write<T>(
     // ---- Phase 3b: the caller's write, still under the lock. ----
     let out = write(&resolved)?;
     Ok((resolved, out))
+}
+
+/// Create a brand-new CHILD task under `parent_path`, running the FULL shared
+/// resolve-the-parent path (validate, lock, re-check, enable, stamp the
+/// parent, compose the link) rather than validation alone — Add subtask is
+/// very often a vault's FIRST hierarchy operation, so validation alone would
+/// leave no authoritative parent-id to write (design spec §2, Codex P1, PR
+/// #77). The child's own file write happens INSIDE `resolve_parent_for_write`'s
+/// held guard, exactly like `set_task_parent`'s write closure — dropping the
+/// lock before creating the file would reopen the very race phases 2-3 close.
+///
+/// Unlike `set_task_parent` there is no self-parent or cycle check here: the
+/// child does not exist on disk yet, so it cannot already equal the chosen
+/// parent (`create_task` never clobbers an existing file, so the eventual
+/// child path can never coincide with a pre-existing one) and nothing can
+/// already reference a file that doesn't exist — the under-lock recheck is
+/// therefore unconditionally `Ok(false)`.
+///
+/// The child's OWN id is drawn here, under the validated `prop` — which stays
+/// correct across phase 2's enable, since the property NAME never changes,
+/// only the enabled flag does — rather than from the caller's pre-call config
+/// snapshot. Using that stale snapshot would pass `None` to `create_task`
+/// whenever THIS call is what turns Task IDs on, leaving a child with a
+/// `parent-id` but no `task-id` of its own (Codex P2, PR #77).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn add_subtask(
+    paths: &ServicePaths,
+    vault_id: &str,
+    vault_path: &Path,
+    root: &Path,
+    cfg: &VaultCaptureConfig,
+    parent_path: &Path,
+    target_root: &Path,
+    title: &str,
+    today: &str,
+    due: Option<&str>,
+    priority: Option<&str>,
+    tags: &[String],
+    scheduled: Option<&str>,
+) -> Result<(ResolvedParent, PathBuf, String), String> {
+    // ---- Phase 1 (read-only): the parent half only — there is no child path
+    // to validate yet, so this is NOT `validate_parent_assignment` (which
+    // requires an existing child). ----
+    let parent = canonical_task_in_root(root, parent_path)?;
+    let prop = cfg.task_id_property_name().to_string();
+    if !tasks::is_valid_id_property(&prop) {
+        return Err(format!(
+            "The vault's task ID property {prop:?} is not a valid frontmatter key; \
+             change it in the vault's Task settings first."
+        ));
+    }
+    let all = tasks::list_tasks_structural(root, Some(&prop))?;
+    reject_ambiguous_parent(&all, &parent)?;
+    let parent_content =
+        std::fs::read_to_string(&parent).map_err(|e| format!("Cannot read task: {e}"))?;
+    if parent_id_unassignable(&parent_content, &prop) {
+        return Err("Could not assign an ID to the parent task.".to_string());
+    }
+
+    // The path the child WILL land at. The collision-safe writer inside the
+    // `write` closure below may still append a ` (N)` suffix on conflict, but
+    // that only changes the FILENAME, never the directory — and
+    // `compose_parent_link`'s fallback form only depends on the child's
+    // DIRECTORY (see its own doc comment), so resolving the link against this
+    // prospective path is safe even though it is not yet the real file.
+    let prospective_child = target_root.join(format!("{}.md", tasks::task_basename(title, today)));
+
+    let ctx = ParentWriteCtx {
+        paths,
+        vault_id,
+        vault_path,
+        root,
+        prop: &prop,
+        phase1_cfg: cfg,
+    };
+    let (resolved, (path, child_id)) = resolve_parent_for_write(
+        &ctx,
+        &parent,
+        &prospective_child,
+        || Ok(false), // a brand-new leaf can never already be on a cycle
+        |resolved| {
+            // Reached only once Task IDs are enabled (already, or by phase 2
+            // just above) under `prop` — generate the child's own id here,
+            // never from a pre-call snapshot (see this fn's doc comment).
+            let child_id = tasks::new_task_id();
+            let written = tasks::create_task(
+                target_root,
+                title,
+                today,
+                due,
+                priority,
+                tags,
+                Some((prop.as_str(), child_id.as_str())),
+                cfg.task_extra_frontmatter.as_deref(),
+                cfg.task_body_template.as_deref(),
+                scheduled,
+                Some((&resolved.parent_id, &resolved.link)),
+            )
+            .map_err(|e| format!("Could not create task: {e}"))?;
+            Ok((written, child_id))
+        },
+    )?;
+    Ok((resolved, path, child_id))
 }
 
 /// Canonicalize `path`, require containment inside the (canonicalized) tasks

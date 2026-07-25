@@ -174,8 +174,10 @@ mod tests {
             &[],
             Some(""),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
         assert!(std::path::Path::new(&moved.path).exists());
         let listed = list_tasks(&paths, "deadbeef01234567");
@@ -201,8 +203,10 @@ mod tests {
             &[],
             Some(""),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         assert!(created.id.is_none());
         std::fs::write(
             paths.config_json.as_ref().unwrap(),
@@ -238,8 +242,10 @@ mod tests {
             &[],
             Some(""),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         let moved = move_task_to_list(&paths, "deadbeef01234567", &created.path, "Inbox").unwrap();
         assert!(moved.id.is_none());
         assert!(!std::fs::read_to_string(&moved.path)
@@ -260,6 +266,7 @@ mod tests {
             None,
             &[],
             Some("Inbox"),
+            None,
             None,
         )
         .unwrap();
@@ -295,8 +302,10 @@ mod tests {
             &[],
             Some("Inbox"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         assert!(created.id.is_none()); // ids were off at create
         std::fs::write(
             paths.config_json.as_ref().unwrap(),
@@ -343,8 +352,10 @@ mod tests {
             &[],
             Some("Project#1"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         let child = add_task(
             &paths,
             "deadbeef01234567",
@@ -355,8 +366,10 @@ mod tests {
             &[],
             Some("Deep/Sub"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         set_task_parent(
             &paths,
             "deadbeef01234567",
@@ -409,8 +422,10 @@ mod tests {
             &[],
             Some("Project#1"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         let child = add_task(
             &paths,
             "deadbeef01234567",
@@ -421,8 +436,10 @@ mod tests {
             &[],
             Some("Deep"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         set_task_parent(
             &paths,
             "deadbeef01234567",
@@ -494,8 +511,10 @@ mod tests {
             &[],
             Some("Project#1"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         let child = add_task(
             &paths,
             "deadbeef01234567",
@@ -506,8 +525,10 @@ mod tests {
             &[],
             Some("Team/Inbox"),
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .task;
         set_task_parent(
             &paths,
             "deadbeef01234567",

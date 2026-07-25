@@ -217,7 +217,35 @@ export interface TaskPatch {
   description?: string;
   /** Clear the description (mirrors clearDue). */
   clearDescription?: boolean;
+  /** Set the parent Task by its PATH (never its id — with Task IDs off, the
+   * default, no id is surfaced anywhere, so a path is the only identity the
+   * frontend can supply). Clear wins when both this and clearParent are sent. */
+  parentPath?: string;
+  /** Clear the parent relationship (mirrors clearDue/clearScheduled). */
+  clearParent?: boolean;
 }
+
+/** update_task's return. `id` keeps its long-standing meaning (the task's
+ * current effective id; null when Task IDs are off). `parentId`/`parentLink`
+ * are the pair actually written THIS call — null when the patch carried no
+ * relationship change (an ordinary field save must never misreport the
+ * task's standing parent). `idsEnabled` is true only when THIS call turned
+ * Task IDs on for the vault — the frontend cannot infer it otherwise, since
+ * an already-enabled vault with an unstamped parent returns the identical
+ * shape. */
+export interface TaskWriteResult {
+  id: string | null;
+  parentId: string | null;
+  parentLink: string | null;
+  idsEnabled: boolean;
+}
+
+/** add_task's return: the created task's fields at the top level (the wire
+ * shape is genuinely flat — Rust's #[serde(flatten)] inlines them, so this is
+ * an intersection, not a nested object) plus idsEnabled, true only when THIS
+ * call turned Task IDs on (Add subtask is often a vault's first hierarchy
+ * operation). */
+export type AddTaskResult = TaskItem & { idsEnabled: boolean };
 
 /** What the inline editor emits: the update_task patch plus an optional list
  * move — the container strips `list` and routes it to move_task_to_list (a

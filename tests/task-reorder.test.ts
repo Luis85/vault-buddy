@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
-import type { TaskItem } from "../src/types";
+import type { TaskItem, TaskWriteResult } from "../src/types";
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
+
+// update_task's mocked "the write succeeded, no relationship change" reply
+// (Task 7 widened the command's return from a bare id to this object).
+const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 const task = (title: string, order: number | null): TaskItem => ({
   path: `C:/v/Tasks/${title}.md`,
@@ -37,7 +41,7 @@ function mountManual(
     if (cmd === "list_tasks") return fixtures;
     if (cmd === "list_task_lists") return [];
     if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [] };
-    if (cmd === "update_task") return null;
+    if (cmd === "update_task") return updateTaskOk;
   });
   const wrapper = mount(Tasks, { props: { vaultId: "v1" }, attachTo: document.body });
   return { wrapper, calls };
@@ -252,7 +256,7 @@ describe("manual reordering", () => {
     await midFlight[2].trigger("keydown", { key: "ArrowUp" });
     await flushPromises();
     expect(calls.filter((c) => c.cmd === "update_task")).toHaveLength(1);
-    resolveWrite(null);
+    resolveWrite(updateTaskOk);
     await flushPromises();
     // Released: grips re-arm and the next reorder goes through.
     const after = wrapper.findAll('[data-testid="task-drag"]');
@@ -315,7 +319,7 @@ describe("manual reordering", () => {
       update_task: () => {
         n += 1;
         if (n >= 2) throw new Error("locked");
-        return null;
+        return updateTaskOk;
       },
     });
     await flushPromises();
@@ -340,7 +344,7 @@ describe("manual reordering", () => {
     const { wrapper } = mountManual([task("a", 1024), task("b", null), task("c", null)], {
       update_task: () => {
         n += 1;
-        return n === 1 ? new Promise((r) => (resolveFirst = r)) : null;
+        return n === 1 ? new Promise((r) => (resolveFirst = r)) : updateTaskOk;
       },
     });
     await flushPromises();
@@ -352,7 +356,7 @@ describe("manual reordering", () => {
     expect(busy.has("C:/v/Tasks/c.md")).toBe(true);
     expect(busy.has("C:/v/Tasks/a.md")).toBe(false); // untouched, never written
     // Draining the batch clears the guard for every row.
-    resolveFirst(null);
+    resolveFirst(updateTaskOk);
     await flushPromises();
     expect(busy.size).toBe(0);
   });
@@ -386,7 +390,7 @@ describe("manual reordering", () => {
     // id on an id-enabled vault (like a field edit). Capture it here too, not
     // just in the editor save, so the row reveals copy-id immediately.
     const { wrapper } = mountManual([task("a", 1024), task("b", 2048)], {
-      update_task: () => "id9",
+      update_task: () => ({ id: "id9", parentId: null, parentLink: null, idsEnabled: false }),
     });
     await flushPromises();
     // ArrowUp on b (its neighbor a is ranked) → one midpoint writeSingleRank.

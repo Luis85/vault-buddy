@@ -6,9 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useVaultsStore } from "../src/stores/vaults";
-import type { TaskItem } from "../src/types";
+import type { TaskItem, TaskWriteResult } from "../src/types";
 import { localToday } from "../src/utils/taskFields";
 import { aggTask, mountAggregate, mountAggregateAttached, mountView, sample } from "./helpers/taskMount";
+
+// update_task's mocked "the write succeeded, no relationship change" reply
+// (Task 7 widened the command's return from a bare id to this object).
+const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
@@ -402,7 +406,7 @@ describe("Tasks", () => {
   });
 
   it("quick-schedules a task from its row popover, writing the do-date optimistically", async () => {
-    const { wrapper, calls } = mountView({ update_task: () => null });
+    const { wrapper, calls } = mountView({ update_task: () => updateTaskOk });
     await flushPromises();
     await wrapper.get('[data-testid="task-schedule-B open"]').trigger("click");
     await wrapper.get('[data-testid="task-schedule-today"]').trigger("click");
@@ -419,7 +423,7 @@ describe("Tasks", () => {
   it("reschedules all overdue to today from the Overdue header", async () => {
     const { wrapper, calls } = mountView({
       list_tasks: () => overdueFixture(),
-      update_task: () => null,
+      update_task: () => updateTaskOk,
     });
     await flushPromises();
     // Lists is the default grouping — switch to Plan (grouping key "dates")
@@ -468,13 +472,13 @@ describe("Tasks", () => {
       ],
       update_task: () => {
         updateCalls++;
-        if (updateCalls === 1) return new Promise<null>(() => {}); // C's own edit save — never resolves
+        if (updateCalls === 1) return new Promise<TaskWriteResult>(() => {}); // C's own edit save — never resolves
         if (updateCalls === 2) {
-          return new Promise<null>((r) => {
-            resolveReschedule = () => r(null);
+          return new Promise<TaskWriteResult>((r) => {
+            resolveReschedule = () => r(updateTaskOk);
           });
         }
-        return null;
+        return updateTaskOk;
       },
     });
     await flushPromises();
@@ -503,7 +507,7 @@ describe("Tasks", () => {
     // grouping-change watch must clear the editing refs so BOTH A and B reschedule.
     const { wrapper, calls } = mountView({
       list_tasks: () => overdueFixture(),
-      update_task: () => null,
+      update_task: () => updateTaskOk,
     });
     await flushPromises();
     const rowA = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("A"))!;

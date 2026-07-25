@@ -4,7 +4,7 @@ import { type Ref,ref } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskEditorPatch, TaskPatch } from "../types";
+import type { AggTask, TaskEditorPatch, TaskPatch, TaskWriteResult } from "../types";
 import { applyMovedTask, applyScalarFields, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 
 // The per-row write actions of the Tasks view (toggle / archive / open /
@@ -148,11 +148,17 @@ export function useTaskActions(opts: {
       // update_task returns the task's current ID (freshly stamped when the
       // vault opts in and it lacked one, or the existing value; null when IDs
       // are off), so the row can reveal its copy-ID affordance immediately
-      // rather than only after a view reload (Codex, PR #59).
-      reflectStampedId(
-        task,
-        await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch }),
-      );
+      // rather than only after a view reload (Codex, PR #59). Its return
+      // widened from a bare id to TaskWriteResult (Task 7, path-keyed
+      // parent) — `patch` here never sets parentPath/clearParent, so only
+      // `.id` is reflected; a future parent-aware caller reads the same
+      // result's parentId/parentLink.
+      const result = await invoke<TaskWriteResult>("update_task", {
+        id: task.vaultId,
+        path: task.path,
+        patch,
+      });
+      reflectStampedId(task, result.id);
       return true;
     } catch (e) {
       Object.assign(task, before);
