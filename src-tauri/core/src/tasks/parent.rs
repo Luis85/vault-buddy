@@ -83,6 +83,10 @@ mod tests {
         // `abc`, blank, indented `def` into "abc\ndef" (Codex P2, PR #77).
         let blank = "---\ntype: Task\nparent-id: abc\n\n  def\ntitle: T\n---\n";
         assert_eq!(parent_id_field(blank), None);
+        // An indented COMMENT is not a continuation — without this the task
+        // loses its id/relationship until the comment is deleted.
+        let commented = "---\ntype: Task\nparent-id: abc\n  # note\ntitle: T\n---\n";
+        assert_eq!(parent_id_field(commented), Some("abc".to_string()));
         // A single-line plain value is of course still fine.
         let ok = "---\ntype: Task\nparent-id: abc\ntitle: T\n---\n";
         assert_eq!(parent_id_field(ok), Some("abc".to_string()));

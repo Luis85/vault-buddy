@@ -293,7 +293,15 @@ fn plain_scalar_continues(content: &str, key: &str) -> bool {
             // (`key: abc`, blank, indented `def` folds to "abc\ndef"), so a
             // blank is not the end of the value — keep scanning and let the
             // first non-blank line decide (Codex P2, PR #77).
-            if t.trim().is_empty() {
+            let trimmed = t.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // A COMMENT-ONLY line is not part of the scalar either. Without
+            // this, `task-id: abc` followed by an indented `# note` reads as a
+            // continuation and the task LOSES its id (and a child its parent
+            // link) until the comment is deleted (Codex P2, PR #77).
+            if trimmed.starts_with('#') {
                 continue;
             }
             return t.starts_with([' ', '\t']);

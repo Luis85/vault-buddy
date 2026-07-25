@@ -61,7 +61,18 @@ pub fn update_task_fields(
                 None
             }
             // Already has a usable PLAIN-SCALAR id (any casing) → never overwritten.
-            Some((_, v)) if !v.is_empty() => Some(v),
+            // Decode it with the SAME strict reader `scalar_id_ci`/`list_tasks`
+            // use, not the shallow `frontmatter_scalar_ci` value: for a quoted
+            // hand-authored id like `task-id: 'a''b'` the shallow read yields
+            // a''b while the list shows a'b, so callers that write this value
+            // back (set_task_parent writes it as the child's `parent-id`) would
+            // record a reference the parent does not answer to, and the
+            // frontend's reflectStampedId would overwrite the correct row value
+            // (Codex P2, PR #77). A value the strict reader cannot decode
+            // reports no id — exactly as the list reports none.
+            Some((on_disk, v)) if !v.is_empty() => {
+                super::parse::strict_scalar_field(&content, &on_disk, false)
+            }
             // Truly blank or absent → generate + stamp. A BLANK line is
             // rewritten under its ON-DISK casing so set_fields (case-
             // sensitive) replaces it — stamping the configured casing would
@@ -540,5 +551,29 @@ mod tests {
             crate::tasks::description::description_field(&std::fs::read_to_string(&p).unwrap()),
             None
         );
+    }
+
+    #[test]
+    fn effective_id_return_uses_the_strict_decode_like_the_list_reader() {
+        // A quoted hand-authored id decodes to a'b for list_tasks (scalar_id_ci
+        // -> strict_scalar_field). The RETURN value must agree: set_task_parent
+        // writes it as the child's `parent-id`, so a shallow a''b here would
+        // record a reference the parent does not answer to, and the frontend's
+        // reflectStampedId would overwrite the correct row value (Codex P2, PR #77).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let p = root.join("t.md");
+        std::fs::write(
+            &p,
+            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ntask-id: 'a''b'\n---\n",
+        )
+        .unwrap();
+        let returned = update_task_fields(root, &p, &[("status", Some("done"))], Some("task-id"))
+            .unwrap()
+            .expect("an existing id is reported back");
+        assert_eq!(returned, "a'b", "must match what list_tasks surfaces");
+        // And the existing id was NOT overwritten.
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(after.contains("task-id: 'a''b'"), "got {after}");
     }
 }
