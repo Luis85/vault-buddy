@@ -6,12 +6,16 @@ import { useTaskDetail } from "../composables/useTaskDetail";
 import { useTaskDetailTaskSet } from "../composables/useTaskDetailTaskSet";
 import { useTaskHierarchy } from "../composables/useTaskHierarchy";
 import { logWarning } from "../logging";
+import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskEditorPatch, TasksConfig } from "../types";
+import type { AddTaskResult, AggTask, TaskEditorPatch, TasksConfig } from "../types";
 import { buildTaskPatch, dueOf, scheduledOf } from "../utils/taskFields";
+import { TASK_IDS_ENABLED_MESSAGE } from "../utils/taskHierarchy";
+import { reflectStampedId } from "../utils/taskMutations";
 import { archivedMatcher, orderLists } from "../utils/taskSections";
 import TaskListPicker from "./TaskListPicker.vue";
 import TaskParentRow from "./TaskParentRow.vue";
+import TaskSubtasks from "./TaskSubtasks.vue";
 
 // The full-height detail surface: a roomy home for one task. It holds its own
 // draft (seeded from the passed task, which carries its own vaultId so writes
@@ -31,7 +35,9 @@ const vaults = useVaultsStore();
 // set was loaded id-suppressed, so EVERY cached id is null, not just the two
 // rows that write touched (Codex P2, PR #77).
 const { allTasks, reload: reloadTaskSet, invalidParentPaths } = useTaskDetailTaskSet(taskRef);
-const { parent, setParent } = useTaskHierarchy(taskRef, allTasks, busy, reloadTaskSet);
+const { parent, children, progress, setParent } = useTaskHierarchy(taskRef, allTasks, busy, reloadTaskSet);
+const notifications = useNotificationsStore();
+const subtasksRef = ref<InstanceType<typeof TaskSubtasks> | null>(null);
 
 // The title trigger in the Tasks list unmounts when this surface opens, so
 // keyboard focus would fall back to <body> and a screen-reader user would get
@@ -162,6 +168,81 @@ function openParentDetail() {
   if (busy.value || !parent.value) return;
   vaults.openTaskDetail(parent.value);
 }
+
+// Add subtask (Task 9): the create-path twin of useTaskHierarchy's setParent
+// above — same shared `busy` guard, same reload-vs-patch branch on
+// `idsEnabled`, and the same TASK_IDS_ENABLED_MESSAGE disclosure, since Add
+// subtask is often a vault's FIRST hierarchy operation (design spec §2).
+async function onAddSubtask(title: string) {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const result = await invoke<AddTaskResult>("add_task", {
+      id: props.task.vaultId,
+      title,
+      parentPath: props.task.path,
+      list: props.task.list,
+    });
+    const { idsEnabled, ...fields } = result;
+    // The child's parentId IS the parent's effective id — possibly stamped by
+    // THIS call (a hand-authored parent that never had one, or the vault's
+    // first-ever hierarchy op — core's add_subtask stamps the parent
+    // unconditionally, not only when it also enables ids). Copy it onto the
+    // cached row BEFORE anything re-resolves: buildParentIndex links
+    // child->parent by matching ids, so a stale null id here would leave the
+    // just-created child unresolved — the create-path twin of the parent-row
+    // patch setParent already applies (Codex P1, PR #77, missed once already
+    // in this exact spot).
+    reflectStampedId(props.task, fields.parentId);
+    if (idsEnabled) {
+      // The whole cached set was loaded id-suppressed — a cheap push would
+      // reveal only THIS relationship while any pre-existing dormant
+      // hierarchy stays orphaned on screen (setParent applies the identical
+      // rule above).
+      await reloadTaskSet();
+      notifications.notify("success", TASK_IDS_ENABLED_MESSAGE, {});
+    } else {
+      allTasks.value.push({ ...fields, vaultId: props.task.vaultId, vaultName: props.task.vaultName });
+    }
+    subtasksRef.value?.reset();
+  } catch (e) {
+    notifications.error(String(e));
+    logWarning(`add_task (subtask) failed: ${String(e)}`);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Toggling a child's status is a plain field write on a DIFFERENT document —
+// still serialized through the ONE shared guard (every write on this surface
+// does), and it mutates the exact object `children` was filtered from, so the
+// progress line updates without a reload.
+async function onToggleSubtask(child: AggTask) {
+  if (busy.value) return;
+  busy.value = true;
+  const prevStatus = child.status;
+  const done = !child.done;
+  child.done = done;
+  child.status = done ? "done" : "new";
+  try {
+    await invoke("set_task_status", { id: child.vaultId, path: child.path, status: child.status });
+    void vaults.refreshTaskCount(child.vaultId);
+  } catch (e) {
+    child.status = prevStatus;
+    child.done = prevStatus === "done";
+    notifications.error(String(e));
+    logWarning(`set_task_status (subtask) failed: ${String(e)}`);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Mirrors openParentDetail: a plain navigation to a different document, still
+// gated on busy so it can't be clicked away from mid-write.
+function openSubtaskDetail(t: AggTask) {
+  if (busy.value) return;
+  vaults.openTaskDetail(t);
+}
 </script>
 
 <template>
@@ -248,7 +329,7 @@ function openParentDetail() {
       />
     </div>
 
-    <!-- Parent row (Task 8), above where the Subtasks section lands (Task 9). -->
+    <!-- Parent row (Task 8), above the Subtasks section (Task 9). -->
     <TaskParentRow
       :parent="parent"
       :busy="busy"
@@ -256,6 +337,16 @@ function openParentDetail() {
       :invalid-paths="invalidParentPaths"
       @open-parent="openParentDetail"
       @select="setParent"
+    />
+
+    <TaskSubtasks
+      ref="subtasksRef"
+      :children="children"
+      :progress="progress"
+      :busy="busy"
+      @add="onAddSubtask"
+      @toggle="onToggleSubtask"
+      @open="openSubtaskDetail"
     />
 
     <!-- While confirming a permanent delete the whole row BECOMES the confirm:
