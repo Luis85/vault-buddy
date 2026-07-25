@@ -27,9 +27,36 @@ pub fn is_task(content: &str) -> bool {
     has_closed_frontmatter(content) && scalar_field(content, "type").as_deref() == Some("Task")
 }
 
+/// True for a name ending `.md` CASE-INSENSITIVELY (`.md`/`.MD`/`.Md`/…) —
+/// the same rule `search.rs`'s own note scan applies (AGENTS.md's search
+/// section: "notes are any-case `.md`"). Shared by `collect.rs` (the
+/// list/structural walk) and `lists/relocate.rs` (delete-list's direct-task
+/// scan) so the two can't independently drift back to a case-sensitive
+/// compare — a case-sensitive miss here is not cosmetic: a hand-authored
+/// `B.MD` invisible to the STRUCTURAL scan is a `parent-id` edge that does
+/// not exist as far as the cycle guard is concerned (see
+/// `services::tasks::parent`'s own tests for the concrete cycle that let
+/// through). The suffix is 3 ASCII bytes, so the byte compare can't split a
+/// UTF-8 char boundary; `>= 3` matches `str::ends_with(".md")`'s own
+/// acceptance of a bare `.md` name exactly, just case-insensitively.
+pub(super) fn is_markdown_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() >= 3 && b[b.len() - 3..].eq_ignore_ascii_case(b".md")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_markdown_name_is_case_insensitive() {
+        for name in [".md", "a.md", "a.MD", "a.Md", "a.mD", "A.B.md"] {
+            assert!(is_markdown_name(name), "{name} must count as markdown");
+        }
+        for name in ["", "a", "md", "a.mdx", "a.txt", ".m"] {
+            assert!(!is_markdown_name(name), "{name} must not count as markdown");
+        }
+    }
 
     #[test]
     fn is_task_only_true_for_type_task() {

@@ -3,7 +3,7 @@
 //! `TaskItem`. `list.rs` owns the walk — which files get visited, and in
 //! what order; this module only ever sees one file at a time.
 
-use super::doc::is_task;
+use super::doc::{is_markdown_name, is_task};
 use super::list::{ScanMode, TaskItem};
 use super::parse::{is_valid_due, note_tags, scalar_field, scalar_id_ci};
 use crate::capture_note::note_field;
@@ -24,7 +24,12 @@ pub(super) fn collect_task_file(
     first_error: &mut Option<String>,
     out: &mut Vec<TaskItem>,
 ) {
-    if !name.ends_with(".md") {
+    // Case-insensitive, matching search.rs's own note scan (AGENTS.md:
+    // "notes are any-case `.md`") — an exact-case compare here made a
+    // hand-authored `B.MD` Task invisible to the STRUCTURAL scan too, so its
+    // `parent-id` edges didn't exist as far as the cycle guard was
+    // concerned (review finding 4).
+    if !is_markdown_name(name) {
         return;
     }
     let content = match std::fs::read_to_string(path) {

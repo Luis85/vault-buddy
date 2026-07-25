@@ -197,7 +197,13 @@ pub fn delete_task_list(
     // Collect the direct task files first (don't mutate while iterating).
     let mut task_files: Vec<PathBuf> = Vec::new();
     for (path, ft, name) in crate::vault_walk::dir_entries(&list_dir) {
-        if ft.is_file() && name.ends_with(".md") {
+        // Case-insensitive `.md` match — mirrors collect.rs's own scan
+        // (review finding 4: search.rs already treats notes as any-case
+        // `.md`, per AGENTS.md). A case-sensitive miss here left a
+        // hand-authored `B.MD` task looking like a "foreign file" to
+        // delete_task_list, keeping its folder around instead of moving the
+        // task to No list.
+        if ft.is_file() && super::super::doc::is_markdown_name(name.as_str()) {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if super::super::doc::is_task(&content) {
                     task_files.push(path);
@@ -438,6 +444,23 @@ mod tests {
         assert!(out.folder_removed);
         assert!(!root.join("Inbox").exists());
         assert!(root.join("a.md").exists() && root.join("b.md").exists());
+    }
+
+    // Review finding 4's sibling: the same case-sensitive `.md` match this
+    // function's own direct-task scan used (independent of collect.rs's
+    // copy) made a hand-authored `B.MD` task look like a foreign file —
+    // kept in place, and the folder kept non-empty — instead of being
+    // relocated to No list like any other direct task.
+    #[test]
+    fn delete_task_list_moves_an_uppercase_md_task_and_removes_the_empty_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        write(&root.join("Inbox"), "Upper.MD", TASK);
+        let out = delete_task_list(&root, "Inbox", None).unwrap();
+        assert_eq!(out.moved, 1);
+        assert!(out.folder_removed);
+        assert!(!root.join("Inbox").exists());
+        assert!(root.join("Upper.MD").exists());
     }
 
     #[test]

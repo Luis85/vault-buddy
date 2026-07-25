@@ -226,6 +226,50 @@ fn refuses_a_cycle_through_an_id_less_prospective_parent() {
 }
 
 #[test]
+fn refuses_a_cycle_routed_through_an_uppercase_md_task() {
+    // Review finding 4: the structural scan's own `.md` match was
+    // case-SENSITIVE (core/src/tasks/collect.rs), unlike search.rs (which
+    // already treats notes as any-case `.md`, per AGENTS.md). A -> B.MD -> C
+    // is a REAL on-disk parent chain (A's parent is B, B's parent is C), but
+    // the case-sensitive scan drops B.MD entirely — so as far as validation
+    // is concerned A has NO outgoing edge, and assigning C's parent to A
+    // (which would close A -> B -> C -> A) is wrongly accepted, writing a
+    // real cycle into the vault. This is the state-corruption case the
+    // list.rs visibility test's own doc comment points at: a guard silently
+    // degrading into a view.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    write(
+        &root,
+        "a.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: aaaaaaaa\nparent-id: bbbbbbbb\n---\n",
+    );
+    write(
+        &root,
+        "b.MD", // uppercase extension — a hand-authored file, legal on disk
+        "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: bbbbbbbb\nparent-id: cccccccc\n---\n",
+    );
+    let c = write(
+        &root,
+        "c.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"C\"\ntask-id: cccccccc\n---\n",
+    );
+    let a = root.join("a.md");
+    let before = std::fs::read_to_string(&c).unwrap();
+    let err = set_task_parent(&paths, &vault, &c, Some(&a));
+    assert!(
+        err.is_err(),
+        "a cycle routed through an uppercase .MD task must be refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&c).unwrap(),
+        before,
+        "a refused cycle must write nothing onto the child"
+    );
+}
+
+#[test]
 fn refuses_a_cycle_using_dormant_ids_while_generation_is_disabled() {
     // Hand-authored ids exist even with the feature off; the ordinary
     // list_tasks walk suppresses them, so validation must read the property

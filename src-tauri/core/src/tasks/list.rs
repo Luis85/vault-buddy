@@ -486,6 +486,42 @@ mod tests {
         );
     }
 
+    // Review finding 4: `collect_task_file`'s own `.md` match was
+    // case-SENSITIVE, while `search.rs` already treats notes as any-case
+    // `.md` (AGENTS.md's search section: "notes are any-case `.md`"). A
+    // hand-authored `Upper.MD` task must be visible to BOTH the view
+    // (list_tasks) and the hierarchy guard (list_tasks_structural) — the
+    // latter matters most: an invisible task's `parent-id` edges don't
+    // exist as far as cycle validation is concerned (see the companion test
+    // in services/tasks/parent/tests.rs for the concrete cycle this let
+    // through).
+    #[test]
+    fn list_tasks_and_structural_scan_surface_uppercase_md_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "Upper.MD",
+            "---\ntype: Task\nstatus: new\ntitle: \"Upper\"\ncreated: 2026-07-25\n---\n",
+        );
+        let titles: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Upper"],
+            "the VIEW must surface an uppercase .MD task"
+        );
+        let structural = list_tasks_structural(root, None).unwrap();
+        assert_eq!(
+            structural.len(),
+            1,
+            "the STRUCTURAL scan must surface it too"
+        );
+        assert_eq!(structural[0].title, "Upper");
+    }
+
     #[test]
     fn structural_scan_keeps_archived_rows() {
         let dir = tempfile::tempdir().unwrap();
