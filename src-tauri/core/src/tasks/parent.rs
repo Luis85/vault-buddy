@@ -8,14 +8,14 @@
 /// field — a `[[wikilink]]`-shaped value here is not exempt (finding 5): an
 /// id must be a plain scalar, and a wikilink is exactly the kind of flow
 /// value the block/flow guard exists to reject.
-pub(super) fn parent_id_field(content: &str) -> Option<String> {
+pub fn parent_id_field(content: &str) -> Option<String> {
     scalar(content, "parent-id", false)
 }
 
 /// The raw `parent` link scalar. Carried through to the DTO verbatim — the app
 /// never interprets it. The only caller that gets the `[[wikilink]]` flow
 /// exemption (see `scalar`'s `link` parameter).
-pub(super) fn parent_link_field(content: &str) -> Option<String> {
+pub fn parent_link_field(content: &str) -> Option<String> {
     scalar(content, "parent", true)
 }
 

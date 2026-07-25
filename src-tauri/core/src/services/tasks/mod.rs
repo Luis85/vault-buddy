@@ -4,10 +4,12 @@ use super::{app_config, find_vault, ServicePaths};
 use crate::{capture_config, capture_note, capture_paths, tasks};
 
 mod lists;
+mod parent;
 pub use lists::{
     create_task_list, delete_task_list, list_task_lists, move_task_to_list, rename_task_list,
     MovedTask,
 };
+pub use parent::{set_task_parent, ParentSet};
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

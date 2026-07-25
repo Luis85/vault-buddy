@@ -71,10 +71,17 @@ pub fn move_task_to_list(
     // MovedTask.
     let id_property =
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-    Ok(MovedTask {
+    let moved = MovedTask {
         path: landed.to_string_lossy().into_owned(),
         id: tasks::backfill_task_id(&root, &landed, id_property),
-    })
+    };
+    // A markdown-fallback `parent` link is resolved relative to the note
+    // holding it, so a child that just changed depth points at nothing even
+    // though its parent never moved. Recompose it here — the one file this move
+    // already rewrites — best-effort/warn-only like the backfill above, and
+    // only written when the link actually differs (see `repair_parent_link`).
+    super::parent::repair_parent_link(&vault_path, &root, &landed, &cfg);
+    Ok(moved)
 }
 
 /// Rename a list folder (see `tasks::rename_task_list`). Adds the vault-level

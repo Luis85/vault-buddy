@@ -188,6 +188,28 @@ pub fn write_config(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
     result
 }
 
+/// The process-wide serialization point for a config.json read-modify-write
+/// that must not interleave with another one — held ACROSS the read and the
+/// write, and (for `services::set_task_parent`) across the vault writes that
+/// depend on the config it just read. Every `update_*_config*` helper below
+/// still takes no lock of its own; this is the mutex their racing callers
+/// take, so the choice of scope stays with the caller that knows what its
+/// sequence must exclude.
+///
+/// Poison-tolerant: a panic while holding it leaves no torn in-memory state
+/// (every writer re-reads the file it modifies), so recovering is right —
+/// wedging every future config write behind one unrelated panic is not. Same
+/// posture as the shell's `lock_ignoring_poison`.
+///
+/// The shell's Tauri-managed `ConfigWriteLock` is a SEPARATE mutex that
+/// serializes the settings commands among themselves; the Task-ID settings
+/// command joins this one too, so a settings save cannot slip between a
+/// parent assignment's phases (design spec §2 / §2a).
+pub fn config_write_lock() -> std::sync::MutexGuard<'static, ()> {
+    static CONFIG_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    CONFIG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Read-modify-write so saving one vault preserves the others. No lock of
 /// its own: callers that can race (the IPC command layer) must serialize
 /// calls behind a mutex.

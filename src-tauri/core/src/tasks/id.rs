@@ -52,7 +52,7 @@ pub fn is_valid_id_property(name: &str) -> bool {
 /// NUMBER by Obsidian/Dataview while the source id is still a string, so
 /// equality silently stops matching). Every GENERATED id is letter-first base36,
 /// so the common case still writes bare (Codex P2 x3, PR #77).
-pub(super) fn quote_id_if_needed(id: &str) -> String {
+pub fn quote_id_if_needed(id: &str) -> String {
     let plain_charset = !id.is_empty()
         && id
             .chars()
