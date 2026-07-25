@@ -30,7 +30,8 @@ fn multiline_needs_escape(c: char) -> bool {
 /// fields). Produces a valid one-physical-line YAML double-quoted scalar so a
 /// multi-line value (the task `description`) rides the line-oriented surgical
 /// writer untouched. Escapes `\` and `"`, encodes newline as `\n` and tab as
-/// `\t`, drops CR (newlines normalize to `\n`), and escapes every code point
+/// `\t`, encodes CR as `\r` (so it round-trips exactly, not silently dropped —
+/// `yaml_unquote_multiline` decodes `\r` back to CR), and escapes every code point
 /// that is not a safe, non-folding member of YAML's `c-printable` set
 /// (`multiline_needs_escape`) as `\xXX` (≤ U+00FF) or `\uXXXX` (above it): the
 /// other C0 controls, DEL, the C1 controls (incl. NEL), the LS/PS line
@@ -46,7 +47,7 @@ pub fn yaml_quote_multiline(value: &str) -> String {
             '"' => inner.push_str("\\\""),
             '\n' => inner.push_str("\\n"),
             '\t' => inner.push_str("\\t"),
-            '\r' => {} // CR dropped; newlines normalize to \n
+            '\r' => inner.push_str("\\r"), // exact round-trip: the decoder maps \r back to CR
             c if multiline_needs_escape(c) => {
                 let u = c as u32;
                 if u <= 0xff {
@@ -158,6 +159,16 @@ mod tests {
         assert!(quoted.starts_with('"') && quoted.ends_with('"'));
         assert!(!quoted.contains('\n'));
         assert_eq!(yaml_unquote_multiline(&quoted), s);
+    }
+
+    #[test]
+    fn yaml_quote_multiline_round_trips_a_carriage_return() {
+        // CR encodes as `\r` (not dropped), so it round-trips through the decoder —
+        // a CR in a duplicated title must survive, not vanish (Codex P2, PR #76).
+        let quoted = yaml_quote_multiline("first\rsecond");
+        assert_eq!(quoted, "\"first\\rsecond\"");
+        assert!(!quoted.contains('\r')); // no raw CR in the scalar
+        assert_eq!(yaml_unquote_multiline(&quoted), "first\rsecond");
     }
 
     #[test]
