@@ -9,6 +9,7 @@ import { useTaskDetail } from "../src/composables/useTaskDetail";
 import { useTaskHierarchy } from "../src/composables/useTaskHierarchy";
 import { useNotificationsStore } from "../src/stores/notifications";
 import type { AggTask } from "../src/types";
+import { buildParentIndexByVault, taskHierarchyInfo } from "../src/utils/taskHierarchy";
 
 const task = (o: Partial<AggTask> = {}): AggTask => ({
   path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
@@ -193,5 +194,56 @@ describe("useTaskHierarchy.setParent", () => {
     const h = useTaskHierarchy(ref(child), ref([parent, child]), busy);
     await h.setParent("/v1/p.md");
     expect(calls).toEqual([]);
+  });
+});
+
+// Task 10's list-level derivation: buildParentIndexByVault (one index per
+// distinct vault, since the aggregate view holds every vault's rows in one
+// array) and taskHierarchyInfo (the per-row parent + open-subtask-count
+// pair). Tested directly here, with full control over array order, rather
+// than only through Tasks.vue — a component-level fixture's order is at the
+// mercy of Tasks.vue's own sortInPlace (manual sort ties break on title),
+// which would make a same-path-collision fixture pass or fail by accident.
+describe("buildParentIndexByVault / taskHierarchyInfo", () => {
+  it("builds one index per distinct vault, scoped independently", () => {
+    const a = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const b = task({ vaultId: "v2", id: "p", path: "/v2/p.md" }); // same id, different vault: not ambiguous
+    const child = task({ vaultId: "v2", id: "c", parentId: "p", path: "/v2/c.md" });
+    const byVault = buildParentIndexByVault([a, b, child]);
+    expect(byVault.get("v1")).toEqual(new Map());
+    expect(byVault.get("v2")).toEqual(new Map([["/v2/c.md", "/v2/p.md"]]));
+  });
+
+  it("resolves a task's own parent and open-subtask count", () => {
+    const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const openKid = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md" });
+    const doneKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", done: true });
+    const all = [p, openKid, doneKid];
+    const byVault = buildParentIndexByVault(all);
+    expect(taskHierarchyInfo(p, all, byVault)).toEqual({ parent: null, openSubtaskCount: 1 });
+    expect(taskHierarchyInfo(openKid, all, byVault).parent).toBe(p);
+  });
+
+  it("never counts an unrelated same-path row from a different vault as an open subtask", () => {
+    // Path is only unique WITHIN a vault (the invariant useTaskHierarchy's own
+    // children/parent computeds defend the same way) — a count that matched
+    // by path alone would double-count a same-path row from another vault.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const openKid = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/Shared.md" });
+    const unrelated = task({ vaultId: "v2", id: "x", path: "/Shared.md" });
+    const all = [parent, openKid, unrelated];
+    const byVault = buildParentIndexByVault(all);
+    expect(taskHierarchyInfo(parent, all, byVault).openSubtaskCount).toBe(1);
+  });
+
+  it("never resolves a parent through a same-path row in a different vault", () => {
+    // Listing the wrong-vault row FIRST means a path-only find() (dropping
+    // the vaultId check) would return it — a wrong object, not silence.
+    const wrongVaultParent = task({ vaultId: "v2", id: "z", path: "/Shared.md", title: "Wrong" });
+    const parent = task({ vaultId: "v1", id: "p", path: "/Shared.md", title: "Right" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const all = [wrongVaultParent, parent, child];
+    const byVault = buildParentIndexByVault(all);
+    expect(taskHierarchyInfo(child, all, byVault).parent).toBe(parent);
   });
 });

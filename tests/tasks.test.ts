@@ -7,7 +7,7 @@ import TaskRow from "../src/components/TaskRow.vue";
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useVaultsStore } from "../src/stores/vaults";
-import type { TaskItem, TaskWriteResult } from "../src/types";
+import type { AggTask, TaskItem, TaskWriteResult } from "../src/types";
 import { localToday } from "../src/utils/taskFields";
 import { aggTask, mountAggregate, mountAggregateAttached, mountView, sample } from "./helpers/taskMount";
 
@@ -40,6 +40,40 @@ const overdueFixture = (): TaskItem[] => [
   { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null },
   { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null },
 ];
+
+// Task 10 (list badge/chip) fixtures: a local `task()` factory matching
+// task-detail.test.ts / task-hierarchy.test.ts's own (already-resolved
+// AggTask rows, unlike the TaskItem fixtures above) rather than a fourth
+// shared helper.
+const task = (o: Partial<AggTask> = {}): AggTask => ({
+  path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
+  done: false, due: null, scheduled: null, priority: null, tags: [], list: "",
+  order: null, id: null, description: null, parentId: null, parentLink: null,
+  vaultId: "v1", vaultName: "V", ...o,
+});
+
+// Mounts Tasks.vue over an already-resolved fixture list: list_tasks (and, in
+// aggregate mode, list_vaults) are both derived straight from `fixtures`, so a
+// test only describes the ROWS. vaultId: null selects aggregate mode, mirroring
+// Tasks.vue's own props.vaultId contract.
+async function mountTasks(fixtures: AggTask[], opts: { vaultId?: string | null } = {}) {
+  const vaultId = opts.vaultId === undefined ? "v1" : opts.vaultId;
+  mockIPC((cmd, args) => {
+    if (cmd === "list_vaults") {
+      const names = new Map<string, string>();
+      for (const t of fixtures) if (!names.has(t.vaultId)) names.set(t.vaultId, t.vaultName);
+      return [...names].map(([id, name]) => ({ id, name, path: `C:/${id}`, open: false }));
+    }
+    if (cmd === "list_tasks") {
+      const id = (args as { id: string }).id;
+      return fixtures.filter((t) => t.vaultId === id);
+    }
+    return undefined;
+  });
+  const wrapper = mount(Tasks, { props: { vaultId } });
+  await flushPromises();
+  return wrapper;
+}
 
 describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -2101,6 +2135,95 @@ describe("Tasks", () => {
     const { wrapper } = mountAggregate();
     await flushPromises();
     expect(wrapper.find('[data-testid="task-drag"]').exists()).toBe(false);
+  });
+
+  // Task 10: the main list's subtask-count badge and parent chip. The list
+  // consumes buildParentIndex exactly as Task Detail does (src/utils/
+  // taskHierarchy.ts), so every case below mirrors a useTaskHierarchy case in
+  // tests/task-hierarchy.test.ts one-for-one — same fixture, same resolution.
+  it("shows an open-subtask count badge on a parent, and none when all are done", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const openKid = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md" });
+    const doneKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", done: true, status: "done" });
+    const w = await mountTasks([parent, openKid, doneKid]);
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1"); // open only
+    // With every child done the badge disappears entirely.
+    const w2 = await mountTasks([parent, doneKid]);
+    expect(w2.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("shows a parent chip on a child that opens the parent's detail", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "Big" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    const w = await mountTasks([parent, child]);
+    const chip = w.get('[data-testid="task-parent-chip"]');
+    expect(chip.text()).toContain("Big");
+    await chip.trigger("click");
+    expect(store.taskDetailTask?.path).toBe("/v1/p.md");
+  });
+  it("shows no chip or count for a duplicated id (matches core and Detail)", async () => {
+    // The list consumes the SAME index builder, so an ambiguous id resolves
+    // nothing here exactly as it does in core (Codex P2, PR #77).
+    const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p1.md", title: "One" });
+    const p2 = task({ vaultId: "v1", id: "p", path: "/v1/p2.md", title: "Two" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const w = await mountTasks([p1, p2, child]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("shows no chip or count for a hand-authored cycle", async () => {
+    const a = task({ vaultId: "v1", id: "a", parentId: "b", path: "/v1/a.md" });
+    const b = task({ vaultId: "v1", id: "b", parentId: "a", path: "/v1/b.md" });
+    const w = await mountTasks([a, b]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("scopes the index per vault in aggregate mode", async () => {
+    // Ids are unique only WITHIN a vault, so the aggregate view must never link a
+    // child in one vault to a same-id task in another.
+    const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "V1 parent" });
+    const foreign = task({ vaultId: "v2", id: "c", parentId: "p", path: "/v2/c.md" });
+    const w = await mountTasks([p1, foreign], { vaultId: null });
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("renders a child whose parent id resolves to nothing as an ordinary top-level row", async () => {
+    const orphan = task({ vaultId: "v1", id: "c", parentId: "gone", path: "/v1/c.md", title: "Orphan" });
+    const w = await mountTasks([orphan]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.text()).toContain("Orphan"); // still listed, just parentless
+  });
+
+  it("shows no chip or count when Task IDs are off (the default — every row has id: null)", async () => {
+    // The common case: no task carries an id, so buildParentIndex resolves
+    // nothing anywhere. A prior P1 on this branch shipped precisely because
+    // every test elsewhere pre-stamped ids and none exercised this path —
+    // the badge/count must quietly not render, never error or show a zero.
+    const a = task({ vaultId: "v1", path: "/v1/a.md", title: "A" });
+    const b = task({ vaultId: "v1", path: "/v1/b.md", title: "B" });
+    const w = await mountTasks([a, b]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+    expect(w.text()).toContain("A");
+    expect(w.text()).toContain("B");
+  });
+
+  it("keeps the subtask count vault-scoped even when two vaults share a literal path", async () => {
+    // Every hierarchy lookup in this codebase pairs vaultId+path (path is
+    // only unique WITHIN a vault — useTaskHierarchy's own children/parent
+    // computeds pair the same way). A count that matched by path alone would
+    // double-count an unrelated same-path row from a different vault — this
+    // fixture makes that mistake visible as "2", not just a silent absence.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const openKid = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/Shared.md" });
+    const unrelated = task({ vaultId: "v2", id: "x", path: "/Shared.md", title: "Unrelated" });
+    const w = await mountTasks([parent, openKid, unrelated], { vaultId: null });
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
   });
 
 });

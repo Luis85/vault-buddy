@@ -4,6 +4,8 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskDisplay } from "../composables/useTaskDisplay";
+import { useTaskListHierarchy } from "../composables/useTaskListHierarchy";
+import { useTaskListReload } from "../composables/useTaskListReload";
 import { useTaskLists } from "../composables/useTaskLists";
 import { useTaskReorder } from "../composables/useTaskReorder";
 import { useTaskReorderCommit } from "../composables/useTaskReorderCommit";
@@ -123,6 +125,10 @@ watch(grouping, () => cancelEdit());
 // actions above, so a schedule write can't race a toggle/edit on one task.
 const { quickSchedule, rescheduleOverdue, reschedulingOverdue } =
   useTaskSchedule({ tasks, sortInPlace, busy });
+// Task 10: the subtask-count badge + parent chip, resolved through the SAME
+// index useTaskHierarchy builds for Task Detail (taskHierarchy.ts) — never a
+// second rule.
+const { hierarchyOf } = useTaskListHierarchy(tasks);
 
 // New list flow: create + cache, then re-select here. `target` (the vault
 // createList used) blocks a mid-create composer vault switch from adopting the
@@ -151,20 +157,8 @@ async function onControlsCreateList(name: string) {
 // precedent).
 const sectionBusy = ref(new Set<string>());
 const sectionMenuResetNonce = ref(0);
-
-// Re-fetch this vault's tasks after a rename/delete relocates files on disk.
-// Per-vault only (the section menu is hidden in the aggregate).
-async function reloadTasks() {
-  if (props.vaultId === null) return;
-  const id = props.vaultId;
-  try {
-    const items = await invoke<TaskItem[]>("list_tasks", { id });
-    tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
-    sortInPlace();
-  } catch (e) {
-    logWarning(`list_tasks reload failed for vault ${id}: ${String(e)}`);
-  }
-}
+// Split out to make room for the hierarchy lookup below (GAP-65).
+const { reloadTasks } = useTaskListReload(props.vaultId, tasks, sortInPlace);
 
 async function runSectionAction(
   list: string,
@@ -505,6 +499,8 @@ async function add(payload: AddPayload) {
               v-for="(task, i) in bucket.tasks"
               :key="rowKey(bucket.key, task)"
               :task="task"
+              :parent="hierarchyOf(task).parent"
+              :subtask-count="hierarchyOf(task).openSubtaskCount"
               :busy="isBusy(task.path)"
               :is-aggregate="isAggregate"
               :editing="editingKey === rowKey(bucket.key, task)"
@@ -522,6 +518,7 @@ async function add(payload: AddPayload) {
               @archive="archive(task)"
               @edit="startEdit(task, bucket.key)"
               @open="onOpenTask(task, $event)"
+              @open-parent="vaultsStore.openTaskDetail(hierarchyOf(task).parent!)"
               @tag-click="tagFilter = $event"
               @schedule="quickSchedule(task, $event)"
               @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"

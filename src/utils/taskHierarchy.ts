@@ -81,6 +81,40 @@ export function buildParentIndex(tasks: AggTask[], vaultId: string): Map<string,
   return edges;
 }
 
+/** One buildParentIndex per DISTINCT vault represented in `tasks` — Task 10's
+ * main-list badge/chip, unlike useTaskHierarchy, can show every vault's rows
+ * at once (the aggregate view), and ids are unique only within a vault, so
+ * each vault needs its OWN index computed under its own scope. */
+export function buildParentIndexByVault(tasks: AggTask[]): Map<string, Map<string, string>> {
+  const byVault = new Map<string, Map<string, string>>();
+  for (const vaultId of new Set(tasks.map((t) => t.vaultId))) {
+    byVault.set(vaultId, buildParentIndex(tasks, vaultId));
+  }
+  return byVault;
+}
+
+/** The resolved parent row (or null) and open (not-done) subtask count for
+ * ONE task — the list's per-row derivation (Task 10), reading the SAME
+ * per-vault index useTaskHierarchy builds for Task Detail so an ambiguous id,
+ * a cycle, or a cross-vault id collision renders as unresolved in BOTH places
+ * (Codex P2, PR #77) — never a second resolution rule. Direct children only,
+ * matching useTaskHierarchy's children/progress (no grandchildren). */
+export function taskHierarchyInfo(
+  task: AggTask,
+  allTasks: AggTask[],
+  byVault: Map<string, Map<string, string>>,
+): { parent: AggTask | null; openSubtaskCount: number } {
+  const index = byVault.get(task.vaultId);
+  const parentPath = index?.get(task.path);
+  const parent = parentPath
+    ? (allTasks.find((t) => t.vaultId === task.vaultId && t.path === parentPath) ?? null)
+    : null;
+  const openSubtaskCount = allTasks.filter(
+    (t) => t.vaultId === task.vaultId && !t.done && index?.get(t.path) === task.path,
+  ).length;
+  return { parent, openSubtaskCount };
+}
+
 /** All paths that are `path` itself or a transitive child of it in `index` (a
  * buildParentIndex child->parent map) — the set that would create a cycle if
  * `path` picked one of them as ITS OWN parent. A UI hint only, computed from
