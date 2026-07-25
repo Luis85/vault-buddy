@@ -36,9 +36,37 @@ describe("useTaskDetail", () => {
     const t = ref(task());
     const { remove } = useTaskDetail(t);
     const { useVaultsStore } = await import("../src/stores/vaults");
-    const back = vi.spyOn(useVaultsStore(), "back");
+    const store = useVaultsStore();
+    store.view = "taskDetail"; // remove() only navigates while still on the detail view
+    const back = vi.spyOn(store, "back");
     await remove();
     expect(back).toHaveBeenCalled();
+  });
+
+  it("remove does NOT navigate again if the user already left the detail view", async () => {
+    // Slow delete + the user clicks header Back first: the view already moved to
+    // tasks, so remove()'s completion back() must NOT run (it would over-advance
+    // to the vault list) — Codex P2, PR #76.
+    let resolveDelete: (() => void) | undefined;
+    mockIPC((cmd) =>
+      cmd === "delete_task"
+        ? new Promise<void>((r) => {
+            resolveDelete = () => r();
+          })
+        : undefined,
+    );
+    const t = ref(task());
+    const { remove } = useTaskDetail(t);
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    store.view = "taskDetail";
+    const back = vi.spyOn(store, "back");
+    const pending = remove(); // delete in flight
+    await new Promise((r) => setTimeout(r));
+    store.view = "tasks"; // the user navigated away during the slow delete
+    resolveDelete?.();
+    await pending;
+    expect(back).not.toHaveBeenCalled();
   });
 
   it("save is a no-op for an empty patch (no invoke)", async () => {
@@ -69,6 +97,23 @@ describe("useTaskDetail", () => {
     const { save, busy } = useTaskDetail(ref(task()));
     expect(await save({ description: "x" })).toBe(false);
     expect(busy.value).toBe(false);
+  });
+
+  it("save names the list when a move fails after the fields already saved", async () => {
+    // The fields ARE persisted; only the list move didn't land — surface that
+    // specifically rather than a bare error (final review, PR #76).
+    mockIPC((cmd) => {
+      if (cmd === "update_task") return null; // fields save OK
+      if (cmd === "move_task_to_list") throw new Error("move boom"); // the move fails
+      return undefined;
+    });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
+    const { save } = useTaskDetail(ref(task({ list: "" })));
+    expect(await save({ title: "New title", list: "Home" })).toBe(false);
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining('Saved fields, but couldn\'t move to "Home"'),
+    );
   });
 
   it("remove surfaces an error and releases the guard", async () => {
@@ -227,10 +272,6 @@ describe("TaskDetail.vue", () => {
     expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(false);
     await wrapper.get('[data-testid="task-detail-title"]').setValue("   ");
     expect((wrapper.find('[data-testid="task-detail-save"]').element as HTMLButtonElement).disabled).toBe(true);
-    // Belt-and-suspenders: onSave's own guard blocks the write too, even if a
-    // disabled button were somehow actuated (it isn't, in a real browser).
-    await wrapper.get('[data-testid="task-detail-save"]').trigger("click");
-    await new Promise((r) => setTimeout(r));
   });
 
   it("save sends the scheduled (do) date and tags in the patch", async () => {
@@ -343,6 +384,24 @@ describe("TaskDetail.vue", () => {
     const wrapper = mount(TaskDetail, { props: { task: task({ list: "Old" }) } });
     await new Promise((r) => setTimeout(r));
     expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home", "Old"]);
+  });
+
+  it("drops a now-non-current archived list from the picker after the task moves out of it", async () => {
+    // The archived "Old" list is retained ONLY as the task's current list; once
+    // the task moves to a visible list, the options must recompute and drop it,
+    // so it can't be re-selected into a hidden list (Codex P2, PR #76).
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return ["Home", "Old"];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task({ list: "Old" }) } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home", "Old"]);
+    // Task moves out of "Old" — the options must reactively drop the archived list.
+    await wrapper.setProps({ task: task({ list: "Home" }) });
+    expect(wrapper.findComponent(TaskListPicker).props("lists")).toEqual(["Home"]);
   });
 
   it("onMounted drops archived lists other than the task's own", async () => {

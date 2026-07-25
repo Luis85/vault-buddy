@@ -7,6 +7,16 @@ import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskEditorPatch } from "../types";
 import { applyDetailFields, applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 
+// A save failure AFTER the fields already persisted is a move failure: name the
+// list clearly (the fields ARE saved), matching useTaskActions.onEditorSave
+// (final review, PR #76). Kept out of `save` so it doesn't push that function
+// past the complexity ratchet.
+function saveErrorMessage(e: unknown, fieldsSaved: boolean, targetList: string | undefined): string {
+  return fieldsSaved
+    ? `Saved fields, but couldn't move to "${targetList || "No list"}": ${String(e)}`
+    : String(e);
+}
+
 /** The single-task write layer for the detail view. Unlike useTaskActions it
  * owns ONE task (no shared list, no re-sort): edits apply to the passed ref,
  * and the tasks list re-fetches when the user goes back. */
@@ -25,6 +35,7 @@ export function useTaskDetail(task: Ref<AggTask>) {
     if (!hasFields && targetList === undefined) return true;
     if (busy.value) return false;
     busy.value = true;
+    let fieldsSaved = false;
     try {
       if (hasFields) {
         const id = await invoke<string | null>("update_task", {
@@ -34,6 +45,7 @@ export function useTaskDetail(task: Ref<AggTask>) {
         });
         applyDetailFields(task.value, fieldPatch);
         reflectStampedId(task.value, id);
+        fieldsSaved = true;
       }
       if (targetList !== undefined && targetList !== task.value.list) {
         const moved = await invoke<MovedTask>("move_task_to_list", {
@@ -47,7 +59,7 @@ export function useTaskDetail(task: Ref<AggTask>) {
       void vaults.refreshTaskCount(task.value.vaultId);
       return true;
     } catch (e) {
-      notifications.error(String(e));
+      notifications.error(saveErrorMessage(e, fieldsSaved, targetList));
       logWarning(`task detail save failed: ${String(e)}`);
       return false;
     } finally {
@@ -62,7 +74,11 @@ export function useTaskDetail(task: Ref<AggTask>) {
       await invoke("delete_task", { id: task.value.vaultId, path: task.value.path });
       void vaults.refreshTaskCount(task.value.vaultId);
       notifications.success(`Deleted "${task.value.title}".`);
-      vaults.back(); // to the tasks list (remounts + re-fetches)
+      // Only navigate if we're still ON the detail view. If the user clicked the
+      // header Back during a slow delete, the view already moved to tasks, and a
+      // second contextual back() would over-advance to the vault list (Codex P2,
+      // PR #76).
+      if (vaults.view === "taskDetail") vaults.back(); // to the tasks list (remounts + re-fetches)
     } catch (e) {
       busy.value = false;
       notifications.error(String(e));

@@ -28,29 +28,37 @@ const draftPriority = ref(normPriority(props.task.priority));
 const draftTags = ref(props.task.tags.join(", "));
 const draftList = ref(props.task.list);
 
-// The vault's lists for the picker. Archived lists are dropped as move targets
-// (they're hidden from the Lists view and open-task counts), but the task's OWN
-// current list is always kept so a task already in an archived list stays
-// selectable — matching useTaskLists.listsForEditor (Codex P2, PR #76). A load
-// failure logs rather than silently rendering a blank picker (Codex P2).
-const lists = ref<string[]>([]);
+// The vault's lists for the picker, loaded once and kept as RAW inputs (not a
+// one-time filtered array) so the visible options can be derived reactively
+// from the task's CURRENT list — see `lists` below. A load failure logs rather
+// than silently rendering a blank picker (Codex P2, PR #76).
+const allLists = ref<string[]>([]);
+const listOrder = ref<string[]>([]);
+const archivedLists = ref<string[]>([]);
 onMounted(async () => {
   try {
     const [all, cfg] = await Promise.all([
       invoke<string[]>("list_task_lists", { id: props.task.vaultId }),
       invoke<TasksConfig>("get_tasks_config", { id: props.task.vaultId }),
     ]);
-    const isArchived = archivedMatcher(cfg.archivedLists ?? []);
-    // Order by the vault's configured listOrder-then-alphabetical (matching
-    // useTaskLists.listsForVault), keeping the task's OWN list even if archived
-    // (reviewer, PR #76).
-    lists.value = orderLists(all, cfg.listOrder ?? []).filter(
-      (l) => l === props.task.list || !isArchived(l),
-    );
+    allLists.value = all;
+    listOrder.value = cfg.listOrder ?? [];
+    archivedLists.value = cfg.archivedLists ?? [];
   } catch (e) {
-    lists.value = [];
     logWarning(`task detail: could not load task lists: ${String(e)}`);
   }
+});
+// Options ordered by the vault's listOrder-then-alphabetical (matching
+// useTaskLists.listsForVault), dropping archived lists EXCEPT the task's own
+// current one. Derived reactively from `props.task.list`, so after a move OUT of
+// an archived list that list drops from the options — a one-time filter would
+// leave it selectable and let the user move back into a hidden list (Codex P2,
+// PR #76).
+const lists = computed(() => {
+  const isArchived = archivedMatcher(archivedLists.value);
+  return orderLists(allLists.value, listOrder.value).filter(
+    (l) => l === props.task.list || !isArchived(l),
+  );
 });
 
 const titleValid = computed(() => draftTitle.value.trim().length > 0);
