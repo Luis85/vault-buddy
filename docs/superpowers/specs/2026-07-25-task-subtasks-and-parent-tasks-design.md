@@ -139,11 +139,17 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
   these, so:
   - **Default — wikilink**: `[[<vault-relative path>]]`, used whenever the path
     contains none of ``# | [ ] ^``.
-  - **Fallback — markdown link**: `[<parent title>](<percent-encoded path>.md)`
-    when it does. Obsidian resolves markdown links natively and percent-encoding
-    represents every character unambiguously; the app already percent-encodes
-    every `obsidian://` parameter in `uri.rs`, so this reuses an established
-    convention rather than inventing one.
+  - **Fallback — markdown link**: `[<escaped parent title>](<percent-encoded
+    path>.md)` when it does. Obsidian resolves markdown links natively and
+    percent-encoding represents every character unambiguously; the app already
+    percent-encodes every `obsidian://` parameter in `uri.rs`, so this reuses an
+    established convention rather than inventing one.
+
+    **The label is escaped too, not just the target.** A title carrying `[`, `]`,
+    or `\` would otherwise produce a malformed link even with the path encoded —
+    YAML quoting protects the surrounding *scalar*, but the Markdown inside it is
+    parsed after YAML decoding (Codex P2, PR #77). Each of `\`, `[`, `]` in the
+    title is backslash-escaped when composing the label.
 
   Both forms are — critically — **always YAML-quoted**: unquoted, `parent:
   [[foo]]` parses as a nested flow *sequence*, not a string. Both are emitted
@@ -151,12 +157,15 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
   does for paths. Task *filenames* need no such care: `slugify` reduces them to
   ASCII alphanumerics and hyphens, so only the List folder segments can carry
   metacharacters.
-- **Drift is benign by construction.** VB keeps the wikilink correct on the moves
-  it performs, but a manual rename in Obsidian (or a rare collision-suffixed
-  move) can stale it. Because `parent-id` is authoritative, a stale wikilink
-  degrades only Obsidian's click-through — never VB's hierarchy — and is
-  rewritten the next time the parent is set. This asymmetry is the whole point of
-  the hybrid.
+- **Drift is bounded, and the link is never repaired in bulk.** A parent that is
+  moved between Lists, renamed in Obsidian, or landed under a collision suffix
+  leaves the link recorded on its children stale. VB does **not** refresh those
+  links — `move_task_to_list` is unchanged by this increment (§7), because
+  repairing them would mean bolting a batch write onto the move path, the same
+  thing this spec declines to do to delete. Because `parent-id` is authoritative,
+  a stale link degrades only Obsidian's click-through — never VB's hierarchy —
+  and it self-heals the next time that parent is set. This asymmetry is the whole
+  point of the hybrid.
 
 **Reading** is lenient, matching the rest of the vault domain: both keys are read
 as single-line scalars via the `description`-style decode (`raw_scalar_field` +
@@ -212,18 +221,34 @@ spec's own guarantee that a cycle rejection writes nothing (Codex P2, PR #77).
   both must be `type: Task` documents. A vanished or escaping path fails here.
 - Refuse a **self-parent** by comparing the two canonical *paths* — no ids
   required, so this rejection is available before anything is stamped.
-- Resolve the id property through
-  `tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())`.
-  When it yields `None` because the configured property is **invalid or reserved**
-  (a hand-edited config), return an inline error naming it — the service never
-  silently rewrites the user's setting, matching `set_task_id_config`'s
-  write-strict posture. (`None` merely because the feature is *off* is expected
-  and handled in phase 2.)
-- Build the index from one `list_tasks` walk and run the **ambiguity and cycle
-  checks against the pre-stamp state**. This is complete, not a shortcut: a child
-  with no id yet cannot be any task's recorded parent, so it cannot be an
-  ancestor of anything and no cycle beyond self-parent is reachable — and
-  self-parent was already rejected by path.
+- Resolve the id property name and reject an **invalid or reserved** one
+  (`tasks::is_valid_id_property`) with an inline error naming it — the service
+  never silently rewrites the user's setting, matching `set_task_id_config`'s
+  write-strict posture. A property that is merely *disabled* is expected here and
+  is enabled in phase 2.
+- Build the validation index by **reading that property unconditionally — even
+  while generation is disabled** — then run the **ambiguity and cycle checks
+  against the pre-stamp state**.
+
+  Reading dormant ids is required for soundness, not an optimization. A
+  hand-authored Task document is explicitly part of this domain (`type: Task` is
+  the identity), so a vault with IDs *off* can still contain ids and parent links
+  that a user or a previous configuration wrote. The ordinary `list_tasks` walk
+  suppresses ids in that state, so an index built from it would be empty and the
+  cycle check would pass vacuously: with `A(id=a, parent-id=b)` and `B(id=b)`,
+  making A the parent of B would be accepted, and phase 3 would then write
+  `B.parent-id=a` — a genuine A↔B cycle created by a check that reported none
+  (Codex P2, PR #77). "Generation is off" never proves "no ids exist."
+
+  This is deliberately **not** the decoupling §2a rejects. That rejection is about
+  what `list_tasks` *surfaces* to the panel and MCP, which stays gated on the
+  enabled flag and is unchanged here. This is an internal read inside
+  `set_task_parent`, used only to validate one write.
+
+  With dormant ids read, the pre-stamp check is complete: every recorded edge is
+  visible, and a child that genuinely has no id cannot be any task's recorded
+  parent, so the only remaining self-reference is self-parent — already rejected
+  by path above.
 
 **Phase 2 — enable (idempotent, additive):** if IDs are off, enable them (a
 `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
@@ -520,7 +545,8 @@ moves from envisioned to shipped.
 block, flow, missing); the paired write and the paired clear; link quoting **and
 the vault-relative path form** (including two Lists holding the same stem, the §1
 ambiguity case); **the link-form switch — a wikilink for an ordinary path, and a
-percent-encoded markdown link for a List containing `#`, `|`, `[`, `]`, or `^`**;
+percent-encoded markdown link for a List containing `#`, `|`, `[`, `]`, or `^`,
+with the fallback's LABEL backslash-escaping `\`, `[`, `]` in the parent title**;
 `RESERVED_TASK_KEYS` filtering for both keys;
 `would_create_cycle` (self, direct, transitive, and a pre-existing on-disk cycle
 terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
@@ -538,7 +564,10 @@ parent links**; a parent whose id is ambiguous refused; a parent path outside th
 tasks root refused; a failed parent stamp leaving the child unwritten.
 **Phase separation (§2): a rejected self-parent and a rejected cycle each leave
 IDs still disabled and NO id stamped on either task** — the regression that
-proves validation precedes every side effect.
+proves validation precedes every side effect. **Dormant ids (§2): with IDs
+disabled but hand-authored `A(id=a, parent-id=b)` / `B(id=b)` on disk, making A
+the parent of B is REFUSED as a cycle** — the regression proving validation reads
+the id property even while generation is off.
 
 **Frontend (Vitest):** parent chip navigation; the picker sending a **path**
 (and working with no ids surfaced); picker disabling cycle-invalid options when
@@ -577,8 +606,11 @@ fully-editable ID settings.
 1. Core reads + `TaskItem`/`TaskDto` fields + reserved keys (additive, no UI).
 2. `hierarchy.rs`: index (omitting ambiguous ids), `ambiguous_ids`, bounded
    ancestors, cycle check.
-3. Service `set_task_parent`: **path → resolve/stamp the parent's id** → cycle
-   gate → paired write, plus id auto-enable; the `update_task` / `add_task` IPC
+3. Service `set_task_parent`, in the §2 phase order — **VALIDATE** (containment,
+   `is_task`, self-parent by path, id-property validity, then ambiguity + cycle
+   on an index built by reading the id property *unconditionally*) → **ENABLE**
+   ids → **WRITE** (stamp the parent, then the child's pair). No enable and no
+   stamp may precede the cycle gate. Then the `update_task` / `add_task` IPC
    surface (path-keyed) and the extended return.
 4. The §2a `set_task_id_config` lock (property name AND enabled flag).
 5. `useTaskHierarchy` + the Detail Parent row and path-sending picker.
