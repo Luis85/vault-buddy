@@ -61,6 +61,78 @@ fn write(root: &Path, rel: &str, content: &str) -> PathBuf {
 }
 
 #[test]
+fn resolve_parent_for_write_refuses_when_the_tasks_root_moved_mid_flight() {
+    // The post-lock re-check (design spec §2) already refused a
+    // task_id_enabled/property change committed between phase 1 and the
+    // lock; it did NOT compare `tasks_root()` — so a concurrent
+    // set_tasks_config moving the vault's tasksFolder in that same window
+    // passed the re-check, and phase 3 stamped/wrote under ctx.root, the
+    // STALE folder. Every later list_tasks/open_task resolves the NEW
+    // folder, so the hierarchy the user just created is invisible
+    // immediately. Constructed directly (rather than raced with a real
+    // thread) for a deterministic repro: hand `resolve_parent_for_write` a
+    // ctx captured from tasksFolder = "A", then mutate config.json to "B"
+    // before calling it — exactly what a set_tasks_config landing in the
+    // phase-1-to-lock window produces.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault_path) = fixture(dir.path(), "MyVault");
+    std::fs::write(
+        paths.config_json.as_ref().unwrap(),
+        format!(r#"{{ "vaults": {{ "{VAULT}": {{ "tasksFolder": "A" }} }} }}"#),
+    )
+    .unwrap();
+    let phase1_cfg = config_for(&paths, VAULT);
+    let root_a = tasks_root(&paths, VAULT);
+    let parent = write(
+        &root_a,
+        "p.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"P\"\n---\n",
+    );
+    let child = write(
+        &root_a,
+        "c.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"C\"\n---\n",
+    );
+
+    // The race: an (async) set_tasks_config commits a DIFFERENT tasks
+    // folder before the lock's re-check runs.
+    std::fs::write(
+        paths.config_json.as_ref().unwrap(),
+        format!(r#"{{ "vaults": {{ "{VAULT}": {{ "tasksFolder": "B" }} }} }}"#),
+    )
+    .unwrap();
+
+    let ctx = ParentWriteCtx {
+        paths: &paths,
+        vault_id: VAULT,
+        vault_path: &vault_path,
+        root: &root_a,
+        prop: "task-id",
+        phase1_cfg: &phase1_cfg,
+    };
+    // Matched manually rather than `.unwrap_err()`: `ResolvedParent` (the Ok
+    // payload) derives no `Debug`, and adding one purely for this assertion
+    // would be a production-code change unrelated to the bug being fixed.
+    let err = match resolve_parent_for_write(&ctx, &parent, &child, || Ok(false), |_| Ok(())) {
+        Err(e) => e,
+        Ok(_) => panic!("expected an error when the tasks root moved mid-flight"),
+    };
+    assert!(err.contains("changed"), "got {err}");
+
+    // Nothing was written under the stale root...
+    assert!(!std::fs::read_to_string(&parent)
+        .unwrap()
+        .contains("task-id:"));
+    assert!(!std::fs::read_to_string(&child)
+        .unwrap()
+        .contains("parent-id:"));
+    // ...the new folder was never touched either (phase 3 never ran)...
+    assert!(!vault_path.join("B").exists());
+    // ...and the doomed attempt never flipped Task IDs on for the vault.
+    assert!(!config_for(&paths, VAULT).task_id_enabled);
+}
+
+#[test]
 fn rejects_a_self_parent_without_enabling_ids_or_stamping() {
     // Phase separation: validation precedes EVERY side effect.
     let dir = tempfile::tempdir().unwrap();

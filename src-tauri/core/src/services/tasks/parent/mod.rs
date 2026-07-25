@@ -224,15 +224,25 @@ pub(super) fn resolve_parent_for_write<T>(
     let _guard = capture_config::config_write_lock();
 
     // Phase 1 read the config BEFORE this lock existed, so a settings save may
-    // have committed a different property in between; writing under the stale
-    // one would orphan the hierarchy immediately. Re-read and refuse when it
-    // actually changed (design spec §2).
+    // have committed a different property — OR a different tasks folder — in
+    // between; writing under either stale value would orphan the hierarchy
+    // immediately (an id under a property nothing reads, or the whole pair
+    // under a root list_tasks/open_task no longer walk — set_tasks_config
+    // takes this same config_write_lock() around its own read-modify-write,
+    // see task_commands.rs, so it is exactly as reachable in this window as
+    // a Task-ID settings save). Re-read and refuse when EITHER actually
+    // changed (design spec §2). `tasks_root()` is compared as the raw
+    // configured string (already defaulted to "Tasks"), not a re-resolved
+    // path — the point is to detect the CONFIG VALUE moving, not to
+    // re-derive `ctx.root` a second way that could itself drift from how
+    // phase 1 derived it.
     let fresh = capture_config::vault_config(&app_config(ctx.paths), ctx.vault_id);
     if fresh.task_id_enabled != ctx.phase1_cfg.task_id_enabled
         || fresh.task_id_property_name() != ctx.prop
+        || fresh.tasks_root() != ctx.phase1_cfg.tasks_root()
     {
         return Err(
-            "The vault's Task ID settings changed while this was in flight. Try again.".to_string(),
+            "The vault's Task settings changed while this was in flight. Try again.".to_string(),
         );
     }
     // UNCONDITIONAL — not only when the config changed. Two parent assignments
