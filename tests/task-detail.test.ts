@@ -32,7 +32,7 @@ describe("useTaskDetail", () => {
   });
 
   it("remove deletes then navigates back", async () => {
-    mockIPC((cmd) => (cmd === "delete_task" ? undefined : undefined));
+    mockIPC(() => undefined);
     const t = ref(task());
     const { remove } = useTaskDetail(t);
     const { useVaultsStore } = await import("../src/stores/vaults");
@@ -94,9 +94,14 @@ describe("useTaskDetail", () => {
 
   it("save surfaces an error and releases the guard", async () => {
     mockIPC((cmd) => { if (cmd === "update_task") throw new Error("boom"); return undefined; });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
     const { save, busy } = useTaskDetail(ref(task()));
     expect(await save({ description: "x" })).toBe(false);
     expect(busy.value).toBe(false);
+    // The user-facing error toast is the point of the catch — assert it fired, so
+    // dropping notifications.error can't slip past green (whole-branch review, PR #76).
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("boom"));
   });
 
   it("save names the list when a move fails after the fields already saved", async () => {
@@ -118,9 +123,12 @@ describe("useTaskDetail", () => {
 
   it("remove surfaces an error and releases the guard", async () => {
     mockIPC((cmd) => { if (cmd === "delete_task") throw new Error("nope"); return undefined; });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
     const { remove, busy } = useTaskDetail(ref(task()));
     await remove();
     expect(busy.value).toBe(false);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("nope"));
   });
 
   it("duplicate notifies with an Open action that launches the new copy", async () => {
@@ -142,9 +150,12 @@ describe("useTaskDetail", () => {
 
   it("duplicate surfaces an error and releases the guard", async () => {
     mockIPC((cmd) => { if (cmd === "duplicate_task") throw new Error("dupe fail"); return undefined; });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
     const { duplicate, busy } = useTaskDetail(ref(task()));
     await duplicate();
     expect(busy.value).toBe(false);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("dupe fail"));
   });
 
   it("openInObsidian launches the task and closes the panel", async () => {
@@ -157,7 +168,11 @@ describe("useTaskDetail", () => {
 
   it("openInObsidian surfaces a launch error without throwing", async () => {
     mockIPC((cmd) => { if (cmd === "open_task") throw new Error("launch fail"); return undefined; });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
     await expect(useTaskDetail(ref(task())).openInObsidian()).resolves.toBeUndefined();
+    // Non-throwing is necessary but not sufficient — the failure must reach the user.
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("launch fail"));
   });
 });
 
