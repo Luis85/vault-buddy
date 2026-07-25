@@ -118,8 +118,17 @@ pub fn set_task_id_config(
     };
     // Compare RESOLVED names, not raw Options: `None` and `Some("task-id")`
     // name the same property, and a save that merely spells the default
-    // explicitly must not read as a re-point.
-    let property_changing = value.task_id_property_name() != resolved_new;
+    // explicitly must not read as a re-point. CASE-INSENSITIVELY, too:
+    // frontmatter_scalar_ci's id lookup/stamp is already case-insensitive and
+    // preserves the on-disk casing, so "Task-ID" -> "task-id" resolves every
+    // existing parent-id reference exactly as before — a spelling-only edit
+    // can never orphan a link, so it must not trip this guard. is_valid_id_
+    // property deliberately ACCEPTS uppercase non-reserved names (its own
+    // reserved-key check is already case-folded), so this is the one
+    // remaining case-sensitive comparison that needed to fold too.
+    let property_changing = !value
+        .task_id_property_name()
+        .eq_ignore_ascii_case(&resolved_new);
     let disabling = value.task_id_enabled && !enabled;
     // Only a PROPERTY CHANGE or a DISABLE can orphan existing links. ENABLING
     // under an unchanged property is always safe — it makes recorded parent-id
@@ -551,6 +560,109 @@ mod tests {
         assert!(
             set_task_id_config(&paths, VAULT_ID, true, None).is_ok(),
             "Some(\"task-id\") -> None resolves to the same property and must not refuse"
+        );
+    }
+
+    // Fix (task-7-fixb): the guard compared resolved property names
+    // CASE-SENSITIVELY, so a vault storing "Task-ID" saving "task-id" (or the
+    // reverse) was classified as a re-point and refused even though nothing
+    // it points at changes — id lookup/stamping is already case-insensitive
+    // (frontmatter_scalar_ci) and preserves the on-disk casing, so a
+    // spelling-only edit can never orphan a parent-id reference. Both
+    // directions are exercised on a vault WITH parent links (the guard is a
+    // no-op otherwise, same vacuity note as resolved_name_treats_*).
+    #[test]
+    fn a_casing_only_property_change_uppercase_to_lowercase_is_allowed_with_parent_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            format!(
+                r#"{{ "vaults": {{ "{VAULT_ID}": {{ "taskIdEnabled": true, "taskIdProperty": "Task-ID" }} }} }}"#
+            ),
+        )
+        .unwrap();
+        let root = tasks_root(&vault);
+        std::fs::create_dir_all(&root).unwrap();
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
+        );
+        assert!(
+            set_task_id_config(&paths, VAULT_ID, true, Some("task-id")).is_ok(),
+            "\"Task-ID\" -> \"task-id\" is a spelling-only change and must not refuse"
+        );
+    }
+
+    #[test]
+    fn a_casing_only_property_change_lowercase_to_uppercase_is_allowed_with_parent_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            format!(
+                r#"{{ "vaults": {{ "{VAULT_ID}": {{ "taskIdEnabled": true, "taskIdProperty": "task-id" }} }} }}"#
+            ),
+        )
+        .unwrap();
+        let root = tasks_root(&vault);
+        std::fs::create_dir_all(&root).unwrap();
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
+        );
+        assert!(
+            set_task_id_config(&paths, VAULT_ID, true, Some("Task-ID")).is_ok(),
+            "\"task-id\" -> \"Task-ID\" is a spelling-only change and must not refuse"
+        );
+    }
+
+    // The complement: a GENUINE re-point (a different property, not just a
+    // different casing of the same one) must still be refused with parent
+    // links present — the fix must only fold case, never widen "unchanged"
+    // to cover an actual property swap. (enabling_ids_under_an_unchanged_
+    // property_is_allowed_with_parent_links above already pins the
+    // default-property case; this pins it again explicitly under a
+    // non-default stored property so the two tests can't quietly rot into
+    // covering the same path.)
+    #[test]
+    fn a_genuine_property_re_point_is_still_refused_with_parent_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            format!(
+                r#"{{ "vaults": {{ "{VAULT_ID}": {{ "taskIdEnabled": true, "taskIdProperty": "task-id" }} }} }}"#
+            ),
+        )
+        .unwrap();
+        let root = tasks_root(&vault);
+        std::fs::create_dir_all(&root).unwrap();
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
+        );
+        assert!(
+            set_task_id_config(&paths, VAULT_ID, true, Some("uid")).is_err(),
+            "\"task-id\" -> \"uid\" is a real re-point and must still be refused"
         );
     }
 }
