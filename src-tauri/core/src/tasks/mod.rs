@@ -9,6 +9,7 @@ mod create;
 mod description;
 mod disk;
 mod doc;
+mod hierarchy;
 mod id;
 mod list;
 mod lists;
@@ -50,6 +51,7 @@ const RESERVED_TASK_KEYS: &[&str] = &[
 pub use create::{create_task, render_task, task_basename};
 pub use disk::{backfill_task_id, set_task_status, update_task_fields};
 pub use doc::is_task;
+pub use hierarchy::{ambiguous_ids, ancestors, parent_index, would_create_cycle, ParentIndex};
 pub use id::{id_property_for_generation, is_valid_id_property, new_task_id};
 pub use list::{list_tasks, list_tasks_structural, priority_rank, TaskItem};
 pub use lists::{
