@@ -227,7 +227,8 @@ function onDeleteKeydown(e: KeyboardEvent) {
           <button
             type="button"
             data-testid="task-detail-delete-cancel"
-            class="cursor-pointer rounded-control px-2 py-1 text-xs text-fg-muted hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            :disabled="busy"
+            class="cursor-pointer rounded-control px-2 py-1 text-xs text-fg-muted hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
             @click="confirming = false"
           >
             Cancel

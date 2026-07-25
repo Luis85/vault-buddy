@@ -694,6 +694,27 @@ returns the same path-free copy as `start_capture_blocking`.
 
 ## 4. Frontend defects & races
 
+### GAP-83 · Low · An off-screen delete completion doesn't refresh an already-mounted Tasks view
+`src/composables/useTaskDetail.ts` (`remove`) + `src/components/Tasks.vue`.
+When `delete_task` is SLOW (a network-backed vault) and the user clicks the
+header Back button before it completes, the Tasks view remounts and reloads
+WITH the task still present (the unlink hasn't happened yet). `remove()`'s
+completion guard correctly suppresses a second navigation (the round-24 fix, so
+it doesn't over-advance to the vault list), but it performs no reload of the
+now-mounted Tasks list, so the deleted row lingers until the next reload (reopen
+the panel, switch grouping, a section-menu op, or re-enter the view). **Why Low
+/ self-healing:** the file IS deleted (no data risk); only the UI row is briefly
+stale, and clicking it yields a harmless "couldn't open" error toast; the window
+is a sub-second slow-vault race the user has to hit by Back-ing mid-delete.
+**Why not fixed now:** a robust fix is cross-cutting — either disable the header
+Back while a detail write is in flight (risks blocking navigation if a write
+stalls, and couples `ActionPanel` to the detail's busy state) or add a store
+reload-signal the Tasks view watches (per-vault only; the aggregate fan-out
+reload is a separate path). Given the branch's whole-branch review cleared it as
+ready-to-merge, this is tracked as the future refinement rather than bolted in
+late. Codex raised it (P2, PR #76) as the follow-on to the round-24 back-race
+fix.
+
 ### GAP-82 · Low · Task Detail (like every panel sub-view) loses unsaved edits on panel auto-hide + reopen
 `src/components/TaskDetail.vue` + the `panel-shown` refresh
 (`src/stores/vaults.ts` `refresh()` → `showList()`). Editing a field in the

@@ -450,6 +450,34 @@ describe("TaskDetail.vue", () => {
     expect(calls).not.toContain("delete_task");
   });
 
+  it("disables the delete Cancel button while the delete is in flight", async () => {
+    // A slow delete: Cancel must NOT stay clickable — hiding the confirm wouldn't
+    // cancel the pending unlink (the delete still completes), so the UI must not
+    // present a Cancel that does nothing (Codex P2, PR #76).
+    let resolveDelete: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "delete_task")
+        return new Promise<void>((r) => {
+          resolveDelete = () => r();
+        });
+      return undefined;
+    });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    useVaultsStore().view = "taskDetail";
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click"); // open confirm
+    await wrapper.get('[data-testid="task-detail-delete-confirm"]').trigger("click"); // slow delete starts
+    await new Promise((r) => setTimeout(r));
+    expect((wrapper.find('[data-testid="task-detail-delete-cancel"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect((wrapper.find('[data-testid="task-detail-delete-confirm"]').element as HTMLButtonElement).disabled).toBe(true);
+    resolveDelete?.();
+    await new Promise((r) => setTimeout(r));
+  });
+
   it("Escape closes the delete confirm without deleting", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

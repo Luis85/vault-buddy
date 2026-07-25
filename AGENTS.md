@@ -1833,8 +1833,10 @@ Browse last), `openRecordings`
 opens the read-only list, the vault-row Tasks button `openTasks` opens the
 per-vault todo view, a plain click on a task's title `openTaskDetail`s the
 `taskDetail` view (parent: `tasks` — it keeps `tasksVaultId` so `back()`
-returns to the task list, and `taskDetailTask` carries the row across the
-`panel-shown` hide/show) while Ctrl/⌘-click opens the task in Obsidian instead,
+returns to the task list; `taskDetailTask` holds the row for the view across
+in-panel navigation, but a `panel-shown` refresh runs `showList()` which
+resets to the list and clears it — the detail view does NOT survive a panel
+hide→show, GAP-82) while Ctrl/⌘-click opens the task in Obsidian instead,
 `importPicker` (parent: the list) is the import vault
 chooser (drop mode when the queue holds a dropped file; vault-first mode on
 an empty queue — the buddy-menu entry — where picking a vault opens the OS
