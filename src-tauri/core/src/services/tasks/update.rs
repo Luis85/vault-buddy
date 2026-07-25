@@ -376,6 +376,84 @@ mod tests {
         assert!(!after.contains("parent:"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_parent_stamp_failure_after_a_committed_field_write_reports_fields_saved() {
+        // Review finding 2: `fields_saved` (computed at update.rs:103, right
+        // above) had no test driving a REAL step-3 I/O failure after a REAL
+        // step-2 commit — `parent_write_error_names_the_fields_saved_state`
+        // below only unit-tests the formatting helper directly, so
+        // mutating `let fields_saved = !updates.is_empty();` to
+        // `let fields_saved = false;` left every one of the 615 core tests
+        // green (this file's own report documents that mutation run).
+        //
+        // Constructed by making the PARENT's own list folder read+execute
+        // only: phase 1 (`validate_parent_assignment`) only ever READS —
+        // canonicalize, `list_tasks_structural`'s walk, the unassignable
+        // forecast — so it passes. The CHILD lives directly in the
+        // (writable) tasks root, so step 2's ordinary field write (the
+        // title) commits. Only THEN does phase 3a's `ensure_id` try to
+        // stamp the parent — which must CREATE a temp file beside it via
+        // `write_atomic_replacing` — and that fails with EACCES, so the
+        // combined call reports a partial success instead of a clean one.
+        //
+        // Root bypasses DAC (this sandbox runs every test as root), so a
+        // write-probe into the locked directory decides whether to
+        // self-skip — the loud, restore-before-assert idiom
+        // `services/tasks/id_config.rs`'s chmod tests use
+        // (id_config.rs:355-382), adapted to probe a WRITE (what this test
+        // denies) rather than a read, matching how `tasks/lists/relocate.rs`
+        // varies the very same idiom for its own write-denial tests. CI's
+        // rust-core job runs unprivileged and exercises the real assertions
+        // below; independently verified for this task by re-running under
+        // `setpriv --reuid=65534 --regid=65534 --clear-groups` (see the task
+        // report for that output).
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["a.md"]);
+        let root = tasks_root(&paths, &vault);
+        let locked_dir = root.join("Locked");
+        std::fs::create_dir_all(&locked_dir).unwrap();
+        let parent = locked_dir.join("p.md");
+        std::fs::write(&parent, "---\ntype: Task\nstatus: new\ntitle: \"P\"\n---\n").unwrap();
+        std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let probe = locked_dir.join(".probe");
+        let bypassed = std::fs::write(&probe, b"x").is_ok();
+        if bypassed {
+            let _ = std::fs::remove_file(&probe);
+            std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!(
+                "SKIPPED a_parent_stamp_failure_after_a_committed_field_write_reports_fields_saved: \
+                 running as root, chmod 555 does not deny directory writes here"
+            );
+            return;
+        }
+
+        let child = root.join("a.md");
+        let quoted = crate::capture_note::yaml_quote("Renamed");
+        let updates: Vec<(&str, Option<&str>)> = vec![("title", Some(quoted.as_str()))];
+        let outcome = update_task(&paths, &vault, &child, &updates, ParentOp::Set(parent));
+
+        // Restore before asserting so the tempdir can clean up either way.
+        std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let err = outcome
+            .err()
+            .expect("the parent stamp must fail under a read-only list folder");
+        assert!(
+            err.starts_with("Saved fields, but couldn't set the parent:"),
+            "got {err}"
+        );
+        assert!(err.contains("Permission denied"), "got {err}");
+        assert!(
+            std::fs::read_to_string(&child)
+                .unwrap()
+                .contains("title: \"Renamed\""),
+            "the committed field write must survive the later parent failure"
+        );
+    }
+
     #[test]
     fn a_vanished_parent_refuses_at_validation_and_never_claims_fields_saved() {
         // A parent that vanished between load and write fails phase 1
