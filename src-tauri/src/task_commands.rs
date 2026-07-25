@@ -153,11 +153,25 @@ fn resolve_archived_lists(existing: Vec<String>, incoming: Option<Vec<String>>) 
         .collect()
 }
 
-/// Persist the vault's Task ID settings (enable + frontmatter property),
-/// preserving every other per-vault field via the same read-modify-write
-/// under ConfigWriteLock. Write-strict on the property: empty → the default
-/// (stored as None); an invalid or reserved name is an inline error. Its own
-/// command — the independent field-save pattern of set_task_lists_config.
+/// Persist the vault's Task ID settings (enable + frontmatter property).
+/// Validation, the parent-links guard, and the read-modify-write itself all
+/// live in `services::set_task_id_config` (core) now — see its doc comment
+/// and design spec §2a. That move is what lets the guard share ONE lock
+/// (`capture_config::config_write_lock()`) with `services::set_task_parent`
+/// across both the scan and the commit; the shell's own `ConfigWriteLock`
+/// (below) is a different mutex and can't stand in for it.
+///
+/// This command still takes `find_vault` and the Tauri `ConfigWriteLock` —
+/// the latter serializes THIS command against its sibling settings commands
+/// (set_tasks_config/set_task_lists_config/set_task_template_config), which
+/// core's lock alone does not (they never take it). The two locks are always
+/// taken in the SAME order — this shell lock first, then core's lock inside
+/// the delegated call — and no other path in the codebase takes core's lock
+/// and then reaches for this one, so the pair cannot deadlock. The body stays
+/// synchronous inside this `async fn` (a `MutexGuard` is `!Send` and must
+/// never be held across an `.await`): `services::set_task_id_config` is
+/// itself a plain synchronous call, so both guards are acquired and released
+/// before this function returns, with no `.await` in between.
 ///
 /// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
 #[tauri::command]
@@ -168,32 +182,8 @@ pub async fn set_task_id_config(
     property: Option<String>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
-    // Validate + apply the property ONLY when enabling. When disabling, the
-    // property is moot (no id is written), so an invalid draft must not block
-    // turning IDs off — and the property field is hidden when off, so the user
-    // couldn't fix it. Some(_) = set the property; None = preserve the stored
-    // one. Validation stays before the lock (fail-fast; never hold it across a
-    // doomed write), matching set_tasks_config/set_task_lists_config.
-    let property_to_set: Option<Option<String>> = if enabled {
-        Some(match property.as_deref().map(str::trim) {
-            None | Some("") => None,
-            Some(p) if tasks::is_valid_id_property(p) => Some(p.to_string()),
-            Some(p) => {
-                return Err(format!(
-                    "Invalid ID property name (letters, digits, - and _ only; not a reserved task field): {p}"
-                ))
-            }
-        })
-    } else {
-        None
-    };
     let _guard = lock_ignoring_poison(&lock.0);
-    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
-    value.task_id_enabled = enabled;
-    if let Some(prop) = property_to_set {
-        value.task_id_property = prop;
-    }
-    capture_config::update_vault_config(&id, value)
+    services::set_task_id_config(&ServicePaths::real(), &id, enabled, property.as_deref())
 }
 
 /// Persist the vault's per-vault task template (extra frontmatter + body).
