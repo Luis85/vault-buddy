@@ -117,7 +117,7 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
   ancestors, cycle checks — reads only this. Because a Task ID never changes once
   stamped, the hierarchy survives retitling, list moves, reordering, and
   duplication untouched.
-- **`parent` is the Obsidian affordance**: a wikilink to the parent's file so the
+- **`parent` is the Obsidian affordance**: a link to the parent's file so the
   relationship is clickable inside Obsidian and resolvable by Dataview. It is
   written as the parent's **vault-relative path without the `.md` extension** —
   `[[Tasks/Work/2026-07-04-prepare-release-cutover]]` — not the bare filename
@@ -125,13 +125,32 @@ parent: "[[2026-07-04-prepare-release-cutover]]"
   two Lists can legitimately hold the same stem; a short-form `[[<stem>]]` would
   then be ambiguous and Obsidian could resolve it to the wrong Task, which is
   precisely the navigation this field exists to make reliable (Codex P2, PR #77).
-  The path form is unambiguous by construction. It is also — critically —
-  **always YAML-quoted**: unquoted, `parent: [[foo]]` parses as a nested flow
-  *sequence*, not a string. It is emitted through the existing `yaml_quote`,
-  exactly as the document-import frontmatter does for paths. The path is built
-  against the **canonical** vault path, the same way `open_task` derives its
-  vault-relative URI parameter (a lexical path would break `strip_prefix` against
-  the canonical paths `list_tasks` hands out, notably Windows' `\\?\` form).
+  The path form is unambiguous by construction. The path is built against the
+  **canonical** vault path, the same way `open_task` derives its vault-relative
+  URI parameter (a lexical path would break `strip_prefix` against the canonical
+  paths `list_tasks` hands out, notably Windows' `\\?\` form).
+- **The link form adapts to the path, because wikilinks cannot express every
+  legal List name.** A List is a folder, and `is_valid_list_name` rejects only
+  empty / `/` / `\` / a leading dot — while a hand-created folder is a valid List
+  and skips that check entirely. So `Project#1` or `A|B` are legitimate Lists,
+  and inside `[[…]]` a `#` starts a heading target, `|` starts an alias, and `]]`
+  terminates the link — silently pointing click-through at the wrong or a
+  nonexistent note (Codex P2, PR #77). Wikilinks have no escape mechanism for
+  these, so:
+  - **Default — wikilink**: `[[<vault-relative path>]]`, used whenever the path
+    contains none of ``# | [ ] ^``.
+  - **Fallback — markdown link**: `[<parent title>](<percent-encoded path>.md)`
+    when it does. Obsidian resolves markdown links natively and percent-encoding
+    represents every character unambiguously; the app already percent-encodes
+    every `obsidian://` parameter in `uri.rs`, so this reuses an established
+    convention rather than inventing one.
+
+  Both forms are — critically — **always YAML-quoted**: unquoted, `parent:
+  [[foo]]` parses as a nested flow *sequence*, not a string. Both are emitted
+  through the existing `yaml_quote`, exactly as the document-import frontmatter
+  does for paths. Task *filenames* need no such care: `slugify` reduces them to
+  ASCII alphanumerics and hyphens, so only the List folder segments can carry
+  metacharacters.
 - **Drift is benign by construction.** VB keeps the wikilink correct on the moves
   it performs, but a manual rename in Obsidian (or a rare collision-suffixed
   move) can stale it. Because `parent-id` is authoritative, a stale wikilink
@@ -179,34 +198,60 @@ reflect it without a reload (the `update_task` precedent).
 
 The hierarchy is keyed on Task IDs, so a vault with IDs off cannot express it.
 Rather than blocking the user behind a settings trip, the first parent-set in a
-vault turns IDs on:
+vault turns IDs on.
 
-- `services::set_task_parent(root, child_path, parent_path, cfg)` resolves the id
-  property through the existing gate
+**Ordering: every validation precedes every side effect.** `set_task_parent(root,
+child_path, parent_path, cfg)` runs in three strictly separated phases. The
+earlier draft of this spec stamped ids *before* the cycle check, so a rejected
+self-parent could still have enabled IDs and written a stamp — contradicting this
+spec's own guarantee that a cycle rejection writes nothing (Codex P2, PR #77).
+
+**Phase 1 — validate (no writes, nothing mutated):**
+
+- Canonicalize both paths and require containment inside the vault's tasks root;
+  both must be `type: Task` documents. A vanished or escaping path fails here.
+- Refuse a **self-parent** by comparing the two canonical *paths* — no ids
+  required, so this rejection is available before anything is stamped.
+- Resolve the id property through
   `tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())`.
-- When that yields `None` **because the feature is off**, the service enables it
-  (a `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
-  `set_task_id_config` pattern) and proceeds with the vault's configured — or
-  defaulted `task-id` — property name.
-- When it yields `None` because the configured property is **invalid or
-  reserved** (a hand-edited config), the service does **not** silently rewrite
-  the user's setting: it returns an inline error naming the property, matching
-  `set_task_id_config`'s write-strict posture.
+  When it yields `None` because the configured property is **invalid or reserved**
+  (a hand-edited config), return an inline error naming it — the service never
+  silently rewrites the user's setting, matching `set_task_id_config`'s
+  write-strict posture. (`None` merely because the feature is *off* is expected
+  and handled in phase 2.)
+- Build the index from one `list_tasks` walk and run the **ambiguity and cycle
+  checks against the pre-stamp state**. This is complete, not a shortcut: a child
+  with no id yet cannot be any task's recorded parent, so it cannot be an
+  ancestor of anything and no cycle beyond self-parent is reachable — and
+  self-parent was already rejected by path.
 
-Enabling is surfaced honestly: the Detail surface notes that setting a parent
-turned on Task IDs for the vault, so the config change is never silent.
+**Phase 2 — enable (idempotent, additive):** if IDs are off, enable them (a
+`ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
+`set_task_id_config` pattern) using the vault's configured — or defaulted
+`task-id` — property name. Enabling is surfaced honestly: the Detail surface
+notes that setting a parent turned Task IDs on for the vault, so the config
+change is never silent.
 
-Both endpoints are then guaranteed to have ids, both paths containment-gated
-like every other task write:
+**Phase 3 — write:**
 
 1. **The parent** — `update_task_fields(root, parent_path, &[], Some(prop))`.
    The existing `ensure_id` stamps only when the property has no usable value and
    **returns the effective id**; with an empty `updates` slice and an id already
    present it short-circuits without a write. This is the id that goes into the
-   child. The parent's path is also what the wikilink is derived from, so both
-   halves of the pair come from this one resolution.
+   child, and the parent's canonical path is what the link is derived from, so
+   both halves of the pair come from this one resolution.
 2. **The child** — the same call that writes its `parent-id`/`parent` passes
    `ensure_id`, so a legacy child picks up its own id in the same write.
+
+**On transactionality.** Phases 2–3 are three separate writes and this app has no
+journal, so they are not atomic; the ordering is chosen instead so that **every
+partial state is benign and self-correcting**. Enabling IDs and stamping an id
+are both additive and idempotent — exactly what any later edit would do anyway —
+and the one meaningful write, the child's pair, comes last. A failure or crash
+mid-sequence can therefore leave an enabled flag and/or a stamped parent id, but
+it can **never** leave a `parent-id` that no task answers to. Claiming true
+transactionality here would be dishonest; guaranteeing no dangling reference is
+both achievable and the property that actually matters.
 
 ### 2a. The ID configuration is locked while hierarchies exist
 
@@ -317,9 +362,10 @@ Additive, no new read command:
 - **`update_task`'s `TaskPatchDto`** gains `parent_path: Option<String>` +
   `clear_parent: bool`, following the established `due`/`scheduled`/`description`
   set-or-clear shape — but keyed on the parent's **path**, for the bootstrap
-  reason in §2. The command owns everything derived: it resolves the path to an
-  authoritative id (stamping if needed), composes the wikilink, and runs the
-  cycle check. The frontend never composes a wikilink and never needs an id.
+  reason in §2. The command owns everything derived: it validates, resolves the
+  path to an authoritative id (stamping if needed), and composes the link in
+  whichever form that path requires (§1). The frontend never composes a link and
+  never needs an id.
 - **`update_task`'s return** extends from the task's own id to also carry the
   **effective `parentId`/`parentLink`** actually written, so the detail row
   reflects a freshly-stamped parent without a reload — the same reason it already
@@ -408,14 +454,17 @@ already sorted.
 
 ```
 core/src/tasks/
-  hierarchy.rs   NEW  parent_index / ancestors / would_create_cycle (pure)
+  hierarchy.rs   NEW  parent_index / ambiguous_ids / ancestors /
+                      would_create_cycle (pure)
   parse.rs       +    lenient parent-id / parent readers
   list.rs        +    parent_id / parent_link on TaskItem
   mod.rs         +    parent-id + parent in RESERVED_TASK_KEYS
   create.rs      +    render_task writes an optional parent pair
 core/src/services/tasks/
-  mod.rs         +    set_task_parent (path resolve -> stamp -> cycle gate ->
-                      paired write; id auto-enable)
+  mod.rs         +    set_task_parent, 3 phases: VALIDATE (containment, is_task,
+                      self-parent by path, id-property, ambiguity + cycle on the
+                      pre-stamp index) -> ENABLE ids -> WRITE (stamp parent,
+                      then the child's pair). No side effect before validation.
                  +    parent_path on add_task; parentId/parentLink on TaskDto
                  +    set_task_id_config lock: refuse ANY id-config change
                       (property name or enabled flag) while any task carries
@@ -444,7 +493,9 @@ moves from envisioned to shipped.
 
 ## Error handling
 
-- A cycle-creating assignment → inline error naming the conflict; nothing written.
+- A cycle-creating assignment (including self-parent, caught by path) → inline
+  error naming the conflict; **nothing written and no config touched**, since all
+  validation runs in phase 1 before any side effect (§2).
 - An invalid/reserved configured id property → inline error naming the property;
   IDs are not silently re-pointed and no parent is written.
 - An **ID-configuration change** while parent links exist — the property name or
@@ -466,9 +517,11 @@ moves from envisioned to shipped.
 ## Testing
 
 **Core (Rust, Linux):** lenient reads of both keys (quoted, unquoted, empty,
-block, flow, missing); the paired write and the paired clear; wikilink quoting
-**and the vault-relative path form** (including two Lists holding the same stem,
-the §1 ambiguity case); `RESERVED_TASK_KEYS` filtering for both keys;
+block, flow, missing); the paired write and the paired clear; link quoting **and
+the vault-relative path form** (including two Lists holding the same stem, the §1
+ambiguity case); **the link-form switch — a wikilink for an ordinary path, and a
+percent-encoded markdown link for a List containing `#`, `|`, `[`, `]`, or `^`**;
+`RESERVED_TASK_KEYS` filtering for both keys;
 `would_create_cycle` (self, direct, transitive, and a pre-existing on-disk cycle
 terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
 unresolvable ids; **`ambiguous_ids` detecting a duplicated own-id, `parent_index`
@@ -483,6 +536,9 @@ error path; **the ID-configuration lock while parent links exist — refusing BO
 a property re-point AND a disable — and both still allowed in a vault with no
 parent links**; a parent whose id is ambiguous refused; a parent path outside the
 tasks root refused; a failed parent stamp leaving the child unwritten.
+**Phase separation (§2): a rejected self-parent and a rejected cycle each leave
+IDs still disabled and NO id stamped on either task** — the regression that
+proves validation precedes every side effect.
 
 **Frontend (Vitest):** parent chip navigation; the picker sending a **path**
 (and working with no ids surfaced); picker disabling cycle-invalid options when
