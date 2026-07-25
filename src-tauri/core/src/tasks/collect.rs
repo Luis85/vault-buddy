@@ -49,7 +49,19 @@ pub(super) fn collect_task_file(
     if !is_task(&content) {
         return;
     }
-    let stem = name.strip_suffix(".md").unwrap_or(name).to_string();
+    // `Path::file_stem` splits on the last `.` structurally, so it strips
+    // any-case `.md`/`.MD`/`.Md` alike — unlike the case-SENSITIVE
+    // `strip_suffix(".md")` this replaced, which left a mixed-case
+    // extension in the fallback title even though `is_markdown_name` above
+    // already treats the file as a task. Matches every sibling file_stem
+    // fallback in this domain (`duplicate_task` in structural.rs, the
+    // list-move stem preserve in lists/relocate.rs, the announce-title
+    // fallback in services/tasks/mod.rs, and `read_title` in
+    // services/tasks/parent/mod.rs) so one file gets one title everywhere.
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string());
     let title = note_field(&content, "title").unwrap_or(stem);
     let status = scalar_field(&content, "status").unwrap_or_else(|| "new".to_string());
     // Archived tasks are removed from the VIEW — never surfaced by
@@ -122,6 +134,28 @@ mod tests {
     fn write(root: &Path, name: &str, body: &str) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join(name), body).unwrap();
+    }
+
+    #[test]
+    fn title_fallback_strips_a_mixed_case_md_extension() {
+        // `is_markdown_name` (doc.rs) was made case-insensitive so a
+        // hand-authored "Upper.MD" is walked as a task at all (AGENTS.md:
+        // "notes are any-case `.md`", the same rule search.rs's own note
+        // scan applies) — but this file's TITLE FALLBACK still stripped
+        // ".md" case-sensitively, so an untitled "Upper.MD" surfaced as
+        // "Upper.MD" instead of "Upper". That disagrees with every sibling
+        // file_stem-based fallback in this domain that already strips
+        // any-case extensions by construction: `duplicate_task`
+        // (structural.rs), the list-move stem preserve (lists/relocate.rs),
+        // the announce-title fallback (services/tasks/mod.rs), and the
+        // parent-link label fallback (`read_title`,
+        // services/tasks/parent/mod.rs) — so the same file was labelled two
+        // different ways in two different places.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "Upper.MD", "---\ntype: Task\nstatus: new\n---\n");
+        let items = list_tasks(root, None);
+        assert_eq!(items[0].title, "Upper");
     }
 
     #[test]
