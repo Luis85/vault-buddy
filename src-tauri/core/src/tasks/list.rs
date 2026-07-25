@@ -533,14 +533,25 @@ mod tests {
             std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
             return;
         }
+        // BOTH scans run while `b.md` is still unreadable — restoring first would
+        // let the view read it, making the "degrades gracefully" assertion pass
+        // for the wrong reason (its sibling directory test failed in CI exactly
+        // this way).
         let out = list_tasks_structural(root, None);
+        let view: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         // Restore before asserting so the tempdir can clean up either way.
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
             out.is_err(),
             "an unreadable task must fail the structural scan"
         );
-        assert!(!list_tasks(root, None).is_empty()); // the VIEW still degrades gracefully
+        // The VIEW degrades gracefully: it skips what it cannot read and returns
+        // the rest. Asserting the exact set (not just non-empty) is what makes
+        // this a real test of the lenient path.
+        assert_eq!(view, vec!["A"], "the VIEW skips only the unreadable task");
     }
 
     // uid-independent counterpart to structural_scan_errors_on_an_unreadable_task
@@ -627,17 +638,20 @@ mod tests {
             std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
             return;
         }
+        // BOTH scans must run while `Sub` is still unreadable — restoring first
+        // would let the view walk into it and see "Hidden", which is exactly how
+        // this test failed in CI (it skips under root, so only CI runs it).
         let structural = list_tasks_structural(root, None);
+        let view: Vec<String> = list_tasks(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
         // Restore before asserting so the tempdir can clean up either way.
         std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(
             structural.is_err(),
             "an unreadable subdirectory must fail the structural scan"
         );
-        let view: Vec<String> = list_tasks(root, None)
-            .into_iter()
-            .map(|t| t.title)
-            .collect();
         assert_eq!(
             view,
             vec!["Top"],
