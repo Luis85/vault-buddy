@@ -22,6 +22,23 @@ use std::path::{Path, PathBuf};
 /// after. The landing uses `rename_noreplace` + the shared ` (N)` suffix
 /// scheme — a collision never clobbers the occupant. Moving a task to the
 /// list it is already in is a no-op `Ok`. Returns the landed path.
+///
+/// TASK 6f: the read-through-rename sequence below runs under the SAME
+/// per-path lock `update_task_fields` takes (see `disk::with_task_file_lock`'s
+/// doc comment), keyed on the SOURCE path. Without it, a concurrent
+/// `update_task_fields` that already read this file at its old path — a
+/// rename, an MCP `set_task_status` — would `rename` its own temp onto that
+/// old path AFTER this move relinquishes it, leaving the same document at
+/// BOTH the old path (a stale resurrected duplicate) and the new one (the
+/// real relocated file) — a duplicate task showing in two lists on the next
+/// scan. Locking only the source is enough: a losing `update_task_fields`
+/// either reads-and-writes before this move starts (fine — the move then
+/// relocates the fresher content) or fails cleanly with "no such file" after
+/// this move has already relinquished the old path (fine — nothing to
+/// resurrect). The DESTINATION path needs no lock of its own here:
+/// `rename_noreplace`'s own exclusive-create-style collision handling
+/// (the `AlreadyExists` retry loop below) already serializes against
+/// whatever else might occupy a candidate name.
 pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf, String> {
     let canon_root =
         std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve tasks folder: {e}"))?;
@@ -30,84 +47,86 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
     if !canon_path.starts_with(&canon_root) {
         return Err("Task file is outside the vault's tasks folder".to_string());
     }
-    // Re-read the frontmatter and refuse a file that is no longer a
-    // `type: Task` document, mirroring the status/field writers (set_fields
-    // rejects a non-task). A list-only editor save skips update_task, so
-    // without this a note edited outside the app to drop `type: Task` — or a
-    // file swapped in at this path — could still be moved around the tasks
-    // folder as if the stale task write still applied.
-    let content =
-        std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-    if !super::super::doc::is_task(&content) {
-        return Err(
-            "This file is no longer a task document — reopen the list to refresh.".to_string(),
-        );
-    }
-    // Lexical gate on the target list — rejected before any filesystem access.
-    let normalized = super::normalize_list_rel(list)?;
-    let target_dir = if normalized.is_empty() {
-        canon_root.clone()
-    } else {
-        canon_root.join(&normalized)
-    };
-    crate::capture_paths::assert_path_inside_vault(&canon_root, &target_dir)?;
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("Could not create the list folder: {e}"))?;
-    let canon_target_dir = std::fs::canonicalize(&target_dir)
-        .map_err(|e| format!("Cannot resolve the list folder: {e}"))?;
-    if !canon_target_dir.starts_with(&canon_root) {
-        return Err("List folder resolves outside the tasks folder".to_string());
-    }
-    if canon_path.parent() == Some(canon_target_dir.as_path()) {
-        return Ok(canon_path); // already in that list — nothing to move
-    }
-    let stem = canon_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let ext = canon_path
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()))
-        .unwrap_or_default();
-    for attempt in 1u32.. {
-        let candidate = canon_target_dir.join(format!(
-            "{}{ext}",
-            crate::capture_paths::candidate(&stem, attempt)
-        ));
-        match crate::capture_paths::rename_noreplace(&canon_path, &candidate) {
-            Ok(()) => {
-                // `rename_noreplace`'s hard-link path is deliberately lenient:
-                // if it links to the destination but can't unlink the source
-                // (a Windows AV/indexer holding it open), it returns Ok and
-                // leaves the source behind — right for capture, where a stray
-                // `.part` is later re-finalized as a `(recovered)` duplicate
-                // and no audio is ever lost. A task move can't tolerate that:
-                // the same document at both the old and new path would surface
-                // as a DUPLICATE task in both lists on the next scan. So treat
-                // a surviving source as a FAILED move — roll back the copy we
-                // just linked into the destination (same inode; removing it
-                // leaves the original intact) and error, so the file stays at
-                // exactly one path and the caller doesn't adopt the new one
-                // (Codex, PR #53 re-review).
-                if canon_path.exists() {
-                    if let Err(e) = std::fs::remove_file(&candidate) {
-                        log::warn!(
-                            "move_task_to_list: source {canon_path:?} survived the move and the \
-                             rolled-back copy {candidate:?} could not be removed ({e})"
+    super::super::disk::with_task_file_lock(&canon_path, || {
+        // Re-read the frontmatter and refuse a file that is no longer a
+        // `type: Task` document, mirroring the status/field writers (set_fields
+        // rejects a non-task). A list-only editor save skips update_task, so
+        // without this a note edited outside the app to drop `type: Task` — or a
+        // file swapped in at this path — could still be moved around the tasks
+        // folder as if the stale task write still applied.
+        let content =
+            std::fs::read_to_string(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+        if !super::super::doc::is_task(&content) {
+            return Err(
+                "This file is no longer a task document — reopen the list to refresh.".to_string(),
+            );
+        }
+        // Lexical gate on the target list — rejected before any filesystem access.
+        let normalized = super::normalize_list_rel(list)?;
+        let target_dir = if normalized.is_empty() {
+            canon_root.clone()
+        } else {
+            canon_root.join(&normalized)
+        };
+        crate::capture_paths::assert_path_inside_vault(&canon_root, &target_dir)?;
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("Could not create the list folder: {e}"))?;
+        let canon_target_dir = std::fs::canonicalize(&target_dir)
+            .map_err(|e| format!("Cannot resolve the list folder: {e}"))?;
+        if !canon_target_dir.starts_with(&canon_root) {
+            return Err("List folder resolves outside the tasks folder".to_string());
+        }
+        if canon_path.parent() == Some(canon_target_dir.as_path()) {
+            return Ok(canon_path.clone()); // already in that list — nothing to move
+        }
+        let stem = canon_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let ext = canon_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        for attempt in 1u32.. {
+            let candidate = canon_target_dir.join(format!(
+                "{}{ext}",
+                crate::capture_paths::candidate(&stem, attempt)
+            ));
+            match crate::capture_paths::rename_noreplace(&canon_path, &candidate) {
+                Ok(()) => {
+                    // `rename_noreplace`'s hard-link path is deliberately lenient:
+                    // if it links to the destination but can't unlink the source
+                    // (a Windows AV/indexer holding it open), it returns Ok and
+                    // leaves the source behind — right for capture, where a stray
+                    // `.part` is later re-finalized as a `(recovered)` duplicate
+                    // and no audio is ever lost. A task move can't tolerate that:
+                    // the same document at both the old and new path would surface
+                    // as a DUPLICATE task in both lists on the next scan. So treat
+                    // a surviving source as a FAILED move — roll back the copy we
+                    // just linked into the destination (same inode; removing it
+                    // leaves the original intact) and error, so the file stays at
+                    // exactly one path and the caller doesn't adopt the new one
+                    // (Codex, PR #53 re-review).
+                    if canon_path.exists() {
+                        if let Err(e) = std::fs::remove_file(&candidate) {
+                            log::warn!(
+                                "move_task_to_list: source {canon_path:?} survived the move and the \
+                                 rolled-back copy {candidate:?} could not be removed ({e})"
+                            );
+                        }
+                        return Err(
+                            "Could not move the task: the original file could not be removed"
+                                .to_string(),
                         );
                     }
-                    return Err(
-                        "Could not move the task: the original file could not be removed"
-                            .to_string(),
-                    );
+                    return Ok(candidate);
                 }
-                return Ok(candidate);
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("Could not move the task: {e}")),
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("Could not move the task: {e}")),
         }
-    }
-    unreachable!("suffix search always terminates")
+        unreachable!("suffix search always terminates")
+    })
 }
 
 /// Outcome of deleting a list: how many of its own tasks were moved to the
@@ -431,6 +450,71 @@ mod tests {
             !root.join("Done").join("t.md").exists(),
             "the linked copy must be rolled back — no duplicate task"
         );
+    }
+
+    #[test]
+    fn concurrent_move_and_field_write_never_duplicate_a_task() {
+        // TASK 6f step 3: a concurrent `update_task_fields` that already read
+        // the file at its OLD path before `move_task_to_list` relocates it
+        // will `rename` its own temp onto that OLD path afterward — the same
+        // document then exists at BOTH the old path (a stale resurrected
+        // duplicate) and the new one (the real relocated file). Pre-fix this
+        // reproduced on 300/300 iterations across three runs in the
+        // authoring environment; see the task report. With the shared
+        // per-path lock, whichever op acquires it first fully finishes
+        // before the other starts, so exactly one copy must exist at the end
+        // regardless of ordering — the move must always land the file
+        // somewhere, and the old path must always end up clear.
+        for i in 0..50 {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("Tasks");
+            std::fs::create_dir_all(&root).unwrap();
+            let p = root.join("t.md");
+            std::fs::write(&p, TASK).unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+            let thread_move = {
+                let p = p.clone();
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    move_task_to_list(&root, &p, "Inbox")
+                })
+            };
+            let thread_write = {
+                let p = p.clone();
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    crate::tasks::update_task_fields(&root, &p, &[("status", Some("done"))], None)
+                })
+            };
+            let move_result = thread_move.join().unwrap();
+            let _write_result = thread_write.join().unwrap();
+
+            let landed = move_result.unwrap_or_else(|e| {
+                panic!(
+                    "iteration {i}: move_task_to_list must always succeed here — the \
+                        source exists whenever it acquires the lock, whether before or \
+                        after the concurrent write, got: {e}"
+                )
+            });
+            assert_ne!(
+                landed, p,
+                "iteration {i}: the task must actually land in Inbox, not stay at the root"
+            );
+            assert!(
+                !p.exists(),
+                "iteration {i}: the old path was resurrected — the task now exists at \
+                 both the old and new path"
+            );
+            assert!(
+                landed.exists(),
+                "iteration {i}: the moved task must exist at its landed path"
+            );
+        }
     }
 
     #[test]

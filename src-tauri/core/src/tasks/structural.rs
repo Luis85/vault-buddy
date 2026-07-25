@@ -9,17 +9,31 @@ use std::path::{Path, PathBuf};
 
 /// Permanently delete a task file — the app's ONLY destructive vault write.
 /// Canonicalizes `root` and `path` and requires containment (a symlink at the
-/// file or folder can't be seen lexically), THEN re-reads the file and requires
-/// it to be a `type: Task` document before removing. Task folders may
-/// legitimately hold foreign files, and a listed row could be swapped for a
-/// non-task file at the same path before the delete lands — so the document is
-/// re-validated here, the same posture the move/field writers get from
-/// `set_fields`' `type: Task` precondition (Codex P1, PR #76). The validated
-/// bytes and the file's identity are taken from ONE open handle, and that
-/// identity is re-verified at unlink time (`handle_identity` + `id_differs`) so
-/// the object we remove is provably the object we validated — a swap during the
-/// validation window is refused, not deleted. A missing file surfaces as an error
-/// (the row the user clicked should exist), never a silent success.
+/// file or folder can't be seen lexically), THEN, under the same per-path
+/// lock `update_task_fields` takes (see `disk::with_task_file_lock`'s doc
+/// comment), re-reads the file and requires it to be a `type: Task` document
+/// before removing. Task folders may legitimately hold foreign files, and a
+/// listed row could be swapped for a non-task file at the same path before
+/// the delete lands — so the document is re-validated here, the same
+/// posture the move/field writers get from `set_fields`' `type: Task`
+/// precondition (Codex P1, PR #76). The validated bytes and the file's
+/// identity are taken from ONE open handle, and that identity is
+/// re-verified at unlink time (`handle_identity` + `id_differs`) so the
+/// object we remove is provably the object we validated — a swap during the
+/// validation window is refused, not deleted. A missing file surfaces as an
+/// error (the row the user clicked should exist), never a silent success.
+///
+/// TASK 6f: sharing `disk`'s per-path lock closes a DIFFERENT hazard than the
+/// identity re-check above — that check catches a swap TO a different file at
+/// this same path; the lock closes a concurrent `update_task_fields` that
+/// already read this file BEFORE this delete unlinks it. Without the lock,
+/// such a write would `rename` its own temp onto this path AFTER the unlink,
+/// resurrecting the file the user just deleted (`write_atomic_replacing`'s
+/// rename recreates the destination unconditionally — it has no way to know
+/// a delete raced it). It does NOT shrink GAP-79's residual re-open->unlink
+/// window documented above: that gap is about proving identity at a path
+/// this call already owns the lock for, not about a different in-process
+/// writer resurrecting the path after removal.
 pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     // A destructive write must NEVER follow a symlink at the leaf: if `path` is
     // a symlink to a different valid Task inside the root, canonicalize would
@@ -39,47 +53,49 @@ pub fn delete_task(root: &Path, path: &Path) -> Result<(), String> {
     if !canon_path.starts_with(&canon_root) {
         return Err("Task file is outside the vault's tasks folder".to_string());
     }
-    // Read the bytes we validate AND the file's identity from ONE open handle, so
-    // they provably describe the same file (no read-vs-stat race). The handle is
-    // dropped at the end of this block, before any unlink, because Windows refuses
-    // to remove a file that still has an open handle without FILE_SHARE_DELETE.
-    let validated_id = {
-        use std::io::Read as _;
-        let mut file =
-            std::fs::File::open(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
-        let id = handle_identity(&file);
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .map_err(|e| format!("Cannot read task: {e}"))?;
-        if !super::doc::is_task(&content) {
-            return Err("Refusing to delete: not a type: Task document".to_string());
+    super::disk::with_task_file_lock(&canon_path, || {
+        // Read the bytes we validate AND the file's identity from ONE open handle, so
+        // they provably describe the same file (no read-vs-stat race). The handle is
+        // dropped at the end of this block, before any unlink, because Windows refuses
+        // to remove a file that still has an open handle without FILE_SHARE_DELETE.
+        let validated_id = {
+            use std::io::Read as _;
+            let mut file =
+                std::fs::File::open(&canon_path).map_err(|e| format!("Cannot read task: {e}"))?;
+            let id = handle_identity(&file);
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| format!("Cannot read task: {e}"))?;
+            if !super::doc::is_task(&content) {
+                return Err("Refusing to delete: not a type: Task document".to_string());
+            }
+            id
+        };
+        // Verify stable file identity at unlink time (Codex P1, PR #76): a no-follow
+        // re-stat rejects a swap to a symlink, and re-reading the file's identity
+        // rejects a swap to any different file — both immediately before the
+        // irreversible remove, so the object we unlink is provably the one we
+        // validated. The residual re-open->remove window is irreducible in portable
+        // std, which has no unlink-by-handle / funlinkat; on a single-user desktop
+        // delete_task runs at machine speed with no user pause inside it (the confirm
+        // happens client-side, before the IPC call), so the window is microseconds —
+        // documented as a bounded gap (docs/Gaps.md, GAP-79).
+        let now = std::fs::symlink_metadata(&canon_path)
+            .map_err(|e| format!("Cannot re-check task: {e}"))?;
+        if now.file_type().is_symlink() {
+            return Err(SWAPPED_MSG.to_string());
         }
-        id
-    };
-    // Verify stable file identity at unlink time (Codex P1, PR #76): a no-follow
-    // re-stat rejects a swap to a symlink, and re-reading the file's identity
-    // rejects a swap to any different file — both immediately before the
-    // irreversible remove, so the object we unlink is provably the one we
-    // validated. The residual re-open->remove window is irreducible in portable
-    // std, which has no unlink-by-handle / funlinkat; on a single-user desktop
-    // delete_task runs at machine speed with no user pause inside it (the confirm
-    // happens client-side, before the IPC call), so the window is microseconds —
-    // documented as a bounded gap (docs/Gaps.md, GAP-79).
-    let now =
-        std::fs::symlink_metadata(&canon_path).map_err(|e| format!("Cannot re-check task: {e}"))?;
-    if now.file_type().is_symlink() {
-        return Err(SWAPPED_MSG.to_string());
-    }
-    // canon_path is not a symlink per the check above, so this re-open cannot
-    // follow one; a differing identity means the entry was swapped during the
-    // validation window.
-    let now_id = std::fs::File::open(&canon_path)
-        .ok()
-        .and_then(|f| handle_identity(&f));
-    if id_differs(validated_id, now_id) {
-        return Err(SWAPPED_MSG.to_string());
-    }
-    std::fs::remove_file(&canon_path).map_err(|e| format!("Cannot delete task: {e}"))
+        // canon_path is not a symlink per the check above, so this re-open cannot
+        // follow one; a differing identity means the entry was swapped during the
+        // validation window.
+        let now_id = std::fs::File::open(&canon_path)
+            .ok()
+            .and_then(|f| handle_identity(&f));
+        if id_differs(validated_id, now_id) {
+            return Err(SWAPPED_MSG.to_string());
+        }
+        std::fs::remove_file(&canon_path).map_err(|e| format!("Cannot delete task: {e}"))
+    })
 }
 
 const SWAPPED_MSG: &str =
@@ -146,6 +162,23 @@ fn id_differs(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> bool {
 /// existing value (Codex P2, PR #76). Written through the collision-safe
 /// never-clobber writer, so a name clash takes the ` (N)` suffix. `today` names
 /// the new file (clock-free core).
+///
+/// TASK 6f: deliberately does NOT take `disk::with_task_file_lock`, unlike
+/// `delete_task` and `lists::relocate::move_task_to_list`. Those two needed
+/// the lock because they can make `update_task_fields` resurrect/duplicate a
+/// file it already read once this function's OWN target path is gone from
+/// under it. `duplicate_task` never removes or relocates the SOURCE — it
+/// only reads it once, then writes to a brand-new path nobody else could be
+/// racing (the collision-safe writer picks that path itself). A concurrent
+/// write to the source can make this a STALE snapshot (the copy reflects
+/// whichever edit did or didn't land before this read), but never a torn one
+/// (`update_task_fields` only ever replaces the source via a full
+/// create-temp-then-rename, so a reader here always sees either the whole
+/// pre-edit or whole post-edit file) and never a LOST one (nothing this
+/// function does can make the source's own edit disappear). A stale-but-
+/// consistent snapshot is an accepted, pre-existing property of "duplicate
+/// while someone else is editing" — not the lost-update/resurrection class
+/// this task closes.
 pub fn duplicate_task(
     root: &Path,
     path: &Path,
@@ -573,6 +606,63 @@ mod tests {
         let off = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), false).unwrap();
         let out_off = std::fs::read_to_string(&off).unwrap();
         assert!(out_off.contains("task-id: {source: jira, ref: ABC-1}"));
+    }
+
+    #[test]
+    fn concurrent_delete_and_field_write_never_resurrect_a_deleted_task() {
+        // TASK 6f step 3: `delete_task` is the app's one destructive vault
+        // write, so a "recreated after delete" outcome is worse than a lost
+        // edit — it's data the user explicitly asked gone, coming back. A
+        // concurrent `update_task_fields` (a status flip, a rename, an MCP
+        // `set_task_status`) that already read the file before delete_task
+        // unlinks it will `write_atomic_replacing` a temp onto this same
+        // path AFTER the unlink — `rename()` recreates the destination
+        // unconditionally, it does not care whether one existed a moment
+        // ago. Pre-fix this reproduced on 299-300/300 iterations across
+        // three runs in the authoring environment; see the task report.
+        // Whichever op wins the shared per-path lock must fully finish
+        // before the other starts, so the file must be gone at the end
+        // EVERY time, regardless of which thread the OS scheduler favors.
+        for i in 0..50 {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("Tasks");
+            std::fs::create_dir_all(&root).unwrap();
+            let p = root.join("t.md");
+            std::fs::write(&p, "---\ntype: Task\nstatus: new\ntitle: \"T\"\n---\n").unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+            let thread_delete = {
+                let p = p.clone();
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    delete_task(&root, &p)
+                })
+            };
+            let thread_write = {
+                let p = p.clone();
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    crate::tasks::update_task_fields(&root, &p, &[("status", Some("done"))], None)
+                })
+            };
+            let delete_result = thread_delete.join().unwrap();
+            let _write_result = thread_write.join().unwrap();
+
+            assert!(
+                delete_result.is_ok(),
+                "iteration {i}: delete_task must succeed regardless of which side of the \
+                 lock it lands on — the file exists whenever it acquires the lock, whether \
+                 before or after the concurrent write, got: {delete_result:?}"
+            );
+            assert!(
+                !p.exists(),
+                "iteration {i}: the deleted task was resurrected by a concurrent field write"
+            );
+        }
     }
 
     #[test]

@@ -633,6 +633,84 @@ files the user did not touch. (Codex re-raised migration/block on PR #75; the
 document-only posture is the approved spec's decision — revisiting it is a human
 call, recorded for the final review.)
 
+### GAP-83 · ~~Medium~~ FIXED 2026-07-25 · No per-file lock serialized concurrent task-file writes (lost updates, deleted-file resurrection, moved-file duplication)
+`src-tauri/core/src/tasks/disk.rs` (`update_task_fields`),
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`),
+`src-tauri/core/src/tasks/lists/relocate.rs` (`move_task_to_list`). None of
+the three sanctioned task-file writers took any lock keyed on the file they
+were about to touch: each is a plain read -> compute -> atomic-write (or
+read -> unlink, or read -> rename) with nothing serializing two IN-PROCESS
+callers on the SAME file. The embedded MCP server's
+`set_task_status`/`add_task` reach the exact same `core::services` functions
+on their own "mcp-blocking" OS thread (see AGENTS.md's MCP section),
+genuinely concurrently with a panel write — and the frontend's per-row
+`busy` guard is per-webview, so it cannot see an MCP call at all. Three
+concretely reachable failure modes, all silent (nothing surfaces the
+corruption as an error):
+- **Lost update** (`update_task_fields` racing itself): two concurrent field
+  writes to the same task both read the same pre-edit content; whichever
+  writes second silently discards the first writer's key along with
+  everything else it re-derived from that stale read.
+- **Resurrection** (`delete_task` racing a concurrent field write): a write
+  that already read the file before delete unlinks it will `rename` its own
+  temp onto that path afterward — `write_atomic_replacing`'s rename
+  recreates the destination unconditionally — bringing back a file the user
+  just deleted.
+- **Duplication** (`move_task_to_list` racing a concurrent field write): the
+  same pattern at the file's OLD path after a move relocates it elsewhere,
+  leaving the same document at both the old (a stale resurrected copy) and
+  the new path.
+
+The subtasks/parent-tasks increment made the first failure mode a worse
+casualty: `resolve_parent_for_write` stamps the parent's Task ID via
+`update_task_fields`, and a racing `set_task_status` on that same parent file
+can overwrite the stamp away, silently orphaning the child's `parent-id`
+reference the moment the hierarchy is created.
+
+**Fixed:** a process-wide, canonical-path-keyed lock
+(`disk::with_task_file_lock`, a `Weak`-pruned map so it cannot grow
+unboundedly with how many files this process has ever touched — only with
+how many are being written RIGHT NOW) is now held across each of the three
+writers' own read-through-write/unlink/rename sequence. Lock ordering is a
+documented invariant at the definition site: `capture_config::
+config_write_lock()` may be acquired before this lock, never after —
+`resolve_parent_for_write` already does so across two calls into it, and
+nothing that takes the new lock ever reaches back into config. Regression
+tests (`tasks::disk::tests`, `tasks::structural::tests`,
+`tasks::lists::relocate::tests`): Barrier-synchronized two-thread races for
+all three writers, the exact parent-id-vs-status-flip scenario
+(`concurrent_parent_id_stamp_and_status_flip_never_lose_either`), a
+canonical-vs-symlink-path aliasing test proving the lock cannot be
+sidestepped by a different spelling of the same file, and a lock-map
+growth-bounding test. Pre-fix, all four race scenarios reproduced their
+failure on 299-300 out of 300 iterations across repeated runs in the
+authoring environment — a reliably reproducible defect, not a rare
+interleaving that needed an injected hook or a sleep to hit.
+
+**What remains open, by design:**
+- **Cross-process writes are entirely out of scope.** This is an in-process
+  lock; it cannot and does not serialize against Obsidian itself or a sync
+  client (OneDrive/Dropbox/Syncthing) writing the same file from another
+  process. That is the same pre-existing, accepted reality already true of
+  the rest of the vault domain — nothing here claims otherwise.
+- **`structural::duplicate_task` deliberately does NOT take the lock.** It
+  reads the source exactly once and writes to a brand-new path nobody else
+  could be racing (the collision-safe writer picks that path itself); a
+  concurrent source edit can make the copy a stale-but-consistent snapshot
+  (never torn — `update_task_fields` only ever replaces the source via a
+  full create-temp-then-rename), but never a lost or resurrected one. A
+  different, accepted category from the three fixed above.
+- **`lists/mod.rs`'s `rename_task_list` (a whole-FOLDER `std::fs::rename`,
+  not a per-file write) was evaluated and left unchanged.** A concurrent
+  `update_task_fields` racing a folder rename fails cleanly — its temp-file
+  create targets a parent directory that, after the rename, no longer
+  exists at that path — a legitimate write error, not a resurrection or a
+  duplication; a materially milder failure shape than the three fixed here.
+  Extending the per-file lock to a whole-subtree rename would mean locking
+  every contained file (or inventing a coarser folder-level lock with its
+  own new ordering rules) to harden a failure mode that already degrades
+  safely — deferred as disproportionate to the risk.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
