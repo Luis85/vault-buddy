@@ -333,6 +333,74 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_task_stamps_a_fresh_id_when_the_source_has_none() {
+        // The realistic "duplicate a legacy task after enabling IDs" case: the
+        // source predates IDs (no id line), the vault now has IDs on, so the copy
+        // must receive a FRESHLY INSERTED id line under the configured property.
+        // Every other ids_enabled duplicate test seeds an existing id, exercising
+        // only the rewrite arm — this pins the insert arm (whole-branch review, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("legacy.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: \"Legacy\"\ncreated: 2026-07-01\n---\n\nbody\n",
+        )
+        .unwrap();
+        assert!(!std::fs::read_to_string(&src).unwrap().contains("task-id"));
+        let new = duplicate_task(&root, &src, "2026-07-24", Some("task-id"), true).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        // A fresh id line is now present with a non-empty value.
+        let id_line = out
+            .lines()
+            .find(|l| l.starts_with("task-id:"))
+            .expect("a fresh task-id line was inserted");
+        assert!(
+            !id_line["task-id:".len()..].trim().is_empty(),
+            "the inserted id has a value"
+        );
+        assert!(out.contains("title: \"Legacy (copy)\""));
+    }
+
+    #[test]
+    fn duplicate_task_preserves_description_and_unknown_keys() {
+        // The docstring promises body/extra-frontmatter/DESCRIPTION/unknown keys
+        // are copied faithfully; description is new to this increment with its own
+        // escaped-scalar encoding, so pin it (and an arbitrary custom key) directly
+        // — set_fields must touch only title/status/id (whole-branch review, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ndescription: \"keep me\\nplease\"\ncustom-field: keep-me\n---\n\nbody\n",
+        )
+        .unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-24", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        // Both untouched lines survive byte-identical (only identity was rewritten).
+        assert!(out.contains("description: \"keep me\\nplease\""));
+        assert!(out.contains("custom-field: keep-me"));
+        assert!(out.contains("title: \"T (copy)\"")); // identity did change
+    }
+
+    #[test]
+    fn delete_and_duplicate_error_on_a_vanished_path() {
+        // Both writes document "a missing file surfaces as an error, never a silent
+        // success" — the double-click-the-confirm or stale-row-deleted-out-of-band
+        // race. Pin it directly for the destructive delete and the copy (review, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let ghost = root.join("ghost.md");
+        assert!(!ghost.exists());
+        assert!(delete_task(&root, &ghost).is_err());
+        assert!(duplicate_task(&root, &ghost, "2026-07-24", Some("task-id"), true).is_err());
+    }
+
+    #[test]
     fn duplicate_task_uses_the_filename_stem_when_the_source_has_no_title() {
         // An untitled hand-authored task lists under its filename stem, so the copy
         // must too — not an empty " (copy)" (Codex P2, PR #76).
