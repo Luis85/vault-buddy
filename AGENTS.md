@@ -1095,9 +1095,10 @@ It reads leniently through the same `is_valid_due` shape check (a malformed
 value reads as unscheduled — no calendar validity, so `2026-02-31` is
 tolerated like `due`), is emitted between `due` and `priority`, is written only
 when present (clearing it removes the line, `due`'s semantics), and is reserved
-in BOTH `RESERVED_TASK_KEYS` sets — the template-frontmatter filter (`disk.rs`)
-and the task-ID-property validator (`id.rs`, kept in sync via reciprocal
-comments) — so it can never be smuggled in as a template key nor configured as
+in the shared `RESERVED_TASK_KEYS` set (`tasks/mod.rs`, single-sourced — used
+by both the template-frontmatter filter in `create::render_task` and the
+task-ID-property validator `id::is_valid_id_property`, GAP-70) — so it can
+never be smuggled in as a template key nor configured as
 an id property (the formerly-settable `scheduled`-as-id-property edge — it was
 command-settable before this increment — is docs/Gaps.md GAP-68). The IPC write params (`scheduled`/`clearScheduled`)
 and the frontend planner/grouping that consume it are documented as those
@@ -1140,9 +1141,9 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   single-line scalar via `core::yaml_scalar::yaml_quote_multiline`; the surgical
   `set_fields` writer handles it like any other key and CONSUMES a hand-authored
   block on rewrite (`skip_block_scalar`), so nothing orphans. `description` is
-  RESERVED in BOTH task key-sets (the template-frontmatter filter and the
-  task-ID-property validator) so it can never be smuggled in as a template key
-  nor configured as the id property. `update_task`'s patch carries `description`
+  RESERVED in the shared `RESERVED_TASK_KEYS` set (used by both the
+  template-frontmatter filter and the task-ID-property validator) so it can
+  never be smuggled in as a template key nor configured as the id property. `update_task`'s patch carries `description`
   / `clearDescription` (a whitespace-only draft clears — it's treated as absent,
   so Save returns to disabled instead of writing forever) and every `list_tasks`
   row carries its `description`. Two MORE sanctioned vault writes join

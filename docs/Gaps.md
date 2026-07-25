@@ -544,9 +544,9 @@ multi-occurrence helper the tracked fix if the exposure ever proves real.
 `src-tauri/core/src/tasks/id.rs` (`RESERVED_TASK_KEYS`, `is_valid_id_property`,
 `id_property_for_generation`). The Task Detail increment
 (docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md)
-adds `description` as a managed frontmatter field and reserves it in the id.rs
-reserved-key set (NOT the template set — the two now diverge on this one key;
-see the cross-referencing comments). Before this increment `is_valid_id_property`
+adds `description` as a managed frontmatter field and reserves it in the shared
+`RESERVED_TASK_KEYS` set (so BOTH the id-property validator and the template
+filter refuse it — see the closing note). Before this increment `is_valid_id_property`
 did NOT reserve `description`, so the supported `set_task_id_config` command
 would ACCEPT `description` as a task-id property. A vault that had
 `task_id_enabled` ON and its id property set to the literal `description`
@@ -1276,24 +1276,19 @@ plus the still-bespoke favorite star.
   `for_each_dated_capture_mp3` and a shared temp-open helper — the repo's
   own `vault_walk.rs` header warns about exactly this drift class.
 
-### GAP-70 · Low · `RESERVED_TASK_KEYS` is duplicated verbatim across `disk.rs` and `id.rs`
-`src-tauri/core/src/tasks/disk.rs:48-59` and
-`src-tauri/core/src/tasks/id.rs:10-21` each define their own `const
-RESERVED_TASK_KEYS: &[&str]`, both currently the identical ten entries
-(`type`/`status`/`title`/`created`/`due`/`scheduled`/`priority`/`tags`/
-`tag`/`order`). The do-date increment added `scheduled` to BOTH by hand;
-today the only thing keeping them aligned is a pair of `// keep in sync
-with <other file>::RESERVED_TASK_KEYS` comments — a reviewer convention,
-not a compiler-enforced one. A future widened field (the next
-`due`/`scheduled`-shaped addition) that updates one list and forgets the
-other reopens exactly the class of edge GAP-68 documents: an id-property
-validator that doesn't know about a new reserved key would let it be
-configured as a task-id property, and the template-frontmatter filter that
-doesn't know about it would let a user's extra-frontmatter template
-redefine it. **Fix:** hoist one `pub(crate) const RESERVED_TASK_KEYS` (or a
-shared function) into a common module both `disk.rs` and `id.rs` import —
-mechanical, no behavior change; deferred here since the do-date increment's
-own reciprocal comments keep the two lists in sync today.
+### GAP-70 · ~~Low~~ FIXED 2026-07-25 · `RESERVED_TASK_KEYS` was duplicated verbatim across two guard sites
+Two `const RESERVED_TASK_KEYS: &[&str]` arrays (the template-frontmatter
+filter and the id-property validator) were kept aligned only by a pair of
+`// keep in sync with <other file>::RESERVED_TASK_KEYS` comments — a reviewer
+convention, not a compiler-enforced one. The Task Detail increment's move of
+one array (`disk.rs`→`create.rs`) left the other's sync comment pointing at a
+file that no longer held the const, half-breaking the only guard (Codex, PR
+#76). **Fixed:** hoisted a single `const RESERVED_TASK_KEYS` into
+`src-tauri/core/src/tasks/mod.rs`, referenced as `super::RESERVED_TASK_KEYS`
+by both `create::render_task` (template filter) and `id::is_valid_id_property`
+(id-property validator) — the two can no longer drift, and the id.rs tests
+that iterate every reserved key guard against a silent removal. Mechanical, no
+behavior change.
 
 ### GAP-72 · Low · `due` stays an unfiltered raw scalar in `TaskItem`/`TaskDto`; `scheduled` is core-validated at the same boundary
 `src-tauri/core/src/tasks/list.rs` (`collect_task_file`). Line 129,

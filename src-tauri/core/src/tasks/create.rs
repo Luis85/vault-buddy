@@ -37,26 +37,6 @@ pub fn task_basename(title: &str, today: &str) -> String {
     format!("{today}-{}", slugify(title))
 }
 
-/// The reserved task frontmatter keys: user extra frontmatter can never
-/// redefine one of these (`render_extra_frontmatter` drops the key), so
-/// the surgical field writer (`set_fields`) is never confused about which key
-/// it owns. The task-id property (when present) is appended to this set at
-/// call time — it's per-vault configurable, so it can't be a `const`.
-// keep in sync with id.rs::RESERVED_TASK_KEYS. `description` is a MANAGED field the detail view owns via set_fields — templates must not seed it (a template block scalar would orphan on the first save), exactly as due/status/priority are managed + reserved (Codex PR #76).
-const RESERVED_TASK_KEYS: &[&str] = &[
-    "type",
-    "status",
-    "title",
-    "created",
-    "due",
-    "scheduled",
-    "priority",
-    "tags",
-    "tag",
-    "order",
-    "description",
-];
-
 /// A `type: Task` document. `type`/`status`/`created` (and the optional
 /// `due`/`priority`) are simple unquoted scalars; the user-supplied title is
 /// quoted so a colon or quote can't break the frontmatter. `due`/`priority`
@@ -117,7 +97,7 @@ pub fn render_task(
         ("priority", priority.unwrap_or("")),
     ];
     if let Some(ef) = extra_frontmatter {
-        let mut reserved: Vec<&str> = RESERVED_TASK_KEYS.to_vec();
+        let mut reserved: Vec<&str> = super::RESERVED_TASK_KEYS.to_vec();
         if let Some((prop, _)) = task_id {
             reserved.push(prop);
         }
