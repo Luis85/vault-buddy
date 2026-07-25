@@ -327,9 +327,9 @@ async function add(payload: AddPayload) {
     // default — the composer only omits it before its default has loaded, so
     // a quick add during that window still lands in the default list.
     if (payload.list !== undefined) args.list = payload.list;
-    const created = await invoke<AddTaskResult>("add_task", args); // AddTaskResult: TaskItem + idsEnabled (Task 7)
+    const { idsEnabled, ...taskFields } = await invoke<AddTaskResult>("add_task", args); // AddTaskResult = TaskItem + idsEnabled (Task 7), a disclosure flag dropped here so it never rides onto the row
     tasks.value.unshift({
-      ...created,
+      ...taskFields,
       vaultId: targetVault,
       vaultName: allVaults.value.find((v) => v.id === targetVault)?.name ?? "",
     });

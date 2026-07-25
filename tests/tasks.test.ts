@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import TaskRow from "../src/components/TaskRow.vue";
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useVaultsStore } from "../src/stores/vaults";
@@ -79,6 +80,42 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
     expect(wrapper.text()).toContain("Ship it");
+  });
+
+  it("does not leak add_task's idsEnabled disclosure flag onto the new row", async () => {
+    // add_task's real wire shape is TaskItem + idsEnabled (AddTaskResult) —
+    // spreading the whole reply into the row put a stray, inert idsEnabled
+    // field on every AggTask, which is not part of the task model.
+    const { wrapper } = mountView({
+      add_task: (args) => {
+        const a = args as { title: string };
+        return {
+          path: "C:/v/Tasks/2026-07-08-new.md",
+          title: a.title,
+          status: "new",
+          created: "2026-07-08",
+          done: false,
+          due: null,
+          scheduled: null,
+          priority: null,
+          tags: [],
+          list: "",
+          order: null,
+          id: null,
+          description: null,
+          parentId: null,
+          parentLink: null,
+          idsEnabled: true,
+        };
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    const row = wrapper.findAllComponents(TaskRow).find((r) => r.props("task").title === "Ship it");
+    expect(row).toBeTruthy();
+    expect(row!.props("task")).not.toHaveProperty("idsEnabled");
   });
 
   it("toggles a task via set_task_status with a status string", async () => {
