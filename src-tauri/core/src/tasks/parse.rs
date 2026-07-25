@@ -232,7 +232,12 @@ pub(super) fn frontmatter_scalar_ci(content: &str, key: &str) -> Option<(String,
 /// `parent_id_field` and `scalar_id_ci` — passes `false`: an id must be a
 /// plain scalar, so a wikilink-shaped value is exactly the kind of flow
 /// value the block/flow guard below exists to reject.
-pub(super) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Option<String> {
+///
+/// `pub(crate)`, not `pub(super)`: `services::tasks::parent`'s phase-1
+/// assignability forecast (design spec §2) calls this directly to decide
+/// whether `ensure_id` will later be able to resolve the parent's id, before
+/// Task IDs are enabled for the vault.
+pub(crate) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Option<String> {
     let raw = crate::capture_note::raw_scalar_field(content, key)?.trim();
     if raw.is_empty() {
         return None;

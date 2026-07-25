@@ -15,7 +15,7 @@ mod list;
 mod lists;
 mod parent;
 mod parent_link;
-mod parse;
+pub(crate) mod parse;
 mod structural;
 mod writer;
 
