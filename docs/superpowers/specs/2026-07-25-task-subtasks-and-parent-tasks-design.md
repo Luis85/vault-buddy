@@ -208,29 +208,44 @@ like every other task write:
 2. **The child** — the same call that writes its `parent-id`/`parent` passes
    `ensure_id`, so a legacy child picks up its own id in the same write.
 
-### 2a. Changing the id property once hierarchies exist
+### 2a. The ID configuration is locked while hierarchies exist
 
-Because resolution reads ids from the vault's **configurable** id property,
-re-pointing that property (say `task-id` → `uid`) would make `list_tasks` stop
-reading the values every `parent-id` references: each task's id reads `None`, no
-task answers to the recorded ids, and the whole hierarchy silently renders as
-orphaned while the data sits intact on disk (Codex P2, PR #77).
+Resolution reads each task's own id through
+`id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name())`,
+so **both** inputs to that gate can break every `parent-id` reference at once:
 
-`set_task_id_config` therefore **refuses a property change while the vault has
-tasks carrying `parent-id`**, with an inline error naming the count and the
-current property. Rationale, weighed against the alternatives:
+- **Re-pointing the property** (`task-id` → `uid`) makes `list_tasks` read a key
+  no task carries — every id reads `None`.
+- **Disabling IDs** makes the gate return `None`, so the property is never read
+  at all — every id reads `None`, identically.
+
+Either way no task answers to the recorded ids and the whole hierarchy silently
+renders as orphaned while the data sits intact on disk (Codex P2 ×2, PR #77 — the
+first revision of this spec carved out disabling as "unaffected", which
+contradicted its own reasoning: the gate treats the two inputs the same, so the
+guard must too).
+
+`set_task_id_config` therefore **refuses any change to the vault's ID
+configuration — the property name or the enabled flag — while the vault has tasks
+carrying `parent-id`**, with an inline error naming the count and the remedy.
+Rationale, weighed against the alternatives:
 
 - **Auto-migrating** (rewriting every task's id property and every reference) is
   the mass vault mutation this app forbids — the same reasoning that made
   GAP-68/GAP-77 document-only rather than migrate.
 - **Warning and proceeding** silently breaks a structure the user built; the
   house posture on settings writes is strict-and-inline, not best-effort.
-- **Refusing** is recoverable and honest: the user clears the parent links (or
-  keeps the property) and is told exactly why. Enabling and *disabling* IDs are
-  unaffected — only re-pointing the property to a different key is refused.
+- **Decoupling hierarchy reads from the enabled flag** (always read the property
+  when parent links exist) was considered and rejected: it makes `list_tasks`'
+  id semantics depend on vault *content*, so the same vault config would surface
+  ids to MCP or not depending on whether a parent happens to exist — a subtler
+  surprise than a refused setting.
+- **Refusing** is recoverable and honest — one rule, both inputs, and the user is
+  told exactly why and how to proceed (clear the parent links first).
 
-A guided migration remains the tracked future option in Gaps if this ever proves
-too strict in practice.
+The lock is scoped to vaults that actually use hierarchies; a vault with no
+parent links keeps today's fully-editable ID settings. A guided migration remains
+the tracked future option in Gaps if this ever proves too strict in practice.
 
 ### 3. Core: hierarchy resolution and cycle prevention
 
@@ -238,10 +253,15 @@ All of it is pure and Linux-testable, in a new `core/src/tasks/hierarchy.rs`:
 
 ```rust
 /// Maps a task's own id -> its parent's id, for ONE vault's tasks. Tasks with
-/// no id or no parent-id contribute no entry.
+/// no id or no parent-id contribute no entry, and an id carried by MORE THAN
+/// ONE task is omitted entirely (see "Ambiguous ids" below).
 pub type ParentIndex<'a> = std::collections::HashMap<&'a str, &'a str>;
 
 pub fn parent_index(tasks: &[TaskItem]) -> ParentIndex<'_>;
+
+/// Ids carried by more than one task in the set — ambiguous, so unusable as a
+/// parent reference. Callers surface these; the index omits them.
+pub fn ambiguous_ids(tasks: &[TaskItem]) -> std::collections::HashSet<&str>;
 
 /// Ancestor ids of `start`, nearest first, EXCLUDING `start` itself. Bounded by
 /// a visited set so a pre-existing hand-authored cycle terminates instead of
@@ -257,6 +277,29 @@ pub fn would_create_cycle(index: &ParentIndex<'_>, child: &str, parent: &str) ->
 bounded walk matters twice: the vault is user-editable, so a cycle can already
 exist on disk before VB ever sees it, and `ancestors` is also what the detail
 surface would use for any future breadcrumb.
+
+**Ambiguous ids.** Two Task documents can carry the same id — not from anything
+VB does (`duplicate_task` regenerates, and `ensure_id` never overwrites) but from
+a file copied in Explorer/Finder, a sync conflict, or a hand edit. VB's own
+never-overwrite discipline then *preserves* the duplicate. A naive
+id→parent-id `HashMap` would silently collapse the two into whichever was
+indexed last, so a child referencing that id would resolve to an arbitrary
+parent and a cycle walk could follow the wrong edge — potentially clearing a
+write that does create a cycle (Codex P2, PR #77).
+
+So an id carried by more than one task is treated as **unresolvable**, matching
+the vault domain's defensive-read posture everywhere else (ambiguous or
+malformed reads as absent; never guess):
+
+- `parent_index` omits ambiguous ids entirely, so no edge is invented and the
+  cycle walk can never traverse a wrong one.
+- A child referencing an ambiguous id renders as a top-level orphan.
+- `set_task_parent` **refuses** a parent whose id is ambiguous, with an inline
+  error saying two Tasks share that id — the one case where staying silent would
+  let the user build a hierarchy on an identity that cannot be resolved back.
+
+The condition is self-healing: the user edits or clears one of the duplicate ids
+and the link resolves normally.
 
 Resolution needs the vault's task set. `set_task_parent` therefore runs one
 `list_tasks` walk (already `spawn_blocking`-offloaded, the same walk every view
@@ -374,8 +417,9 @@ core/src/services/tasks/
   mod.rs         +    set_task_parent (path resolve -> stamp -> cycle gate ->
                       paired write; id auto-enable)
                  +    parent_path on add_task; parentId/parentLink on TaskDto
-                 +    set_task_id_config guard: refuse a property CHANGE while
-                      any task carries parent-id (2a)
+                 +    set_task_id_config lock: refuse ANY id-config change
+                      (property name or enabled flag) while any task carries
+                      parent-id (2a)
 src-tauri/src/
   task_commands.rs +  parent_path/clear_parent on TaskPatchDto; parent_path on
                       add_task; update_task returns the effective parent pair
@@ -403,8 +447,11 @@ moves from envisioned to shipped.
 - A cycle-creating assignment → inline error naming the conflict; nothing written.
 - An invalid/reserved configured id property → inline error naming the property;
   IDs are not silently re-pointed and no parent is written.
-- An id-property **change** while parent links exist → inline error naming the
-  count and current property (§2a); the setting is unchanged.
+- An **ID-configuration change** while parent links exist — the property name or
+  the enabled flag — → inline error naming the count and the remedy (§2a); the
+  setting is unchanged.
+- A parent whose id is **ambiguous** (shared with another Task) → inline error
+  naming the collision; nothing written (§3).
 - A parent path outside the vault's tasks root → refused by the same containment
   gate as the child path; nothing written.
 - A parent that vanished between load and write → the write fails like any other
@@ -424,15 +471,18 @@ block, flow, missing); the paired write and the paired clear; wikilink quoting
 the §1 ambiguity case); `RESERVED_TASK_KEYS` filtering for both keys;
 `would_create_cycle` (self, direct, transitive, and a pre-existing on-disk cycle
 terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
-unresolvable ids; `render_task` with and without a parent (byte-identical to
-today when absent); duplicate preserving the parent pair.
+unresolvable ids; **`ambiguous_ids` detecting a duplicated own-id, `parent_index`
+omitting it, and a cycle walk therefore never following a collapsed edge**;
+`render_task` with and without a parent (byte-identical to today when absent);
+duplicate preserving the parent pair.
 
 **Service:** **the IDs-off bootstrap — set a parent in a vault with IDs disabled
 and assert it enables IDs, stamps BOTH tasks, and writes a resolvable link**
 (the P1 regression); the no-op when IDs are already on; the invalid-property
-error path; the id-property-change refusal while parent links exist (and that it
-still allows enable/disable); a parent path outside the tasks root refused; a
-failed parent stamp leaving the child unwritten.
+error path; **the ID-configuration lock while parent links exist — refusing BOTH
+a property re-point AND a disable — and both still allowed in a vault with no
+parent links**; a parent whose id is ambiguous refused; a parent path outside the
+tasks root refused; a failed parent stamp leaving the child unwritten.
 
 **Frontend (Vitest):** parent chip navigation; the picker sending a **path**
 (and working with no ids surfaced); picker disabling cycle-invalid options when
@@ -461,17 +511,20 @@ IDs on first use, which is itself additive (ids are stamped, never overwritten)
 and surfaced to the user. MCP's `list_tasks` gains two fields and no new tool.
 
 The one **restriction** this increment introduces is §2a: once a vault has parent
-links, its Task ID *property name* can no longer be re-pointed (enabling and
-disabling IDs still work). A vault with no hierarchy is entirely unaffected.
+links, its Task ID configuration is locked — neither the property name nor the
+enabled flag can change until those links are cleared, since either would make
+every recorded reference unresolvable. A vault with no hierarchy keeps today's
+fully-editable ID settings.
 
 ## Suggested phasing for the plan
 
 1. Core reads + `TaskItem`/`TaskDto` fields + reserved keys (additive, no UI).
-2. `hierarchy.rs`: index, bounded ancestors, cycle check.
+2. `hierarchy.rs`: index (omitting ambiguous ids), `ambiguous_ids`, bounded
+   ancestors, cycle check.
 3. Service `set_task_parent`: **path → resolve/stamp the parent's id** → cycle
    gate → paired write, plus id auto-enable; the `update_task` / `add_task` IPC
    surface (path-keyed) and the extended return.
-4. The §2a `set_task_id_config` guard.
+4. The §2a `set_task_id_config` lock (property name AND enabled flag).
 5. `useTaskHierarchy` + the Detail Parent row and path-sending picker.
 6. The Subtasks section + Add subtask.
 7. The list badge + parent chip (incl. per-vault scoping in aggregate mode).
