@@ -13,6 +13,7 @@ mod model_commands;
 mod pandoc;
 mod search_commands;
 mod task_commands;
+mod task_config_commands;
 mod transcription;
 mod tray;
 
@@ -445,13 +446,13 @@ pub fn run() {
             capture_commands::pause_capture,
             capture_commands::resume_capture,
             capture_commands::rename_capture,
-            task_commands::get_tasks_config,
-            task_commands::set_tasks_config,
-            task_commands::set_task_lists_config,
+            task_config_commands::get_tasks_config,
+            task_config_commands::set_tasks_config,
+            task_config_commands::set_task_lists_config,
             task_commands::rename_task_list,
             task_commands::delete_task_list,
-            task_commands::set_task_id_config,
-            task_commands::set_task_template_config,
+            task_config_commands::set_task_id_config,
+            task_config_commands::set_task_template_config,
             task_commands::list_tasks,
             task_commands::add_task,
             task_commands::set_task_status,
