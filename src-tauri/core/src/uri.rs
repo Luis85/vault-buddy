@@ -1,6 +1,6 @@
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 
-fn encode(value: &str) -> String {
+pub(crate) fn encode(value: &str) -> String {
     utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
 }
 

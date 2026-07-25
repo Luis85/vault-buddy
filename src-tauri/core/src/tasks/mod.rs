@@ -13,6 +13,7 @@ mod id;
 mod list;
 mod lists;
 mod parent;
+mod parent_link;
 mod parse;
 mod structural;
 mod writer;
@@ -55,6 +56,7 @@ pub use lists::{
     create_task_list, delete_task_list, is_valid_list_name, move_task_to_list, normalize_list_rel,
     rename_task_list, task_lists, DeleteListOutcome,
 };
+pub use parent_link::compose as compose_parent_link;
 pub use parse::{is_valid_due, is_valid_tag, note_tags};
 pub use structural::{delete_task, duplicate_task};
 pub use writer::{set_fields, set_status};
