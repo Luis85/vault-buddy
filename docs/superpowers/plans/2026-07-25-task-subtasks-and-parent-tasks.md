@@ -1118,24 +1118,59 @@ both writers quote identically):
 /// the lenient reader rejects, unresolving the link the instant it is written
 /// (Codex P2, PR #77).
 fn quote_id_if_needed(id: &str) -> String {
-    // A YAML null spelling passes the charset whitelist but would be READ BACK as
-    // absent by the strict parent decoder, unresolving the link immediately — so
-    // it must be quoted despite looking plain (Codex P2, PR #77).
-    let yaml_null = matches!(id, "null" | "Null" | "NULL" | "~");
-    let plain = !id.is_empty()
-        && !yaml_null
+    // Emit bare ONLY when the token is provably not implicitly typed by YAML.
+    // Inverted on purpose: enumerating every YAML type (null, bool, int, float,
+    // hex, sexagesimal, .inf/.nan, timestamp) is a losing game, but "starts with
+    // an ASCII letter" rules out ALL of the numeric and date forms in one
+    // stroke, since every one of them starts with a digit, `.`, `-` or `+`.
+    // That leaves only the bool/null keywords to name explicitly.
+    //
+    // This matters beyond our own ids: ensure_id preserves any usable existing
+    // value, so a hand-authored `task-id: "123"` or `"2026-07-25"` would
+    // otherwise be re-emitted as `parent-id: 123` / `2026-07-25` — which
+    // Obsidian and Dataview read as a NUMBER or a DATE while the source id is
+    // still a string, so Properties/Dataview equality silently stops matching
+    // even though our own text reader still resolves it (Codex P2 x2, PR #77).
+    // Every GENERATED id is letter-first base36, so the common case stays bare.
+    let plain_charset = !id.is_empty()
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if plain { id.to_string() } else { crate::yaml_scalar::yaml_quote(id) }
+    let letter_first = id.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+    let keyword = matches!(
+        id.to_ascii_lowercase().as_str(),
+        "null" | "nil" | "true" | "false" | "yes" | "no" | "on" | "off" | "y" | "n"
+    );
+    if plain_charset && letter_first && !keyword {
+        id.to_string()
+    } else {
+        crate::yaml_scalar::yaml_quote(id)
+    }
 }
 
 #[test]
-fn quote_id_if_needed_keeps_base36_bare_and_quotes_the_rest() {
+fn quote_id_if_needed_keeps_generated_ids_bare_and_quotes_typed_tokens() {
+    // Generated ids are letter-first base36 — the common case stays clean.
     assert_eq!(quote_id_if_needed("k3m9x2qp"), "k3m9x2qp");
+    assert_eq!(quote_id_if_needed("uid_2"), "uid_2");
+    // Charset/syntax failures.
     assert_eq!(quote_id_if_needed("[legacy]"), "\"[legacy]\"");
     assert_eq!(quote_id_if_needed("has space"), "\"has space\"");
-    // Passes the charset check, but bare it would read back as YAML null.
-    assert_eq!(quote_id_if_needed("null"), "\"null\"");
-    assert_eq!(quote_id_if_needed("NULL"), "\"NULL\"");
+    // YAML null + bool keywords: bare, these change TYPE on read-back.
+    for kw in ["null", "NULL", "true", "False", "yes", "no", "on", "off", "y", "n"] {
+        assert_eq!(
+            quote_id_if_needed(kw),
+            format!("\"{kw}\""),
+            "{kw} must be quoted"
+        );
+    }
+    // Numeric / date / special forms — all rejected by the letter-first rule,
+    // so Obsidian never retypes a string id as a number or a date.
+    for typed in ["123", "0x1F", "1e3", "2026-07-25", "-5", "1:30", ".inf"] {
+        assert_eq!(
+            quote_id_if_needed(typed),
+            format!("\"{typed}\""),
+            "{typed} must be quoted"
+        );
+    }
 }
 ```
 
