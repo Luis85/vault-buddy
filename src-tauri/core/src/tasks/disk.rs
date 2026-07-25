@@ -46,20 +46,24 @@ pub fn update_task_fields(
     let mut generated: Option<String> = None;
     let mut blank_casing: Option<String> = None;
     let ensured = ensure_id.and_then(|key| {
+        // `id_property_unassignable` is the SINGLE-SOURCED gate
+        // `services::tasks::parent`'s phase-1 pre-lock forecast also
+        // consults (design spec §2) — see its own doc comment for why the
+        // two must never be two independently-maintained notions of
+        // "assignable". A BLOCK (a nested map/list under the key) or FLOW
+        // (`key: {..}` / `[..]`) value is the USER'S frontmatter, not a
+        // stamp target and not an id: set_fields' rewrite would
+        // consume/rewrite it and delete their data (review, PR #59), and
+        // reporting it as the effective id would let a duplicate that
+        // preserved a flow value read as sharing the source's stable id
+        // (Codex P2, PR #76). A present, non-blank scalar the strict reader
+        // can't decode is likewise not a usable id. Leave either untouched
+        // and report no id — the read (`scalar_id_ci`) agrees: non-scalar =
+        // non-id.
+        if super::parse::id_property_unassignable(&content, key) {
+            return None;
+        }
         match super::parse::frontmatter_scalar_ci(&content, key) {
-            // A BLOCK (a nested map/list under the key) or FLOW (`key: {..}` /
-            // `[..]`) value is the USER'S frontmatter, not a stamp target and
-            // not an id: set_fields' rewrite would consume/rewrite it and delete
-            // their data (review, PR #59), and reporting it as the effective id
-            // would let a duplicate that preserved a flow value read as sharing
-            // the source's stable id (Codex P2, PR #76). Leave it untouched and
-            // report no id — the read (`scalar_id_ci`) agrees: non-scalar = non-id.
-            Some((on_disk, _))
-                if super::parse::key_opens_block(&content, &on_disk)
-                    || super::parse::key_opens_flow(&content, &on_disk) =>
-            {
-                None
-            }
             // Already has a usable PLAIN-SCALAR id (any casing) → never overwritten.
             // Decode it with the SAME strict reader `scalar_id_ci`/`list_tasks`
             // use, not the shallow `frontmatter_scalar_ci` value: for a quoted
@@ -69,7 +73,9 @@ pub fn update_task_fields(
             // record a reference the parent does not answer to, and the
             // frontend's reflectStampedId would overwrite the correct row value
             // (Codex P2, PR #77). A value the strict reader cannot decode
-            // reports no id — exactly as the list reports none.
+            // reports no id — exactly as the list reports none (unreachable
+            // here in practice: `id_property_unassignable` already ruled out
+            // a non-empty value the strict reader rejects).
             Some((on_disk, v)) if !v.is_empty() => {
                 super::parse::strict_scalar_field(&content, &on_disk, false)
             }

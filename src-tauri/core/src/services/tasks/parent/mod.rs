@@ -331,27 +331,22 @@ fn reject_ambiguous_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(),
 }
 
 /// True when phase 3a's `ensure_id` is FORECAST to fail on `parent_content` —
-/// the id property holds a value on its own frontmatter line that is present
-/// but not a usable scalar (a flow collection, a block-scalar marker, a
-/// comment-only/null-ish value, or a plain scalar YAML folds onto the next
-/// line). Absent or BLANK reads as assignable: that is exactly what
-/// `ensure_id` stamps a fresh id into, and refusing it here would be a
-/// regression, not a fix.
+/// delegates entirely to `tasks::parse::id_property_unassignable`, the SAME
+/// block/flow/strict-decode predicate `update_task_fields`'s writer (phase
+/// 3a) itself consults, so the two can never define "assignable" two
+/// different ways (design spec §2).
 ///
-/// This reads at the same single-line granularity `raw_scalar_field` does, so
-/// an IMPLICIT block/list value with no `|`/`>`/`{`/`[` marker on the key's
-/// own line (e.g. `task-id:` followed by unmarked indented children) is
-/// indistinguishable here from a truly blank property, and is not caught —
-/// `update_task_fields` (phase 3a) remains the authoritative, correct guard
-/// against clobbering EVERY non-scalar form; this is only a phase-1 forecast
-/// so a doomed assignment can be refused before Task IDs are switched on, not
-/// a second copy of the writer's own never-clobber decision.
+/// An earlier version of this forecast re-implemented only a single-line raw
+/// scan (`raw_scalar_field`), which cannot see an IMPLICIT block/list value
+/// with no `|`/`>`/`{`/`[` marker on the key's own line (e.g. `task-id:`
+/// followed by unmarked indented children): it read that blank first line as
+/// assignable, let phase 2 switch Task IDs on for the vault, and only then
+/// hit the writer's OWN (correct) block detection — after the setting was
+/// already flipped. Reusing the writer's predicate instead of a second copy
+/// closes that gap for every present and future non-scalar shape, not just
+/// the one that was found.
 fn parent_id_unassignable(parent_content: &str, prop: &str) -> bool {
-    match crate::capture_note::raw_scalar_field(parent_content, prop) {
-        None => false,
-        Some(raw) if raw.trim().is_empty() => false,
-        Some(_) => tasks::parse::strict_scalar_field(parent_content, prop, false).is_none(),
-    }
+    tasks::parse::id_property_unassignable(parent_content, prop)
 }
 
 /// Turn Task IDs on for the vault, WITHOUT taking the config lock — the caller

@@ -171,6 +171,36 @@ fn refuses_an_unassignable_parent_id_without_enabling_ids() {
 }
 
 #[test]
+fn refuses_an_unassignable_parent_id_with_an_implicit_block_value_without_enabling_ids() {
+    // The sub-case the flow-map test above does NOT cover: here the id
+    // property's OWN line is blank (`task-id:` with nothing after the
+    // colon) — indistinguishable from a truly-blank scalar to a single-line
+    // scan — but it is followed by UNMARKED indented continuation lines (no
+    // `|`/`>`/`{`/`[` on the key's own line), which is a YAML block mapping.
+    // `ensure_id` (phase 3a) already refuses to stamp over this shape via
+    // `key_opens_block` — the same detection this test's fix reuses in
+    // phase 1's forecast, rather than re-deriving a second notion of
+    // "assignable" that can miss shapes the first one didn't special-case.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+    let root = tasks_root(&paths, &vault);
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id:\n  source: jira\n  ref: ABC-1\n---\n",
+    );
+    let err = set_task_parent(&paths, &vault, &root.join("c.md"), Some(&parent));
+    assert!(
+        err.is_err(),
+        "an implicit block id value must be refused, not treated as a blank/assignable scalar"
+    );
+    assert!(
+        !config_for(&paths, &vault).task_id_enabled,
+        "a refused assignment must not leave Task IDs switched on for the vault"
+    );
+}
+
+#[test]
 fn refuses_a_cycle_through_an_id_less_prospective_parent() {
     // REGRESSION (design spec §3): P has no id but already names C as its
     // parent. The path-keyed graph must see P->C and refuse; an id-keyed one
