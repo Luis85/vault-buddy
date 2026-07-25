@@ -3,11 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { computed, nextTick, onMounted, ref, toRef } from "vue";
 
 import { useTaskDetail } from "../composables/useTaskDetail";
+import { useTaskDetailTaskSet } from "../composables/useTaskDetailTaskSet";
+import { useTaskHierarchy } from "../composables/useTaskHierarchy";
 import { logWarning } from "../logging";
+import { useVaultsStore } from "../stores/vaults";
 import type { AggTask, TaskEditorPatch, TasksConfig } from "../types";
 import { buildTaskPatch, dueOf, scheduledOf } from "../utils/taskFields";
 import { archivedMatcher, orderLists } from "../utils/taskSections";
 import TaskListPicker from "./TaskListPicker.vue";
+import TaskParentRow from "./TaskParentRow.vue";
 
 // The full-height detail surface: a roomy home for one task. It holds its own
 // draft (seeded from the passed task, which carries its own vaultId so writes
@@ -17,6 +21,17 @@ import TaskListPicker from "./TaskListPicker.vue";
 const props = defineProps<{ task: AggTask }>();
 const taskRef = toRef(props, "task");
 const { busy, save, remove, duplicate, openInObsidian } = useTaskDetail(taskRef);
+const vaults = useVaultsStore();
+
+// Parent/subtask hierarchy (Task 8): resolved from the vault's own task set,
+// loaded independently of Tasks.vue's — that view is UNMOUNTED while this one
+// shows (ActionPanel's view switch is one-at-a-time), so there is no shared
+// list to read from here. `reload` is what useTaskHierarchy calls INSTEAD OF
+// its cheap two-row patch when a write turns Task IDs on for the vault: the
+// set was loaded id-suppressed, so EVERY cached id is null, not just the two
+// rows that write touched (Codex P2, PR #77).
+const { allTasks, reload: reloadTaskSet, invalidParentPaths } = useTaskDetailTaskSet(taskRef);
+const { parent, setParent } = useTaskHierarchy(taskRef, allTasks, busy, reloadTaskSet);
 
 // The title trigger in the Tasks list unmounts when this surface opens, so
 // keyboard focus would fall back to <body> and a screen-reader user would get
@@ -42,8 +57,7 @@ const draftList = ref(props.task.list);
 const allLists = ref<string[]>([]);
 const listOrder = ref<string[]>([]);
 const archivedLists = ref<string[]>([]);
-onMounted(async () => {
-  rootEl.value?.focus();
+async function loadLists(): Promise<void> {
   try {
     const [all, cfg] = await Promise.all([
       invoke<string[]>("list_task_lists", { id: props.task.vaultId }),
@@ -55,6 +69,12 @@ onMounted(async () => {
   } catch (e) {
     logWarning(`task detail: could not load task lists: ${String(e)}`);
   }
+}
+onMounted(async () => {
+  rootEl.value?.focus();
+  // Independent loads with their own catch (reloadTaskSet never throws): a
+  // failed task-set read must not also blank the lists picker, and vice versa.
+  await Promise.all([loadLists(), reloadTaskSet()]);
 });
 // Options ordered by the vault's listOrder-then-alphabetical (matching
 // useTaskLists.listsForVault), dropping archived lists EXCEPT the task's own
@@ -123,7 +143,10 @@ function onDeleteKeydown(e: KeyboardEvent) {
   // Only swallow Escape while the confirm is OPEN. When it is closed, let Escape
   // bubble to PanelRoot's window handler so it closes the panel like every other
   // view — an unconditional stopPropagation() would make Escape a dead end on
-  // this page (reviewer + Codex P2, PR #76).
+  // this page (reviewer + Codex P2, PR #76). TaskParentRow's own picker is a
+  // separate, self-contained Escape scope (it stops propagation at ITS OWN
+  // root before an event could ever reach here), so this handler only ever
+  // needs to know about the delete confirm.
   if (e.key === "Escape" && confirming.value) {
     e.stopPropagation();
     // Don't cancel the warning mid-delete: the unlink is already in flight and
@@ -131,6 +154,13 @@ function onDeleteKeydown(e: KeyboardEvent) {
     // blocks the mouse path; this blocks the keyboard path (Codex P2, PR #76).
     if (!busy.value) void cancelConfirm();
   }
+}
+// A plain navigation to a DIFFERENT document — not the same-file race
+// useTaskActions.onOpenTask guards against — but still gated on `busy` so the
+// row can't be clicked away from while every other control here is disabled.
+function openParentDetail() {
+  if (busy.value || !parent.value) return;
+  vaults.openTaskDetail(parent.value);
 }
 </script>
 
@@ -217,6 +247,16 @@ function onDeleteKeydown(e: KeyboardEvent) {
         data-testid="task-detail-list"
       />
     </div>
+
+    <!-- Parent row (Task 8), above where the Subtasks section lands (Task 9). -->
+    <TaskParentRow
+      :parent="parent"
+      :busy="busy"
+      :all-tasks="allTasks"
+      :invalid-paths="invalidParentPaths"
+      @open-parent="openParentDetail"
+      @select="setParent"
+    />
 
     <!-- While confirming a permanent delete the whole row BECOMES the confirm:
          Save/Open/Duplicate are hidden so the only choices are Cancel and the

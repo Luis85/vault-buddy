@@ -381,6 +381,7 @@ watch(
       >
         <TaskDetail
           v-if="store.taskDetailTask"
+          :key="store.taskDetailTask.path"
           :task="store.taskDetailTask"
         />
       </div>
