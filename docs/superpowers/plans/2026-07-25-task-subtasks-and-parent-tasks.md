@@ -1241,12 +1241,24 @@ git commit -m "feat(core): add set_task_parent with validate-before-side-effect 
     }
 
     #[test]
-    fn an_unreadable_vault_refuses_rather_than_reporting_no_links() {
+    fn an_unreachable_vault_refuses_rather_than_reporting_no_links() {
         // Best-effort reads are right for a view, wrong for a guard: an offline
         // vault must not read as "no parent links" (Codex P2, PR #77).
+        // Remove the VAULT, not just the tasks subfolder — an absent tasks
+        // folder under a reachable vault is legitimately "no tasks" (design
+        // spec §2a), so it is vault RESOLUTION that must fail here.
         let (paths, vault) = fixture_with_ids_enabled(&[]);
-        remove_tasks_root(&paths, &vault); // simulate an unavailable vault
+        remove_vault_dir(&paths, &vault);
         assert!(vault_has_parent_links(&paths, &vault).is_err());
+    }
+
+    #[test]
+    fn an_absent_tasks_folder_under_a_reachable_vault_is_simply_link_free() {
+        // The complement: a brand-new vault that has never created a Tasks
+        // folder must NOT be blocked from configuring Task IDs.
+        let (paths, vault) = fixture_with_ids_enabled(&[]);
+        remove_tasks_root(&paths, &vault); // vault still present
+        assert_eq!(vault_has_parent_links(&paths, &vault).unwrap(), false);
     }
 ```
 
@@ -1854,10 +1866,20 @@ it("stamps the current task's cached id from the created child (IDs-off)", async
   // parent's cached row, `children` compares against a still-null id and the new
   // subtask (and the progress line) stay invisible until a reload.
   const parent = task({ vaultId: "v1", id: null, path: "/v1/p.md", title: "Parent", list: "" });
+  let listCalls = 0;
   mockIPC((cmd) => {
     if (cmd === "list_task_lists") return [];
     if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-    if (cmd === "list_tasks") return [parent];
+    // idsEnabled: true takes the RELOAD branch (Task 8), so list_tasks must
+    // return the post-enable state on the second call — the stamped parent AND
+    // the created child. Returning the original id-less parent forever would
+    // make these assertions unreachable (Codex P2, PR #77).
+    if (cmd === "list_tasks") {
+      listCalls += 1;
+      return listCalls === 1
+        ? [parent]
+        : [{ ...parent, id: "pid" }, task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" })];
+    }
     if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: true };
     return undefined;
   });
@@ -1867,7 +1889,7 @@ it("stamps the current task's cached id from the created child (IDs-off)", async
   await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
   await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
   await new Promise((r) => setTimeout(r));
-  expect(parent.id).toBe("pid"); // the parent's cached id was stamped
+  expect(listCalls).toBeGreaterThan(1); // the reload branch ran
   expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1");
   expect(wrapper.findAll('[data-testid="task-detail-subtask"]')).toHaveLength(1);
 });

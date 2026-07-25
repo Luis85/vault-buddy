@@ -400,17 +400,29 @@ first revision of this spec carved out disabling as "unaffected", which
 contradicted its own reasoning: the gate treats the two inputs the same, so the
 guard must too).
 
-`set_task_id_config` therefore **refuses any change to the vault's ID
-configuration — the property name or the enabled flag — while the vault has tasks
-carrying `parent-id`**, with an inline error naming the count and the remedy. That
+`set_task_id_config` therefore **refuses the changes that can orphan links while
+the vault has tasks carrying `parent-id`** — a **property re-point**, or a
+**disable** — with an inline error naming the count and the remedy.
+
+**Enabling under an unchanged property is explicitly exempt.** It cannot orphan
+anything; it makes recorded `parent-id` references resolvable. Refusing it would
+be a catch-22, because a hand-authored hierarchy is invisible *precisely because*
+ids are off: the user would have to delete the very links they were trying to
+reveal in order to be allowed to reveal them (Codex P2, PR #77). That
 scan is the **unfiltered** one (§2): an archived Task's file still carries its
 `parent-id`, so reusing the presentation-filtered `list_tasks` would let the
 settings change through and orphan those links the moment the Task is
 unarchived.
 
 **The scan is `list_tasks_structural` (§2) — fallible, and a failure refuses the
-change.** An unresolvable root or an unreadable task file is an error, never
-"nothing here": otherwise an offline network vault would report "no parent links"
+change.** The layering matters: an **absent** tasks folder under a reachable
+vault is genuinely "no tasks, therefore no parent links" and reads as an empty
+graph, because a vault that has never created one has no hierarchy to protect —
+refusing there would block ID settings for every new vault. **Vault reachability
+is the caller's gate**: `vault_has_parent_links` resolves the vault first and
+errors when *it* cannot be reached, which is what a disconnected network vault
+actually looks like. Anything else — an unreadable root, directory, or task file
+— is an error, never "nothing here": otherwise an offline network vault would report "no parent links"
 and let the setting through, orphaning every relationship once access returns
 (Codex P2, PR #77). `set_task_id_config` refuses conservatively — "couldn't verify
 this vault's tasks, so the Task ID settings weren't changed." Refusing a rare,

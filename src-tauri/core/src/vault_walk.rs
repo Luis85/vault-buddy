@@ -112,11 +112,19 @@ pub(crate) fn dir_entries_checked(
     dir: &Path,
 ) -> std::io::Result<Vec<(PathBuf, std::fs::FileType, String)>> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir)?.flatten() {
-        if let Ok(ft) = entry.file_type() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            out.push((entry.path(), ft, name));
-        }
+    // Per-ENTRY failures are propagated, not skipped. `read_dir` succeeding only
+    // means the directory opened; iteration and `file_type()` can each fail
+    // afterwards on a transient network-vault I/O error. Dropping those (a
+    // `flatten()` and an `if let Ok`) would omit a file or a whole subtree while
+    // still reporting success, so a structural scan would treat a partial graph
+    // as complete and a guard could approve a write past hidden `parent-id`
+    // edges (Codex P2, PR #77). The lenient `dir_entries` wrapper still discards
+    // all of this for presentation callers.
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        out.push((entry.path(), ft, name));
     }
     Ok(out)
 }
