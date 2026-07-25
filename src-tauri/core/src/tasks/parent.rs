@@ -23,7 +23,7 @@ pub fn parent_link_field(content: &str) -> Option<String> {
 /// That decoder exists for TITLES, where falling back to raw text is right
 /// because a title must never vanish. A parent reference is the opposite: a
 /// wrong value manufactures a phantom relationship and would make
-/// `vault_has_parent_links` block ID settings forever. So unsupported and
+/// `count_parent_links` block ID settings forever. So unsupported and
 /// null-ish forms yield None, matching `description_field`'s rules (Codex P2,
 /// PR #77).
 ///

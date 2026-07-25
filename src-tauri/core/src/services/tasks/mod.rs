@@ -6,7 +6,7 @@ use crate::{capture_config, capture_note, capture_paths, tasks};
 mod id_config;
 mod lists;
 mod parent;
-pub use id_config::{set_task_id_config, vault_has_parent_links};
+pub use id_config::{count_parent_links, set_task_id_config};
 pub use lists::{
     create_task_list, delete_task_list, list_task_lists, move_task_to_list, rename_task_list,
     MovedTask,

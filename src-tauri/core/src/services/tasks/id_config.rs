@@ -15,17 +15,25 @@ use crate::capture_config;
 use crate::services::{app_config, ServicePaths};
 use crate::tasks;
 
-/// True when ANY task in the vault carries a `parent-id`. The ID configuration
-/// is locked while this holds: changing the property name OR disabling the
-/// feature would make every recorded reference unresolvable (design spec §2a).
+/// Count of tasks in the vault that carry a `parent-id`. The ID configuration
+/// is locked while this is nonzero: changing the property name OR disabling
+/// the feature would make every recorded reference unresolvable (design spec
+/// §2a). The count itself (not just a bool) is the point — the refusal it
+/// feeds names it, per spec §2a's "inline error naming the count and the
+/// remedy".
 ///
 /// FALLIBLE on purpose. The read paths in this app are best-effort — an
 /// unresolvable root degrades to "nothing here" — which is right for a view but
-/// wrong for a guard: an offline network vault would report "no parent links"
-/// and let the setting through, orphaning every relationship once access
-/// returns. An incomplete inspection is an Err, and the caller refuses
-/// conservatively (design spec §2a).
-pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> Result<bool, String> {
+/// wrong for a guard: an offline network vault would report zero links and let
+/// the setting through, orphaning every relationship once access returns. An
+/// incomplete inspection is an Err, and the caller refuses conservatively
+/// (design spec §2a).
+///
+/// MUST NOT acquire `capture_config::config_write_lock()`. Its only caller,
+/// `set_task_id_config`, calls this WHILE HOLDING that lock — one lock across
+/// the scan and the commit (design spec §2a) — and the lock is NOT reentrant,
+/// so taking it again here would self-deadlock instead of erroring loudly.
+pub fn count_parent_links(paths: &ServicePaths, vault_id: &str) -> Result<usize, String> {
     let (vault_path, root, _cfg) = tasks_root_for(paths, vault_id)?;
     // The registry can list a vault whose folder was moved/deleted (add_task
     // guards its own write the same way — services/tasks/mod.rs). That is
@@ -46,7 +54,8 @@ pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> Result<bo
     // exist, and parent-id is surfaced regardless of the id feature's state.
     Ok(tasks::list_tasks_structural(&root, None)?
         .iter()
-        .any(|t| t.parent_id.is_some()))
+        .filter(|t| t.parent_id.is_some())
+        .count())
 }
 
 /// Persist the vault's Task ID settings (enable + frontmatter property),
@@ -58,9 +67,10 @@ pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> Result<bo
 /// GUARDED (design spec §2a): refuses a PROPERTY CHANGE or a DISABLE outright
 /// while the vault has any task carrying `parent-id` — either one makes
 /// `id_property_for_generation`'s gate stop resolving that property, so every
-/// recorded reference would point at nothing. Enabling under an UNCHANGED
-/// property is exempt — see `vault_has_parent_links` above and the design
-/// spec for why that direction can never orphan a link.
+/// recorded reference would point at nothing. The refusal names the count of
+/// affected tasks and the remedy (spec §2a's exact requirement). Enabling
+/// under an UNCHANGED property is exempt — see `count_parent_links` above and
+/// the design spec for why that direction can never orphan a link.
 pub fn set_task_id_config(
     paths: &ServicePaths,
     id: &str,
@@ -90,7 +100,8 @@ pub fn set_task_id_config(
     // ONE lock across scan + write: without it, set_task_parent could write a
     // new parent link after this scan sees none and before this save commits,
     // orphaning that hierarchy immediately (design spec §2a). NOT reentrant —
-    // vault_has_parent_links below must not (and does not) acquire it again.
+    // count_parent_links below must not (and does not) acquire it again (see
+    // its own doc comment).
     let _guard = capture_config::config_write_lock();
     let mut value = capture_config::vault_config(&app_config(paths), id);
 
@@ -118,13 +129,25 @@ pub fn set_task_id_config(
     // were trying to see (Codex P2, PR #77).
     //
     // A scan failure REFUSES the change — it must never read as "no links".
-    if (property_changing || disabling) && vault_has_parent_links(paths, id)? {
-        return Err(
-            "This vault has tasks with a parent, which reference Task IDs \
-                    under the current property. Clear those parent links before \
-                    changing the Task ID settings."
-                .to_string(),
-        );
+    // The scan itself only runs when a change is actually guarded (the
+    // `count_parent_links` call sits inside this branch, not in the `if`
+    // condition above), so an unrelated field save on a vault with an
+    // unreadable task file is never blocked by a scan it doesn't need.
+    if property_changing || disabling {
+        let count = count_parent_links(paths, id)?;
+        if count > 0 {
+            // Spec §2a: "an inline error naming the count and the remedy."
+            let (task_noun, link_noun) = if count == 1 {
+                ("task", "link")
+            } else {
+                ("tasks", "links")
+            };
+            return Err(format!(
+                "This vault has {count} {task_noun} with a parent, referencing Task IDs \
+                 under the current property. Clear the parent {link_noun} before changing \
+                 the Task ID settings."
+            ));
+        }
     }
 
     value.task_id_enabled = enabled;
@@ -211,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_has_parent_links_detects_any_parent_id() {
+    fn count_parent_links_detects_any_parent_id() {
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
         let root = tasks_root(&vault);
@@ -220,20 +243,42 @@ mod tests {
             "a.md",
             "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
         );
-        assert!(!vault_has_parent_links(&paths, VAULT_ID).unwrap());
+        assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 0);
         write(
             &root,
             "b.md",
             "---\ntype: Task\nstatus: new\ntitle: \"B\"\nparent-id: x\n---\n",
         );
-        assert!(vault_has_parent_links(&paths, VAULT_ID).unwrap());
-        // An ARCHIVED task's file still carries parent-id — it must count.
+        assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 1);
+    }
+
+    // Review finding 1: the ORIGINAL version of this test appended an
+    // archived task carrying parent-id to a fixture that ALREADY had a
+    // non-archived parent-id from a sibling `write` call, so its "archived
+    // tasks count too" assertion passed regardless of whether archived tasks
+    // were scanned at all. The reviewer proved this by mutating the scan to
+    // add `.filter(|t| t.status != "archived")` and watching every test in
+    // this module — including that one — stay green. This fixture's ONLY
+    // `parent-id` is on an archived task, with a non-archived sibling that
+    // carries none, so the assertion is meaningful: it goes red the instant
+    // archived tasks are excluded (verified by re-applying that exact
+    // mutation here — see the task report for the observed red/green).
+    #[test]
+    fn count_parent_links_counts_an_archived_only_parent_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&vault);
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
+        );
         write(
             &root,
             "c.md",
             "---\ntype: Task\nstatus: archived\ntitle: \"C\"\nparent-id: y\n---\n",
         );
-        assert!(vault_has_parent_links(&paths, VAULT_ID).unwrap());
+        assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 1);
     }
 
     #[test]
@@ -273,7 +318,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
         remove_vault_dir(&vault);
-        assert!(vault_has_parent_links(&paths, VAULT_ID).is_err());
+        assert!(count_parent_links(&paths, VAULT_ID).is_err());
     }
 
     #[test]
@@ -283,7 +328,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
         remove_tasks_root(&vault); // vault still present
-        assert!(!vault_has_parent_links(&paths, VAULT_ID).unwrap());
+        assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 0);
     }
 
     #[cfg(unix)]
@@ -292,8 +337,8 @@ mod tests {
         // guard-vs-view (design spec §2a / list.rs's "a view may degrade; a
         // guard must refuse"): list_tasks_structural aborts the whole scan on
         // an unreadable .md instead of silently skipping it, and this guard
-        // must propagate that Err rather than let it collapse to Ok(false) —
-        // a scan that never actually finished must not be read as "no links".
+        // must propagate that Err rather than let it collapse to Ok(0) — a
+        // scan that never actually finished must not be read as "no links".
         //
         // Root bypasses DAC, so chmod 000 is a no-op there and this probe
         // self-skips — SKIPPED HERE: this sandbox runs every test as root.
@@ -302,7 +347,10 @@ mod tests {
         // structural_scan_errors_on_an_unreadable_task). Independently
         // verified for this task by re-running just this test as an
         // unprivileged user (`setpriv --reuid=65534 --regid=65534
-        // --clear-groups`) — see the task report for that output.
+        // --clear-groups`) — see the task report for that output. The
+        // uid-independent counterpart below (review finding 2) exercises the
+        // same strict-error guarantee on every uid, root included, since this
+        // probe's own self-skip cannot.
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
@@ -324,12 +372,42 @@ mod tests {
             );
             return;
         }
-        let out = vault_has_parent_links(&paths, VAULT_ID);
+        let out = count_parent_links(&paths, VAULT_ID);
         // Restore before asserting so the tempdir can clean up either way.
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
             out.is_err(),
             "an unreadable task must refuse the settings change, not report no links"
+        );
+    }
+
+    // Review finding 2: the chmod-based test above self-skips as root (this
+    // sandbox runs every test as root; CI's rust-core job does not), so
+    // mutating the scan's `list_tasks_structural(&root, None)?` to
+    // `.unwrap_or_default()` left every test in this module green on a root
+    // dev machine — the self-skip can never catch a scan that quietly
+    // swallowed its own error. `read_to_string` fails with `InvalidData` for
+    // non-UTF-8 bytes regardless of uid/permissions, so this exercises the
+    // same strict-error guarantee on every uid, root included — the
+    // uid-independent counterpart, mirroring core::tasks::list's own
+    // `structural_scan_errors_on_a_non_utf8_task_file`, itself the documented
+    // "uid-independent counterpart to structural_scan_errors_on_an_
+    // unreadable_task" (list.rs).
+    #[test]
+    fn a_non_utf8_task_file_refuses_rather_than_reporting_no_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&vault);
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
+        );
+        std::fs::write(root.join("b.md"), [0xff, 0xfe]).unwrap();
+        let out = count_parent_links(&paths, VAULT_ID);
+        assert!(
+            out.is_err(),
+            "a non-UTF-8 task file must refuse the settings change, not report no links"
         );
     }
 
@@ -351,10 +429,128 @@ mod tests {
             "b.md",
             "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
         );
-        assert!(vault_has_parent_links(&paths, VAULT_ID).unwrap()); // links exist
-                                                                    // Same enabled (true, from fixture_with_ids_enabled) and the same
-                                                                    // property (None resolves to the already-stored default) -> no
-                                                                    // change -> allowed even though the vault has parent links.
+        assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 1); // links exist
+                                                                      // Same enabled (true, from fixture_with_ids_enabled) and the same
+                                                                      // property (None resolves to the already-stored default) -> no
+                                                                      // change -> allowed even though the vault has parent links.
         assert!(set_task_id_config(&paths, VAULT_ID, true, None).is_ok());
+    }
+
+    // Review finding 3 (spec §2a: "an inline error naming the count and the
+    // remedy"): the refusal must state HOW MANY tasks carry a parent link,
+    // not just that some do.
+    #[test]
+    fn set_task_id_config_refusal_names_the_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&vault);
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
+        );
+        write(
+            &root,
+            "c.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"C\"\ntask-id: c\nparent-id: a\n---\n",
+        );
+        // Disabling is one of the two guarded changes; two tasks (b, c) carry
+        // parent-id.
+        let err = set_task_id_config(&paths, VAULT_ID, false, None).unwrap_err();
+        assert!(
+            err.contains('2'),
+            "expected the refusal to name the count (2), got: {err}"
+        );
+    }
+
+    // Review finding 4: the write-strict property validation moved from the
+    // shell (task_commands.rs) to core with no test following it to its new
+    // home — neither branch of `is_valid_id_property`'s rejection (a bad
+    // charset, or a reserved structured-task key) had coverage here.
+    #[test]
+    fn set_task_id_config_rejects_an_invalid_or_reserved_property() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture_with_ids_disabled(dir.path(), &[]);
+        // Charset: a space is not letters/digits/-/_ (mirrors
+        // core::tasks::id's own is_valid_id_property_charset_and_reserved).
+        let err = set_task_id_config(&paths, VAULT_ID, true, Some("task id")).unwrap_err();
+        assert!(
+            err.contains("Invalid ID property name"),
+            "expected the charset error, got: {err}"
+        );
+        // Reserved: "status" is one of RESERVED_TASK_KEYS.
+        let err = set_task_id_config(&paths, VAULT_ID, true, Some("status")).unwrap_err();
+        assert!(
+            err.contains("Invalid ID property name"),
+            "expected the reserved-key error, got: {err}"
+        );
+    }
+
+    // Review finding 6: the guard compares RESOLVED property names, not raw
+    // `Option`s — a stored `None` and an incoming `Some("task-id")` both name
+    // the default and must not read as a re-point. This seam is only
+    // observable on a vault WITH parent links: with none present the guard
+    // never fires either way (the same vacuity finding 1 pins), so both tests
+    // below plant a parent link before asserting the save is ALLOWED, not
+    // refused.
+    #[test]
+    fn resolved_name_treats_an_explicit_default_as_unchanged() {
+        // stored: None (the default — fixture_with_ids_enabled never sets
+        // taskIdProperty); incoming: Some("task-id"), spelling that same
+        // default out loud.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&vault);
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
+        );
+        assert!(
+            set_task_id_config(&paths, VAULT_ID, true, Some("task-id")).is_ok(),
+            "None -> Some(\"task-id\") names the same property and must not refuse"
+        );
+    }
+
+    #[test]
+    fn resolved_name_treats_the_default_spelled_either_way_as_unchanged() {
+        // The inverse direction: stored explicitly as Some("task-id") (a
+        // hand-edited config.json spelling out the default); incoming: None
+        // (omit the field, which also resolves to the default).
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            format!(
+                r#"{{ "vaults": {{ "{VAULT_ID}": {{ "taskIdEnabled": true, "taskIdProperty": "task-id" }} }} }}"#
+            ),
+        )
+        .unwrap();
+        let root = tasks_root(&vault);
+        std::fs::create_dir_all(&root).unwrap();
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: a\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: b\nparent-id: a\n---\n",
+        );
+        assert!(
+            set_task_id_config(&paths, VAULT_ID, true, None).is_ok(),
+            "Some(\"task-id\") -> None resolves to the same property and must not refuse"
+        );
     }
 }
