@@ -341,7 +341,7 @@ mod tests {
         let (paths, vault) = fixture_with_ids_enabled(dir.path(), &["p.md", "c.md"]);
         let root = tasks_root(&paths, &vault);
         let child = root.join("c.md");
-        update_task(
+        let set_result = update_task(
             &paths,
             &vault,
             &child,
@@ -349,6 +349,20 @@ mod tests {
             ParentOp::Set(root.join("p.md")),
         )
         .unwrap();
+        // Review finding 3: the vault (fixture_with_ids_enabled) ALREADY had
+        // Task IDs on before this Set, so idsEnabled must read false here —
+        // this is the only place in the suite a Set on an already-enabled
+        // vault checks that field at all (the sibling bootstrap test,
+        // `a_parent_only_set_bootstraps_ids_and_reports_the_childs_own_id`,
+        // only covers the ids-were-OFF/turned-on arm). A hardcoded
+        // `resolved.ids_enabled` -> `true` at update.rs:177 left every one
+        // of the 615 core tests green without this assertion — a false
+        // "Task IDs were turned on for this vault" disclosure on every
+        // parent assignment in an already-enabled vault.
+        assert!(
+            !set_result.ids_enabled,
+            "ids were already on before this call, not turned on by it"
+        );
         assert!(std::fs::read_to_string(&child)
             .unwrap()
             .contains("parent-id"));
