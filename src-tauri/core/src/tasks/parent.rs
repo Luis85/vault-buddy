@@ -72,6 +72,19 @@ mod tests {
     }
 
     #[test]
+    fn a_continued_plain_scalar_reads_as_no_parent() {
+        // YAML folds `parent-id: abc` + an indented `def` into "abc def", so
+        // returning "abc" would report a value Obsidian disagrees with — and
+        // "abc" may be ANOTHER task's id, resolving the hierarchy to the wrong
+        // parent (Codex P2, PR #77). Reject, like the other multi-line forms.
+        let c = "---\ntype: Task\nparent-id: abc\n  def\ntitle: T\n---\n";
+        assert_eq!(parent_id_field(c), None);
+        // A single-line plain value is of course still fine.
+        let ok = "---\ntype: Task\nparent-id: abc\ntitle: T\n---\n";
+        assert_eq!(parent_id_field(ok), Some("abc".to_string()));
+    }
+
+    #[test]
     fn null_comment_and_unterminated_forms_read_as_no_parent() {
         // A parent reference is a REFERENCE: a wrong value is worse than none.
         // These would otherwise become phantom ids and permanently block the

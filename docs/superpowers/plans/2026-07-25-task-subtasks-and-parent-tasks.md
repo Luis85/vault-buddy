@@ -854,7 +854,7 @@ git commit -m "feat(core): render_task/create_task write an optional parent pair
 - Modify: `src-tauri/core/src/services/tasks/mod.rs`
 
 **Interfaces:**
-- Consumes: `tasks::{parent_index, would_create_cycle, ambiguous_ids, is_valid_id_property, compose_parent_link, update_task_fields, list_tasks, is_task}`; `capture_config` for the vault config + `ConfigWriteLock`.
+- Consumes: `tasks::{parent_index_for_validation, would_create_cycle, ambiguous_ids, is_valid_id_property, compose_parent_link, update_task_fields, list_tasks_structural, is_task}` — the VALIDATION index, never the display `parent_index`; `capture_config` for the vault config + `ConfigWriteLock`.
 - Produces: `services::set_task_parent(paths, vault_id, child_path, parent_path: Option<&Path>) -> Result<ParentSet, String>` where `ParentSet { parent_id: Option<String>, parent_link: Option<String> }`. `parent_path = None` **clears** the pair.
 
 **Read the spec's §2 before writing this — the phase order is the point of the task.**
@@ -1014,7 +1014,15 @@ pub fn set_task_parent(
     // The graph is keyed on PATHS with edges resolved through ids, so an id-less
     // task still contributes its outgoing edge and the check is never skipped
     // for want of an id (design spec §3).
-    let index = tasks::parent_index(&all);
+    // VALIDATION index, not the display one: parent_index drops the edges of a
+    // pre-existing on-disk cycle so both rows render parentless, but validating
+    // against that filtered graph accepts writes that CLOSE a cycle. With
+    // A->B->A and C->A on disk, the dropped edges make ancestors(C) = [A], B is
+    // never seen, and assigning B's parent to C writes B->C->A->B (Codex P2,
+    // PR #77). parent_index_for_validation keeps cyclic edges (still dropping
+    // ambiguous ids, which resolve nothing either way); `ancestors` is bounded,
+    // so walking a cyclic graph still terminates.
+    let index = tasks::parent_index_for_validation(&all);
     if tasks::would_create_cycle(&index, &child, &parent) {
         return Err("That would make a task its own ancestor.".to_string());
     }
@@ -1023,7 +1031,11 @@ pub fn set_task_parent(
     let resolved = resolve_parent_for_write(&vault, &root, &parent, &child, &prop, &cfg, || {
         // Re-validation closure, run only if the config changed under the lock.
         let all = tasks::list_tasks_structural(&root, Some(&prop))?;
-        Ok::<bool, String>(tasks::would_create_cycle(&tasks::parent_index(&all), &child, &parent))
+        Ok::<bool, String>(tasks::would_create_cycle(
+            &tasks::parent_index_for_validation(&all),
+            &child,
+            &parent,
+        ))
     })?;
 
     // ---- Phase 3b: write the child's pair. ----

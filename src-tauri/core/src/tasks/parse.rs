@@ -254,6 +254,16 @@ pub(super) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Optio
     } else if raw.starts_with('\'') {
         super::description::decode_single_quoted(raw)?
     } else {
+        // A PLAIN scalar can continue onto following indented lines: YAML folds
+        // `key: abc` + an indented `def` into `abc def`. Surfacing only the first
+        // physical line would report a value Obsidian does not agree with — and
+        // for an id REFERENCE that is worse than useless: `abc` may be some other
+        // task's id, so the hierarchy would resolve to the WRONG parent, or a
+        // guard would see a phantom reference (Codex P2, PR #77). Reject, exactly
+        // as the multi-line quoted and block forms above are rejected.
+        if plain_scalar_continues(content, key) {
+            return None;
+        }
         let stripped = strip_inline_comment(raw).trim();
         if matches!(stripped, "null" | "Null" | "NULL" | "~") {
             return None;
@@ -261,6 +271,37 @@ pub(super) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Optio
         stripped.to_string()
     };
     (!decoded.trim().is_empty()).then_some(decoded)
+}
+
+/// True when the top-level `key`'s PLAIN value continues onto the next line —
+/// i.e. the line after it is non-empty and indented, which YAML folds into the
+/// same scalar. Callers use this to refuse a value they would otherwise read
+/// only the first line of.
+fn plain_scalar_continues(content: &str, key: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    let mut at_key = false;
+    for line in lines {
+        let t = line.trim_end();
+        if t == "---" {
+            return false; // closing fence
+        }
+        if at_key {
+            // The line immediately after the key's own line.
+            return !t.trim().is_empty() && t.starts_with([' ', '\t']);
+        }
+        if t.starts_with([' ', '\t']) {
+            continue; // nested line, not a top-level key
+        }
+        if let Some((k, _)) = t.split_once(':') {
+            if k.trim().eq_ignore_ascii_case(key) {
+                at_key = true;
+            }
+        }
+    }
+    false
 }
 
 /// True when the top-level `key:` line (exact, ON-DISK casing) opens a BLOCK
