@@ -221,12 +221,41 @@ In `src/types.ts`, add to the `TaskItem` interface:
   parentLink: string | null;
 ```
 
-- [ ] **Step 9: Run the full core suite + gates**
+- [ ] **Step 9: Add an UNFILTERED walk for structural scans**
+
+`list_tasks` drops `status: archived` at `list.rs:128` — it is a *presentation*
+function. But an archived Task's file still carries its `parent-id`, so every
+hierarchy scan (the cycle index in Task 5, the settings guard in Task 6) must see
+them: otherwise a cycle routed `A → B(archived) → C` is invisible, and the guard
+lets an ID-settings change through that orphans archived links.
+
+Write the failing test:
+
+```rust
+    #[test]
+    fn list_tasks_including_archived_keeps_archived_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "a.md", "---\ntype: Task\nstatus: new\ntitle: \"Open\"\n---\n");
+        write(root, "b.md", "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\nparent-id: x\n---\n");
+        assert_eq!(list_tasks(root, None).len(), 1); // presentation: archived hidden
+        let all = list_tasks_including_archived(root, None);
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|t| t.parent_id.as_deref() == Some("x")));
+    }
+```
+
+Implement by extracting the archived filter into a flag: keep `list_tasks(root,
+id_property)` as-is (delegating with `include_archived: false`) and add
+`list_tasks_including_archived(root, id_property)`. One walk implementation, two
+entry points — do not copy the walk.
+
+- [ ] **Step 10: Run the full core suite + gates**
 
 Run: `cd src-tauri && cargo fmt && cd core && cargo test --lib && cargo clippy --all-targets -- -D warnings`
 Expected: all pass, no warnings.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add -A && git commit -m "feat(core): read the parent-id/parent keys and surface them on TaskItem/TaskDto"
@@ -791,7 +820,9 @@ pub fn set_task_parent(
     // Read ids UNCONDITIONALLY — hand-authored tasks carry ids even while
     // generation is off, and an index built from the gated walk would be empty,
     // passing the cycle check vacuously (design spec §2).
-    let all = tasks::list_tasks(&root, Some(&prop));
+    // UNFILTERED: list_tasks hides archived tasks, but their files still carry
+    // parent-id, so a cycle through an archived task would be invisible.
+    let all = tasks::list_tasks_including_archived(&root, Some(&prop));
     let ambiguous = tasks::ambiguous_ids(&all);
     let parent_existing_id = read_own_id(&parent, &prop);
     if let Some(pid) = parent_existing_id.as_deref() {
@@ -812,7 +843,7 @@ pub fn set_task_parent(
     // ---- Phases 2+3a: the SHARED resolve path (also used by add_task). ----
     let resolved = resolve_parent_for_write(&vault, &root, &parent, &prop, &cfg, || {
         // Re-validation closure, run only if the config changed under the lock.
-        let all = tasks::list_tasks(&root, Some(&prop));
+        let all = tasks::list_tasks_including_archived(&root, Some(&prop));
         tasks::would_create_cycle(&tasks::parent_index(&all), &child, &parent)
     })?;
 
@@ -821,7 +852,10 @@ pub fn set_task_parent(
         &root,
         &child,
         &[
-            ("parent-id", Some(&resolved.parent_id)),
+            // ensure_id preserves ANY usable existing value, so an inherited
+            // `task-id: "[legacy]"` would otherwise emit a bare flow sequence the
+            // reader rejects. quote_id_if_needed keeps generated base36 bare.
+            ("parent-id", Some(&quote_id_if_needed(&resolved.parent_id))),
             ("parent", Some(&crate::yaml_scalar::yaml_quote(&resolved.link))),
         ],
         Some(&prop),
@@ -878,6 +912,31 @@ fn resolve_parent_for_write(
     let link = tasks::compose_parent_link(parent, vault, &read_title(parent))
         .ok_or("The parent task is outside the vault.")?;
     Ok(ResolvedParent { parent_id, link })
+}
+```
+
+Add this helper beside the writer (and use it in the `create_task` path too, so
+both writers quote identically):
+
+```rust
+/// Emit an id bare when it is a plain-safe token, quoted otherwise. Every
+/// GENERATED id is base36 and stays bare, matching how the id property itself is
+/// written. But `ensure_id` preserves any usable non-empty existing value, so a
+/// hand-authored `task-id: "[legacy]"` yields the effective id `[legacy]` —
+/// emitting `parent-id: [legacy]` bare would make it a YAML flow SEQUENCE, which
+/// the lenient reader rejects, unresolving the link the instant it is written
+/// (Codex P2, PR #77).
+fn quote_id_if_needed(id: &str) -> String {
+    let plain = !id.is_empty()
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if plain { id.to_string() } else { crate::yaml_scalar::yaml_quote(id) }
+}
+
+#[test]
+fn quote_id_if_needed_keeps_base36_bare_and_quotes_the_rest() {
+    assert_eq!(quote_id_if_needed("k3m9x2qp"), "k3m9x2qp");
+    assert_eq!(quote_id_if_needed("[legacy]"), "\"[legacy]\"");
+    assert_eq!(quote_id_if_needed("has space"), "\"has space\"");
 }
 ```
 
@@ -946,7 +1005,11 @@ pub fn vault_has_parent_links(paths: &ServicePaths, vault_id: &str) -> bool {
     let Ok((_, root)) = resolve_vault_and_tasks_root(paths, vault_id) else {
         return false;
     };
-    tasks::list_tasks(&root, None).iter().any(|t| t.parent_id.is_some())
+    // UNFILTERED: an archived task's file still carries parent-id, so reusing
+    // the presentation-filtered list would let a settings change orphan it.
+    tasks::list_tasks_including_archived(&root, None)
+        .iter()
+        .any(|t| t.parent_id.is_some())
 }
 ```
 
@@ -1034,7 +1097,43 @@ definition.
 
 - [ ] **Step 3: Handle it in `update_task`**
 
-`parent_path` / `clear_parent` must count toward the emptiness decision AND be dispatched even when no ordinary field changed (clear wins over set, matching `clearDue`). Order: run the field write first when there are field updates, then `services::set_task_parent`; a patch with only relationship fields skips straight to the latter. Fold its result into the return. Change the return type from `Option<String>` to a small DTO:
+`parent_path` / `clear_parent` must count toward the emptiness decision AND be dispatched even when no ordinary field changed (clear wins over set, matching `clearDue`).
+
+**Ordering matters for a COMBINED patch** (a title change *and* a parent assignment in one call, which an IPC caller may legally send). Writing the fields first and then failing parent validation commits the title while returning an error — the frontend reverts its whole optimistic patch and reports failure, yet the title is changed on disk (Codex P2, PR #77). So:
+
+1. Run the parent's **read-only validation first** (phase 1 of the shared path) — a rejected parent must write nothing.
+2. Then the ordinary field write, if any.
+3. Then the parent write.
+4. A parent failure at step 3 (an I/O failure, not validation) is a real partial state no ordering removes without a journal — report it in the **fields-saved** form so the caller does not claim total failure:
+
+```rust
+    Err(format!("Saved fields, but couldn't set the parent: {e}"))
+```
+
+This mirrors `useTaskDetail`'s existing `saveErrorMessage` for a failed list move — reuse that wording shape.
+
+Add the regression:
+
+```rust
+    #[test]
+    fn a_combined_patch_with_an_invalid_parent_writes_nothing() {
+        // Title + a self-parent in one patch: validation runs first, so the
+        // title must NOT be committed (Codex P2, PR #77).
+        let (paths, vault) = fixture_with_ids_enabled(&["a.md"]);
+        let root = tasks_root(&paths, &vault);
+        let p = root.join("a.md");
+        let before = std::fs::read_to_string(&p).unwrap();
+        let patch = TaskPatchDto {
+            title: Some("Renamed".into()),
+            parent_path: Some(p.to_string_lossy().into_owned()), // self-parent
+            ..Default::default()
+        };
+        assert!(apply_task_patch(&paths, &vault, &p, patch).is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), before); // title untouched
+    }
+```
+
+Fold the parent result into the return. Change the return type from `Option<String>` to a small DTO:
 
 ```rust
 #[derive(serde::Serialize)]
@@ -1134,11 +1233,29 @@ it("sends the parent PATH and clears with clearParent", async () => {
   await h.setParent(null);
   expect(calls[1][1].patch).toEqual({ clearParent: true });
 });
+
+it("writes the stamped id onto the PARENT's cached row (IDs-off bootstrap)", async () => {
+  // With IDs off — the default — the loaded parent row has id: null. The backend
+  // enables IDs and stamps it, returning parentId. If only the child is updated,
+  // the parent's cached id stays null and (since resolution compares ids) the
+  // relationship the user just made is invisible until a reload (Codex P1, PR #77).
+  const parent = task({ vaultId: "v1", id: null, path: "/v1/p.md", title: "Parent" });
+  const child = task({ vaultId: "v1", id: null, path: "/v1/c.md", title: "Child" });
+  mockIPC((cmd) => (cmd === "update_task" ? { id: "cid", parentId: "pid", parentLink: "[[Tasks/p]]" } : undefined));
+  const all = ref([parent, child]);
+  const h = useTaskHierarchy(ref(child), all);
+  await h.setParent("/v1/p.md");
+  expect(all.value.find((t) => t.path === "/v1/p.md")!.id).toBe("pid"); // parent stamped in cache
+  expect(child.parentId).toBe("pid");
+  expect(h.parent.value?.path).toBe("/v1/p.md"); // resolves WITHOUT a reload
+});
 ```
 
 - [ ] **Step 2: Implement the composable**
 
 Mirror `useTaskDetail`'s discipline exactly: one shared `busy` guard, optimistic update, revert + `notifications.error` on failure, `logWarning`. Scope every lookup by `vaultId` before comparing ids.
+
+**On success, write the response's `parentId` onto the selected PARENT row's cached `id` as well as the child's `parentId`** — in the IDs-off default the parent's cached id is `null` until the backend stamps it, and resolution compares ids, so skipping this leaves the new relationship invisible until a reload.
 
 - [ ] **Step 3: Build `TaskParentPicker.vue`**
 

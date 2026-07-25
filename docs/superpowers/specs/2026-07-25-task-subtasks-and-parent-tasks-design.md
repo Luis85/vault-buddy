@@ -181,6 +181,17 @@ deleted) renders as top-level while its raw keys stay intact on disk.
 together and cleared together, so the two can never disagree about *whether*
 there is a parent.
 
+`parent-id` is emitted **bare when the id is a plain-safe token** (`[A-Za-z0-9_-]+`,
+which every generated base36 id is — matching how the id property itself is
+written, so the two lines look consistent in one file) and **YAML-quoted
+otherwise**. The quoting is not hypothetical: `ensure_id` preserves *any* usable
+non-empty existing value, not only generated ones, so a hand-authored
+`task-id: "[legacy]"` resolves to the effective id `[legacy]`. Emitting
+`parent-id: [legacy]` bare would make it a YAML flow *sequence*, which the lenient
+reader then rejects — leaving the relationship unresolved the instant it was
+written (Codex P2, PR #77). Both write paths — `set_task_parent` and the
+create path — quote through the same helper.
+
 Both keys join `RESERVED_TASK_KEYS` (`tasks/mod.rs`) so a template can never seed
 them and neither can be configured as the task-id property. As with `description`
 (GAP-77) and `scheduled` (GAP-68), this closes a formerly-settable edge: a vault
@@ -249,6 +260,16 @@ spec's own guarantee that a cycle rejection writes nothing (Codex P2, PR #77).
   still represented and the check is never skipped for want of an id. With
   dormant ids read and the graph keyed on paths, every recorded edge is visible
   and the pre-stamp check is complete.
+
+  **The scan must include archived Tasks.** `list_tasks` deliberately drops
+  `status: archived` documents — it is a *presentation* function — but an
+  archived Task's file still carries its `parent-id`. Building the validation
+  index from the filtered list would silently erase every edge through an
+  archived Task, so a cycle routed through one (`A → B(archived) → C`) would be
+  invisible and the write would create it. Hierarchy scans therefore use an
+  **unfiltered** walk of every `type: Task` document; the archived filter belongs
+  to the views, not to a structural invariant (Codex P2, PR #77 — raised against
+  the §2a guard, which has the same root cause and the same fix).
 
 **Phase 2 — enable (idempotent, additive):** if IDs are off, enable them (a
 `ConfigWriteLock`-serialized read-modify-write of `task_id_enabled`, the
@@ -336,7 +357,11 @@ guard must too).
 
 `set_task_id_config` therefore **refuses any change to the vault's ID
 configuration — the property name or the enabled flag — while the vault has tasks
-carrying `parent-id`**, with an inline error naming the count and the remedy. It
+carrying `parent-id`**, with an inline error naming the count and the remedy. That
+scan is the **unfiltered** one (§2): an archived Task's file still carries its
+`parent-id`, so reusing the presentation-filtered `list_tasks` would let the
+settings change through and orphan those links the moment the Task is
+unarchived. It
 holds the `ConfigWriteLock` across **both** the parent-link scan and the write,
 so a concurrent `set_task_parent` (which holds the same lock through its phases
 2–3, §2) cannot slip a new hierarchy in between this scan and its commit.
@@ -459,6 +484,17 @@ Additive, no new read command:
   relationship fields have to count toward "is there anything to do?", and be
   dispatched even when no scalar field changed. Otherwise every picker action is
   a silent no-op (Codex P1, PR #77).
+- **A combined patch validates the parent BEFORE writing any scalar field.** An
+  IPC caller may legally send a title change *and* a parent assignment in one
+  patch. Writing the fields first and then failing parent validation would commit
+  the title while returning an error — the frontend reverts its whole optimistic
+  patch and reports failure, yet the title is changed on disk, surfacing as
+  divergence on the next reload (Codex P2, PR #77). Running the read-only
+  validation first means a rejected parent writes *nothing*, preserving the §2
+  guarantee. A parent failure that happens later, at the *write* stage, is a
+  genuine partial state no ordering can remove without a journal; it is reported
+  in the fields-saved form ("Saved fields, but couldn't set the parent: …"),
+  reusing the exact pattern `useTaskDetail` already applies to a failed list move.
 - **`add_task`** gains an optional `parent_path`, so "Add subtask" is one call —
   running the full shared resolve path (§2), not validation alone.
 
@@ -494,6 +530,16 @@ serializing save/delete/duplicate/parent-set, optimistic update with revert +
 toast on failure, and `taskDetailBusy` gating the header Back and the panel's
 `refresh()`. Child rows reuse the row-level busy set so a child's status toggle
 can't race a parent write.
+
+**A parent-set must write the stamped id back onto the PARENT's cached row.** In
+the default IDs-off state the loaded parent row has `id: null`; the backend
+enables IDs, stamps the parent, and returns its `parentId`. Updating only the
+child's optimistic fields would leave the parent's cached `id` null — and since
+the frontend resolves parents and children by comparing ids, the relationship the
+user just created would be **invisible until a reload** (Codex P1, PR #77). So the
+response's `parentId` is written onto the selected parent row as well as the
+child's `parentId`. The regression test must run with IDs **off** — a fixture with
+pre-stamped parents cannot catch this.
 
 **Drilling detail→detail must remount the surface.** This increment introduces
 the first navigation from one Task Detail to another (a parent chip or a child
@@ -635,7 +681,11 @@ with the fallback's LABEL backslash-escaping `\`, `[`, `]` in the parent title**
 terminating); `ancestors` bounded by its visited set; `parent_index` ignoring
 unresolvable ids; **`ambiguous_ids` detecting a duplicated own-id, `parent_index`
 omitting it, and a cycle walk therefore never following a collapsed edge**;
-**an ID-LESS task's outgoing edge still present in the path-keyed index — the
+**an ARCHIVED task's edges present in the hierarchy index and counted by the
+settings guard (the unfiltered scan, §2) — including a cycle routed
+`A → B(archived) → C`**; **a `parent-id` whose value is not plain-safe
+(a hand-authored `task-id: "[legacy]"`) written QUOTED and reading back
+equal**; **an ID-LESS task's outgoing edge still present in the path-keyed index — the
 `P(no id, parent-id: c)` + `C(id: c)` case, where making P the parent of C must
 be refused as a cycle rather than skipped for want of a parent id**;
 `render_task` with and without a parent (byte-identical to today when absent);
@@ -663,7 +713,9 @@ must not be written under the stale property. Add-subtask with IDs OFF must
 enable, stamp the parent, and create a child carrying a resolvable `parent-id` —
 the bootstrap regression for the create path.**
 
-**Frontend (Vitest):** **drilling from one detail to another re-seeds the drafts
+**Frontend (Vitest):** **an IDs-OFF parent-set writes the returned id onto the
+parent's cached row, so the new relationship renders without a reload**;
+**drilling from one detail to another re-seeds the drafts
 — assert the rendered title/description inputs show the NEW task, not the
 previous one, and that a Save after drilling writes the new task's path**;
 **a parent-only patch (`{parentPath}` / `{clearParent}`) actually dispatches
