@@ -546,7 +546,10 @@ Additive, no new read command:
   reflects a freshly-stamped parent without a reload — the same reason it already
   returns the stamped id — plus **`idsEnabled`**, true only when *this call*
   turned Task IDs on (§2). `add_task` returns the same flag alongside the created
-  task.
+  task — its result is wrapped (the task's fields `serde(flatten)`ed so the wire
+  shape stays backward-compatible) rather than left a bare `TaskDto`, since Add
+  subtask is the path most likely to perform a vault's first hierarchy operation
+  and therefore the one that most often turns IDs on.
 - **A parent-only patch must not be mistaken for an empty one.** `update_task`
   no-ops an empty patch, and the Parent picker's Change/Clear sends exactly
   `{parentPath}` or `{clearParent: true}` with no ordinary field updates — so the

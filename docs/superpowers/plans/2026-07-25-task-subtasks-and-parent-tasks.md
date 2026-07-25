@@ -1396,7 +1396,28 @@ Update `src/types.ts` and every frontend caller of `update_task` accordingly (`u
 
 - [ ] **Step 4: Thread the parent through `add_task` — via the FULL shared path**
 
-Add `parent_path: Option<String>` to the command and to `services::add_task`. In the service, run the **whole** `resolve_parent_for_write` path from Task 5 — validate, lock, re-check, enable IDs, stamp the parent, compose the link — then pass the resulting pair into `tasks::create_task` while the guard is still held. Phase 1's read-only validation alone is **not** enough here.
+Add `parent_path: Option<String>` to the command and to `services::add_task`.
+
+**`add_task` must also return the `idsEnabled` flag.** Add subtask is the most
+likely FIRST hierarchy operation in a vault, so it is the path that most often
+turns Task IDs on — but a plain `TaskDto` gives the frontend no way to know, and
+the disclosure the design promises (§2) cannot be implemented (Codex P2, PR #77).
+Wrap the result:
+
+```rust
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddTaskResult {
+    #[serde(flatten)]
+    pub task: TaskDto,
+    /// True only when THIS call turned Task IDs on for the vault.
+    pub ids_enabled: bool,
+}
+```
+
+Flattening keeps the wire shape backward-compatible for every existing
+`add_task` caller (the task's fields stay top-level); only the new boolean is
+added. Update `src/types.ts` and the frontend `add_task` call sites accordingly. In the service, run the **whole** `resolve_parent_for_write` path from Task 5 — validate, lock, re-check, enable IDs, stamp the parent, compose the link — then pass the resulting pair into `tasks::create_task` while the guard is still held. Phase 1's read-only validation alone is **not** enough here.
 
 Write this failing test first:
 
@@ -1455,6 +1476,18 @@ it("resolves the parent and children per vault, ignoring cross-vault ids", () =>
   const foreign = task({ vaultId: "v2", id: "x", parentId: "p", path: "/v2/x.md" });
   const h = useTaskHierarchy(ref(a), ref([a, b, foreign]));
   expect(h.children.value.map((t) => t.path)).toEqual(["/v1/c.md"]);
+});
+
+it("renders both rows of an on-disk cycle as top-level, matching core", () => {
+  // Core's drop_cyclic_edges removes both edges of A->B->A. Straight id matching
+  // would show them as each other's parent/subtask — the two surfaces
+  // disagreeing about the same vault (Codex P2, PR #77).
+  const a = task({ vaultId: "v1", id: "a", parentId: "b", path: "/v1/a.md" });
+  const b = task({ vaultId: "v1", id: "b", parentId: "a", path: "/v1/b.md" });
+  const all = ref([a, b]);
+  expect(useTaskHierarchy(ref(a), all).parent.value).toBeNull();
+  expect(useTaskHierarchy(ref(a), all).children.value).toEqual([]);
+  expect(useTaskHierarchy(ref(b), all).parent.value).toBeNull();
 });
 
 it("resolves nothing through a duplicated id, matching core's ambiguity rule", () => {
@@ -1526,6 +1559,31 @@ function ambiguousIds(tasks: AggTask[], vaultId: string): Set<string> {
     seen.set(t.id, (seen.get(t.id) ?? 0) + 1);
   }
   return new Set([...seen].filter(([, n]) => n > 1).map(([id]) => id));
+}
+```
+
+**And drop CYCLIC edges, mirroring `drop_cyclic_edges` in core (Task 3).** Core
+removes the edges of every node on a pre-existing `A→B→A` so both rows resolve
+parentless; a frontend doing straight id matching would still render them as each
+other's parent and subtask, so the two surfaces would disagree about the same
+vault (Codex P2, PR #77). Build the path-keyed map, then walk each node's
+ancestors and drop the edge when the walk revisits its start:
+
+```ts
+// Mirrors core::tasks::hierarchy::drop_cyclic_edges. A pre-existing on-disk
+// cycle must render both rows top-level, not as each other's parent.
+function dropCyclicEdges(edges: Map<string, string>): void {
+  for (const start of [...edges.keys()]) {
+    const seen = new Set<string>();
+    let cur: string | undefined = start;
+    while (cur !== undefined) {
+      const next: string | undefined = edges.get(cur);
+      if (next === start) { edges.delete(start); break; }
+      if (next === undefined || seen.has(next)) break;
+      seen.add(next);
+      cur = next;
+    }
+  }
 }
 ```
 
@@ -1650,7 +1708,7 @@ it("Add subtask creates a child with this task as the parent and inherits its Li
     if (cmd === "list_task_lists") return [];
     if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
     if (cmd === "list_tasks") return [parent];
-    if (cmd === "add_task") return task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" });
+    if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
     return undefined;
   });
   const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -1699,7 +1757,7 @@ it("stamps the current task's cached id from the created child (IDs-off)", async
     if (cmd === "list_task_lists") return [];
     if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
     if (cmd === "list_tasks") return [parent];
-    if (cmd === "add_task") return task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" });
+    if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: true };
     return undefined;
   });
   const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
