@@ -377,7 +377,28 @@ pub(super) fn add_subtask(
     // `compose_parent_link`'s fallback form only depends on the child's
     // DIRECTORY (see its own doc comment), so resolving the link against this
     // prospective path is safe even though it is not yet the real file.
-    let prospective_child = target_root.join(format!("{}.md", tasks::task_basename(title, today)));
+    //
+    // CANONICALIZED — not the caller's `target_root` verbatim. Below,
+    // `resolve_parent_for_write` strips a CANONICAL vault path off this child
+    // (`uri::vault_relative`'s `strip_prefix` does no canonicalization of its
+    // own), so a `target_root` built from the vault's REGISTRY path — a
+    // symlink, or, unconditionally on Windows, obsidian.json's `C:\...`
+    // against canonicalize's `\\?\C:\...` (the same divergence `open_task`
+    // guards against) — would never match, and `compose_parent_link` would
+    // wrongly report the child "outside the vault" for any parent whose List
+    // folder carries a wikilink metacharacter (`parent_link.rs`'s markdown
+    // fallback is the only branch that resolves the child at all). By the
+    // time that failure surfaced, phase 2/3a above had already enabled Task
+    // IDs and stamped the parent — a rejected assignment with a silent side
+    // effect and no child created. `set_task_parent` never hit this: its
+    // child already exists on disk and is canonicalized up front via
+    // `canonical_task_in_root`. `target_root` already exists here (`add_task`
+    // always creates it before calling this), so this only fails on a
+    // genuine race/removal.
+    let canon_target_root = std::fs::canonicalize(target_root)
+        .map_err(|e| format!("Cannot resolve the list folder: {e}"))?;
+    let prospective_child =
+        canon_target_root.join(format!("{}.md", tasks::task_basename(title, today)));
 
     let ctx = ParentWriteCtx {
         paths,

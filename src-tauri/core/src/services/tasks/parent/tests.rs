@@ -298,6 +298,87 @@ fn enables_ids_stamps_both_and_writes_a_resolvable_pair() {
     assert!(child.contains("parent: \"[[")); // a link was written
 }
 
+#[cfg(unix)]
+#[test]
+fn add_subtask_resolves_the_child_link_through_a_symlinked_vault_registration() {
+    // Review finding 1: `add_subtask` built `prospective_child` by joining
+    // onto `target_root` exactly as the CALLER passed it in — the vault's
+    // REGISTRY path (obsidian.json), never canonicalized. But
+    // `resolve_parent_for_write` strips a CANONICAL vault path off the child
+    // (`uri::vault_relative`'s `strip_prefix` does no canonicalization of its
+    // own), so a `target_root` built through a symlinked vault registration
+    // never matches and `compose_parent_link` wrongly reports "outside the
+    // vault" — on Windows this is UNCONDITIONAL (canonicalize's `\\?\C:\...`
+    // vs obsidian.json's `C:\...`; AGENTS.md cites the identical divergence
+    // for `open_task`). `set_task_parent` never hit this because its child
+    // already exists on disk and is canonicalized up front
+    // (`canonical_task_in_root`); `add_subtask`'s child does not exist yet,
+    // so nothing canonicalized it before this fix.
+    //
+    // The wikilink-unsafe `#` in the List folder's name is the OTHER
+    // required ingredient: `compose()`'s wikilink branch resolves only the
+    // PARENT path and never looks at the child at all, so a plain list name
+    // would mask this bug entirely — only the markdown-fallback branch
+    // (forced by the metacharacter) touches the broken child path. A
+    // hand-created List folder may legally carry one (parent_link.rs's own
+    // module doc), so both ingredients here are exactly the reviewer's
+    // reproduction, not a contrived combination.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, _) = fixture(dir.path(), "Placeholder");
+    let cfg = config_for(&paths, VAULT);
+
+    let real_vault = dir.path().join("RealVault");
+    std::fs::create_dir_all(&real_vault).unwrap();
+    let vault_link = dir.path().join("VaultLink");
+    std::os::unix::fs::symlink(&real_vault, &vault_link).unwrap();
+
+    // Lexical throughout — via the symlink, exactly like the caller's own
+    // `root`/`target_root` locals (services/tasks/mod.rs never canonicalizes
+    // either before calling add_subtask).
+    let root = vault_link.join("Tasks");
+    let list_dir = root.join("Proj#1");
+    let parent_path = std::fs::canonicalize(write(
+        &list_dir,
+        "2026-07-25-parent.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"Parent\"\n---\n",
+    ))
+    .unwrap();
+
+    let result = add_subtask(
+        &paths,
+        VAULT,
+        &vault_link, // non-canonical: the registry form
+        &root,       // non-canonical
+        &cfg,
+        &parent_path,
+        &list_dir, // non-canonical target_root — the exact buggy ingredient
+        "Child",
+        "2026-07-25",
+        None,
+        None,
+        &[],
+        None,
+    );
+    let (resolved, path, _child_id) = result.unwrap_or_else(|e| {
+        panic!(
+            "add_subtask must resolve the child's link through a symlinked \
+             vault registration, got: {e}"
+        )
+    });
+    assert!(
+        !resolved.link.starts_with("[["),
+        "the metacharacter must force the markdown fallback, got {}",
+        resolved.link
+    );
+    assert!(resolved.link.contains("Proj%231"), "got {}", resolved.link);
+    // `path` itself is `create_task`'s return value, which (unchanged by this
+    // fix) still writes through the caller's ORIGINAL `target_root` — so
+    // canonicalize both sides rather than asserting the exact string form.
+    assert!(std::fs::canonicalize(&path)
+        .unwrap()
+        .starts_with(std::fs::canonicalize(&list_dir).unwrap()));
+}
+
 /// A vault whose parent link is a MARKDOWN FALLBACK (the parent sits in a
 /// List folder carrying a wikilink metacharacter), with the child nested
 /// under `child_list`. Returns (paths, vault id, tasks root, child path).
