@@ -1572,18 +1572,28 @@ ancestors and drop the edge when the walk revisits its start:
 ```ts
 // Mirrors core::tasks::hierarchy::drop_cyclic_edges. A pre-existing on-disk
 // cycle must render both rows top-level, not as each other's parent.
+//
+// TWO PHASES — collect every cyclic key against the UNCHANGED map, then delete.
+// Deleting inside the walk breaks the very paths still being inspected: for
+// A->B->A, removing A's edge while processing A leaves B's later walk unable to
+// reach A, so B->A survives and one side of the loop still renders (Codex P2,
+// PR #77). Rust's borrow checker forces the two-phase shape; the port must
+// reproduce it deliberately.
 function dropCyclicEdges(edges: Map<string, string>): void {
-  for (const start of [...edges.keys()]) {
+  const cyclic: string[] = [];
+  for (const start of edges.keys()) {
     const seen = new Set<string>();
     let cur: string | undefined = start;
     while (cur !== undefined) {
       const next: string | undefined = edges.get(cur);
-      if (next === start) { edges.delete(start); break; }
-      if (next === undefined || seen.has(next)) break;
+      if (next === undefined) break;
+      if (next === start) { cyclic.push(start); break; }
+      if (seen.has(next)) break; // a different cycle upstream, not ours
       seen.add(next);
       cur = next;
     }
   }
+  for (const key of cyclic) edges.delete(key);
 }
 ```
 
