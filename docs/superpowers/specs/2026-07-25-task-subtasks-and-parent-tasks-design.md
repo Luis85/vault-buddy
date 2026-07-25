@@ -268,16 +268,27 @@ change is never silent.
 2. **The child** — the same call that writes its `parent-id`/`parent` passes
    `ensure_id`, so a legacy child picks up its own id in the same write.
 
-**Phases 2–3 run under one `ConfigWriteLock`, held across both.** A concurrent
-`set_task_id_config` would otherwise interleave: it could scan, see no parent
-links yet, allow a disable or property re-point, and commit it while this
-assignment is still mid-flight — orphaning the new hierarchy the instant it is
-written. Serializing only phase 2's config read-modify-write is not enough, and
-an assignment that finds IDs *already enabled* would not take the lock at all
-(Codex P2, PR #77). So `set_task_parent` acquires the lock once, before phase 2,
-and holds it through the child's write; `set_task_id_config` holds the same lock
-across **both** its parent-link scan and its write (§2a), which makes the two
-mutually exclusive in either interleaving.
+**Phases 2–3 run under one `ConfigWriteLock`, held across both, and the config is
+re-checked once it is held.** A concurrent `set_task_id_config` would otherwise
+interleave: it could scan, see no parent links yet, allow a disable or property
+re-point, and commit it while this assignment is still mid-flight — orphaning the
+new hierarchy the instant it is written. Serializing only phase 2's config
+read-modify-write is not enough, and an assignment that finds IDs *already
+enabled* would not take the lock at all (Codex P2, PR #77).
+
+Holding the lock across the writes closes the write-vs-write race but not a
+read-then-write staleness: phase 1 reads the config and picks the id property
+*before* the lock exists, so a settings save can commit a different property in
+between and phase 3 would then write both ids under the stale one (Codex P2,
+PR #77). Two options — acquiring the lock before phase 1 would hold it across a
+full vault walk, serializing every unrelated config write for the duration of a
+scan. So instead: **after acquiring the lock, re-read the config and compare it
+to the phase-1 snapshot; if `(task_id_enabled, property)` changed, re-run phase
+1's property validation and cycle check under the lock before proceeding.** This
+costs nothing in the common case (unchanged → proceed), and is cheap exactly when
+it can happen: `set_task_id_config` refuses a change once parent links exist
+(§2a), so the interleaving is only reachable on a vault's *first* hierarchy
+operation, where the index is empty and re-validation is trivial.
 
 **Implementation note — do not re-acquire.** The lock is not reentrant, so the
 enable step inside the held scope must be a `*_locked` helper that performs the
@@ -285,6 +296,16 @@ read-modify-write *without* taking the lock again; a nested acquire would
 self-deadlock. This briefly serializes unrelated config writes (capture settings
 and the like) for the duration of two small task-file writes — an accepted,
 bounded cost for closing the race.
+
+**One shared resolve-the-parent path, used by set AND create.** Phases 1–3's
+parent half — validate, lock, re-check, enable, stamp the parent, compose the
+link — is factored into a single helper returning `(parent_id, link)` with the
+lock still held. `set_task_parent` then writes the pair onto an existing child;
+`add_task` passes the same pair into `create_task` for a brand-new one. Creating
+a subtask must run the **whole** path, not just the read-only validation:
+"Add subtask" is very often a vault's *first* hierarchy operation, where IDs are
+off and the parent is unstamped, so validation alone would leave no authoritative
+`parent-id` to write (Codex P1, PR #77).
 
 **On transactionality.** Phases 2–3 are still three separate writes and this app
 has no journal, so they are not atomic even under the lock; the ordering is
@@ -432,7 +453,14 @@ Additive, no new read command:
   **effective `parentId`/`parentLink`** actually written, so the detail row
   reflects a freshly-stamped parent without a reload — the same reason it already
   returns the stamped id.
-- **`add_task`** gains an optional `parent_path`, so "Add subtask" is one call.
+- **A parent-only patch must not be mistaken for an empty one.** `update_task`
+  no-ops an empty patch, and the Parent picker's Change/Clear sends exactly
+  `{parentPath}` or `{clearParent: true}` with no ordinary field updates — so the
+  relationship fields have to count toward "is there anything to do?", and be
+  dispatched even when no scalar field changed. Otherwise every picker action is
+  a silent no-op (Codex P1, PR #77).
+- **`add_task`** gains an optional `parent_path`, so "Add subtask" is one call —
+  running the full shared resolve path (§2), not validation alone.
 
 Both write commands stay `async` (`spawn_blocking`), like every other task write.
 Both resolve `parent_path` under the same canonical-containment gate as the child
@@ -466,6 +494,24 @@ serializing save/delete/duplicate/parent-set, optimistic update with revert +
 toast on failure, and `taskDetailBusy` gating the header Back and the panel's
 `refresh()`. Child rows reuse the row-level busy set so a child's status toggle
 can't race a parent write.
+
+**Drilling detail→detail must remount the surface.** This increment introduces
+the first navigation from one Task Detail to another (a parent chip or a child
+row). `openTaskDetail` only swaps `store.taskDetailTask`, the view stays
+`taskDetail`, and `ActionPanel` renders `<TaskDetail>` **unkeyed** — while
+`TaskDetail.vue` seeds all seven draft refs once in `setup` with no watcher on
+`props.task`. Without a change, drilling would keep showing the previous task's
+fields while `useTaskDetail`'s `toRef` already points at the new path, so Save
+would write the old task's values onto the newly opened one (Codex P1, PR #77).
+Today that is unreachable only because every detail open comes via the list,
+which unmounts the component.
+
+The fix is to **key the component by task path** in `ActionPanel`
+(`:key="store.taskDetailTask.path"`), forcing a full remount: fresh drafts, a
+fresh list load, a reset delete-confirm, and the on-mount focus. Keying beats a
+props watcher because it resets *every* piece of local state, including the ones
+a future field would add — no watcher to keep in sync. Tests must assert the
+**rendered field values** change on drill-through, not merely the store path.
 
 ### 6. Frontend: the main list (light touch)
 
@@ -612,8 +658,17 @@ holds the `ConfigWriteLock` across phases 2–3 and `set_task_id_config` holds i
 across scan-and-write, so the two serialize in either interleaving — and the
 enable step inside the held scope must NOT re-acquire it (a nested acquire
 self-deadlocks; assert the happy path completes rather than hanging).**
+**The post-lock config re-check: a property changed between phase 1 and the lock
+must not be written under the stale property. Add-subtask with IDs OFF must
+enable, stamp the parent, and create a child carrying a resolvable `parent-id` —
+the bootstrap regression for the create path.**
 
-**Frontend (Vitest):** parent chip navigation; the picker sending a **path**
+**Frontend (Vitest):** **drilling from one detail to another re-seeds the drafts
+— assert the rendered title/description inputs show the NEW task, not the
+previous one, and that a Save after drilling writes the new task's path**;
+**a parent-only patch (`{parentPath}` / `{clearParent}`) actually dispatches
+rather than no-opping as an empty patch**; parent chip navigation; the picker
+sending a **path**
 (and working with no ids surfaced); picker disabling cycle-invalid options when
 ids exist; add-subtask creating with the parent and inheriting the List;
 progress counting; the shared busy guard covering the parent write; orphan

@@ -809,36 +809,89 @@ pub fn set_task_parent(
         return Err("That would make a task its own ancestor.".to_string());
     }
 
-    // ---- Phases 2+3 under ONE ConfigWriteLock ----
-    // A concurrent set_task_id_config must not scan (seeing no parent links),
-    // allow a disable, and commit it while this assignment is in flight — that
-    // would orphan the hierarchy the instant it is written. set_task_id_config
-    // holds the same lock across its scan AND write, so the two serialize either
-    // way (design spec §2).
+    // ---- Phases 2+3a: the SHARED resolve path (also used by add_task). ----
+    let resolved = resolve_parent_for_write(&vault, &root, &parent, &prop, &cfg, || {
+        // Re-validation closure, run only if the config changed under the lock.
+        let all = tasks::list_tasks(&root, Some(&prop));
+        tasks::would_create_cycle(&tasks::parent_index(&all), &child, &parent)
+    })?;
+
+    // ---- Phase 3b: write the child's pair. ----
+    tasks::update_task_fields(
+        &root,
+        &child,
+        &[
+            ("parent-id", Some(&resolved.parent_id)),
+            ("parent", Some(&crate::yaml_scalar::yaml_quote(&resolved.link))),
+        ],
+        Some(&prop),
+    )?;
+    Ok(ParentSet { parent_id: Some(resolved.parent_id), parent_link: Some(resolved.link) })
+}
+
+/// Validate-under-lock, enable, stamp the parent, compose the link. Returns with
+/// the lock RELEASED only after the caller's own write, so callers take the
+/// guard from the returned struct (or this takes a closure that performs the
+/// child write — pick one shape and keep it consistent; the guard must outlive
+/// the child write).
+///
+/// Shared by `set_task_parent` (writes onto an existing child) and `add_task`
+/// (passes the pair into `create_task`). Add-subtask is very often a vault's
+/// FIRST hierarchy operation — IDs off, parent unstamped — so the create path
+/// must run this WHOLE path, not just the read-only validation (design spec §2).
+fn resolve_parent_for_write(
+    vault: &Path,
+    root: &Path,
+    parent: &Path,
+    prop: &str,
+    phase1_cfg: &VaultCaptureConfig,
+    recheck_cycle: impl FnOnce() -> bool,
+) -> Result<ResolvedParent, String> {
+    // ONE lock across the config re-check, the enable, and the stamp. A
+    // concurrent set_task_id_config holds the same lock across its scan AND
+    // write, so the two serialize either way (design spec §2).
     let _guard = capture_config::config_write_lock();
 
-    // ---- Phase 2: enable (idempotent, additive). ----
-    if !cfg.task_id_enabled {
+    // Phase 1 read the config BEFORE this lock existed, so a settings save may
+    // have committed a different property in between; writing under the stale
+    // one would orphan the hierarchy immediately. Re-read and re-validate only
+    // when it actually changed (design spec §2).
+    let fresh = capture_config::vault_config(&capture_config::load_config(), vault_id);
+    if fresh.task_id_enabled != phase1_cfg.task_id_enabled
+        || fresh.task_id_property_name() != prop
+    {
+        return Err("The vault's Task ID settings changed while this was in \
+                    flight. Try again."
+            .to_string());
+    }
+    if recheck_cycle() {
+        return Err("That would make a task its own ancestor.".to_string());
+    }
+
+    if !fresh.task_id_enabled {
         // MUST NOT re-acquire the lock — it is not reentrant and a nested
         // acquire self-deadlocks. This is the *_locked variant.
         enable_task_ids_locked(vault_id)?;
     }
-
-    // ---- Phase 3: write. Parent first, so the child never names a missing id. ----
-    let parent_id = tasks::update_task_fields(&root, &parent, &[], Some(&prop))?
+    let parent_id = tasks::update_task_fields(root, parent, &[], Some(prop))?
         .ok_or("Could not assign an ID to the parent task.")?;
-    let parent_title = read_title(&parent);
-    let link = tasks::compose_parent_link(&parent, &vault, &parent_title)
+    let link = tasks::compose_parent_link(parent, vault, &read_title(parent))
         .ok_or("The parent task is outside the vault.")?;
-    tasks::update_task_fields(
-        &root,
-        &child,
-        &[("parent-id", Some(&parent_id)), ("parent", Some(&crate::yaml_scalar::yaml_quote(&link)))],
-        Some(&prop),
-    )?;
-    Ok(ParentSet { parent_id: Some(parent_id), parent_link: Some(link) })
+    Ok(ResolvedParent { parent_id, link })
 }
 ```
+
+> **Shape decision for the implementer:** the `ConfigWriteLock` guard must stay
+> alive across the caller's own write (the child's pair, or `create_task`). Either
+> return the guard alongside the result, or invert the helper so it takes the
+> caller's write as a closure it runs before releasing. Pick one and use it for
+> both callers — do NOT let the guard drop at the end of the helper, which would
+> reopen the race this closes. Simplest correct choice: pass the write in as a
+> closure.
+>
+> A "settings changed, try again" error is preferable to silently re-running a
+> full walk. It is reachable only on a vault's first hierarchy operation, since
+> `set_task_id_config` refuses a change once parent links exist (Task 6).
 
 Helpers to add beside it: `canonical_task_in_root` (canonicalize + containment + `is_task`), `read_own_id` (read the file, `tasks::parse::scalar_id_ci`-equivalent — widen visibility if needed), `read_title`, and `enable_task_ids_locked` (the read-modify-write setting `task_id_enabled = true`, **without** taking the lock — the caller holds it).
 
@@ -958,9 +1011,30 @@ git add -A && git commit -m "feat(shell): lock the task ID configuration while p
     pub clear_parent: bool,
 ```
 
-- [ ] **Step 2: Handle it in `update_task`**
+- [ ] **Step 2: Write the failing "parent-only patch" test FIRST**
 
-After the existing field write, when `parent_path.is_some() || clear_parent` (clear wins, matching `clearDue`), call `services::set_task_parent` and fold its result into the return. Change the return type from `Option<String>` to a small DTO:
+```rust
+    #[test]
+    fn a_parent_only_patch_is_not_treated_as_empty() {
+        // The Parent picker's Change/Clear sends {parentPath} / {clearParent}
+        // with NO ordinary field updates. update_task no-ops an empty patch, so
+        // unless the relationship fields count toward "is there anything to do",
+        // every picker action is a silent no-op (Codex P1, PR #77).
+        let patch = TaskPatchDto { parent_path: Some("/v/Tasks/p.md".into()), ..Default::default() };
+        assert!(!patch_is_empty(&patch));
+        let clearing = TaskPatchDto { clear_parent: true, ..Default::default() };
+        assert!(!patch_is_empty(&clearing));
+        assert!(patch_is_empty(&TaskPatchDto::default()));
+    }
+```
+
+Derive `Default` on `TaskPatchDto` if it does not already, and extract the
+emptiness decision into a `patch_is_empty` helper so it is testable and has ONE
+definition.
+
+- [ ] **Step 3: Handle it in `update_task`**
+
+`parent_path` / `clear_parent` must count toward the emptiness decision AND be dispatched even when no ordinary field changed (clear wins over set, matching `clearDue`). Order: run the field write first when there are field updates, then `services::set_task_parent`; a patch with only relationship fields skips straight to the latter. Fold its result into the return. Change the return type from `Option<String>` to a small DTO:
 
 ```rust
 #[derive(serde::Serialize)]
@@ -974,11 +1048,34 @@ pub struct TaskWriteResult {
 
 Update `src/types.ts` and every frontend caller of `update_task` accordingly (`useTaskActions`, `useTaskDetail`, `useTaskReorder` — the compiler and `vue-tsc` will list them).
 
-- [ ] **Step 3: Thread the parent through `add_task`**
+- [ ] **Step 4: Thread the parent through `add_task` — via the FULL shared path**
 
-Add `parent_path: Option<String>` to the command and to `services::add_task`. In the service, resolve/validate exactly as `set_task_parent`'s phase 1 does (reuse the helper), then pass the composed pair into `tasks::create_task`.
+Add `parent_path: Option<String>` to the command and to `services::add_task`. In the service, run the **whole** `resolve_parent_for_write` path from Task 5 — validate, lock, re-check, enable IDs, stamp the parent, compose the link — then pass the resulting pair into `tasks::create_task` while the guard is still held. Phase 1's read-only validation alone is **not** enough here.
 
-- [ ] **Step 4: Verify + commit**
+Write this failing test first:
+
+```rust
+    #[test]
+    fn add_subtask_bootstraps_ids_when_the_vault_has_none() {
+        // Add subtask is very often a vault's FIRST hierarchy operation: IDs are
+        // off by default and the parent is unstamped, so validation alone would
+        // leave no authoritative parent-id to write (Codex P1, PR #77).
+        let (paths, vault) = fixture_with_ids_disabled(&["p.md"]);
+        let root = tasks_root(&paths, &vault);
+        let child = add_task(
+            &paths, &vault, "Child", "2026-07-25", None, None, &[], None, None,
+            Some(&root.join("p.md")),
+        )
+        .unwrap();
+        assert!(config_for(&vault).task_id_enabled); // bootstrapped
+        let pid = child.parent_id.expect("the child names a parent");
+        assert!(!pid.is_empty());
+        // …and it RESOLVES: the parent now carries that exact id.
+        assert!(std::fs::read_to_string(root.join("p.md")).unwrap().contains(&format!("task-id: {pid}")));
+    }
+```
+
+- [ ] **Step 5: Verify + commit**
 
 Run: `cd src-tauri && cargo fmt && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p vault-buddy --lib`
 Run: `npm run build`
@@ -1047,16 +1144,67 @@ Mirror `useTaskDetail`'s discipline exactly: one shared `busy` guard, optimistic
 
 Presentational: props `{ tasks, currentPath, invalidPaths }`, emits `select(path | null)`. A search input filters by title; options in `invalidPaths` render `disabled` with a "would create a loop" note. Follow `TaskListPicker.vue` for markup and token usage; do NOT force `Field`/`AppButton` where they would resize the dense controls.
 
-- [ ] **Step 4: Wire the Parent row into `TaskDetail.vue`**
+- [ ] **Step 4: Key `TaskDetail` by path so drilling remounts it (P1)**
+
+This increment introduces the first detail→detail navigation. `openTaskDetail`
+only swaps `store.taskDetailTask`; the view stays `taskDetail`, `ActionPanel`
+renders `<TaskDetail>` **unkeyed** (`ActionPanel.vue:382`), and `TaskDetail.vue`
+seeds all seven draft refs once in `setup` (lines 30-36) with **no watcher** on
+`props.task`. So drilling would keep the previous task's fields on screen while
+`useTaskDetail`'s `toRef` already points at the new path — and Save would write
+the old values onto the newly opened task (Codex P1, PR #77).
+
+Write the failing test first, in `tests/task-detail.test.ts`:
+
+```ts
+it("re-seeds every draft when drilling from one task's detail to another", async () => {
+  // The rendered FIELDS must follow the task, not just the store path.
+  const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "Parent", description: "pd" });
+  const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", title: "Child", description: "cd" });
+  mockIPC((cmd) => {
+    if (cmd === "list_task_lists") return [];
+    if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+    if (cmd === "list_tasks") return [parent, child];
+    return undefined;
+  });
+  const { useVaultsStore } = await import("../src/stores/vaults");
+  const store = useVaultsStore();
+  store.openTaskDetail(parent);
+  const ActionPanel = (await import("../src/components/ActionPanel.vue")).default;
+  const wrapper = mount(ActionPanel);
+  await new Promise((r) => setTimeout(r));
+  expect((wrapper.get('[data-testid="task-detail-title"]').element as HTMLInputElement).value).toBe("Parent");
+  store.openTaskDetail(child); // drill through
+  await new Promise((r) => setTimeout(r));
+  expect((wrapper.get('[data-testid="task-detail-title"]').element as HTMLInputElement).value).toBe("Child");
+  expect((wrapper.get('[data-testid="task-detail-description"]').element as HTMLTextAreaElement).value).toBe("cd");
+});
+```
+
+Then fix it in `ActionPanel.vue`:
+
+```html
+        <TaskDetail
+          v-if="store.taskDetailTask"
+          :key="store.taskDetailTask.path"
+          :task="store.taskDetailTask"
+        />
+```
+
+Keying beats a props watcher: it resets *every* piece of local state — drafts,
+the list load, the delete-confirm, the on-mount focus — including whatever a
+future field adds, with no watcher to keep in sync.
+
+- [ ] **Step 5: Wire the Parent row into `TaskDetail.vue`**
 
 A row above the Subtasks section: the parent's title as a clickable chip (`vaults.openTaskDetail(parent)`), plus Change / Clear. Disable while `busy`. Compute `invalidPaths` from the frontend index (self + descendants); note in a comment that with IDs off the index is empty and nothing is pre-disabled — correctly, since no parent links can exist — and that core remains the authority.
 
-- [ ] **Step 5: Run the frontend gates**
+- [ ] **Step 6: Run the frontend gates**
 
-Run: `npx vitest run tests/task-hierarchy.test.ts tests/task-detail.test.ts`
+Run: `npx vitest run tests/task-hierarchy.test.ts tests/task-detail.test.ts tests/action-panel.test.ts`
 Run: `npm run lint && npm run build`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A && git commit -m "feat(ui): add the Task Detail parent row and cycle-aware picker"
