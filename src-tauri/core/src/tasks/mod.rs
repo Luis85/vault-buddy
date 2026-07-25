@@ -59,7 +59,7 @@ pub use id::{id_property_for_generation, is_valid_id_property, new_task_id, quot
 pub use list::{list_tasks, list_tasks_structural, priority_rank, TaskItem};
 pub use lists::{
     create_task_list, delete_task_list, is_valid_list_name, move_task_to_list, normalize_list_rel,
-    rename_task_list, task_lists, DeleteListOutcome,
+    rename_task_list, task_lists, DeleteListError, DeleteListOutcome,
 };
 pub use parent::{parent_id_field, parent_link_field};
 pub use parent_link::compose as compose_parent_link;

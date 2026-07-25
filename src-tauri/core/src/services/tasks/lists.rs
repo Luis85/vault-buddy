@@ -110,7 +110,6 @@ pub fn delete_task_list(
     assert_root_if_exists(&vault_path, &root)?;
     let id_property =
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-    let outcome = tasks::delete_task_list(&root, list, id_property)?;
     // Same bounded, single-file repair `move_task_to_list` performs on its own
     // landed file — reached here too, because the core delete loop relocates
     // the list's tasks through the exact same rename rails. This is the
@@ -118,10 +117,29 @@ pub fn delete_task_list(
     // needs the real vault root, and `root.parent()` is wrong for a nested
     // `tasksFolder` (the trap its own doc comment names). Never the unbounded
     // "refresh every child of a moved PARENT" batch this design declines.
-    for landed in &outcome.landed {
-        super::parent::repair_parent_link(&vault_path, &root, landed, &cfg);
+    //
+    // Matched explicitly rather than `?`: core's delete can fail AFTER
+    // already relocating some (or all) of the list's direct tasks (GAP-64) —
+    // a later move, or the final folder removal, failing does not undo the
+    // moves that already landed. `DeleteListError::landed` carries exactly
+    // those paths, so the repair must run on the Err arm too, BEFORE the
+    // failure propagates — not only on success, or an already-landed
+    // child's stale fallback `parent` link (depth-relative, so a relocation
+    // always changes it) would be left broken with nothing to ever fix it.
+    match tasks::delete_task_list(&root, list, id_property) {
+        Ok(outcome) => {
+            for landed in &outcome.landed {
+                super::parent::repair_parent_link(&vault_path, &root, landed, &cfg);
+            }
+            Ok(outcome)
+        }
+        Err(e) => {
+            for landed in &e.landed {
+                super::parent::repair_parent_link(&vault_path, &root, landed, &cfg);
+            }
+            Err(e.message)
+        }
     }
-    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -424,6 +442,125 @@ mod tests {
         assert!(
             after.contains("](../../Notes/Tasks/Project%231/"),
             "link must be vault-relative, got {after}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_task_list_repairs_a_landed_child_despite_a_propagated_removal_failure() {
+        // GAP-64's OTHER partial-failure arm (the sibling test above pins the
+        // move-loop's own `?`): core's delete can relocate EVERY direct task
+        // successfully and still return Err — the final `remove_dir` on the
+        // now-empty list folder can fail on its own (permissions, a Windows
+        // AV/indexer lock). Before this fix, the service layer's `?` on
+        // core's call skipped the repair loop entirely on ANY Err, so an
+        // already-landed child kept a fallback `parent` link computed for
+        // its OLD, deeper location even though the move itself succeeded.
+        //
+        // Nest the list ("Team/Inbox") so the list's OWN parent ("Team") can
+        // be made unwritable WITHOUT blocking the moves themselves:
+        // relocating a task needs write on Team/Inbox (to unlink it) and on
+        // the tasks root (to hard-link it in) — neither is an operation on
+        // Team's own directory entries. Only removing the "Inbox" ENTRY
+        // from "Team" touches Team's own entries. A plain chmod can't
+        // express "writable one level down, not here" AND survive root
+        // (DAC is bypassed for root, which is what runs this suite here —
+        // see the chmod-based tests elsewhere in this crate); the ext4
+        // immutable flag (`chattr +i`) is enforced independently of DAC —
+        // confirmed empirically for this task (see the task report) — so it
+        // blocks root's own rmdir too, without a setpriv dance. Still
+        // probed and skipped if unsupported (a non-ext4 temp filesystem, or
+        // `chattr` unavailable), mirroring this crate's chmod-based
+        // probe-and-skip tests.
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true } } }"#,
+        )
+        .unwrap();
+        let root = tasks_root_for(&paths, "deadbeef01234567").unwrap().1;
+        // `Project#1` forces the markdown-fallback link — `#` has no
+        // wikilink escape, so the composer must percent-encode it (the same
+        // forcing device the sibling repair tests above use).
+        let parent = add_task(
+            &paths,
+            "deadbeef01234567",
+            "P",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Project#1"),
+            None,
+        )
+        .unwrap();
+        let child = add_task(
+            &paths,
+            "deadbeef01234567",
+            "C",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Team/Inbox"),
+            None,
+        )
+        .unwrap();
+        set_task_parent(
+            &paths,
+            "deadbeef01234567",
+            Path::new(&child.path),
+            Some(Path::new(&parent.path)),
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&child.path).unwrap();
+        assert!(
+            before.contains("](../../../Tasks/Project%231/"),
+            "the pre-delete link is three levels deep, got {before}"
+        );
+
+        let team = root.join("Team");
+        let set_immutable = Command::new("chattr").arg("+i").arg(&team).status();
+        let chattr_ok = matches!(&set_immutable, Ok(s) if s.success());
+        // Probe: creating a new entry DIRECTLY under Team must now be
+        // blocked too (the same directory-entry-write the final rmdir
+        // needs) — if it isn't, the flag had no effect here and this test
+        // cannot exercise anything.
+        let bypassed = !chattr_ok || std::fs::write(team.join(".probe"), b"x").is_ok();
+        if bypassed {
+            let _ = Command::new("chattr").arg("-i").arg(&team).status();
+            let _ = std::fs::remove_file(team.join(".probe"));
+            eprintln!(
+                "SKIPPED delete_task_list_repairs_a_landed_child_despite_a_propagated_removal_failure: \
+                 chattr +i had no effect here (unsupported filesystem or missing chattr)"
+            );
+            return;
+        }
+
+        let err = delete_task_list(&paths, "deadbeef01234567", "Team/Inbox").unwrap_err();
+        // Restore BEFORE asserting so tempdir cleanup always succeeds either way.
+        let _ = Command::new("chattr").arg("-i").arg(&team).status();
+        assert!(
+            err.contains("could not be removed"),
+            "the removal failure must still propagate, got {err}"
+        );
+
+        // The move already landed (No list) despite the propagated error...
+        let landed = list_tasks(&paths, "deadbeef01234567")
+            .into_iter()
+            .find(|t| t.title == "C")
+            .expect("the relocated child is still listed");
+        assert_eq!(landed.list, "", "the child landed in No list");
+        // ...and its stale fallback link was recomposed for its NEW
+        // (shallower) location, not left pointing three levels deep at a
+        // folder that no longer contains it.
+        let after = std::fs::read_to_string(&landed.path).unwrap();
+        assert!(
+            after.contains("](../Tasks/Project%231/"),
+            "the repaired link must recompose to the child's new depth despite \
+             the propagated error, got {after}"
         );
     }
 }

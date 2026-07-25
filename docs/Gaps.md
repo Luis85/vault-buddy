@@ -393,6 +393,26 @@ count) or continue best-effort and aggregate per-file failures, without
 breaking the existing `Result<DeleteListOutcome, String>` contract today's
 callers depend on.
 
+**Update (subtasks & parent-tasks increment):** `tasks::delete_task_list`'s
+error is now `DeleteListError { message, landed }`
+(`core/src/tasks/lists/relocate.rs`)
+— the "error variant carrying the partial paths" this entry's Fix section
+named, though core's own `Result<DeleteListOutcome, String>` contract still
+changed (only the ONE caller, the service layer, needed updating).
+`services::tasks::lists::delete_task_list` uses `landed` to repair each
+already-relocated child's own stale fallback `parent` link (design spec
+`2026-07-25-task-subtasks-and-parent-tasks-design.md` §7 — a relocated
+child's markdown-fallback link is depth-relative, so a move always stales it)
+BEFORE propagating the failure, closing the parent-link consequence this
+partial-failure window left when the subtasks increment landed. The residual
+is narrower than before: the mid-loop `move_task_to_list` failure's own
+message still doesn't name `moved` (only the remove_dir failure's message
+did, and still does); and the shell command
+(`task_commands.rs::delete_task_list`) still surfaces only a `String` to the
+frontend, so a caller wanting the landed count/paths on failure — not just
+the best-effort repair core now performs — would need `DeleteListDto`/the IPC
+contract widened too.
+
 ### GAP-65 · Low · Tasks-polish increment residuals (list lifecycle / copy-ID / drag-to-move, accepted)
 - ~~**A move stamps a Task ID on disk but the row reflects it only after a
   reload.**~~ — FIXED in the polish pass (Codex, PR #59): `move_task_to_list`
