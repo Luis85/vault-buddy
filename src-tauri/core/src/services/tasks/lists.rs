@@ -110,14 +110,25 @@ pub fn delete_task_list(
     assert_root_if_exists(&vault_path, &root)?;
     let id_property =
         tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-    tasks::delete_task_list(&root, list, id_property)
+    let outcome = tasks::delete_task_list(&root, list, id_property)?;
+    // Same bounded, single-file repair `move_task_to_list` performs on its own
+    // landed file — reached here too, because the core delete loop relocates
+    // the list's tasks through the exact same rename rails. This is the
+    // SERVICE layer (not core's lists.rs) on purpose: `repair_parent_link`
+    // needs the real vault root, and `root.parent()` is wrong for a nested
+    // `tasksFolder` (the trap its own doc comment names). Never the unbounded
+    // "refresh every child of a moved PARENT" batch this design declines.
+    for landed in &outcome.landed {
+        super::parent::repair_parent_link(&vault_path, &root, landed, &cfg);
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::test_support::fixture;
-    use crate::services::{add_task, list_tasks};
+    use crate::services::{add_task, list_tasks, set_task_parent};
 
     #[test]
     fn task_list_services_enumerate_create_and_move() {
@@ -283,6 +294,136 @@ mod tests {
             listed[0].id.as_ref().is_some_and(|s| s.len() == 8),
             "the relocated legacy task must be stamped, got {:?}",
             listed[0].id
+        );
+    }
+
+    #[test]
+    fn delete_task_list_repairs_a_relocated_childs_fallback_link() {
+        // move_task_to_list already repairs the ONE file it lands (Codex P2,
+        // PR #77, design spec §7): a markdown-fallback `parent` link is
+        // resolved relative to the note's OWN directory, so a child that
+        // changes depth points at nothing even though its parent never moved.
+        // delete_task_list relocates a list's tasks to No list through the
+        // exact same rails and used to skip the repair entirely — reached by
+        // a different write path than move.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true } } }"#,
+        )
+        .unwrap();
+        // `Project#1` forces the markdown-fallback form — `#` has no
+        // wikilink escape, so the composer must percent-encode it.
+        let parent = add_task(
+            &paths,
+            "deadbeef01234567",
+            "P",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Project#1"),
+            None,
+        )
+        .unwrap();
+        let child = add_task(
+            &paths,
+            "deadbeef01234567",
+            "C",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Deep/Sub"),
+            None,
+        )
+        .unwrap();
+        set_task_parent(
+            &paths,
+            "deadbeef01234567",
+            Path::new(&child.path),
+            Some(Path::new(&parent.path)),
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&child.path).unwrap();
+        assert!(
+            before.contains("](../../../Tasks/Project%231/"),
+            "the pre-delete link is three levels deep, got {before}"
+        );
+        let out = delete_task_list(&paths, "deadbeef01234567", "Deep/Sub").unwrap();
+        assert_eq!(out.moved, 1);
+        let landed = list_tasks(&paths, "deadbeef01234567")
+            .into_iter()
+            .find(|t| t.title == "C")
+            .expect("the relocated child is still listed");
+        assert_eq!(landed.list, "", "the child landed in No list");
+        let after = std::fs::read_to_string(&landed.path).unwrap();
+        // One `../` now: the child sits at <vault>/Tasks/<file>.md, and a
+        // markdown destination resolves from the note's OWN directory.
+        assert!(
+            after.contains("](../Tasks/Project%231/"),
+            "the repaired link must recompose to one level, got {after}"
+        );
+    }
+
+    #[test]
+    fn delete_task_list_repairs_a_relocated_childs_link_under_a_nested_tasks_folder() {
+        // tasks root = <vault>/Notes/Tasks, so vault_root != tasks_root.parent()
+        // — the trap parent::repair_parent_link's doc comment names by name.
+        // The SERVICE layer must thread the real vault_path it already
+        // resolved via tasks_root_for, never derive one inside core's
+        // lists.rs.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _vault) = fixture(dir.path(), "MyVault");
+        std::fs::write(
+            paths.config_json.as_ref().unwrap(),
+            r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true, "tasksFolder": "Notes/Tasks" } } }"#,
+        )
+        .unwrap();
+        let parent = add_task(
+            &paths,
+            "deadbeef01234567",
+            "P",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Project#1"),
+            None,
+        )
+        .unwrap();
+        let child = add_task(
+            &paths,
+            "deadbeef01234567",
+            "C",
+            "2026-07-09",
+            None,
+            None,
+            &[],
+            Some("Deep"),
+            None,
+        )
+        .unwrap();
+        set_task_parent(
+            &paths,
+            "deadbeef01234567",
+            Path::new(&child.path),
+            Some(Path::new(&parent.path)),
+        )
+        .unwrap();
+        delete_task_list(&paths, "deadbeef01234567", "Deep").unwrap();
+        let landed = list_tasks(&paths, "deadbeef01234567")
+            .into_iter()
+            .find(|t| t.title == "C")
+            .expect("the relocated child is still listed");
+        let after = std::fs::read_to_string(&landed.path).unwrap();
+        // Vault-relative, `Notes/` included: root.parent() would have
+        // dropped it and emitted `../Tasks/Project%231/...` — one segment
+        // short and pointing nowhere real.
+        assert!(
+            after.contains("](../../Notes/Tasks/Project%231/"),
+            "link must be vault-relative, got {after}"
         );
     }
 }

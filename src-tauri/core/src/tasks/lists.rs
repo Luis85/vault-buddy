@@ -234,11 +234,13 @@ pub fn move_task_to_list(root: &Path, path: &Path, list: &str) -> Result<PathBuf
 }
 
 /// Outcome of deleting a list: how many of its own tasks were moved to the
-/// tasks root, and whether the (now-empty) folder was removed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// tasks root, whether the (now-empty) folder was removed, and their landed
+/// paths — the service layer repairs each one's own stale `parent` link there.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteListOutcome {
     pub moved: usize,
     pub folder_removed: bool,
+    pub landed: Vec<PathBuf>,
 }
 
 /// Rename a list folder's leaf to `to` (a single valid segment) at the same
@@ -331,6 +333,7 @@ pub fn delete_task_list(
         }
     }
     let mut moved = 0;
+    let mut landed_paths = Vec::with_capacity(task_files.len());
     // Partial-failure semantics (GAP-64): if the Nth move fails, files
     // 1..N-1 already relocated to the tasks root — `moved` is discarded and
     // the caller gets an opaque Err with no signal the vault was partially
@@ -343,11 +346,13 @@ pub fn delete_task_list(
         // to No list; rails already never-clobber. The relocation is a
         // structural move, so the shared best-effort backfill stamps a missing
         // id on the LANDED file (warn-only on failure — the move already
-        // mutated the vault). The id is discarded: the frontend reloads after
-        // a delete regardless (GAP-64), which surfaces fresh ids.
+        // mutated the vault). The id is discarded (GAP-64, the frontend
+        // reloads regardless); the landed PATH is kept — the service layer
+        // repairs this file's own stale `parent` link there (DeleteListOutcome).
         let landed = move_task_to_list(&canon_root, f, "")?;
         super::disk::backfill_task_id(&canon_root, &landed, id_property);
         moved += 1;
+        landed_paths.push(landed);
     }
     // Remove only if empty; a folder with sub-lists / foreign files stays.
     // Only DirectoryNotEmpty IS that deliberate keep — collapsing every error
@@ -371,6 +376,7 @@ pub fn delete_task_list(
     Ok(DeleteListOutcome {
         moved,
         folder_removed,
+        landed: landed_paths,
     })
 }
 
