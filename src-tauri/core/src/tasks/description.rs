@@ -59,6 +59,31 @@ pub(super) fn opens_multiline_quoted(value: &str) -> bool {
         || (value.starts_with('\'') && decode_single_quoted(value).is_none())
 }
 
+/// Decode a single-line YAML scalar VALUE for a LENIENT free-text field (a task
+/// title) so a hand-authored quoted/commented title copies faithfully instead of
+/// baking YAML syntax into the copy (Codex P2, PR #76). Handles the single-quoted
+/// (`''`→`'`) and double-quoted (unescaped, trailing comment dropped) forms and
+/// strips a plain scalar's inline comment; an unsupported shape (block / flow /
+/// multi-line / leading-`#`) returns the raw trimmed value — a title is free text
+/// we always keep something for (UNLIKE `description_field`, which rejects those
+/// to `None`). `note_field` already unquotes the plain double-quoted form; this
+/// adds the single-quoted / commented forms it leaves raw.
+pub(super) fn decode_scalar_lenient(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.starts_with('"') {
+        if let Some(span) = double_quoted_slice(raw) {
+            return yaml_unquote_multiline(span);
+        }
+    } else if raw.starts_with('\'') {
+        if let Some(decoded) = decode_single_quoted(raw) {
+            return decoded;
+        }
+    } else if !raw.starts_with(['|', '>', '[', '{', '#']) {
+        return strip_inline_comment(raw).trim().to_string();
+    }
+    raw.to_string()
+}
+
 /// Read the top-level `description:` free-text field, decoded by its YAML scalar
 /// form so a value reads exactly as Obsidian's js-yaml does (Codex P2, PR #76):
 /// a DOUBLE-quoted scalar (`"…"`, optionally followed by a ` # comment`) is
@@ -274,6 +299,21 @@ mod tests {
                 .as_deref(),
             Some("#hashtag")
         );
+    }
+
+    #[test]
+    fn decode_scalar_lenient_decodes_quoted_and_plain_forms() {
+        // Used for duplicating a task's title: a hand-authored quoted/commented
+        // scalar must decode, not keep its YAML syntax (Codex P2, PR #76).
+        assert_eq!(super::decode_scalar_lenient("'it''s ready'"), "it's ready");
+        assert_eq!(super::decode_scalar_lenient("\"done\" # note"), "done");
+        assert_eq!(
+            super::decode_scalar_lenient("\"a \\\"q\\\" b\""),
+            "a \"q\" b"
+        );
+        assert_eq!(super::decode_scalar_lenient("plain title"), "plain title");
+        assert_eq!(super::decode_scalar_lenient("todo # later"), "todo");
+        assert_eq!(super::decode_scalar_lenient("has#hash"), "has#hash"); // glued # kept
     }
 
     #[test]

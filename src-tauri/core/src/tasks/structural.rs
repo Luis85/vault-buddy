@@ -170,7 +170,13 @@ pub fn duplicate_task(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let title = crate::capture_note::note_field(&content, "title").unwrap_or(stem);
+    // Decode the title's YAML scalar form (single-quoted / quoted-then-commented
+    // hand-authored titles) so the copy is faithful, not one with the syntax baked
+    // in (Codex P2, PR #76). note_field already unquotes the plain double-quoted
+    // form the Buddy writes.
+    let title = super::description::decode_scalar_lenient(
+        &crate::capture_note::note_field(&content, "title").unwrap_or(stem),
+    );
     let new_title = format!("{title} (copy)");
     let quoted = yaml_quote(&new_title);
     // A fresh id when IDs are on; `None` strips the configured property so the
@@ -332,6 +338,24 @@ mod tests {
         let new = duplicate_task(&root, &src, "2026-07-24", None, false).unwrap();
         let out = std::fs::read_to_string(&new).unwrap();
         assert!(out.contains("title: \"My hand note (copy)\""));
+    }
+
+    #[test]
+    fn duplicate_task_decodes_a_hand_authored_quoted_title() {
+        // A single-quoted title must copy as its DECODED value + " (copy)", not
+        // with the YAML quotes/escape baked in (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: 'it''s ready'\n---\n",
+        )
+        .unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-25", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("title: \"it's ready (copy)\""), "got: {out}");
     }
 
     #[cfg(unix)]

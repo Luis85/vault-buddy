@@ -109,7 +109,10 @@ function onDeleteKeydown(e: KeyboardEvent) {
   // this page (reviewer + Codex P2, PR #76).
   if (e.key === "Escape" && confirming.value) {
     e.stopPropagation();
-    confirming.value = false;
+    // Don't cancel the warning mid-delete: the unlink is already in flight and
+    // can't be undone, so keep the confirmation up. The disabled Cancel button
+    // blocks the mouse path; this blocks the keyboard path (Codex P2, PR #76).
+    if (!busy.value) confirming.value = false;
   }
 }
 </script>
@@ -207,7 +210,8 @@ function onDeleteKeydown(e: KeyboardEvent) {
       <button
         type="button"
         data-testid="task-detail-open"
-        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        :disabled="busy"
+        class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-1 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="openInObsidian"
       >
         Open in Obsidian

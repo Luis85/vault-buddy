@@ -224,6 +224,7 @@ watch(
           label="Back"
           title="Back"
           data-testid="back-button"
+          :disabled="view === 'taskDetail' && store.taskDetailBusy"
           @click="store.back()"
         >
           <AppIcon>

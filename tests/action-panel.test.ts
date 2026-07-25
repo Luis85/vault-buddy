@@ -49,6 +49,27 @@ describe("ActionPanel", () => {
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
   });
 
+  it("disables the header Back button while a Task Detail write is in flight", async () => {
+    // Leaving the detail view mid-write would let the write finish off-screen
+    // against a stale, remounted Tasks list — so Back is inert until it settles
+    // (Codex P2, PR #76).
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openTaskDetail({
+      path: "p", title: "T", status: "new", created: "2026-07-01", done: false,
+      due: null, scheduled: null, priority: null, tags: [], list: "", order: null,
+      id: null, description: null, vaultId: "v1", vaultName: "V",
+    });
+    store.taskDetailBusy = true;
+    const wrapper = mount(ActionPanel, { global: { stubs: { TaskDetail: true } } });
+    const back = () => wrapper.find('[data-testid="back-button"]').element as HTMLButtonElement;
+    expect(back().disabled).toBe(true);
+    store.taskDetailBusy = false; // write settled
+    await wrapper.vm.$nextTick();
+    expect(back().disabled).toBe(false);
+  });
+
   it("lists each vault with both actions and a count badge", () => {
     const store = useVaultsStore();
     store.vaults = sampleVaults;

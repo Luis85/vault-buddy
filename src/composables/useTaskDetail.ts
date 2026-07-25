@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { type Ref, ref } from "vue";
+import { type Ref, ref, watch } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
@@ -28,6 +28,15 @@ export function useTaskDetail(task: Ref<AggTask>) {
   // delete could race the save's atomic rename and the save would recreate the
   // deleted file (Codex P2, PR #76). Matches the row-write busy invariant.
   const busy = ref(false);
+  // Mirror the in-flight write to the store so ActionPanel disables the header
+  // Back button while a detail write commits: leaving mid-write would let the
+  // write finish off-screen against a stale, remounted Tasks list (the delete
+  // double-nav of round 24, the delete/save stale-row of rounds 25/26). Reset on
+  // the next openTaskDetail; a stale `true` after an unmount is harmless because
+  // ActionPanel gates on `view === "taskDetail"` too (Codex P2, PR #76).
+  watch(busy, (b) => {
+    vaults.taskDetailBusy = b;
+  });
 
   async function save(patch: TaskEditorPatch): Promise<boolean> {
     const { list: targetList, ...fieldPatch } = patch;

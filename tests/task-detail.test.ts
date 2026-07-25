@@ -478,6 +478,80 @@ describe("TaskDetail.vue", () => {
     await new Promise((r) => setTimeout(r));
   });
 
+  it("keeps the delete confirm open when Escape is pressed mid-delete", async () => {
+    // The keyboard path must match the disabled Cancel button: Escape can't
+    // cancel the in-flight unlink, so it must not hide the warning (Codex P2, PR #76).
+    let resolveDelete: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "delete_task")
+        return new Promise<void>((r) => {
+          resolveDelete = () => r();
+        });
+      return undefined;
+    });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    useVaultsStore().view = "taskDetail";
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-delete"]').trigger("click");
+    await wrapper.get('[data-testid="task-detail-delete-confirm"]').trigger("click"); // slow delete
+    await new Promise((r) => setTimeout(r));
+    await wrapper
+      .get('[data-testid="task-detail-delete-confirm"]')
+      .trigger("keydown", { key: "Escape" });
+    expect(wrapper.find('[data-testid="task-detail-delete-confirm"]').exists()).toBe(true);
+    resolveDelete?.();
+    await new Promise((r) => setTimeout(r));
+  });
+
+  it("disables Open in Obsidian while a detail write is in flight", async () => {
+    let resolveDup: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "duplicate_task")
+        return new Promise<string>((r) => {
+          resolveDup = () => r("/v/Tasks/t (copy).md");
+        });
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: task() } });
+    await new Promise((r) => setTimeout(r));
+    const open = () => wrapper.find('[data-testid="task-detail-open"]').element as HTMLButtonElement;
+    expect(open().disabled).toBe(false);
+    await wrapper.get('[data-testid="task-detail-duplicate"]').trigger("click"); // slow write
+    await new Promise((r) => setTimeout(r));
+    expect(open().disabled).toBe(true);
+    resolveDup?.();
+    await new Promise((r) => setTimeout(r));
+    expect(open().disabled).toBe(false);
+  });
+
+  it("drives store.taskDetailBusy while a detail write is in flight (gates the header Back)", async () => {
+    let resolveDup: (() => void) | undefined;
+    mockIPC((cmd) =>
+      cmd === "duplicate_task"
+        ? new Promise<string>((r) => {
+            resolveDup = () => r("/v/Tasks/t (copy).md");
+          })
+        : undefined,
+    );
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    const { duplicate } = useTaskDetail(ref(task()));
+    expect(store.taskDetailBusy).toBe(false);
+    const pending = duplicate();
+    await new Promise((r) => setTimeout(r));
+    expect(store.taskDetailBusy).toBe(true);
+    resolveDup?.();
+    await pending;
+    expect(store.taskDetailBusy).toBe(false);
+  });
+
   it("Escape closes the delete confirm without deleting", async () => {
     const calls: string[] = [];
     mockIPC((cmd) => {

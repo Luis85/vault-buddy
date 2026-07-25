@@ -47,6 +47,12 @@ export const useVaultsStore = defineStore("vaults", {
     // The task whose detail surface is showing (its own vaultId decides which
     // vault every detail-view write targets). Cleared by showList.
     taskDetailTask: null as AggTask | null,
+    // True while a Task Detail write (save / delete / duplicate) is in flight, so
+    // ActionPanel can disable the header Back button — leaving the detail view
+    // mid-write would let the write finish off-screen against a stale, remounted
+    // Tasks list (Codex P2, PR #76). Reset on entry (openTaskDetail); useTaskDetail
+    // drives it from its own busy ref.
+    taskDetailBusy: false,
     // The dropped document's path, armed by a Rust-owned buddy drop
     // (`take_pending_import`, consumed in `refresh`) and read by
     // ImportVaultPicker to drive `convert_document`.
@@ -269,6 +275,7 @@ export const useVaultsStore = defineStore("vaults", {
     openTaskDetail(task: AggTask) {
       this.view = "taskDetail";
       this.taskDetailTask = task;
+      this.taskDetailBusy = false; // fresh surface — no write in flight yet
     },
     // Cross-vault, so no per-vault id to remember (unlike tasks/recordings).
     // back() needs no case: search falls through to the final else → showList.
