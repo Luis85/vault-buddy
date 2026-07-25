@@ -188,6 +188,11 @@ export interface TaskItem {
   id: string | null;
   /** Free-text detail (the `description:` frontmatter field); null when unset. */
   description: string | null;
+  /** The parent Task's stable id (`parent-id`); null when the Task has no
+   * parent. */
+  parentId: string | null;
+  /** The parent's Obsidian link (`parent`), for display/navigation only. */
+  parentLink: string | null;
 }
 
 /** A TaskItem enriched with its owning vault — the ONE internal shape the

@@ -34,6 +34,11 @@ pub struct TaskDto {
     /// Free-text detail (the `description:` frontmatter field). `None` when
     /// absent. Additive for the frontend and MCP `list_tasks` alike.
     pub description: Option<String>,
+    /// The parent Task's stable id (`parent-id`); `None` when the Task has no
+    /// parent. Additive for the frontend and MCP `list_tasks` alike.
+    pub parent_id: Option<String>,
+    /// The parent's Obsidian link, for display/navigation only.
+    pub parent_link: Option<String>,
 }
 
 impl TaskDto {
@@ -52,6 +57,8 @@ impl TaskDto {
             order: t.order,
             id: t.id,
             description: t.description,
+            parent_id: t.parent_id,
+            parent_link: t.parent_link,
         }
     }
 }
@@ -257,6 +264,10 @@ pub fn add_task(
         // field, reserved from templates (like due/status), and is set later in
         // the detail view (Codex PR #76).
         description: None,
+        // add_task has no parent write path yet (Task 1 of the subtasks slice
+        // is read-only: readers, reserved keys, and the DTO surface only).
+        parent_id: None,
+        parent_link: None,
     })
 }
 

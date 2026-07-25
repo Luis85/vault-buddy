@@ -2,9 +2,8 @@
 //! clock-free sort ("overdue"/"today" need a clock, so date-bucket grouping
 //! is deliberately the frontend's job, not the sort's).
 
-use super::doc::is_task;
-use super::parse::{is_valid_due, note_tags, scalar_field, scalar_id_ci};
-use crate::capture_note::note_field;
+use super::collect::collect_task_file;
+use super::parse::is_valid_due;
 use std::path::{Path, PathBuf};
 
 /// One task surfaced in the list.
@@ -36,6 +35,14 @@ pub struct TaskItem {
     /// Free-text detail, decoded from the `description:` frontmatter scalar
     /// (multi-line, `#`-tolerant). `None` when absent/empty.
     pub description: Option<String>,
+    /// The parent Task's stable id, read from `parent-id`. Authoritative for
+    /// hierarchy resolution. NOT gated on the vault's id feature — a task's own
+    /// id is (it is read under the configured property), but this is a plain
+    /// key that always means the same thing.
+    pub parent_id: Option<String>,
+    /// The parent's Obsidian link (`parent`), carried verbatim for navigation.
+    /// Never parsed for meaning.
+    pub parent_link: Option<String>,
 }
 
 /// Sort tier for a priority value: high first, low last, anything else
@@ -67,21 +74,103 @@ fn due_key(t: &TaskItem) -> (bool, &str) {
 /// `id_property` is the vault's configured task-id frontmatter key, or
 /// `None` when task IDs are off — the property is then never read, so a
 /// disabled vault pays no extra cost and `TaskItem.id` is always `None`.
+///
+/// A PRESENTATION function in two ways that make it wrong for a hierarchy
+/// guard: `status: archived` Tasks are dropped, and a file that can't be read
+/// is silently skipped. A guard (the cycle index, the id-settings guard) must
+/// see every `parent-id` edge or a cycle can slip through validation — use
+/// `list_tasks_structural` there instead.
 pub fn list_tasks(root: &Path, id_property: Option<&str>) -> Vec<TaskItem> {
+    // `scan` only ever returns Err in Structural mode — View never fails.
+    let mut out = scan(root, id_property, ScanMode::View).unwrap_or_default();
+    sort_tasks(&mut out);
+    out
+}
+
+/// The STRUCTURAL counterpart of `list_tasks`, for a hierarchy guard: the
+/// SAME walk (never copied — thread new modes through `ScanMode` instead),
+/// but it INCLUDES `status: archived` Tasks (their files still carry
+/// `parent-id`, and a cycle routed through one must still be visible to the
+/// guard) and FAILS the whole scan — naming the offending path — when any
+/// `.md` file cannot be read, rather than silently dropping it. A file's
+/// `type:` can't be checked without reading it, so an unreadable `.md` is
+/// treated as a POSSIBLE Task: dropping it would drop a possible hierarchy
+/// edge, and a missing edge is exactly what lets a cycle pass validation and
+/// get written (Codex P2, PR #77). The rule: a view may degrade; a guard must
+/// refuse.
+pub fn list_tasks_structural(
+    root: &Path,
+    id_property: Option<&str>,
+) -> Result<Vec<TaskItem>, String> {
+    let mut out = scan(root, id_property, ScanMode::Structural)?;
+    sort_tasks(&mut out);
+    Ok(out)
+}
+
+/// Which of the two callers is walking. One enum instead of two independent
+/// bools, so the two combinations actually used — lenient+presentation,
+/// strict+structural — can't drift apart from a third nobody asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScanMode {
+    View,
+    Structural,
+}
+
+impl ScanMode {
+    /// Structural keeps `status: archived` Tasks; View drops them.
+    pub(super) fn include_archived(self) -> bool {
+        self == ScanMode::Structural
+    }
+
+    /// Structural aborts the whole scan on the first unreadable `.md` file;
+    /// View skips it and keeps going (today's degrade-silently behavior).
+    pub(super) fn strict(self) -> bool {
+        self == ScanMode::Structural
+    }
+}
+
+/// The ONE walk both `list_tasks` and `list_tasks_structural` drive over
+/// `crate::vault_walk` (canonical containment, cycle set, dot-dir skip,
+/// single-sourced with the search scan) — do not copy it; a future mode
+/// belongs in `ScanMode`. Structural mode stops at the first unreadable file
+/// (`Flow::Stop`) instead of scanning the rest of a vault it already knows it
+/// must reject.
+fn scan(root: &Path, id_property: Option<&str>, mode: ScanMode) -> Result<Vec<TaskItem>, String> {
     let mut out = Vec::new();
-    // The walk discipline (canonical containment, cycle set, dot-dir skip)
-    // lives in vault_walk, single-sourced with the search scan. A missing/
-    // unresolvable root → empty list (best-effort, unchanged).
+    let mut first_error: Option<String> = None;
+    // A missing/unresolvable root → empty list (best-effort, unchanged) even
+    // in Structural mode — a vault with no tasks folder yet has no graph to
+    // protect.
     if let Ok(canon_root) = std::fs::canonicalize(root) {
         crate::vault_walk::walk_vault(&canon_root, &mut |path, name| {
-            collect_task_file(path, name, &canon_root, id_property, &mut out);
-            crate::vault_walk::Flow::Continue
+            collect_task_file(
+                path,
+                name,
+                &canon_root,
+                id_property,
+                mode,
+                &mut first_error,
+                &mut out,
+            );
+            if first_error.is_some() {
+                crate::vault_walk::Flow::Stop
+            } else {
+                crate::vault_walk::Flow::Continue
+            }
         });
     }
-    // Open first. Open tasks: due ascending (no/invalid due last), then
-    // priority tier, then newest created, then title. Done tasks ignore due —
-    // newest created first, then title. Clock-free: "overdue"/"today" need a
-    // clock, so bucketing is the frontend's job, not the sort's.
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(out),
+    }
+}
+
+/// Open first. Open tasks: due ascending (no/invalid due last), then
+/// priority tier, then newest created, then title. Done tasks ignore due —
+/// newest created first, then title. Clock-free: "overdue"/"today" need a
+/// clock, so bucketing is the frontend's job, not the sort's. Shared by both
+/// entry points so they can never disagree on order.
+fn sort_tasks(out: &mut [TaskItem]) {
     out.sort_by(|a, b| {
         a.done.cmp(&b.done).then_with(|| {
             if a.done {
@@ -99,80 +188,6 @@ pub fn list_tasks(root: &Path, id_property: Option<&str>) -> Vec<TaskItem> {
                     .then_with(|| a.title.cmp(&b.title))
             }
         })
-    });
-    out
-}
-
-/// The per-file half of the old recursive collector: read, keep `type: Task`
-/// files, map to a TaskItem. Unreadable files and non-tasks degrade silently.
-fn collect_task_file(
-    path: &Path,
-    name: &str,
-    canon_root: &Path,
-    id_property: Option<&str>,
-    out: &mut Vec<TaskItem>,
-) {
-    if !name.ends_with(".md") {
-        return;
-    }
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return;
-    };
-    if !is_task(&content) {
-        return;
-    }
-    let stem = name.strip_suffix(".md").unwrap_or(name).to_string();
-    let title = note_field(&content, "title").unwrap_or(stem);
-    let status = scalar_field(&content, "status").unwrap_or_else(|| "new".to_string());
-    // Archived tasks are removed from view — never surfaced in the list.
-    if status == "archived" {
-        return;
-    }
-    let created = scalar_field(&content, "created").unwrap_or_default();
-    let due = scalar_field(&content, "due");
-    // Filter through the date validator so a malformed value (e.g. "next week")
-    // becomes None at the DTO/MCP boundary, honoring the "invalid → None"
-    // contract in CORE — not only in the frontend's scheduledOf (Codex, PR #75).
-    let scheduled = scalar_field(&content, "scheduled").filter(|s| is_valid_due(s));
-    let priority = scalar_field(&content, "priority");
-    let tags = note_tags(&content);
-    let done = status == "done";
-    // The walk hands canonical paths under the canonical root, so the parent
-    // dir's strip_prefix is the task's List for free (no extra I/O).
-    let list = path
-        .parent()
-        .and_then(|dir| dir.strip_prefix(canon_root).ok())
-        .map(|rel| {
-            rel.components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .unwrap_or_default();
-    let order = scalar_field(&content, "order")
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|f| f.is_finite());
-    // Case-insensitive, top-level-only via `scalar_id_ci`, which agrees with
-    // the id-stamp path: a task stamped under a different casing still surfaces
-    // (Codex review, PR #59), a blank `task-id:` counts as ABSENT, and a
-    // NON-SCALAR value (a block or flow collection) is NOT surfaced as an id —
-    // else a duplicate that preserved a flow-valued property (never-clobber)
-    // would read as sharing the source's stable id (Codex P2, PR #76).
-    let id = id_property.and_then(|p| scalar_id_ci(&content, p));
-    out.push(TaskItem {
-        path: path.to_path_buf(),
-        title,
-        status,
-        created,
-        done,
-        due,
-        scheduled,
-        priority,
-        tags,
-        list,
-        order,
-        id,
-        description: super::description::description_field(&content),
     });
 }
 
@@ -224,44 +239,6 @@ mod tests {
     }
 
     #[test]
-    fn list_tasks_strips_inline_comments_from_structured_scalars() {
-        // Codex review, PR #46: `due: 2026-07-15 # client` read the comment
-        // into the value, so a due Obsidian's Properties UI shows failed
-        // is_valid_due and bucketed as no-date; `priority: high # urgent`
-        // degraded to normal; `status: done # shipped` counted as open and
-        // `status: archived # old` stayed listed. Structured scalars strip
-        // comments like the tags reader does. Titles stay raw (free text).
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "a.md",
-            "---\ntype: Task\nstatus: done # shipped\ntitle: \"A\"\ncreated: 2026-07-06 # early\ndue: 2026-07-15 # client\npriority: high # urgent\n---\n",
-        );
-        write(
-            root,
-            "b.md",
-            "---\ntype: Task\nstatus: archived # old\ntitle: \"B\"\n---\n",
-        );
-        // Quoted-then-commented corner: the comment strip must also unwrap
-        // the remaining quote pair.
-        write(
-            root,
-            "c.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"C\"\ndue: \"2026-07-16\" # quoted\n---\n",
-        );
-        let items = list_tasks(root, None);
-        let titles: Vec<&str> = items.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, vec!["C", "A"]); // archived B gone; done A last
-        assert_eq!(items[0].due.as_deref(), Some("2026-07-16"));
-        assert!(items[1].done);
-        assert_eq!(items[1].status, "done");
-        assert_eq!(items[1].created, "2026-07-06");
-        assert_eq!(items[1].due.as_deref(), Some("2026-07-15"));
-        assert_eq!(items[1].priority.as_deref(), Some("high"));
-    }
-
-    #[test]
     fn list_tasks_excludes_archived() {
         // Archived tasks are removed from view — the list surfaces only open +
         // done, never archived (no show-archived surface this slice).
@@ -293,28 +270,6 @@ mod tests {
     fn list_tasks_missing_root_is_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert!(list_tasks(&dir.path().join("nope"), None).is_empty());
-    }
-
-    #[test]
-    fn list_tasks_skips_unterminated_frontmatter() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "2026-07-08-good.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Good\"\ncreated: 2026-07-08\n---\n",
-        );
-        // Opens `---\ntype: Task` but never closes the block — must not appear.
-        write(
-            root,
-            "2026-07-08-bad.md",
-            "---\ntype: Task\ntitle: \"Bad\"\n",
-        );
-        let titles: Vec<String> = list_tasks(root, None)
-            .into_iter()
-            .map(|t| t.title)
-            .collect();
-        assert_eq!(titles, vec!["Good"]);
     }
 
     #[test]
@@ -441,55 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn list_tasks_reads_due_and_priority() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "t.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ndue: 2026-07-15\npriority: high\n---\n",
-        );
-        let items = list_tasks(root, None);
-        assert_eq!(items[0].due.as_deref(), Some("2026-07-15"));
-        assert_eq!(items[0].priority.as_deref(), Some("high"));
-    }
-
-    #[test]
-    fn list_tasks_reads_scheduled() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "t.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\nscheduled: 2026-07-20\n---\n",
-        );
-        write(
-            root,
-            "u.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"U\"\ncreated: 2026-07-08\n---\n",
-        );
-        // A malformed value must degrade to None IN CORE (not just the
-        // frontend) so TaskDto/MCP never expose it (Codex, PR #75).
-        write(
-            root,
-            "m.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"M\"\ncreated: 2026-07-08\nscheduled: next week\n---\n",
-        );
-        let items = list_tasks(root, None);
-        let sched = |title: &str| {
-            items
-                .iter()
-                .find(|t| t.title == title)
-                .unwrap()
-                .scheduled
-                .clone()
-        };
-        assert_eq!(sched("T"), Some("2026-07-20".to_string()));
-        assert_eq!(sched("U"), None); // absent → None
-        assert_eq!(sched("M"), None); // malformed → None (filtered in core)
-    }
-
-    #[test]
     fn list_tasks_sorts_by_due_then_priority_then_created() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -561,142 +467,59 @@ mod tests {
     }
 
     #[test]
-    fn list_tasks_reads_order_leniently() {
-        // `order:` is the manual rank — lenient read like every widened field:
-        // integers and floats parse, anything else (or absence) is unranked
-        // (None), never an error.
+    fn structural_scan_keeps_archived_rows() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(
             root,
             "a.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"A\"\ncreated: 2026-07-08\norder: 1536\n---\n",
+            "---\ntype: Task\nstatus: new\ntitle: \"Open\"\n---\n",
         );
         write(
             root,
             "b.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"B\"\ncreated: 2026-07-08\norder: 1536.5\n---\n",
+            "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\nparent-id: x\n---\n",
         );
-        write(
-            root,
-            "c.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"C\"\ncreated: 2026-07-08\norder: soon\n---\n",
-        );
-        write(
-            root,
-            "d.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"D\"\ncreated: 2026-07-08\n---\n",
-        );
-        let items = list_tasks(root, None);
-        let by_title = |t: &str| items.iter().find(|i| i.title == t).unwrap().order;
-        assert_eq!(by_title("A"), Some(1536.0));
-        assert_eq!(by_title("B"), Some(1536.5));
-        assert_eq!(by_title("C"), None);
-        assert_eq!(by_title("D"), None);
+        assert_eq!(list_tasks(root, None).len(), 1); // presentation: archived hidden
+        let all = list_tasks_structural(root, None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|t| t.parent_id.as_deref() == Some("x")));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn list_tasks_reads_tags() {
+    fn structural_scan_errors_on_an_unreadable_task() {
+        // One unreadable Task in a network vault must ABORT the scan, not vanish
+        // from the graph — a missing edge lets a cycle through (Codex P2, PR #77).
+        // Root bypasses DAC, so probe and skip under root; CI's rust-core runs
+        // non-root and exercises the assertions (same pattern as
+        // move_task_fails_and_rolls_back_when_source_cannot_be_removed in
+        // lists.rs).
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(
             root,
-            "t.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ntags:\n- work\n---\n",
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
         );
-        assert_eq!(list_tasks(root, None)[0].tags, vec!["work"]);
-    }
-
-    #[test]
-    fn list_tasks_reads_the_configured_id_property_when_asked() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(root, "t.md", "---\ntype: Task\nstatus: new\ntitle: \"T\"\ncreated: 2026-07-08\ntask-id: abc12345\n---\n");
-        assert_eq!(
-            list_tasks(root, Some("task-id"))[0].id.as_deref(),
-            Some("abc12345")
-        );
-        assert_eq!(list_tasks(root, None)[0].id, None); // off → no read
-    }
-
-    #[test]
-    fn list_tasks_reads_the_id_property_case_insensitively() {
-        // Codex PR #59: the id STAMP path detects an existing id under ANY
-        // casing (via scalar_field_ci), but list_tasks once read it with
-        // scalar_field's exact-case lookup — so a task stamped `Task-ID:` while
-        // the vault resolves the property to `task-id` had a stable id on disk
-        // that was invisible in TaskDto.id (dead to the UI/MCP and the copy-id
-        // feature). Both now share scalar_field_ci, so read agrees with write.
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "upper.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Upper\"\ncreated: 2026-07-08\nTask-ID: abc12345\n---\n",
-        );
-        write(
-            root,
-            "exact.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Exact\"\ncreated: 2026-07-08\ntask-id: xyz\n---\n",
-        );
-        // A NESTED indented `task-id` under a mapping is NOT the top-level
-        // property — scalar_field_ci is top-level-only, the same discipline the
-        // id-stamp uses — so this file carries no usable id at all.
-        write(
-            root,
-            "nested.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Nested\"\ncreated: 2026-07-08\nmetadata:\n  task-id: nope\n---\n",
-        );
-
-        let items = list_tasks(root, Some("task-id"));
-        let id_of = |title: &str| items.iter().find(|t| t.title == title).unwrap().id.clone();
-        assert_eq!(id_of("Upper"), Some("abc12345".to_string())); // case-insensitive win
-        assert_eq!(id_of("Exact"), Some("xyz".to_string())); // exact case: no regression
-        assert_eq!(id_of("Nested"), None); // nested key never counts as top-level
-
-        // Feature off (None property) never reads, regardless of on-disk casing.
-        let off = list_tasks(root, None);
-        assert_eq!(off.iter().find(|t| t.title == "Upper").unwrap().id, None);
-    }
-
-    #[test]
-    fn list_tasks_treats_a_blank_id_property_as_absent() {
-        // A bare `task-id:` (an Obsidian property panel / template leaves the
-        // key valueless) reads as Some("") through scalar_id_ci's inner read.
-        // The STAMP path treats that as missing and generates; the read must
-        // agree — surfacing "" as TaskDto.id would hand the UI/MCP an unusable
-        // id until the next edit (review, PR #59).
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "blank.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Blank\"\ncreated: 2026-07-08\ntask-id:\n---\n",
-        );
-        assert_eq!(list_tasks(root, Some("task-id"))[0].id, None);
-    }
-
-    #[test]
-    fn list_tasks_does_not_surface_a_non_scalar_id_as_an_id() {
-        // A block- or flow-valued id property is the user's structure, not a
-        // stable id — it must read as None so a duplicate that preserved a flow
-        // value can't appear to share the source's id (Codex P2, PR #76).
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        write(
-            root,
-            "flow.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Flow\"\ncreated: 2026-07-08\ntask-id: {source: jira}\n---\n",
-        );
-        write(
-            root,
-            "block.md",
-            "---\ntype: Task\nstatus: new\ntitle: \"Block\"\ncreated: 2026-07-08\ntask-id:\n  source: jira\n---\n",
-        );
-        let items = list_tasks(root, Some("task-id"));
-        assert_eq!(items.len(), 2);
-        for t in &items {
-            assert_eq!(t.id, None, "{}: a non-scalar id must not surface", t.title);
+        let locked = root.join("b.md");
+        std::fs::write(&locked, "---\ntype: Task\nstatus: new\ntitle: \"B\"\n---\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // If a read still succeeds despite the mode, perms are being bypassed
+        // (root) and the wall this test relies on doesn't hold — skip.
+        let bypassed = std::fs::read_to_string(&locked).is_ok();
+        if bypassed {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+            return;
         }
+        let out = list_tasks_structural(root, None);
+        // Restore before asserting so the tempdir can clean up either way.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            out.is_err(),
+            "an unreadable task must fail the structural scan"
+        );
+        assert!(!list_tasks(root, None).is_empty()); // the VIEW still degrades gracefully
     }
 }

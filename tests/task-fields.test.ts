@@ -15,7 +15,7 @@ import {
 function task(p: Partial<TaskItem>): TaskItem {
   return {
     path: "p", title: "t", status: "new", created: "2026-07-01", done: false,
-    due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, ...p,
+    due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null, ...p,
   };
 }
 
@@ -102,7 +102,7 @@ describe("buildTaskPatch", () => {
   const base: TaskItem = {
     path: "p", title: "Old", status: "new", created: "2026-07-01", done: false,
     due: "2026-07-10", scheduled: null, priority: null, tags: ["a"], list: "Work",
-    order: null, id: null, description: null,
+    order: null, id: null, description: null, parentId: null, parentLink: null,
   };
   const draft = (o: Partial<TaskDraft> = {}): TaskDraft => ({
     title: "Old", due: "2026-07-10", scheduled: "", priority: "normal", tags: "a", list: "Work", ...o,

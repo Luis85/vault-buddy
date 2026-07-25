@@ -2,7 +2,7 @@
 //! YAML scalar form exactly as Obsidian's js-yaml does; reject the multi-line
 //! forms (block / line-spanning quoted) rather than expose a partial value.
 
-use super::parse::strip_inline_comment;
+pub(super) use super::parse::strip_inline_comment;
 use crate::yaml_scalar::yaml_unquote_multiline;
 
 /// Extract the `"..."` span of a double-quoted scalar starting at `s[0] == '"'`,
@@ -10,7 +10,7 @@ use crate::yaml_scalar::yaml_unquote_multiline;
 /// `"` and `\` are ASCII, so byte-scanning can never mismatch inside a
 /// multi-byte char; any trailing ` # comment` after the close is left out.
 /// None when the scalar is unterminated.
-fn double_quoted_slice(s: &str) -> Option<&str> {
+pub(super) fn double_quoted_slice(s: &str) -> Option<&str> {
     let b = s.as_bytes();
     let mut i = 1;
     while i < b.len() {
@@ -27,7 +27,7 @@ fn double_quoted_slice(s: &str) -> Option<&str> {
 /// to the closing quote (a `'` that is NOT doubled), collapsing each `''` to one
 /// `'`. A trailing ` # comment` after the close is dropped. None when
 /// unterminated.
-fn decode_single_quoted(s: &str) -> Option<String> {
+pub(super) fn decode_single_quoted(s: &str) -> Option<String> {
     let inner = &s[1..];
     let b = inner.as_bytes();
     let mut out = String::with_capacity(inner.len());

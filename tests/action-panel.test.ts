@@ -59,7 +59,7 @@ describe("ActionPanel", () => {
     store.openTaskDetail({
       path: "p", title: "T", status: "new", created: "2026-07-01", done: false,
       due: null, scheduled: null, priority: null, tags: [], list: "", order: null,
-      id: null, description: null, vaultId: "v1", vaultName: "V",
+      id: null, description: null, parentId: null, parentLink: null, vaultId: "v1", vaultName: "V",
     });
     store.taskDetailBusy = true;
     const wrapper = mount(ActionPanel, { global: { stubs: { TaskDetail: true } } });
@@ -654,7 +654,7 @@ describe("ActionPanel", () => {
     store.openTaskDetail({
       path: "C:/v/Tasks/t.md", title: "Buy milk", status: "new", created: "2026-07-01",
       done: false, due: null, scheduled: null, priority: null, tags: [], list: "",
-      order: null, id: null, description: null, vaultId: "d4e5f6", vaultName: "Personal",
+      order: null, id: null, description: null, parentId: null, parentLink: null, vaultId: "d4e5f6", vaultName: "Personal",
     });
     const wrapper = mount(ActionPanel, {
       global: { stubs: { TaskDetail: true } },
