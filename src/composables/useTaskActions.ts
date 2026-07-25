@@ -100,9 +100,16 @@ export function useTaskActions(opts: {
   // A title click's routing: plain opens the in-panel detail home ("manage
   // without opening Obsidian"); Ctrl/⌘-click keeps the old muscle memory and
   // jumps straight to Obsidian, the one additive power-user shortcut.
+  // Ctrl/⌘-click jumps to Obsidian (a read — safe mid-write). A plain click opens
+  // the in-panel detail home, BUT NOT while the row's own write is in flight: a
+  // pending row write (toggle/archive/edit/schedule) holds task.path in `busy`,
+  // and opening Detail spins up a FRESH busy guard that could race it — both
+  // writers replace the WHOLE document, and a late field write can even recreate
+  // a file Detail just deleted (Codex P1, PR #76). The row write is optimistic and
+  // brief, so a click during it simply no-ops and can be retried.
   function onOpenTask(task: AggTask, ev: MouseEvent) {
     if (ev.ctrlKey || ev.metaKey) void openInObsidian(task);
-    else vaultsStore.openTaskDetail(task);
+    else if (!isBusy(task.path)) vaultsStore.openTaskDetail(task);
   }
 
   // Inline editor: one row at a time; opening another row discards unsaved

@@ -170,13 +170,15 @@ pub fn duplicate_task(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // Decode the title's YAML scalar form (single-quoted / quoted-then-commented
-    // hand-authored titles) so the copy is faithful, not one with the syntax baked
-    // in (Codex P2, PR #76). note_field already unquotes the plain double-quoted
-    // form the Buddy writes.
-    let title = super::description::decode_scalar_lenient(
-        &crate::capture_note::note_field(&content, "title").unwrap_or(stem),
-    );
+    // Decode the title's YAML scalar form from the RAW value (quotes/escapes
+    // intact) so a hand-authored quoted / commented / escaped title copies
+    // faithfully — `"café"` → `café`, `'it''s ready'` → `it's ready` — not
+    // with the syntax baked in. Reading via `note_field` first would strip the
+    // quotes and decode only `\"`/`\\`, losing `\u` and a `#` inside quotes
+    // (Codex P2, PR #76).
+    let title = crate::capture_note::raw_scalar_field(&content, "title")
+        .map(super::description::decode_scalar_lenient)
+        .unwrap_or(stem);
     let new_title = format!("{title} (copy)");
     let quoted = yaml_quote(&new_title);
     // A fresh id when IDs are on; `None` strips the configured property so the
@@ -356,6 +358,24 @@ mod tests {
         let new = duplicate_task(&root, &src, "2026-07-25", None, false).unwrap();
         let out = std::fs::read_to_string(&new).unwrap();
         assert!(out.contains("title: \"it's ready (copy)\""), "got: {out}");
+    }
+
+    #[test]
+    fn duplicate_task_decodes_an_escaped_double_quoted_title() {
+        // `note_field` only handles `\"`/`\\`; a `\u` escape must still decode
+        // (café), which requires reading the RAW quoted value (Codex P2, PR #76).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Tasks");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("orig.md");
+        std::fs::write(
+            &src,
+            "---\ntype: Task\nstatus: new\ntitle: \"caf\\u00e9\"\n---\n",
+        )
+        .unwrap();
+        let new = duplicate_task(&root, &src, "2026-07-25", None, false).unwrap();
+        let out = std::fs::read_to_string(&new).unwrap();
+        assert!(out.contains("title: \"café (copy)\""), "got: {out}");
     }
 
     #[cfg(unix)]

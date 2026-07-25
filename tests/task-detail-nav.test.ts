@@ -1,6 +1,9 @@
+import { clearMocks,mockIPC } from "@tauri-apps/api/mocks";
 import { createPinia,setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach,beforeEach, describe, expect, it } from "vitest";
+import { ref } from "vue";
 
+import { useTaskActions } from "../src/composables/useTaskActions";
 import { useVaultsStore } from "../src/stores/vaults";
 import type { AggTask } from "../src/types";
 
@@ -12,6 +15,31 @@ const task = (over: Partial<AggTask> = {}): AggTask => ({
 
 describe("task detail navigation", () => {
   beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => clearMocks());
+
+  it("onOpenTask does NOT open detail while the row's own write is in flight (P1 race)", async () => {
+    // A pending row write + opening Detail would race two whole-document writers
+    // (a late field write could recreate a file Detail just deleted) — Codex P1, PR #76.
+    let resolve: (() => void) | undefined;
+    mockIPC((cmd) =>
+      cmd === "set_task_status"
+        ? new Promise((r) => {
+            resolve = () => r(null);
+          })
+        : undefined,
+    );
+    const s = useVaultsStore();
+    const t = task();
+    const actions = useTaskActions({ tasks: ref([t]), sortInPlace: () => {} });
+    const pending = actions.toggle(t); // slow write → t.path enters the busy set
+    await new Promise((r) => setTimeout(r));
+    actions.onOpenTask(t, new MouseEvent("click")); // plain click while the row is busy
+    expect(s.view).not.toBe("taskDetail"); // suppressed — no race
+    resolve?.();
+    await pending;
+    actions.onOpenTask(t, new MouseEvent("click")); // row settled → opens now
+    expect(s.view).toBe("taskDetail");
+  });
 
   it("opens detail keeping the aggregate/per-vault mode, and back() restores it", () => {
     const s = useVaultsStore();

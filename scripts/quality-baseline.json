@@ -1,5 +1,5 @@
 {
-  "description": "Fallow quality baseline. Counters may shrink but not grow; averageMaintainability may rise but not drop. Regenerate with `npm run check:quality -- --update` (commit the diff in the same PR that moves the metric). The do-date increment (PR #75) lowered averageMaintainability 91.8->91.7 — the reviewed reason is recorded in docs/Gaps.md GAP-74 (that entry's complexFunctions 13->15 bump was retired by a later refactor, per the same GAP). The Task Detail increment (PR #76) lowered it 91.7->91.6: adding the real async useTaskDetail composable (own MI 87.7, in line with its siblings useTaskSchedule 88.0 / useTaskReorderCommit 86.6 / useTaskDisplay 86.2 — not a factoring problem) pulls the repo-wide average down ~0.1 at this rounding edge; every counter metric (complexFunctions, cloneGroups, criticalComplexity, deadCode) stayed at/under baseline, single-sourcing shared field-reflection into utils/taskMutations.ts rather than duplicating.",
+  "description": "Fallow quality baseline. Counters may shrink but not grow; averageMaintainability may rise but not drop. Regenerate with `npm run check:quality -- --update` (commit the diff in the same PR that moves the metric). The do-date increment (PR #75) lowered averageMaintainability 91.8->91.7 — the reviewed reason is recorded in docs/Gaps.md GAP-74 (that entry's complexFunctions 13->15 bump was retired by a later refactor, per the same GAP). The Task Detail increment (PR #76) lowered it 91.7->91.6: adding the real async useTaskDetail composable (own MI 87.7, in line with its siblings useTaskSchedule 88.0 / useTaskReorderCommit 86.6 / useTaskDisplay 86.2 — not a factoring problem) pulls the repo-wide average down ~0.1 at this rounding edge; every counter metric (complexFunctions, cloneGroups, criticalComplexity, deadCode) stayed at/under baseline, single-sourcing shared field-reflection into utils/taskMutations.ts rather than duplicating. A later Task Detail follow-up (PR #76, Codex round 27) lowered it 91.6->91.5: onOpenTask gained a required P1 guard — it must NOT open Task Detail while the row's own write is in flight, or a detail save/delete races the row write (both replace the whole document; a late field write can recreate a file Detail just deleted). The guard is one added conditional in useTaskActions.ts (already a documented LOC hotspot); a concise if/else-if form did not recover the ~0.05 rounding-edge drop, and the fix is a data-integrity requirement, so the floor moves rather than contorting the code. Every counter metric stayed at/under baseline.",
   "fallowVersion": "3.3.0",
   "metrics": {
     "deadCodeIssues": 2,
@@ -10,6 +10,6 @@
     "duplicatedLines": 0,
     "complexFunctions": 13,
     "criticalComplexity": 4,
-    "averageMaintainability": 91.6
+    "averageMaintainability": 91.5
   }
 }
