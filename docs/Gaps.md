@@ -1144,6 +1144,54 @@ non-string id is unusable and reject it up front, which is simpler and matches
 `parent_index`/`parent_index_for_validation` and `count_parent_links` must all
 adopt it together — they are the same rule seen from three places, and this
 branch's most repeated defect was fixing one such site and leaving its siblings.
+
+### GAP-98 · Low · An unread archived-list config reads as a CONFIRMED-empty one in the list badge
+`src/utils/taskHierarchy.ts` (`openSubtaskCounts`, the
+`archivedByVault.get(vaultId) ?? []` fallback). When `get_tasks_config` fails
+for a vault, `loadVaultConfig` leaves that vault out of the map entirely, and
+the `?? []` treats the absence as "this vault archives no lists" rather than
+"we do not know". Any open child that IS in an archived list therefore keeps
+counting toward its parent's open-subtask badge for the rest of the mounted
+session — the badge disagreeing with the open-task counts beside it, which
+apply the exclusion.
+
+**Why this is filed rather than fixed, while the visually similar Task Detail
+case WAS fixed:** the two differ on the axis this codebase draws everywhere —
+*a view may degrade; a guard must refuse.* Task Detail's parent picker
+**authorizes a write**: an unknown archived set there let the user persist a
+relationship the rule forbids, and core deliberately does not validate archived
+LISTS, so the frontend is the only enforcement point. That is a guard, so it now
+gates on the config having actually resolved and offers a retry. The subtask
+badge **displays a number**. A wrong count is visibly wrong, corrects itself on
+the next successful load, and authorizes nothing. Gating it would mean either
+suppressing a badge the user expects or plumbing an error state through a purely
+presentational path, for a degradation the project's own rule permits.
+
+**Fix shape, if it is ever worth it:** represent the missing entry as
+*unresolved* rather than empty (`Map<string, string[] | undefined>` is already
+the shape — the `?? []` is what erases the distinction), and have the count
+either suppress itself or retry for an unresolved vault. Note the same `?? []`
+idiom appears wherever a per-vault archived set is read; fix them together or
+the surfaces will disagree in a new place, which is the defect this file already
+records three facets of under GAP-91.
+
+### GAP-99 · Low · TaskDetail's List picker does not gate on the archived-list config either
+`src/components/TaskDetail.vue` (the `lists` computed feeding `TaskListPicker`
+/ `draftList`). The third consumer of `archivedLists` on that surface, found by
+the per-consumer audit the Add-Subtask gate prompted. Unlike the parent picker
+and Add Subtask — both now gated on `archivedListsResolved` — this one still
+reads the set while it may be unresolved or failed, so an archived list can be
+offered as a destination.
+
+**Deliberately left alone**, for three reasons that make it materially different
+from its two siblings: it predates this whole increment (present since
+`TaskDetail.vue`'s first commit, `a213873`); it is an **explicit user pick** of
+a destination rather than a silent inherited assignment, so nothing happens
+without the user choosing it and seeing it; and `TaskListPicker.vue` is shared
+with `Tasks.vue`'s composer and editor, so gating it here would ripple into
+surfaces this increment never touched. **Fix shape:** if it is taken up, gate at
+the shared component rather than at this one call site, or the three consumers
+drift apart again.
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
 scroll listener closed the menu on every scroll event, including the

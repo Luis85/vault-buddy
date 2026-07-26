@@ -1829,7 +1829,27 @@ removes the line (or block) entirely, same "absent means gone" semantics as
     never **having** one: an existing pair is never re-validated, so a child
     whose parent was archived later keeps resolving and rendering it (PR #77's
     Fix 1 — an invisible parent is what invited a silent overwrite through the
-    picker). Core deliberately does **not** know about archived LISTS: that
+    picker). The refusal is ALSO re-run under the write lock, unconditionally,
+    by `recheck_set_or_update` (shared by `set_task_parent` and `update_task`'s
+    own separate closure) and `recheck_add_subtask` — but that re-check
+    **narrows the window, it does not close it**, and must not be read as a
+    guarantee: `services::set_task_status` takes no `config_write_lock`, so an
+    archive committing between the re-check and phase 3b still lands. That is
+    deliberate. The resulting state — a child whose parent is archived — is
+    byte-identical to the case the rule already permits (archived AFTER the
+    assignment), so there is nothing to prevent; and the only lock that could
+    serialize them is the parent's per-file lock, which would mean holding one
+    file lock while taking another for the child, and this codebase documents
+    exactly one ordering (`config_write_lock` → per-file) and no file→file
+    ordering at all. The re-check earns its place on the far likelier case: a
+    parent already archived before phase 1, where the scan is simply stale.
+    **Both rechecks require CANONICAL paths** — they match `parent` against
+    `list_tasks_structural`'s canonical rows, so a raw registry path silently
+    matches nothing and refuses nothing; every production caller goes through
+    `canonical_task_in_root` first, and tests must too (a Linux tempdir root is
+    already canonical, so a non-canonical test path passes there and fails only
+    on Windows' `\\?\` form — CI caught exactly that).
+    Core deliberately does **not** know about archived LISTS: that
     would refuse a Task which is itself active and plainly visible under
     Plan/Tags grouping. *Display side (frontend):* a Task that is archived OR
     filed in an archived list is neither offered as a new parent
