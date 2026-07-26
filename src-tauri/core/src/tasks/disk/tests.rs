@@ -667,6 +667,40 @@ fn with_task_file_lock_prunes_dead_entries_so_the_map_does_not_grow_unboundedly(
 }
 
 #[test]
+fn ensure_id_never_overwrites_an_anchored_existing_id_and_reports_it_stripped() {
+    // Behavior change, stated plainly (task report): before this fix, the
+    // effective id returned for `task-id: &stable abc` was the literal
+    // "&stable abc" (strict_scalar_field did not strip the anchor). It is
+    // now "abc" — matching what list_tasks/scalar_id_ci report, and what
+    // mirror_id_reference already mirrors into a child. The never-overwrite
+    // invariant is UNAFFECTED either way: this property was already
+    // classified as "has a usable value" (Some, never None) before this fix
+    // too, so ensure_id never stamped over it pre- or post-fix — only the
+    // STRING it reports changed, not whether it counts as usable.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("Tasks");
+    std::fs::create_dir_all(&root).unwrap();
+    let p = root.join("t.md");
+    std::fs::write(
+        &p,
+        "---\ntype: Task\nstatus: new\ntitle: \"T\"\ntask-id: &stable abc\n---\n",
+    )
+    .unwrap();
+    let reported = update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id"))
+        .unwrap()
+        .expect("an existing anchored id is reported back, not treated as absent");
+    assert_eq!(reported, "abc");
+    // Never overwritten: the source line is untouched, byte for byte.
+    let after = std::fs::read_to_string(&p).unwrap();
+    assert!(after.contains("task-id: &stable abc\n"), "got {after}");
+    assert_eq!(
+        after.matches("task-id:").count(),
+        1,
+        "no second id line stamped"
+    );
+}
+
+#[test]
 fn effective_id_return_uses_the_strict_decode_like_the_list_reader() {
     // A quoted hand-authored id decodes to a'b for list_tasks (scalar_id_ci
     // -> strict_scalar_field). The RETURN value must agree: set_task_parent

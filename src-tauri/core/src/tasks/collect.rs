@@ -444,6 +444,48 @@ mod tests {
     }
 
     #[test]
+    fn parent_index_resolves_an_edge_through_an_anchored_parent_own_id() {
+        // THE reported regression, end to end. The parent's own id carries a
+        // legitimate hand-authored YAML anchor (`&stable abc` — e.g. for a
+        // Dataview cross-reference elsewhere in the vault), not something
+        // Vault Buddy wrote. Vault Buddy's OWN write side already strips the
+        // anchor before mirroring it into a child's parent-id (a prior fix
+        // on this branch), so the child's file correctly reads
+        // `parent-id: abc`. Before THIS fix, scalar_id_ci — what list_tasks
+        // reports as the PARENT's own id — still returned the anchor
+        // annotation verbatim ("&stable abc"), so parent_index's id -> path
+        // map was keyed on the wrong string and the edge this app itself had
+        // just written could never resolve: the child rendered with no
+        // parent the instant the relationship was saved.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "parent.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Parent\"\ncreated: 2026-07-25\ntask-id: &stable abc\n---\n",
+        );
+        write(
+            root,
+            "child.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Child\"\ncreated: 2026-07-25\nparent-id: abc\n---\n",
+        );
+        let items = list_tasks(root, Some("task-id"));
+        let parent_item = items.iter().find(|t| t.title == "Parent").unwrap();
+        let child_item = items.iter().find(|t| t.title == "Child").unwrap();
+        assert_eq!(
+            parent_item.id.as_deref(),
+            Some("abc"),
+            "the anchor annotation must not leak into the displayed id"
+        );
+        let idx = crate::tasks::parent_index(&items);
+        assert_eq!(
+            idx.get(child_item.path.as_path()),
+            Some(&parent_item.path.as_path()),
+            "the child must resolve a real edge despite the parent's anchored id"
+        );
+    }
+
+    #[test]
     fn list_tasks_does_not_surface_a_non_scalar_id_as_an_id() {
         // A block- or flow-valued id property is the user's structure, not a
         // stable id — it must read as None so a duplicate that preserved a flow

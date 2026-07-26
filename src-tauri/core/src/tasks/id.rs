@@ -91,6 +91,15 @@ pub fn is_valid_id_property(name: &str) -> bool {
 /// (falling back to the quoted-source encoding of `decoded`, never mirrored)
 /// so this function can never manufacture a dangling or colliding alias if
 /// that upstream invariant is ever weakened.
+///
+/// **Read-side parity.** `strict_scalar_field` strips the same anchor
+/// annotation via the shared `strip_anchor` helper below, so a task's own id
+/// (as `scalar_id_ci`/`list_tasks` report it) and this function's mirrored
+/// output always resolve an anchored source to the identical value — three-
+/// way agreement with js-yaml/Dataview, not just this function being
+/// internally reasonable. Read that function's doc comment for the
+/// regression this closes: `strip_anchor` used to be this module's own,
+/// unshared helper.
 pub fn mirror_id_reference(content: &str, key: &str, decoded: &str) -> String {
     match super::parse::top_level_raw_value_ci(content, key) {
         Some(raw) => mirror_or_fall_back(super::parse::strip_inline_comment(raw).trim(), decoded),
@@ -139,7 +148,20 @@ fn classify(candidate: &str, decoded: &str) -> String {
 /// whitespace) from a scalar's raw text, returning the remainder — or `None`
 /// when the text does not start with one (including a malformed `&` with no
 /// following name, which this declines to guess at).
-fn strip_anchor(raw: &str) -> Option<&str> {
+///
+/// SHARED with the READ side: `tasks::parse::scalar::strict_scalar_field`
+/// (the decoder behind `scalar_id_ci` — a task's own id, what `list_tasks`
+/// reports — and the `parent-id`/`parent` readers in `tasks::parent`) calls
+/// this too, so a raw `&name value` decodes to the identical `value` on
+/// both sides. Before that read-side fix landed, only THIS module's write
+/// side stripped the anchor: a task's own id, read back via the (then
+/// unfixed) strict decoder, still carried the annotation verbatim, so it
+/// could never equal what `mirror_id_reference` (below) mirrors into a
+/// child's `parent-id` — the hierarchy the app itself had just written was
+/// orphaned the instant it landed. One helper, reused rather than copied
+/// into a second implementation, is what keeps the two sides from drifting
+/// apart again — that is exactly how they drifted apart the first time.
+pub(in crate::tasks) fn strip_anchor(raw: &str) -> Option<&str> {
     let rest = raw.strip_prefix('&')?;
     let name_len = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))

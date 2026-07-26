@@ -50,6 +50,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parent_id_field_strips_a_leading_anchor() {
+        // parent_id_field shares strict_scalar_field with scalar_id_ci
+        // (Defect A's fix keeps the two decoders identical on purpose), so
+        // it inherits the anchor-stripping fix too. The write side never
+        // itself produces an anchored parent-id (mirror_id_reference always
+        // strips one before writing), but a hand-authored parent-id could
+        // still carry one, and the two readers must never re-diverge on
+        // identical raw text the way scalar_id_ci and this reader once did.
+        let c = "---\ntype: Task\nparent-id: &stable abc\n---\n";
+        assert_eq!(parent_id_field(c), Some("abc".to_string()));
+    }
+
+    #[test]
     fn reads_plain_and_quoted_values() {
         let c = "---\ntype: Task\nparent-id: ab12cd34\nparent: \"[[Tasks/Work/p]]\"\n---\n";
         assert_eq!(parent_id_field(c), Some("ab12cd34".to_string()));
