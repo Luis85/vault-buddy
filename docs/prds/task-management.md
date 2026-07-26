@@ -16,7 +16,14 @@
   home opened by a title click (Ctrl/⌘-click still opens the Task in
   Obsidian), adding an editable `description` frontmatter field and the first
   per-Task lifecycle verbs (Duplicate and permanent Delete) — in the
-  task-detail increment. The standalone Task Dashboard (Inbox / Completed
+  task-detail increment; and **Parent Task** — the one PRD-level Task
+  property that had no implementation until now — in the subtasks &
+  parent-tasks increment: a child names its parent by the parent's own
+  stable Task ID (authoritative for every resolution) plus an Obsidian link
+  (for click-through/Dataview), managed from the Task Detail surface (a
+  Parent row with a cycle-aware picker, and a Subtasks section with Add
+  Subtask), with a light-touch subtask-count badge and parent chip in the
+  main list. The standalone Task Dashboard (Inbox / Completed
   Today / Recently Created / High Priority / Recently Modified as separate
   summary widgets), templates, Task Tags on non-Task notes / Todos, and the
   AI features below remain unbuilt. See
@@ -200,7 +207,28 @@ Each task contains structured metadata.
 - Related Notes
 - Attachments
 
-`Parent Task` is optional and references another Task, so Tasks can be organized into hierarchies (e.g. a large Task broken into child Tasks) purely through frontmatter — no nested folders required.
+`Parent Task` is optional and references another Task, so Tasks can be organized into hierarchies (e.g. a large Task broken into Subtasks) purely through frontmatter — no nested folders required.
+
+**Shipped (the subtasks & parent-tasks increment).** A child Task carries a
+`parent-id` (the parent's stable Task ID — authoritative for every
+resolution: children, ancestors, cycle checks) plus a `parent` Obsidian link
+(navigation and Dataview only, never parsed for meaning). Setting a Vault's
+first Parent Task turns Task IDs on for it automatically, since the
+reference depends on one existing. Cycle- and ambiguous-id-safe: an
+assignment that would make a Task its own ancestor is refused inline, and an
+id shared by more than one Task (a copied file, a sync conflict) is treated
+as unresolvable rather than guessed at. Managed entirely from the **Task
+Detail** surface — a Parent row (current parent as a clickable chip, plus
+Change/Clear through a cycle-aware picker) and a Subtasks section (a
+done/total progress line, each child as a compact row, and Add Subtask) —
+with a light touch in the main list (an open-subtask-count badge on a
+parent, a parent chip on a child); the list itself stays flat, with no
+nested tree or collapse/expand. Completing a Parent Task does not complete
+its Subtasks, and completing every Subtask does not complete the parent —
+the parent only ever shows progress, never enforcement. Deleting a Parent
+Task does not cascade to its Subtasks (they become orphans, still valid,
+independent Tasks); duplicating a Task keeps its Parent Task, so the copy
+lands as a sibling.
 
 This allows compatibility with Obsidian Properties, Dataview and future AI capabilities.
 
@@ -256,12 +284,18 @@ A Todo is a plain checklist line — no properties, no filename, no identity bey
 - Description — **shipped** (the task-detail increment): an editable free-text
   `description` frontmatter property, distinct from the Note body that Task
   Management still never writes
+- Parent Task / Subtask — **shipped** (the subtasks & parent-tasks
+  increment): set or clear a Task's Parent Task from a cycle-aware picker,
+  or create a new Subtask directly under the open Task; see the Task Model
+  section above for the full mechanism
 
-The **Task Detail** surface (the task-detail increment) is where these edits
+The **Task Detail** surface (the task-detail increment, extended by the
+subtasks & parent-tasks increment) is where these edits
 live: a plain click on a Task's title opens a full-height per-Task home
 (Ctrl/⌘-click still opens the Task in Obsidian) that shows and edits title,
-description, Do Date / deadline, priority, tags, and List, and offers
-Open-in-Obsidian / Duplicate / Delete.
+description, Do Date / deadline, priority, tags, List, and Parent Task, and
+offers Open-in-Obsidian / Duplicate / Delete plus a Subtasks section with
+Add Subtask.
 
 ### Task Tags
 
@@ -454,6 +488,11 @@ Obsidian is never required for creating or editing tasks.
   Created, High Priority, and Recently Modified as separate summary cards —
   today's buckets are a grouping mode inside `Tasks.vue`, not a standalone
   dashboard screen.
+- Parent Task / Subtask hierarchy — ✅ shipped (the subtasks & parent-tasks
+  increment: a Parent row + Subtasks section on the Task Detail surface, a
+  cycle-aware picker, an ID-based authoritative reference plus an Obsidian
+  link for navigation, and a light-touch badge/chip in the main list — the
+  one PRD-level Task property with no implementation until now)
 
 ### Version 2
 

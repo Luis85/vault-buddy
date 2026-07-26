@@ -12,6 +12,7 @@ related_specs:
   - "docs/superpowers/specs/2026-07-09-tasks-todo-list-design.md"
   - "docs/superpowers/specs/2026-07-09-task-tags-design.md"
   - "docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md"
+  - "docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md"
 tags: [use-case, task-management]
 ---
 
@@ -39,7 +40,7 @@ Management PRD's status line now narrates what shipped and what remains
 unbuilt, and `AGENTS.md` documents the `task_commands::*` surface. Kept as a
 struck-through record per this catalog's convention.
 
-## Status: Shipped (v0.5.0, extended through v0.5.3, the lists increment, the do-date/planner-foundation increment, and the task-detail increment)
+## Status: Shipped (v0.5.0, extended through v0.5.3, the lists increment, the do-date/planner-foundation increment, the task-detail increment, and the subtasks & parent-tasks increment)
 
 - **v0.5.0** — the vertical slice: configure a per-vault tasks folder, list
   tasks, add a task, toggle completion.
@@ -73,6 +74,16 @@ struck-through record per this catalog's convention.
   faithful, collision-safe copy that resets only identity), and a permanent
   **Delete** behind a hardened two-step confirm (the app's first destructive
   vault write).
+- **Subtasks & parent-tasks increment** — a Task can now name a **Parent
+  Task**: a hybrid reference (the parent's stable Task ID, authoritative for
+  resolution, plus an Obsidian link for click-through/Dataview), managed from
+  the Task Detail surface's new **Parent row** (current parent as a
+  clickable chip, Change/Clear through a cycle- and ambiguous-id-aware
+  picker) and **Subtasks section** (a done/total progress line, each child
+  as a compact row, and Add Subtask). Setting a vault's first Parent Task
+  turns on Task IDs for it automatically. The main list gets a light touch
+  only — an open-subtask-count badge on a parent and a parent chip on a
+  child — with no nested tree or collapse/expand.
 
 ## Implementation
 
@@ -84,13 +95,19 @@ struck-through record per this catalog's convention.
   the generalized surgical multi-key frontmatter writer behind every edit
   (byte-preserving; consumes block-style lists on rewrite/removal).
 - Sanctioned vault writes, mirroring the transcript sidecar's never-clobber
-  discipline: collision-safe create; the surgical field write
-  (`update_task_fields`: canonical containment + atomic replacing rename); a
-  faithful collision-safe **duplicate** (`duplicate_task` — copies the bytes
-  and resets only identity); and a permanent **delete** (`delete_task` — the
-  app's first destructive vault write: canonical containment + `type: Task`
-  re-validation + file-identity re-check at unlink time + a no-follow symlink
-  refusal).
+  discipline: collision-safe create (optionally carrying an already-resolved
+  `parent-id`/`parent` pair for a Subtask); the surgical field write
+  (`update_task_fields`: canonical containment + atomic replacing rename —
+  also what sets/clears a Task's `parent-id`/`parent` pair, not a new write
+  capability); a faithful collision-safe **duplicate** (`duplicate_task` —
+  copies the bytes and resets only identity, keeping the source's Parent
+  Task so the copy lands as a sibling); a task-file move
+  (`move_task_to_list` — also recomposes the landed file's own stale
+  markdown-fallback `parent` link when it is itself a child); and a
+  permanent **delete** (`delete_task` — the app's first destructive vault
+  write: canonical containment + `type: Task` re-validation + file-identity
+  re-check at unlink time + a no-follow symlink refusal; a deleted parent's
+  children become orphans rather than being cascade-deleted or repaired).
 - The `description` field: an optional free-text `description:` frontmatter
   property, written as a single escaped YAML scalar the app round-trips
   exactly (`core::yaml_scalar`) and read leniently by
@@ -98,27 +115,47 @@ struck-through record per this catalog's convention.
   Obsidian's js-yaml does; a block or flow value degrades to none rather than
   corrupting the frontmatter). Reserved in both task key-sets so it can never
   be smuggled in as a template key nor configured as the Task ID property.
+- The Parent Task / Subtask hierarchy: `parent-id` (the parent's stable Task
+  ID, authoritative — read via a strict optional-field decode, not the
+  lenient title decode, since a wrong reference is worse than none) plus
+  `parent` (an Obsidian link, wikilink by default with a percent-encoded
+  markdown fallback for a List name carrying a wikilink metacharacter),
+  both additive and reserved like `description`. `services::tasks::parent`
+  validates (containment, self-parent, ambiguous ids, cycles — the last two
+  against a STRICT structural scan that includes archived Tasks and refuses
+  on any unreadable file, never a lenient view) before enabling Task IDs
+  (the vault's first Parent Task turns them on) and writing the pair — see
+  AGENTS.md's tasks-domain section for the full phase ordering and the
+  ID-configuration lock that follows once a hierarchy exists.
 - Config: `tasks_folder` on `VaultCaptureConfig`, default `"Tasks"`, edited
   in the per-vault Vault settings view.
 - IPC: `get_tasks_config`, `set_tasks_config`, `list_tasks` (rows now carry
-  `description`), `add_task`, `set_task_status`, `count_open_tasks`,
+  `description` and `parentId`/`parentLink`; takes an `include_archived` flag
+  the hierarchy resolution opts into), `add_task` (optional `parent_path`,
+  returning `idsEnabled`), `set_task_status`, `count_open_tasks`,
   `open_task`, `update_task` (patch now carries `description` /
-  `clearDescription`), `delete_task`, `duplicate_task`
-  (`src-tauri/src/task_commands.rs`).
+  `clearDescription` and `parentPath`/`clearParent`, returning
+  `parentId`/`parentLink`/`idsEnabled` alongside the task's own id),
+  `delete_task`, `duplicate_task` (`src-tauri/src/task_commands.rs`); the
+  five per-vault Tasks-settings commands, including `set_task_id_config`
+  (now refusing an ID re-point/disable while a hierarchy exists), live in
+  the sibling `src-tauri/src/task_config_commands.rs`.
 - Frontend: `Tasks.vue` (self-contained, no dedicated Pinia store), reached
   via the Tasks button on each vault row (which carries the open-task
   badge); `vaults` store holds `view: 'tasks'` / `tasksVaultId` /
   `openTasks()` and the per-vault counts. The **Task Detail** surface is
   `TaskDetail.vue`, driven by the `useTaskDetail` composable
-  (save / delete / duplicate / open under one shared busy guard); a title
-  click routes through `useTaskActions`' `onOpenTask` (plain → detail,
-  Ctrl/⌘ → Obsidian), and the store adds `view: 'taskDetail'` +
+  (save / delete / duplicate / open under one shared busy guard) and, for
+  the hierarchy, `useTaskHierarchy` (parent / children / progress / set)
+  plus `TaskParentRow.vue`, `TaskParentPicker.vue`, and `TaskSubtasks.vue`;
+  a title click routes through `useTaskActions`' `onOpenTask` (plain →
+  detail, Ctrl/⌘ → Obsidian), and the store adds `view: 'taskDetail'` +
   `taskDetailTask` + `openTaskDetail()`.
 
 ## Explicitly out of scope (single-vault list)
 
 Task lists (Inbox/Next/Today/etc. as metadata), project and estimated-effort
-fields, parent-task hierarchy, the cross-vault aggregated dashboard, Task
+fields, the cross-vault aggregated dashboard, Task
 Tags on non-Task notes, inline-Todo scanning, the standalone
 Quick Task modal, un-archiving / a show-archived
 view, recurring tasks and notifications — see

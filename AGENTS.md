@@ -104,9 +104,9 @@ vault-buddy/
 │   ├── capabilities/           # single default capability (all 3 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
-│   │                           #   transcription.rs, task_commands.rs,
+│   │                           #   transcription.rs, task_commands.rs, task_config_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
-│   │                           #   tray.rs, diagnostics.rs, main.rs
+│   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
 │   │                           #   mcp_config + document_import_config + transcription_config (split-out config sections),
@@ -255,12 +255,13 @@ Keep this table in sync when adding/removing commands.
 | --- | --- |
 | `commands.rs` | `list_vaults`, `open_vault`, `open_daily_note`, `prepare_update_install`, `toggle_panel`, `close_panel`, `open_panel` (idempotent show — the clickable bubble's reveal), `close_bubble`, `announce` (optional `action` → a clickable bubble), `get_buddy_facing`, `get_bubble_anchor`, `start_buddy_drag`, `show_buddy_menu`, `open_logs_folder`, `open_external_url` (https-only, OS browser), `set_dialog_active` (suppress panel auto-hide while a native dialog is open), `rearm_crash_detection`, `get_autostart`, `set_autostart`, `get_panel_config`, `set_panel_size` *(async — its fsync'd config write must not sit on the main thread, mirroring the other config setters)* (the panel preset size, `compact`/`comfortable`/`large`; read from a lock-free in-memory cache primed at startup so the show path never reads disk; `position_panel` sizes the HIDDEN panel from it on the next open — clamped to the monitor work area, since `place_beside` clamps position but not size — never resizes a shown window) |
 | `capture_commands.rs` | `start_capture` *(async)*, `stop_capture` *(async)*, `capture_status`, `pause_capture`, `resume_capture`, `rename_capture`, `list_recordings` *(async)*, `open_recording`, `open_transcript`, `list_audio_devices` *(async)* |
-| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` (now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields), `get_transcription_config`, `set_transcription_config` |
+| `capture_config_commands.rs` | `get_capture_config`, `set_capture_config` *(async — now also carries the additive `note_extra_frontmatter`/`note_body_template` companion-note template fields)*, `get_transcription_config`, `set_transcription_config` *(async)* |
 | `transcription.rs` | `transcribe_recording_now`, `retranscribe`, `cancel_transcription`, `transcription_queue_status` |
-| `task_commands.rs` | `get_tasks_config`, `set_tasks_config`, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)*, `list_tasks` *(async — each row now also carries `scheduled`)*, `add_task` *(async — takes an optional `list` and an optional `scheduled` do-date, validated like `due`)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank and the `scheduled`/`clearScheduled` do-date fields (validated like `due`/`clearDue`, `clearScheduled` winning); stamps a generated task ID when the vault opts in and the task lacks one, and RETURNS the task's current id — freshly-stamped or existing, `None` when IDs are off — so the row reveals copy-ID without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit)*, `delete_task` *(async — the app's FIRST destructive vault write; canonical-containment + `is_task` re-validation immediately before the irreversible remove, and REFUSES a symlink leaf (no-follow) so it can never delete through a link at the target; gated behind the detail view's hardened confirm)*, `duplicate_task` *(async — faithful collision-safe copy via the never-clobber writer: body/extra-frontmatter/description/unknown keys preserved, only identity reset (title `(copy)` / status `new` / id regenerated-or-stripped, non-scalar id left untouched); returns the landed (possibly ` (N)`-suffixed) path for the success toast's Open action)* |
+| `task_commands.rs` | `list_tasks` *(async — takes an `include_archived` flag; every existing caller keeps passing `false` for today's exact behavior, `true` backs the frontend's parent/subtask hierarchy resolution via `services::list_tasks_including_archived` — an archived Task can still be somebody's parent, and a resolver built from the archived-excluded default can never see that edge; each row now also carries `parentId`/`parentLink`)*, `add_task` *(async — takes an optional `list`, an optional `scheduled` do-date validated like `due`, and an optional `parent_path` — the prospective parent's PATH, never its id, since a vault with Task IDs off (the default) surfaces no id anywhere for the frontend to send; `Some` runs add_subtask's full shared resolve-the-parent path (validate → enable IDs → stamp the parent → write the child), not read-only validation alone, since Add Subtask is very often a vault's FIRST hierarchy operation; returns `AddTaskResult` — the created task's fields flattened for wire compatibility (`serde(flatten)`) plus `idsEnabled`, true only when THIS call turned Task IDs on)*, `set_task_status` *(async)*, `count_open_tasks` *(async)*, `open_task`, `update_task` *(async — patch includes the manual `order` rank, the `scheduled`/`clearScheduled` do-date fields, and now `parentPath`/`clearParent` — set-or-clear, keyed on the parent's PATH; a parent-only patch (no ordinary field) still counts as non-empty, so the Parent picker's Change/Clear can never silently no-op; validates the parent BEFORE writing any ordinary field, so a rejected parent commits nothing; stamps a generated task ID when the vault opts in and the task lacks one; returns a `TaskWriteResult { id, parentId, parentLink, idsEnabled }` — `id` is the task's current effective id, `parentId`/`parentLink` are the pair actually written THIS call (`None` when the patch carried no relationship change), `idsEnabled` is true only when THIS call turned Task IDs on — so the row reflects a freshly-stamped id or parent without a reload)*, `list_task_lists` *(async)*, `create_task_list` *(async)*, `rename_task_list` *(async — renames a list folder's leaf, moving the subtree; REFUSES a name collision, so the user re-picks — unlike the auto-suffixing move; returns the landed name; deliberately does NOT recompose any child's `parent` link — see the hierarchy section below)*, `delete_task_list` *(async — moves the list's direct tasks to No list then removes the now-empty folder; a folder still holding sub-lists/foreign files is kept; backfills a missing task ID on each relocated task when the vault opts in — best-effort, the reload surfaces them; the service layer also repairs each relocated child's own stale `parent` link, on BOTH the success and the failure arm — GAP-64; returns `{moved, folderRemoved}`)*, `move_task_to_list` *(async — returns `{path, id}`: the landed path, which may carry a collision suffix, plus the task's current id — backfilled on the landed file when the vault opts in and it lacked one — so the drag / editor-move callers reveal copy-ID without a reload; a move is a structural edit like a field edit; a moved CHILD also recomposes its own stale markdown-fallback `parent` link on this same landed-file write)*, `delete_task` *(async — the app's FIRST destructive vault write; canonical-containment + `is_task` re-validation immediately before the irreversible remove, and REFUSES a symlink leaf (no-follow) so it can never delete through a link at the target; gated behind the detail view's hardened confirm; a deleted parent's children become orphans — their `parent-id`/`parent` keys are left stale, never cleared)*, `duplicate_task` *(async — faithful collision-safe copy via the never-clobber writer: body/extra-frontmatter/description/unknown keys preserved, only identity reset (title `(copy)` / status `new` / id regenerated-or-stripped, non-scalar id left untouched); a duplicate KEEPS its source's `parent-id`/`parent` pair, landing as a sibling under the same parent; returns the landed (possibly ` (N)`-suffixed) path for the success toast's Open action)* |
+| `task_config_commands.rs` | Split out of `task_commands.rs` in the subtasks & parent-tasks increment — the per-vault Tasks settings surface. `get_tasks_config`, `set_tasks_config` *(async)*, `set_task_lists_config` *(async — now carries the `archivedLists` set; `archived_lists` is `Option`, `None` preserves the stored set so the settings card can keep omitting it)*, `set_task_id_config` *(async — enable + property name, write-strict: empty → the default, invalid/reserved → an inline error naming the token; REFUSES a property re-point or a disable while the vault has any Task carrying `parent-id` — either would make every recorded reference unresolvable — with an inline error naming the count (`services::count_parent_links`) and the remedy; enabling under an unchanged property stays allowed, since that direction can only make references resolvable, never orphan one)*, `set_task_template_config` *(async — the vault's additive task-document template, extra frontmatter + body; independent field-save, the `set_task_id_config` pattern, blank → `None`)* |
 | `search_commands.rs` | `search_vaults` (async — deliberate, see search), `open_search_result` |
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
-| `document_commands.rs` | `detect_pandoc`, `convert_document` (async — spawns the pandoc child off the main thread), `get_documents_config`, `set_documents_config` (now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields), `set_pandoc_path`, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
+| `document_commands.rs` | `detect_pandoc` *(async)*, `convert_document` *(async — spawns the pandoc child off the main thread)*, `get_documents_config`, `set_documents_config` *(async — now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields)*, `set_pandoc_path` *(async)*, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
@@ -502,18 +503,23 @@ exist, each documented in its own domain section below:
 1. the **capture** domain — recordings and companion notes;
 2. the **transcription** domain — the `<base>.transcript.md` sidecar;
 3. the **tasks** domain — creating a task document (collision-safe, into
-   its list folder) and the list-folder lifecycle (`create_task_list`
-   directory-only with pre/post containment asserts; `rename_task_list` and
-   `delete_task_list` — the delete moves direct tasks to No list then removes
-   the folder only if empty, keeping one that still holds sub-lists/foreign
-   files);
+   its list folder — optionally carrying an already-resolved `parent-id`/
+   `parent` pair when created as a Subtask) and the list-folder lifecycle
+   (`create_task_list` directory-only with pre/post containment asserts;
+   `rename_task_list` and `delete_task_list` — the delete moves direct tasks
+   to No list then removes the folder only if empty, keeping one that still
+   holds sub-lists/foreign files);
 4. the **tasks** domain — the surgical multi-key frontmatter field write
    (status toggle, rename, due/priority/tags/**description** edit, the manual
-   `order` rank, and the ensure-id task-ID stamp — one generalized writer);
+   `order` rank, the ensure-id task-ID stamp, and the paired **`parent-id`/
+   `parent`** set-or-clear — one generalized writer; setting/clearing a
+   Task's parent is this same writer, not a new write capability);
 5. the **tasks** domain — the in-root task file move between list folders
    (`move_task_to_list`: `rename_noreplace` + ` (N)` suffix retry, never
    clobbers, same-list no-op; also backfills a missing task ID on the landed
-   file when the vault opts in);
+   file when the vault opts in, and recomposes the landed file's OWN stale
+   `parent` link when it is itself a child — never a moved parent's
+   children's links, see the tasks-domain section);
 6. the **tasks** domain — the permanent **delete** of a task file
    (`delete_task`: the app's FIRST destructive vault write — canonical
    containment + `type: Task` re-validation + a file-identity re-check at
@@ -544,7 +550,9 @@ directly is a design change, not a patch. Design specs:
 `docs/superpowers/specs/2026-07-10-task-aggregation-design.md`,
 `docs/superpowers/specs/2026-07-10-document-import-pandoc-design.md`,
 `docs/superpowers/specs/2026-07-15-tasks-lists-first-drag-default-and-task-ids-design.md`,
-`docs/superpowers/specs/2026-07-18-vault-ux-and-configurable-templates-design.md`.
+`docs/superpowers/specs/2026-07-18-vault-ux-and-configurable-templates-design.md`,
+`docs/superpowers/specs/2026-07-24-task-detail-surface-description-verbs-design.md`,
+`docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`.
 
 Data flow: `%APPDATA%\obsidian\obsidian.json` → `discovery.rs` →
 `list_vaults` (open-flag scrub) → `vaults` Pinia store → `VaultList.vue` →
@@ -685,7 +693,9 @@ found the failure it prevents:
   collision suffix the plan didn't predict) so a pending transcription
   follows the file instead of stranding under the old name. Config writes
   stay app-side: owned temp + REPLACING rename is correct for
-  `config.json` only, serialized behind `ConfigWriteLock`.
+  `config.json` only, serialized behind the single core
+  `capture_config::config_write_lock()` (see the tasks-domain section for
+  why there is now exactly one such lock, not two).
 - **Companion note & follow-up template**: the optional `.md` embeds the audio
   and carries recording metadata; with the per-vault `follow_up_template` on
   (default), `render_note` (core) also appends a `## Follow-up` scaffold (action
@@ -1198,8 +1208,43 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `open_task`, separately) canonicalize root+path and require containment.
   `add_task` also rejects a missing vault dir (`!is_dir()`) before creating, so
   a stale registry can't resurrect a deleted vault. `set_capture_config`
-  preserves `tasks_folder` (read under `ConfigWriteLock`) so saving capture
-  settings can't reset it.
+  preserves `tasks_folder` (read under `capture_config::config_write_lock()`)
+  so saving capture settings can't reset it.
+- **Concurrency safety: one config lock, one per-file lock, a fixed order
+  (the subtasks & parent-tasks increment, GAP-83).** The shell's own
+  Tauri-managed `ConfigWriteLock` is RETIRED — it and core's
+  `capture_config::config_write_lock()` used to serialize `config.json`
+  read-modify-writes WITHOUT excluding each other, so a settings save on one
+  path could desync from a concurrent save on the other. Every config write
+  in the whole shell (capture, transcription, documents, MCP, and all five
+  task-settings commands) now takes the single core lock, and a shell test
+  (`config_lock_guard.rs`) structurally scans the shell crate's own source
+  and fails if a second config-flavored `Mutex<()>` gate ever reappears.
+  Separately, a NEW per-file lock, `tasks::disk::with_task_file_lock`
+  (canonical-path-keyed, `Weak`-pruned so it grows only with files being
+  written RIGHT NOW, poison-tolerant), is held across `update_task_fields`,
+  `delete_task`, and `move_task_to_list`'s own read-through-write/unlink/rename
+  sequence — closing three silent races between the panel and the embedded
+  MCP server's own OS thread (see the MCP section): a lost field update (both
+  read the same stale content, the second writer's key silently discards the
+  first's), a delete resurrected by a racing write's temp-then-rename landing
+  on the just-unlinked path, and a moved file duplicated at its old path.
+  `duplicate_task` and `rename_task_list` deliberately do NOT take it — a
+  duplicate reads its source exactly once and writes to a brand-new path
+  nobody else could be racing, so a concurrent edit can make it a
+  stale-but-consistent snapshot, never a lost or torn write; a folder rename
+  fails cleanly instead (a racing writer's temp-file create targets a parent
+  directory that, after the rename, no longer exists at that path) rather
+  than resurrecting or duplicating anything — see docs/Gaps.md GAP-83 for the
+  full reasoning on both. **The ordering invariant, honored everywhere:**
+  `config_write_lock()` may be acquired BEFORE the per-file lock, never
+  after — `resolve_parent_for_write` (below) already holds the config lock
+  across two calls into the per-file lock, so reversing the order anywhere
+  else is the textbook two-lock deadlock. Neither lock is reentrant. Both
+  locks are strictly IN-PROCESS: neither serializes against Obsidian itself
+  or a sync client (OneDrive/Dropbox/Syncthing) writing the same file from
+  another process — a pre-existing, accepted reality of the whole vault
+  domain, unchanged by either lock.
 - **`list_tasks` walks the configured tasks folder RECURSIVELY** (v0.5.x) so
   tasks organized into subfolders are all surfaced. The recursive walk is the
   shared `core::vault_walk` helper — canonical containment (a
@@ -1574,11 +1619,14 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `update_task_fields` that passes `ensure_id: None` — the one
   write path deliberately excluded, since a checkbox click isn't "editing"
   the task. `set_task_id_config` is the
-  independent field-save command (the `set_task_lists_config` pattern):
-  async, `ConfigWriteLock`-serialized read-modify-write; an empty property
+  independent field-save command (the `set_task_lists_config` pattern, now
+  in `task_config_commands.rs`): async, `capture_config::config_write_lock()`-
+  serialized read-modify-write; an empty property
   normalizes to `None` (the default), and an invalid/reserved name is an
   inline error naming the offending token rather than silently falling
-  back. **Frontend**: `TaskIdSettings.vue` is a presentational card
+  back. Since the subtasks & parent-tasks increment it ALSO refuses a
+  property re-point or a disable while the vault has any Task carrying
+  `parent-id` (see Hierarchy below). **Frontend**: `TaskIdSettings.vue` is a presentational card
   (toggle + property-name input + inline error, no invoke of its own) in
   the Vault settings Tasks tab; `TasksConfigTab.vue` owns the load,
   autosave scheduling, and the `set_task_id_config` call, mirroring how it
@@ -1591,7 +1639,7 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `task_extra_frontmatter` / `task_body_template` (blank → `None`), owned by
   their own independent field-save command, `set_task_template_config`
   (async, the `set_task_id_config` read-modify-write pattern under
-  `ConfigWriteLock`) — not `set_capture_config`/`set_tasks_config`, so a
+  `capture_config::config_write_lock()`) — not `set_capture_config`/`set_tasks_config`, so a
   template save can't reset the folder/lists/id fields, or vice versa.
   `render_task` (now taking both fields) reuses the capture-note's
   `core::template::render_extra_frontmatter` (see the capture domain): extra
@@ -1611,6 +1659,161 @@ removes the line (or block) entirely, same "absent means gone" semantics as
   `TaskIdSettings.vue`'s prop/emit shape, `TasksConfigTab.vue` owns
   load/autosave) is the LAST card in the Tasks settings tab (see the
   reordered layout above).
+- **Hierarchy: Parent Task and Subtask (the subtasks & parent-tasks
+  increment).** A child Task carries two additive, always-paired keys — set
+  and cleared together, never one without the other — so the two can never
+  disagree about *whether* there is a parent:
+  - **`parent-id` is authoritative.** Every resolution (children, ancestors,
+    cycle checks) reads only this — the parent's stable Task ID. Read via
+    `tasks::parent::{parent_id_field, parent_link_field}`, the same STRICT
+    optional-field decode `description_field` uses (deliberately NOT the
+    title's lenient `decode_scalar_lenient`): a comment-only value
+    (`parent-id: # note`), a YAML null (`null`/`~`), a block/flow value, or
+    an unterminated quoted scalar all read as **no parent** rather than a
+    phantom one — a wrong reference here is strictly worse than none, since
+    it would make the ID-config guard below block forever. Emitted bare when
+    the id is a plain-safe token and YAML-quoted otherwise
+    (`quote_id_if_needed`); when mirroring an INHERITED id onto a child,
+    `id::mirror_id_reference` copies the parent's raw on-disk scalar
+    verbatim (not a decode-then-requote) so an implicitly-typed
+    (`task-id: 123`, a YAML number) or tag-decorated (`!!str 123`) source
+    resolves identically for both properties, stripping a leading YAML
+    anchor (`&name`, else the child would define a second anchor of the same
+    name) and falling back to the safe quoted encoding for a quoted or alias
+    source.
+  - **`parent` is the navigational link, never parsed for meaning** — an
+    Obsidian link to the parent's file, vault-relative-path-without-`.md`,
+    so click-through and Dataview work. `tasks::parent_link::compose`
+    defaults to a wikilink (`[[Tasks/Work/…]]`); a List name containing a
+    wikilink metacharacter (`# | [ ] ^` — a hand-created folder can
+    legally hold one) falls back to a percent-encoded markdown link
+    resolved **relative to the CHILD's own directory** (a markdown
+    destination resolves from the note containing it, so a vault-relative
+    path would be wrong the instant parent and child sit at different
+    depths), with the label's `\ [ ]` backslash-escaped. Both forms are
+    always YAML-quoted (unquoted, `[[foo]]` parses as a flow sequence).
+  - Both keys join `RESERVED_TASK_KEYS` (`tasks/mod.rs`), so a task template
+    can never seed them and neither can be configured as the Task ID
+    property (the GAP-68/GAP-77 formerly-settable-edge pattern — see
+    docs/Gaps.md).
+  - **Validate → enable → write, in that order, every time
+    (`services::tasks::parent::{set_task_parent, add_subtask}`).** Phase 1
+    (read-only, nothing mutated) canonicalizes + requires containment +
+    `is_task` for both paths, refuses a self-parent BY PATH (no id needed),
+    validates the configured id property, then builds a validation index by
+    reading every task's id property **unconditionally — even while Task IDs
+    are off** (a hand-authored Task can already carry one) and checks
+    ambiguity + cycles against it. Only if phase 1 passes does phase 2 run:
+    if IDs are off, this FIRST parent-set turns them on for the vault
+    (idempotent, additive) using the configured — or defaulted `task-id` —
+    property. Phase 3 stamps the parent's own id (`update_task_fields` with
+    an empty `updates` slice — a no-op write when an id is already present),
+    composes the link, then writes the child's pair. A rejected self-parent
+    or cycle leaves NOTHING stamped and Task IDs still off — the ordering
+    exists precisely so a cycle rejection is never accompanied by a silent
+    side effect. Phases 2–3 run under ONE `config_write_lock()` held across
+    both, re-reading the config once the lock is held (a settings save
+    landing between phase 1 and the lock must not write under a now-stale
+    property) and re-running the cycle check **unconditionally, not only
+    when the config changed** — two overlapping parent-assignments (one
+    setting A→B, the other B→A) both pass phase 1 before either writes, so
+    only an unconditional re-check under the shared lock catches the second
+    one closing the loop. Phases 2–3 are still three separate writes with no
+    journal, so they are not atomic even under the lock — but the ordering
+    (additive/idempotent steps first, the one write that matters last) means
+    every partial state left by a crash mid-sequence is benign and
+    self-correcting: it can leave Task IDs enabled and/or a stamped parent id
+    with nothing pointing at them yet, but it can never leave a `parent-id`
+    that no task answers to (docs/Gaps.md). One shared resolve-path,
+    `resolve_parent_for_write`, backs both `set_task_parent` (writes onto an
+    existing child) and `add_subtask` (creates a brand-new one) — Add
+    Subtask is very often a vault's FIRST hierarchy operation, so it runs the
+    WHOLE path, not validation alone, or there would be no authoritative id
+    to write into the new file. **Ambiguous ids**: an id carried by more than
+    one Task (a copied file, a sync conflict, a hand edit — never something
+    VB itself creates) is unresolvable, exactly like the rest of the vault
+    domain's defensive-read posture — `parent_index` omits its edges
+    entirely (a referencing child renders as a top-level orphan) and
+    `set_task_parent`/`add_subtask` REFUSE a prospective parent whose id is
+    ambiguous, naming the collision. **Cyclic edges**: `tasks::hierarchy`
+    keys its graph on PATHS (`ParentIndex`), not ids — an id-less task can
+    still carry an outgoing `parent-id` edge, and an id-keyed graph would
+    silently drop it, letting a cycle through the check that should have
+    caught it. `parent_index` (the DISPLAY index — bounded `ancestors`,
+    `would_create_cycle`) drops the edges of every node already on a
+    pre-existing on-disk cycle, so both rows render parentless rather than
+    confidently as each other's parent/child; `parent_index_for_validation`
+    is the separate WRITE-PATH index that keeps those cyclic edges (write
+    validation against the display-filtered graph could accept an
+    assignment that CLOSES a cycle the filtered view can no longer see) —
+    every hierarchy guard uses this one, never the display index.
+  - **The strict-guard-vs-lenient-view read split — three functions, not
+    two.** `list_tasks` (excludes `status: archived`, best-effort skips a
+    file it cannot read — the ordinary panel/MCP list) and
+    `list_tasks_including_archived` (same best-effort posture, but
+    archived-INCLUDED — the `list_tasks(id, include_archived: true)` IPC
+    path the frontend's hierarchy resolution reads, since an archived Task
+    can still be somebody's parent) are both VIEWS: right for something the
+    user is looking at, wrong for a structural invariant. Every hierarchy
+    GUARD instead uses **`list_tasks_structural`** — archived-included AND
+    FALLIBLE: any `type: Task` document it cannot read or decode is an
+    `Err`, never a silently-incomplete graph — used by the pre-lock
+    validation index, the post-lock re-check, and `set_task_id_config`'s
+    guard below, and by nothing else. The rule: **a view may degrade; a
+    guard must refuse.**
+  - **The ID configuration locks itself once a hierarchy exists (§2a,
+    `services::tasks::id_config::set_task_id_config`).** Re-pointing the
+    task-id property OR disabling Task IDs both make
+    `id_property_for_generation`'s gate stop resolving every recorded
+    `parent-id` at once — so the settings command REFUSES either change
+    while `services::count_parent_links` (a `list_tasks_structural` scan,
+    same fallible-guard posture — an unreadable vault refuses the settings
+    change rather than reporting "no links") is nonzero, naming the count and
+    the remedy inline. **Enabling under an unchanged property is exempt** —
+    it can only make references resolvable, never orphan one; refusing it
+    would trap a user whose hand-authored hierarchy is invisible precisely
+    *because* ids are off. The guard holds `config_write_lock()` across its
+    own scan-and-write, so it and a concurrent `set_task_parent`
+    (which holds the same lock across ITS phases 2–3) can never interleave a
+    new hierarchy write in between this scan and its commit.
+  - **`move_task_to_list` recomposes the landed CHILD's own `parent` link**
+    when it is itself a child on the markdown-fallback form (a wikilink is
+    vault-relative and never goes stale) — one extra, best-effort, warn-only
+    write on the SAME file the move already rewrites for the id backfill,
+    skipped when the recomposed link is unchanged. It does **not** touch a
+    moved PARENT's children: that would be an unbounded batch write the
+    design declines to bolt onto the move path (the same reasoning that
+    keeps `delete_task` a single-file op) — so moving a parent leaves its
+    children's `parent` links stale (cosmetic — `parent-id` is authoritative,
+    so VB's own hierarchy is unaffected; only Obsidian's click-through
+    degrades, visibly, rather than resolving to the wrong Task — see
+    docs/Gaps.md). `delete_task_list`'s relocation loop shares the identical
+    per-landed-file repair, on both its success and its failure arm (GAP-64).
+  - **Frontend (Detail-first, a light touch in the list).** `TaskDetail.vue`
+    gains a **Parent row** (`TaskParentRow.vue`: the current parent as a
+    clickable chip that opens its own detail, Change/Clear, "No parent"/"Set
+    parent" otherwise) and a **Subtasks section** (`TaskSubtasks.vue`: a
+    done/total progress line, each child as a compact row, and an **Add
+    subtask** title input), both driven by `useTaskHierarchy` (resolves
+    parent/children/progress from the vault's already-loaded, archived-
+    inclusive task set — no extra IPC round-trip — and calls `update_task`'s
+    `parentPath`/`clearParent`). `TaskParentPicker.vue` is the searchable
+    picker behind Change: it pre-disables self + descendants as a UI hint
+    (computed from whatever ids the frontend can already see) and excludes
+    archived Tasks as NEW-parent candidates — core's cycle/ambiguity checks
+    remain the authority either way. Every write rides the surface's one
+    shared `busy` guard; drilling from one Task's detail into another's
+    (a parent chip or a child row) re-keys `<TaskDetail>` by the task's path
+    so its seven draft refs reseed instead of showing the previous Task's
+    fields. The main list stays flat (no nested tree, no collapse/expand):
+    `TaskRow.vue` gains a subtask-count badge (open children only, hidden at
+    zero) and a parent chip, both purely presentational and, in aggregate
+    ("All tasks") mode, resolved PER VAULT so two vaults can never cross-link.
+    Duplicating a Task keeps its `parent-id`/`parent` pair (the copy lands as
+    a sibling under the same parent); deleting one does not touch its
+    children (see docs/Gaps.md for both the orphan and the parent-move
+    residuals). Spec:
+    `docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`.
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 
@@ -1735,7 +1938,7 @@ Invariants — each exists because a review found the failure it prevents:
   self-heals by generating one (32 bytes, base64url, in `config.json`).
   The settings commands are async (the stop path joins the server thread —
   that wait must not sit on the main thread); config writes stay under
-  `ConfigWriteLock`.
+  the single core `capture_config::config_write_lock()`.
 - **Frontend**: `McpSettings.vue` (Buddy-settings section, self-contained)
   owns enable/port/writes/token + status + copyable client snippets;
   successful writes emit `mcp:write`, announced by `useBuddyAnnouncements`
