@@ -39,6 +39,9 @@ const vaults = useVaultsStore();
 // from the parent options (GAP-91), and a `const` used before its declaration
 // is a TDZ error, not merely a style question. `loadLists` (below) fills it.
 const archivedLists = ref<string[]>([]);
+// See loadListsConfig: gates the parent picker's Change until the archived set
+// is known, since the frontend is the SOLE enforcement point for that rule.
+const archivedListsResolved = ref(false);
 const {
   allTasks,
   pickerCandidates,
@@ -72,24 +75,40 @@ const draftList = ref(props.task.list);
 // than silently rendering a blank picker (Codex P2, PR #76).
 const allLists = ref<string[]>([]);
 const listOrder = ref<string[]>([]);
+// SPLIT from the config read below. The two shared one `Promise.all`, so a
+// rejected enumeration discarded a SUCCESSFUL config — silently leaving
+// archivedLists empty and disabling the parent picker's archived-list
+// exclusion outright (Codex P2, PR #78).
 async function loadLists(): Promise<void> {
   try {
-    const [all, cfg] = await Promise.all([
-      invoke<string[]>("list_task_lists", { id: props.task.vaultId }),
-      invoke<TasksConfig>("get_tasks_config", { id: props.task.vaultId }),
-    ]);
-    allLists.value = all;
+    allLists.value = await invoke<string[]>("list_task_lists", { id: props.task.vaultId });
+  } catch (e) {
+    logWarning(`task detail: could not load task lists: ${String(e)}`);
+  }
+}
+// `archivedListsResolved` means "we have finished ASKING", not "we got an
+// answer" — it flips on BOTH arms. Until then the parent picker's Change is
+// held: an unloaded archivedLists is indistinguishable from a genuinely empty
+// one, and core deliberately does NOT validate archived lists, so a pick made
+// in that window writes a real, PERSISTED relationship rather than a transient
+// display glitch that self-heals. A FAILED read still resolves, degrading to
+// the pre-existing behavior instead of stranding the user on a transient error.
+async function loadListsConfig(): Promise<void> {
+  try {
+    const cfg = await invoke<TasksConfig>("get_tasks_config", { id: props.task.vaultId });
     listOrder.value = cfg.listOrder ?? [];
     archivedLists.value = cfg.archivedLists ?? [];
   } catch (e) {
-    logWarning(`task detail: could not load task lists: ${String(e)}`);
+    logWarning(`task detail: could not load the tasks config: ${String(e)}`);
+  } finally {
+    archivedListsResolved.value = true;
   }
 }
 onMounted(async () => {
   rootEl.value?.focus();
   // Independent loads with their own catch (reloadTaskSet never throws): a
   // failed task-set read must not also blank the lists picker, and vice versa.
-  await Promise.all([loadLists(), reloadTaskSet()]);
+  await Promise.all([loadLists(), loadListsConfig(), reloadTaskSet()]);
 });
 // Options ordered by the vault's listOrder-then-alphabetical (matching
 // useTaskLists.listsForVault), dropping archived lists EXCEPT the task's own
@@ -368,6 +387,7 @@ function openSubtaskDetail(t: AggTask) {
       :busy="busy"
       :all-tasks="pickerCandidates"
       :invalid-paths="invalidParentPaths"
+      :can-assign="archivedListsResolved"
       @open-parent="openParentDetail"
       @select="setParent"
     />

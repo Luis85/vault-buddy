@@ -18,6 +18,14 @@ const props = defineProps<{
   busy: boolean;
   allTasks: AggTask[];
   invalidPaths: string[];
+  /** False while the vault's archived-list set is still being read. Gates
+   * ASSIGNMENT only — Clear stays available, since removing a relationship
+   * never needs the archived set. The frontend is the SOLE enforcement point
+   * for the archived-list rule (core deliberately validates only archived
+   * STATUS), so offering candidates before that set is known would let a pick
+   * write a real, persisted relationship the rule should have excluded
+   * (Codex P2, PR #78). */
+  canAssign: boolean;
 }>();
 const emit = defineEmits<{
   (e: "openParent"): void;
@@ -42,10 +50,10 @@ const statusLabel = computed(() => {
 });
 
 async function open() {
-  // Defensive: the trigger below is already :disabled="busy" (a disabled
-  // native button can't dispatch click), so this only matters if that ever
-  // drifts — same posture as the sibling Save/Delete guards in TaskDetail.
-  if (props.busy) return;
+  // Defensive: the trigger below is already :disabled="busy || !canAssign" (a
+  // disabled native button can't dispatch click), so this only matters if that
+  // ever drifts — same posture as the sibling Save/Delete guards in TaskDetail.
+  if (props.busy || !props.canAssign) return;
   changing.value = true;
   await nextTick();
   picker.value?.focus();
@@ -100,7 +108,7 @@ function onRootKeydown(e: KeyboardEvent) {
         ref="changeBtn"
         type="button"
         data-testid="task-detail-parent-change"
-        :disabled="busy"
+        :disabled="busy || !canAssign"
         class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="open"
       >

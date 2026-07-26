@@ -1609,3 +1609,86 @@ describe("TaskDetail.vue Subtasks — archiving", () => {
     ).toBe(false);
   });
 });
+
+// GAP-91's load-ordering half (Codex P2, PR #78). Core deliberately does NOT
+// validate archived LISTS, so the frontend is the SOLE enforcement point for
+// that rule — which makes it matter that the rule is actually in force by the
+// time the picker becomes interactive. A pick made while archivedLists is
+// still empty writes a real, persisted relationship; it does not self-heal.
+describe("TaskDetail.vue parent picker — archived-list config readiness", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const mountWith = async (
+    open: AggTask,
+    opts: { listsFail?: boolean; holdConfig?: boolean } = {},
+  ) => {
+    let releaseConfig: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") {
+        if (opts.listsFail) throw new Error("enumeration failed");
+        return [];
+      }
+      if (cmd === "get_tasks_config") {
+        const cfg = { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
+        if (!opts.holdConfig) return cfg;
+        return new Promise((r) => { releaseConfig = () => r(cfg); });
+      }
+      if (cmd === "list_tasks")
+        return [open, task({ vaultId: "v1", id: "z", path: "/v1/z.md", list: "Old" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: open } });
+    await new Promise((r) => setTimeout(r));
+    return { wrapper, release: () => releaseConfig?.() };
+  };
+
+  it("still applies the archived filter when list_task_lists FAILS", async () => {
+    // The two reads shared one Promise.all, so a rejected enumeration
+    // discarded a SUCCESSFUL config — silently leaving archivedLists empty
+    // and disabling the archived-list exclusion outright.
+    const { wrapper } = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md" }),
+      { listsFail: true },
+    );
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    // The archived-list task must NOT be offered even though the sibling
+    // enumeration call failed.
+    expect(wrapper.find('[data-testid="task-parent-picker-option-/v1/z.md"]').exists()).toBe(false);
+  });
+
+  it("holds parent assignment until the archived-list config resolves", async () => {
+    const { wrapper, release } = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md" }),
+      { holdConfig: true },
+    );
+    const change = () =>
+      wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement;
+    expect(change().disabled).toBe(true);
+    release();
+    await new Promise((r) => setTimeout(r));
+    expect(change().disabled).toBe(false);
+  });
+
+  it("re-enables assignment when the config read FAILS, rather than stranding the user", async () => {
+    // "Resolved" means we finished ASKING, not that we got an answer. A
+    // transient config failure degrades to the pre-existing behavior (the Low
+    // GAP-91 inconsistency) instead of permanently disabling a feature.
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") throw new Error("config unreadable");
+      if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, {
+      props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
+    });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      (wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+});
