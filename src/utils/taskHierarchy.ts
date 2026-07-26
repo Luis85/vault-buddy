@@ -93,26 +93,89 @@ export function buildParentIndexByVault(tasks: AggTask[]): Map<string, Map<strin
   return byVault;
 }
 
-/** The resolved parent row (or null) and open (not-done) subtask count for
- * ONE task — the list's per-row derivation (Task 10), reading the SAME
- * per-vault index useTaskHierarchy builds for Task Detail so an ambiguous id,
- * a cycle, or a cross-vault id collision renders as unresolved in BOTH places
- * (Codex P2, PR #77) — never a second resolution rule. Direct children only,
- * matching useTaskHierarchy's children/progress (no grandchildren). */
-export function taskHierarchyInfo(
-  task: AggTask,
-  allTasks: AggTask[],
+/** One task's resolved parent row (or null) and open (not-done) subtask
+ * count — the list's per-row derivation (Task 10). */
+export interface HierarchyInfo {
+  parent: AggTask | null;
+  openSubtaskCount: number;
+}
+
+/** The `(vaultId, path)` bucket inside a nested vault map, creating it on
+ * first use — the one repeated shape all three of buildHierarchyInfoByVault's
+ * passes share, factored out so each pass reads as its own rule instead of
+ * three copies of the same get-or-create dance (also what keeps each pass's
+ * own cyclomatic complexity low). */
+function vaultBucket<V>(outer: Map<string, Map<string, V>>, vaultId: string): Map<string, V> {
+  let inner = outer.get(vaultId);
+  if (!inner) {
+    inner = new Map();
+    outer.set(vaultId, inner);
+  }
+  return inner;
+}
+
+/** Pass 1 of {@link buildHierarchyInfoByVault}: `(vaultId, path)` -> the task
+ * itself, for resolving a PARENT's own row. */
+function taskByPath(tasks: AggTask[]): Map<string, Map<string, AggTask>> {
+  const byPath = new Map<string, Map<string, AggTask>>();
+  for (const t of tasks) vaultBucket(byPath, t.vaultId).set(t.path, t);
+  return byPath;
+}
+
+/** Pass 2 of {@link buildHierarchyInfoByVault}: `(vaultId, parentPath)` ->
+ * open (not done) child count. */
+function openSubtaskCounts(
+  tasks: AggTask[],
   byVault: Map<string, Map<string, string>>,
-): { parent: AggTask | null; openSubtaskCount: number } {
-  const index = byVault.get(task.vaultId);
-  const parentPath = index?.get(task.path);
-  const parent = parentPath
-    ? (allTasks.find((t) => t.vaultId === task.vaultId && t.path === parentPath) ?? null)
-    : null;
-  const openSubtaskCount = allTasks.filter(
-    (t) => t.vaultId === task.vaultId && !t.done && index?.get(t.path) === task.path,
-  ).length;
-  return { parent, openSubtaskCount };
+): Map<string, Map<string, number>> {
+  const counts = new Map<string, Map<string, number>>();
+  for (const t of tasks) {
+    if (t.done) continue;
+    const parentPath = byVault.get(t.vaultId)?.get(t.path);
+    if (!parentPath) continue;
+    const bucket = vaultBucket(counts, t.vaultId);
+    bucket.set(parentPath, (bucket.get(parentPath) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Every task's {@link HierarchyInfo}, keyed by vault then path, built in
+ * ONE pass over `tasks` instead of a per-task lookup — the list used to
+ * re-derive each row from scratch (an `allTasks.find` + `allTasks.filter`,
+ * each O(n)) on every render, so a thousand-task vault redid roughly
+ * `n rows * O(n)` comparisons per keystroke or checkbox toggle (Task 12's
+ * perf fix). Reads the SAME per-vault index useTaskHierarchy builds for Task
+ * Detail so an ambiguous id, a cycle, or a cross-vault id collision renders
+ * as unresolved in BOTH places (Codex P2, PR #77) — this is a memoization of
+ * that one shared rule, never a second resolution rule. Direct children
+ * only, matching useTaskHierarchy's children/progress (no grandchildren).
+ *
+ * A task missing from the returned map (Task IDs off is the common case —
+ * every vault's index is then empty) resolves to no entry; callers supply
+ * the trivial `{parent: null, openSubtaskCount: 0}` default themselves
+ * (`useTaskListHierarchy.hierarchyOf`) rather than this function padding
+ * every path with a value nothing asked for.
+ */
+export function buildHierarchyInfoByVault(
+  tasks: AggTask[],
+  byVault: Map<string, Map<string, string>>,
+): Map<string, Map<string, HierarchyInfo>> {
+  const out = new Map<string, Map<string, HierarchyInfo>>();
+  // Early-out: no vault has ANY edge (Task IDs off is the default), so every
+  // answer is trivially null/0 — skip the passes below rather than walking
+  // `tasks` for nothing on the vault's most common configuration.
+  const hasAnyEdge = [...byVault.values()].some((index) => index.size > 0);
+  if (!hasAnyEdge) return out;
+
+  const byPath = taskByPath(tasks);
+  const counts = openSubtaskCounts(tasks, byVault);
+  for (const t of tasks) {
+    const parentPath = byVault.get(t.vaultId)?.get(t.path);
+    const parent = parentPath ? (byPath.get(t.vaultId)?.get(parentPath) ?? null) : null;
+    const openSubtaskCount = counts.get(t.vaultId)?.get(t.path) ?? 0;
+    vaultBucket(out, t.vaultId).set(t.path, { parent, openSubtaskCount });
+  }
+  return out;
 }
 
 /** All paths that are `path` itself or a transitive child of it in `index` (a
