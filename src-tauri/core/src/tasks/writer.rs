@@ -300,6 +300,35 @@ mod tests {
     }
 
     #[test]
+    fn set_fields_preserves_a_quoted_value_with_an_embedded_hash_verbatim_when_untouched() {
+        // Audit finding (task report's strip_inline_comment caller survey):
+        // this writer's own comment-strip (used only to classify whether a
+        // MATCHED key's OLD value opens a following block to consume) is
+        // quote-blind like every other call site — but the bytes emitted for
+        // an UNTOUCHED key are copied straight from the source line, never
+        // derived from that classification text, so a quoted value with an
+        // embedded `#` on a key not in `updates` must survive unchanged.
+        let doc = "---\ntype: Task\nstatus: new\ntitle: \"abc # def\"\n---\n";
+        let out = set_fields(doc, &[("due", Some("2026-07-20"))]).unwrap();
+        assert!(out.contains("title: \"abc # def\"\n"), "got {out}");
+    }
+
+    #[test]
+    fn set_fields_rewriting_a_quoted_hash_valued_key_does_not_misclassify_it_as_a_block() {
+        // The other half of the audit: when the key WITH the tricky value IS
+        // the one being rewritten, the (quote-blind) classification of its
+        // OLD value must still correctly see it as non-empty/non-block —
+        // never accidentally consuming the unrelated key that follows it.
+        let doc = "---\ntype: Task\nstatus: new\ntitle: \"abc # def\"\ndue: 2026-07-10\n---\n";
+        let out = set_fields(doc, &[("title", Some("\"new\""))]).unwrap();
+        assert!(out.contains("title: \"new\"\n"));
+        assert!(
+            out.contains("due: 2026-07-10\n"),
+            "unrelated key must survive, got {out}"
+        );
+    }
+
+    #[test]
     fn set_fields_does_not_match_a_key_prefix() {
         // "due" must not rewrite a "duedate:" line — key match requires the colon
         // immediately after the key.

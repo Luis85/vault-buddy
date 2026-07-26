@@ -701,6 +701,45 @@ fn ensure_id_never_overwrites_an_anchored_existing_id_and_reports_it_stripped() 
 }
 
 #[test]
+fn ensure_id_treats_an_invalid_plain_scalar_id_as_unassignable_and_leaves_it_untouched() {
+    // Behavior change, stated plainly (task report, case b): before this fix,
+    // `task-id: abc: def` (not valid YAML — an unquoted `key: value` shape is
+    // a same-line nested mapping, forbidden outside flow context) was read as
+    // a "usable" existing id (Some("abc: def")), so ensure_id never stamped
+    // over it AND a parent assignment through it happily mirrored the same
+    // invalid text into a child (see services::tasks::parent's own
+    // regression test). It is now correctly treated as UNASSIGNABLE (None) —
+    // the same "leave it alone, we cannot safely touch or repair it" posture
+    // already established for an alias or a block/flow value. The
+    // never-overwrite invariant itself is unaffected: this property was
+    // ALREADY never touched pre-fix (just for the wrong reason — being
+    // misread as already-usable rather than correctly recognized as
+    // untouchable).
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("Tasks");
+    std::fs::create_dir_all(&root).unwrap();
+    let p = root.join("t.md");
+    std::fs::write(
+        &p,
+        "---\ntype: Task\nstatus: new\ntitle: \"T\"\ntask-id: abc: def\n---\n",
+    )
+    .unwrap();
+    let reported =
+        update_task_fields(&root, &p, &[("status", Some("done"))], Some("task-id")).unwrap();
+    assert_eq!(reported, None, "an invalid plain-scalar id is not usable");
+    let after = std::fs::read_to_string(&p).unwrap();
+    assert!(
+        after.contains("task-id: abc: def\n"),
+        "left untouched, got {after}"
+    );
+    assert_eq!(
+        after.matches("task-id:").count(),
+        1,
+        "no second id line stamped"
+    );
+}
+
+#[test]
 fn effective_id_return_uses_the_strict_decode_like_the_list_reader() {
     // A quoted hand-authored id decodes to a'b for list_tasks (scalar_id_ci
     // -> strict_scalar_field). The RETURN value must agree: set_task_parent

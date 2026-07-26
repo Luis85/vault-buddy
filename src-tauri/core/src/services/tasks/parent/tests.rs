@@ -201,6 +201,40 @@ fn refuses_an_unassignable_parent_id_with_an_implicit_block_value_without_enabli
 }
 
 #[test]
+fn refuses_an_unassignable_parent_id_with_an_invalid_plain_scalar_without_enabling_ids() {
+    // Case (b), task report: `task-id: abc: def` is not valid YAML at all —
+    // an unquoted `key: value` shape is a same-line nested mapping, forbidden
+    // outside flow context. Before the decode fix, both the lenient and
+    // strict readers accepted "abc: def" as a usable id, so this parent
+    // passed assignability and set_task_parent mirrored the invalid text
+    // straight into the child's `parent-id`, corrupting ITS frontmatter too
+    // — Obsidian could no longer parse either file's properties block, while
+    // this app's own line-oriented reader still resolved the relationship,
+    // rendering a healthy hierarchy over two broken files.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+    let root = tasks_root(&paths, &vault);
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"P\"\ntask-id: abc: def\n---\n",
+    );
+    let child = root.join("c.md");
+    let before = std::fs::read_to_string(&child).unwrap();
+    let err = set_task_parent(&paths, &vault, &child, Some(&parent));
+    assert!(
+        err.is_err(),
+        "an invalid plain-scalar parent id must be refused"
+    );
+    assert!(
+        !config_for(&paths, &vault).task_id_enabled,
+        "a refused assignment must not leave Task IDs switched on for the vault"
+    );
+    // Nothing was written into the child either.
+    assert_eq!(std::fs::read_to_string(&child).unwrap(), before);
+}
+
+#[test]
 fn refuses_a_cycle_through_an_id_less_prospective_parent() {
     // REGRESSION (design spec §3): P has no id but already names C as its
     // parent. The path-keyed graph must see P->C and refuse; an id-keyed one

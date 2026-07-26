@@ -195,6 +195,70 @@ fn scalar_id_ci_decodes_a_doubled_single_quote_escape_fully() {
 }
 
 #[test]
+fn strict_scalar_field_decodes_a_tag_decorated_quoted_scalar_with_an_embedded_hash() {
+    // Case (a), task report: `strip_inline_comment` is not quote-aware, so it
+    // truncated INSIDE the quotes at the embedded `#` (`!!str "abc # def"`
+    // decoded to the unterminated `!!str "abc`). The fix must preserve the
+    // full text: the strict decoder does not interpret tags — it returns the
+    // opaque tag+quoted syntax as-is (see mirror_id_reference's doc comment
+    // for why that opacity is deliberate) — so the untruncated text IS the
+    // correct "decoded" value here.
+    let doc = "---\ntype: Task\ntask-id: !!str \"abc # def\"\n---\n";
+    assert_eq!(
+        strict_scalar_field(doc, "task-id", false).as_deref(),
+        Some("!!str \"abc # def\"")
+    );
+}
+
+#[test]
+fn strict_scalar_field_rejects_an_invalid_plain_scalar_shape() {
+    // Case (b), task report: none of these are valid YAML plain scalars —
+    // each is its own forbidden production (a same-line nested-mapping
+    // value, a block-sequence entry, a mapping key, a flow separator, a
+    // character that starts no token) — yet nothing here checked plain-
+    // scalar validity beyond the handful of markers already tested
+    // elsewhere (block/flow/alias/comment/anchor). A parent id shaped like
+    // this can never be safely mirrored into a child: Obsidian cannot parse
+    // the PARENT's own frontmatter at that line either.
+    for bad in ["abc: def", "abc:", ":", "- abc", "? abc", ", abc", "@abc"] {
+        let doc = format!("---\ntype: Task\ntask-id: {bad}\n---\n");
+        assert_eq!(
+            strict_scalar_field(&doc, "task-id", false),
+            None,
+            "{bad:?} is not a valid YAML plain scalar"
+        );
+    }
+}
+
+#[test]
+fn strict_scalar_field_still_accepts_valid_plain_scalars_including_a_bare_colon_or_dash() {
+    // The gate must not overreach: `abc:def` (no space after the colon) and
+    // `-abc` (no space after the dash) ARE valid YAML plain scalars — only
+    // the SPACE-separated forms are reserved indicators.
+    for ok in ["abc:def", "-abc", "abc", "123", "k3m9x2qp"] {
+        let doc = format!("---\ntype: Task\ntask-id: {ok}\n---\n");
+        assert_eq!(
+            strict_scalar_field(&doc, "task-id", false).as_deref(),
+            Some(ok),
+            "{ok:?} should still be accepted"
+        );
+    }
+}
+
+#[test]
+fn scalar_id_ci_and_mirror_id_reference_agree_on_a_tag_decorated_quoted_id_with_a_hash() {
+    // Parity, like the existing anchor test above: the read side (a task's
+    // own id, what list_tasks reports) and the write side (what gets
+    // mirrored into a child's parent-id) must resolve identical raw text to
+    // the identical value, or the hierarchy the app itself writes is
+    // orphaned the instant it lands.
+    let doc = "---\ntype: Task\ntask-id: !!str \"abc # def\"\n---\n";
+    let reader = scalar_id_ci(doc, "task-id");
+    let writer = crate::tasks::mirror_id_reference(doc, "task-id", "WRONG-FALLBACK");
+    assert_eq!(reader.as_deref(), Some(writer.as_str()));
+}
+
+#[test]
 fn strict_scalar_field_rejects_an_alias_value() {
     // `task-id: *stable` is a YAML ALIAS: its value lives wherever the
     // matching `&stable` anchor was defined elsewhere in the document, so

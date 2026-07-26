@@ -12,6 +12,8 @@
 //! `services::tasks::parent` for the `pub(crate)` names) — this split
 //! changed no call site anywhere in the crate.
 
+use serde_yaml_ng::Value;
+
 /// The on-disk casing of the first TOP-LEVEL `key:` line, matched
 /// CASE-INSENSITIVELY — `None` when the key never appears at the top level
 /// before the closing fence, or the fence is missing. Factored out of
@@ -78,6 +80,109 @@ pub(in crate::tasks) fn frontmatter_scalar_ci(
 ) -> Option<(String, String)> {
     let on_disk = top_level_key_ci(content, key)?;
     super::scalar_field(content, on_disk).map(|v| (on_disk.to_string(), v))
+}
+
+/// Peel one leading YAML tag token (`!foo`, `!!str`, a verbatim `!<uri>`) and
+/// its required separating whitespace off `raw`. Returns the remainder, or
+/// `raw` unchanged when it does not open with `!`, or the `!` has no
+/// following whitespace at all — a shape this reader declines to guess at,
+/// the same posture `tasks::id::strip_anchor` takes for a malformed `&`.
+fn strip_leading_tag(raw: &str) -> &str {
+    if !raw.starts_with('!') {
+        return raw;
+    }
+    match raw.find(char::is_whitespace) {
+        Some(i) if i > 0 => raw[i..].trim_start(),
+        _ => raw,
+    }
+}
+
+/// Quote-and-tag-aware alternative to `strip_inline_comment`, for the ONE
+/// shape the plain (whitespace-`#`) scan corrupts: a tag-decorated QUOTED
+/// scalar (`!!str "abc # def"`, task report case a). `strip_inline_comment`
+/// finds the first whitespace-preceded `#` ANYWHERE in the text, so a `#`
+/// INSIDE the quotes — legitimately part of the string's content, not a
+/// comment — truncates it mid-string (`!!str "abc # def"` -> the
+/// unterminated `!!str "abc`).
+///
+/// If, after peeling any leading tag, the remainder opens a quoted scalar
+/// that actually closes on this physical line, everything through that
+/// close is untouchable — the naive scan runs only on what follows it, never
+/// across it. Every other shape (no tag; a tag not followed by a quote; a
+/// quote that never closes on this line) is exactly what
+/// `strip_inline_comment` already handles correctly: a stray quote embedded
+/// in genuine plain-scalar text has no YAML significance of its own (`abc
+/// "def" ghi` is one ordinary plain token — real YAML does not treat an
+/// embedded quote as opening anything unless the scalar itself starts with
+/// one), so the untouched naive scan is the right answer there, not a bug to
+/// route around. This is also why an untagged quoted source (no `!` prefix)
+/// needs no special handling here: `mirror_id_reference`'s own
+/// quote-prefix check (`classify`) still recognizes ANY quote-fronted text —
+/// truncated or not — and falls back to the safe re-encoding regardless; the
+/// tag is what hides that leading quote from `classify` in the first place.
+pub(in crate::tasks) fn strip_scalar_comment(raw: &str) -> &str {
+    let after_tag = strip_leading_tag(raw);
+    let quote_len = if after_tag.starts_with('"') {
+        super::super::description::double_quoted_slice(after_tag).map(str::len)
+    } else if after_tag.starts_with('\'') {
+        super::super::description::single_quoted_slice(after_tag).map(str::len)
+    } else {
+        None
+    };
+    let Some(quote_len) = quote_len else {
+        return super::strip_inline_comment(raw);
+    };
+    // Everything through the quote's real close came from `raw` itself
+    // (after_tag is a suffix of it), so this offset is a valid boundary in
+    // BOTH strings — only what follows the quote can start a comment.
+    let untouchable_len = (raw.len() - after_tag.len()) + quote_len;
+    let rest_kept_len = super::strip_inline_comment(&raw[untouchable_len..]).len();
+    &raw[..untouchable_len + rest_kept_len]
+}
+
+/// Whether `candidate` — the exact text about to be accepted as an existing
+/// scalar's value, or mirrored verbatim into a child's `parent-id:` — is
+/// actually a single valid YAML scalar when embedded after a key. Hand
+/// enumerating every invalid shape (an unquoted `key: value` glued onto the
+/// text, a leading `- `/`? `/`, `, a bare `@`/`` ` ``/`%`…) leaks
+/// indefinitely — each is its own YAML production rule, and the task
+/// report's case (b), `task-id: abc: def`, is exactly one such rule (a
+/// same-line nested-mapping value, forbidden outside flow context) that no
+/// existing guard here checked for. Parsing the actual candidate through a
+/// real YAML parser closes the whole class in one gate instead of adding
+/// another special case to a list that keeps growing (task report:
+/// "findings have arrived one exotic syntax at a time").
+///
+/// A probe key (`x`) is used so only the VALUE's syntax is under test. A
+/// Sequence or Mapping result is rejected too: every caller here has already
+/// excluded a raw `[`/`{`-prefixed candidate via the pre-existing flow guard
+/// above, so this never fires in practice — it keeps the gate honest as a
+/// standalone "is this usable as a scalar" predicate rather than depending on
+/// caller ordering. A CUSTOM tag (`!x 123`) parses to `Tagged` and is
+/// unwrapped and re-checked; a STANDARD tag (`!!str`) never reaches that arm
+/// at all — serde resolves it straight to `String`/`Number` first (verified;
+/// `core::template`'s custom-tag handling relies on the identical fact).
+///
+/// Callers must skip this gate for the `parent` link's `[[wikilink]]`
+/// exemption (`strict_scalar_field`'s `wikilink_exempt`): a wikilink is a
+/// flow SEQUENCE by YAML syntax (`[[x]]` = a sequence containing one
+/// sequence), which this gate would reject outright — it is deliberately
+/// exempted from the flow guard above precisely because it is not meant to
+/// be validated as an ordinary scalar.
+pub(in crate::tasks) fn is_valid_scalar_source(candidate: &str) -> bool {
+    let probe = format!("x: {candidate}\n");
+    let Ok(Value::Mapping(m)) = serde_yaml_ng::from_str::<Value>(&probe) else {
+        return false;
+    };
+    m.get("x").is_some_and(is_scalar_shaped)
+}
+
+fn is_scalar_shaped(v: &Value) -> bool {
+    match v {
+        Value::Sequence(_) | Value::Mapping(_) => false,
+        Value::Tagged(t) => is_scalar_shaped(&t.value),
+        _ => true,
+    }
 }
 
 /// STRICT optional-field scalar decode: the FULL YAML escape set (unlike
@@ -214,8 +319,16 @@ pub(crate) fn strict_scalar_field(content: &str, key: &str, link: bool) -> Optio
         if plain_scalar_continues(content, key) {
             return None;
         }
-        let stripped = super::strip_inline_comment(raw).trim();
+        let stripped = strip_scalar_comment(raw).trim();
         if matches!(stripped, "null" | "Null" | "NULL" | "~") {
+            return None;
+        }
+        // Case (b), task report: `abc: def`/`- abc`/`? abc`/… are not valid
+        // YAML plain scalars at all — reject rather than surface text that
+        // could never be safely mirrored into another document. Skipped for
+        // the wikilink exemption (see is_valid_scalar_source's doc comment):
+        // that form is a flow sequence, never meant to pass this gate.
+        if !wikilink_exempt && !is_valid_scalar_source(stripped) {
             return None;
         }
         stripped.to_string()

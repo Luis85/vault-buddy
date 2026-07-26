@@ -102,7 +102,12 @@ pub fn is_valid_id_property(name: &str) -> bool {
 /// unshared helper.
 pub fn mirror_id_reference(content: &str, key: &str, decoded: &str) -> String {
     match super::parse::top_level_raw_value_ci(content, key) {
-        Some(raw) => mirror_or_fall_back(super::parse::strip_inline_comment(raw).trim(), decoded),
+        // `strip_scalar_comment`, not the naive `strip_inline_comment`: a
+        // tag-decorated QUOTED source (`!!str "abc # def"`) has an embedded
+        // `#` that the naive scan truncates ON (task report, case a) —
+        // see its own doc comment for why only THIS shape needs the
+        // quote-aware handling here.
+        Some(raw) => mirror_or_fall_back(super::parse::strip_scalar_comment(raw).trim(), decoded),
         // Unreachable in practice: this is only ever called with a `key`
         // `update_task_fields` (or its own forecast) just confirmed has a
         // usable value under. Kept so a future caller mistake degrades to a
@@ -134,13 +139,26 @@ fn mirror_or_fall_back(stripped: &str, decoded: &str) -> String {
 
 /// The final classification, once any leading anchor is out of the way:
 /// mirror verbatim, unless it's quoted (unchanged from today — see
-/// `mirror_id_reference`), an alias (defensive only), or empty (nothing to
-/// mirror).
+/// `mirror_id_reference`), an alias (defensive only), empty (nothing to
+/// mirror), or — task report, case b — not actually a valid YAML scalar at
+/// all (`abc: def`, `- abc`, …). That last check is a real YAML parse, not
+/// another hand-rolled shape check: `is_valid_scalar_source` is the same
+/// gate `strict_scalar_field`'s decoder now applies, so the two can never
+/// again disagree about what counts as a mirrorable source (the exact way
+/// this module's anchor-handling drifted from the read side once already —
+/// see `strip_anchor`'s doc comment). In practice a candidate this rejects
+/// is unreachable here (the caller's own `ensure_id`/assignability forecast
+/// already refuses the write before this function would ever see it — see
+/// `services::tasks::parent`'s regression test) — kept anyway so this
+/// function can never manufacture invalid YAML if that upstream invariant
+/// is ever weakened, matching the alias/malformed-anchor fallbacks above.
 fn classify(candidate: &str, decoded: &str) -> String {
     if candidate.is_empty() || candidate.starts_with(['"', '\'', '*']) {
         quote_id_if_needed(decoded)
-    } else {
+    } else if super::parse::is_valid_scalar_source(candidate) {
         candidate.to_string()
+    } else {
+        quote_id_if_needed(decoded)
     }
 }
 
@@ -269,6 +287,57 @@ mod tests {
             mirror_id_reference(&doc("task-id: !!str 123"), "task-id", "!!str 123"),
             "!!str 123"
         );
+    }
+
+    #[test]
+    fn mirror_id_reference_mirrors_a_tag_decorated_quoted_scalar_with_an_embedded_hash() {
+        // Case (a), task report: `strip_inline_comment` is not quote-aware,
+        // so it truncates INSIDE the quotes at the embedded `#` — `!!str
+        // "abc # def"` mirrored as the unterminated `!!str "abc`, written
+        // straight into the child's frontmatter. A plain quoted source (no
+        // tag) survives today only by accident: `classify`'s own
+        // quote-prefix check still recognizes the (corrupted) text as
+        // quote-fronted and falls back to the safe encoding regardless — the
+        // TAG is what hides that leading quote from `classify`, which is why
+        // this needs tag + quotes together to actually corrupt anything.
+        let doc = "---\ntype: Task\ntask-id: !!str \"abc # def\"\n---\n";
+        let mirrored = mirror_id_reference(doc, "task-id", "WRONG-FALLBACK");
+        assert_eq!(
+            mirrored, "!!str \"abc # def\"",
+            "must mirror the FULL tagged+quoted text, comment and all"
+        );
+        assert_parses_as_yaml_scalar(&mirrored);
+    }
+
+    #[test]
+    fn mirror_id_reference_never_mirrors_an_invalid_plain_scalar_verbatim() {
+        // Case (b), task report: `abc: def` is not a valid YAML plain scalar
+        // — an unquoted `key: value` shape is a same-line nested mapping,
+        // forbidden outside flow context — yet nothing here classified it as
+        // anything other than an ordinary mirrorable token, so
+        // `parent-id: abc: def` was written straight into a child,
+        // corrupting its frontmatter even though the reference itself
+        // "resolved" under this app's own line-oriented reader.
+        let doc = "---\ntype: Task\ntask-id: abc: def\n---\n";
+        let mirrored = mirror_id_reference(doc, "task-id", "fallback-id");
+        assert_ne!(
+            mirrored, "abc: def",
+            "must never mirror an invalid plain scalar verbatim"
+        );
+        assert_parses_as_yaml_scalar(&mirrored);
+    }
+
+    /// Parse-based validity assertion (task report: "assert by parsing, not
+    /// by string comparison" — a string assertion alone would not have
+    /// caught this bug class, which is exactly why it shipped). No `---`
+    /// fences: wrapping a lone value in a fenced document makes the parser
+    /// see TWO documents and error for an unrelated reason — the dead
+    /// probe's own harness bug, reproduced and diagnosed fresh for this fix.
+    fn assert_parses_as_yaml_scalar(value: &str) {
+        let frontmatter = format!("parent-id: {value}\n");
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&frontmatter).unwrap_or_else(|e| {
+            panic!("mirrored parent-id must parse as valid YAML: {e}\n---\n{frontmatter}")
+        });
     }
 
     #[test]
