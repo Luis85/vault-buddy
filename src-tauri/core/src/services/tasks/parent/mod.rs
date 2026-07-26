@@ -197,6 +197,7 @@ pub(super) fn validate_parent_assignment(
     // let a cycle through (design spec §2).
     let all = tasks::list_tasks_structural(root, Some(&prop))?;
     reject_ambiguous_parent(&all, &parent)?;
+    reject_archived_parent(&all, &parent)?;
     // The graph is keyed on PATHS with edges resolved through ids, so an id-less
     // task still contributes its outgoing edge and the check is never skipped
     // for want of an id (design spec §3).
@@ -415,6 +416,7 @@ pub(super) fn add_subtask(
     }
     let all = tasks::list_tasks_structural(root, Some(&prop))?;
     reject_ambiguous_parent(&all, &parent)?;
+    reject_archived_parent(&all, &parent)?;
     let parent_content =
         std::fs::read_to_string(&parent).map_err(|e| format!("Cannot read task: {e}"))?;
     if parent_id_unassignable(&parent_content, &prop) {
@@ -532,6 +534,43 @@ fn reject_ambiguous_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(),
             .to_string()),
         _ => Ok(()),
     }
+}
+
+/// Refuse an ARCHIVED task as a NEW parent (GAP-90).
+///
+/// A SHARED helper rather than an inline check, because the two phase-1 sites
+/// — `validate_parent_assignment` (for `set_task_parent` and `update_task`'s
+/// combined patch) and `add_subtask`'s own, which deliberately cannot reuse
+/// that validator since no child path exists yet — are separate functions that
+/// already share every other per-check helper (this one,
+/// `reject_ambiguous_parent`, `parent_id_unassignable`). Inlining it at one
+/// site is precisely how the other silently keeps the old behavior: the
+/// Parent picker already excluded archived tasks from being newly assigned,
+/// and Add Subtask bypassed that policy for exactly this reason.
+///
+/// Governs ASSIGNING a parent, never HAVING one: an existing on-disk pair is
+/// never re-validated here, so a child whose parent was archived afterwards
+/// keeps resolving and rendering it (PR #77's Fix 1 — hiding an archived
+/// parent is what invited a silent overwrite through the picker).
+///
+/// Archived LISTS are deliberately NOT considered. That is a frontend display
+/// rule (`archivedMatcher`); refusing here would block a Task that is itself
+/// active and plainly visible under Plan/Tags grouping, which is harsher than
+/// the problem warrants (design spec, Non-goals).
+///
+/// A parent the walk never yielded (it skips symlinked files) has no recorded
+/// status and is left to the other guards, mirroring `reject_ambiguous_parent`.
+fn reject_archived_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(), String> {
+    if all
+        .iter()
+        .find(|t| t.path == parent)
+        .is_some_and(|t| t.status == "archived")
+    {
+        return Err("That task is archived, so it can't be given subtasks. \
+             Unarchive it first."
+            .to_string());
+    }
+    Ok(())
 }
 
 /// True when phase 3a's `ensure_id` is FORECAST to fail on `parent_content` —
