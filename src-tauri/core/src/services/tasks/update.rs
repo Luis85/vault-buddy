@@ -719,4 +719,83 @@ mod tests {
             "Couldn't set the parent: boom"
         );
     }
+
+    #[test]
+    fn the_under_lock_recheck_refuses_a_cycle_a_concurrent_write_would_otherwise_create() {
+        // Fix 4 (final whole-branch review, task report): `update_task`'s OWN
+        // under-lock re-check (the closure above, which reads `tasks::
+        // parent_index_for_validation`) is a SEPARATE call site from
+        // `set_task_parent`'s (`services::tasks::parent::mod.rs`) — this
+        // module builds its own `resolve_parent_for_write` closure rather
+        // than delegating to that one. The sibling regression pinned in
+        // `parent/tests.rs` covers ONLY that other call site; a mutation here
+        // (validation index -> display index) is invisible to it, since
+        // nothing in this file's existing coverage exercises a genuine
+        // concurrent write landing in the narrow phase-1-to-lock window this
+        // recheck exists to close. See that sibling test's own doc comment
+        // for the full mechanics (a pre-existing hand-authored X<->Y cycle,
+        // Z with no parent yet, and a race between "Z's parent = X" and "Y's
+        // parent = Z") — reproduced here against `update_task` instead of
+        // `set_task_parent`, since the two never share a recheck closure.
+        for _ in 0..60 {
+            let dir = tempfile::tempdir().unwrap();
+            let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+            let root = tasks_root(&paths, &vault);
+            std::fs::write(
+                root.join("x.md"),
+                "---\ntype: Task\nstatus: new\ntitle: \"X\"\ntask-id: x\nparent-id: y\n---\n",
+            )
+            .unwrap();
+            std::fs::write(
+                root.join("y.md"),
+                "---\ntype: Task\nstatus: new\ntitle: \"Y\"\ntask-id: y\nparent-id: x\n---\n",
+            )
+            .unwrap();
+            std::fs::write(
+                root.join("z.md"),
+                "---\ntype: Task\nstatus: new\ntitle: \"Z\"\ntask-id: z\n---\n",
+            )
+            .unwrap();
+            let x = root.join("x.md");
+            let y = root.join("y.md");
+            let z = root.join("z.md");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+            let thread_a = {
+                let paths = paths.clone();
+                let vault = vault.clone();
+                let (z, x) = (z.clone(), x.clone());
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    update_task(&paths, &vault, &z, &[], ParentOp::Set(x))
+                })
+            };
+            let thread_b = {
+                let paths = paths.clone();
+                let vault = vault.clone();
+                let (y, z) = (y.clone(), z.clone());
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    update_task(&paths, &vault, &y, &[], ParentOp::Set(z))
+                })
+            };
+            let _ = thread_a.join().unwrap();
+            let _ = thread_b.join().unwrap();
+
+            let x_parent = tasks::parent_id_field(&std::fs::read_to_string(&x).unwrap());
+            let y_parent = tasks::parent_id_field(&std::fs::read_to_string(&y).unwrap());
+            let z_parent = tasks::parent_id_field(&std::fs::read_to_string(&z).unwrap());
+            let closed_the_cycle = x_parent.as_deref() == Some("y")
+                && y_parent.as_deref() == Some("z")
+                && z_parent.as_deref() == Some("x");
+            assert!(
+                !closed_the_cycle,
+                "a concurrent pair of parent assignments closed a real cycle \
+                 X -> Y -> Z -> X: x.parent={x_parent:?} y.parent={y_parent:?} \
+                 z.parent={z_parent:?}"
+            );
+        }
+    }
 }

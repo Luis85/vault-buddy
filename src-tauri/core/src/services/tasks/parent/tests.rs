@@ -877,3 +877,111 @@ fn concurrent_capture_save_and_parent_assignment_never_desync_task_id_enabled() 
         );
     }
 }
+
+#[test]
+fn the_under_lock_recheck_refuses_a_cycle_a_concurrent_write_would_otherwise_create() {
+    // Fix 4 (final whole-branch review, task report): the under-lock
+    // re-check inside `set_task_parent`'s own `resolve_parent_for_write` call
+    // (the closure above, which reads `tasks::parent_index_for_validation`)
+    // exists ONLY to catch a concurrent write landing between phase 1's
+    // (lock-free) validation and THIS call's own lock acquisition — so it
+    // must be validated against the VALIDATION index, never the DISPLAY
+    // index (`parent_index`, which drops a pre-existing on-disk cycle's
+    // edges so the UI can render both rows parentless). The existing
+    // regression coverage (`refuses_a_cycle_routed_through_an_uppercase_md_
+    // task` and friends) only ever exercises phase 1's lock-free check,
+    // which reads the SAME data before and after — a mutation of the
+    // RECHECK's own index selection can never be observed there, since
+    // nothing changes the graph mid-call in a single-threaded test. Only a
+    // genuine concurrent write, landing in the narrow window this recheck
+    // exists to close, can tell the two indices apart here.
+    //
+    // Setup: X and Y hand-author a mutual cycle (X's parent is Y, Y's parent
+    // is X) — exactly like a pre-existing on-disk cycle a user's own
+    // frontmatter can create. Z carries its own id and, initially, no
+    // parent. Two concurrent calls race: thread A assigns "Z's parent = X",
+    // thread B assigns "Y's parent = Z". Both PASS phase 1 (at that moment Z
+    // has no parent yet, so neither assignment closes a cycle on the graph
+    // either call's own lock-free scan sees). Whichever call wins the lock
+    // commits first; the LOSER's under-lock recheck then reads the FRESH,
+    // just-committed graph:
+    //   - If A (Z's parent = X) commits first: B's recheck now sees X<->Y
+    //     (unchanged) plus the just-landed Z->X. Assigning Y's parent = Z
+    //     would close X -> Y -> Z -> X — a REAL new cycle. The VALIDATION
+    //     index (retaining every edge) correctly refuses it. The DISPLAY
+    //     index drops X<->Y's edges (they sit on a pre-existing on-disk
+    //     cycle) but leaves Z->X untouched (Z is not itself cyclic) — so it
+    //     wrongly reports NO cycle, and B's write lands, corrupting the vault.
+    //   - If B (Y's parent = Z) commits first, it BREAKS the X<->Y cycle (Y's
+    //     parent-id changes from x to z), so A's subsequent recheck sees a
+    //     plain chain (X -> Y -> Z, no loop) — both indices agree there and
+    //     correctly refuse A's write. This ordering never distinguishes the
+    //     two indices, which is why the test is a PROPERTY over many
+    //     iterations (Barrier-synchronized, like the sibling `concurrent_
+    //     capture_save_and_parent_assignment_never_desync_task_id_enabled`
+    //     race above) rather than a single deterministic interleaving: it
+    //     asserts the specific 3-cycle X -> Y -> Z -> X can NEVER exist
+    //     afterward, in ANY iteration, regardless of which side won the lock.
+    for _ in 0..60 {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&paths, &vault);
+        write(
+            &root,
+            "x.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"X\"\ntask-id: x\nparent-id: y\n---\n",
+        );
+        write(
+            &root,
+            "y.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Y\"\ntask-id: y\nparent-id: x\n---\n",
+        );
+        write(
+            &root,
+            "z.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Z\"\ntask-id: z\n---\n",
+        );
+        let x = root.join("x.md");
+        let y = root.join("y.md");
+        let z = root.join("z.md");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let thread_a = {
+            let paths = paths.clone();
+            let vault = vault.clone();
+            let (z, x) = (z.clone(), x.clone());
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                set_task_parent(&paths, &vault, &z, Some(&x))
+            })
+        };
+        let thread_b = {
+            let paths = paths.clone();
+            let vault = vault.clone();
+            let (y, z) = (y.clone(), z.clone());
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                set_task_parent(&paths, &vault, &y, Some(&z))
+            })
+        };
+        let _ = thread_a.join().unwrap();
+        let _ = thread_b.join().unwrap();
+
+        // The invariant: whichever call won the race, the specific cycle
+        // X -> Y -> Z -> X must never exist on disk afterward.
+        let x_parent = tasks::parent_id_field(&std::fs::read_to_string(&x).unwrap());
+        let y_parent = tasks::parent_id_field(&std::fs::read_to_string(&y).unwrap());
+        let z_parent = tasks::parent_id_field(&std::fs::read_to_string(&z).unwrap());
+        let closed_the_cycle = x_parent.as_deref() == Some("y")
+            && y_parent.as_deref() == Some("z")
+            && z_parent.as_deref() == Some("x");
+        assert!(
+            !closed_the_cycle,
+            "a concurrent pair of parent assignments closed a real cycle \
+             X -> Y -> Z -> X: x.parent={x_parent:?} y.parent={y_parent:?} \
+             z.parent={z_parent:?}"
+        );
+    }
+}
