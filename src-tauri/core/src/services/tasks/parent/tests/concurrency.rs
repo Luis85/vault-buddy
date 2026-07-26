@@ -344,7 +344,16 @@ fn recheck_set_or_update_refuses_a_parent_archived_mid_flight() {
         "p.md",
         "---\ntype: Task\nstatus: archived\ntitle: \"P\"\n---\n",
     );
-    let child = root.join("c.md");
+    // CANONICAL on both sides, mirroring production: `validate_parent_assignment`
+    // and `add_subtask` both pass paths through `canonical_task_in_root` before
+    // these rechecks ever see them, and `list_tasks_structural` yields canonical
+    // paths too. A raw `root.join(..)` compares equal only where the tempdir
+    // root already happens to be canonical (Linux); on Windows canonicalising
+    // adds the `\\?\` prefix, the path never matches a scanned row, and the
+    // check silently returns Ok — the test passing for the wrong reason
+    // everywhere and failing outright on the shipped platform (CI, PR #78).
+    let parent = std::fs::canonicalize(&parent).unwrap();
+    let child = std::fs::canonicalize(root.join("c.md")).unwrap();
     let err = recheck_set_or_update(&root, "task-id", &child, &parent)
         .expect_err("must refuse a parent archived on disk");
     assert!(err.contains("archived"), "got {err}");
@@ -369,7 +378,9 @@ fn recheck_set_or_update_still_catches_a_cycle_beside_the_archived_check() {
         "y.md",
         "---\ntype: Task\nstatus: new\ntitle: \"Y\"\ntask-id: y\n---\n",
     );
-    let x = root.join("x.md");
+    // Canonical on both sides — see the archived sibling test above.
+    let y = std::fs::canonicalize(&y).unwrap();
+    let x = std::fs::canonicalize(root.join("x.md")).unwrap();
     let err = recheck_set_or_update(&root, "task-id", &y, &x).expect_err("must refuse a cycle");
     assert_eq!(err, "That would make a task its own ancestor.");
 }
@@ -389,6 +400,8 @@ fn recheck_add_subtask_refuses_a_parent_archived_mid_flight() {
         "p.md",
         "---\ntype: Task\nstatus: archived\ntitle: \"P\"\n---\n",
     );
+    // Canonical — see the archived sibling test above.
+    let parent = std::fs::canonicalize(&parent).unwrap();
     let err = recheck_add_subtask(&root, "task-id", &parent)
         .expect_err("must refuse a parent archived on disk");
     assert!(err.contains("archived"), "got {err}");
@@ -407,5 +420,10 @@ fn recheck_add_subtask_passes_an_active_parent() {
         "p.md",
         "---\ntype: Task\nstatus: new\ntitle: \"P\"\n---\n",
     );
+    // Canonical here too, even though this test asserts Ok: with a raw path the
+    // parent never matches a scanned row, so the assertion would hold for the
+    // WRONG reason (nothing found -> nothing refused) and would keep holding
+    // even if the archived check were deleted.
+    let parent = std::fs::canonicalize(&parent).unwrap();
     assert!(recheck_add_subtask(&root, "task-id", &parent).is_ok());
 }
