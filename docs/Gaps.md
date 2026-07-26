@@ -1169,6 +1169,54 @@ the vault's default list (mirroring the existing `remapListRef` pick-
 reconciliation precedent for a list that becomes unavailable) or disclose to
 the user that the subtask landed in a hidden list.
 
+### GAP-95 · Low · Sibling settings-tab autosaves don't revert their optimistic value on a rejected save (audited alongside the Task-ID toggle fix)
+`src/components/TasksConfigTab.vue` (`autosave`, lines 36-46, feeding the
+tasks-folder field via `onFolderInput`, lines 132-135) and
+`src/components/TaskListSettings.vue` (`onDefaultChange` line 102, `move`
+line 109, `unarchive` line 123, all backed by its own `autosave` at line 58)
+all mutate a ref optimistically, call `saveNow()`/`schedule()`, and never
+revert on a caught rejection — the same no-revert shape the Task-ID toggle
+had before this round's fix (`TasksConfigTab.vue`'s `onIdEnabledChange` /
+`idAutosave`, which now reloads from `get_tasks_config` in its `catch`).
+**Failure scenario:** a rejected `set_tasks_config` leaves the folder input
+showing the rejected text indefinitely — `pendingFolderChange` stays `true`,
+so `TaskListSettings` stays replaced by the "reload once the tasks folder is
+saved…" placeholder until the user manually retypes the last-good folder or
+a later save succeeds; a rejected `set_task_lists_config` from a default-list
+pick, a reorder, or an unarchive leaves the picker/order/archived-set showing
+a choice that was never actually persisted. **Why filed as a gap rather than
+fixed alongside the toggle:** unlike the toggle, none of these fields gate a
+message behind their own state — each one's inline error
+(`tasks-folder-error`, `task-lists-error`) renders unconditionally alongside
+the stale value, so the specific "the error is hidden exactly when it fires"
+compounding bug does not reproduce here; the residual is a UI that silently
+disagrees with disk until the next successful save, not an invisible
+refusal. **Fix shape:** the same one applied to the Task-ID toggle — reload
+the affected field(s) from `get_tasks_config` in each `catch` block instead
+of trusting a locally-cached "previous" value, which a concurrent external
+change could already have invalidated.
+
+### GAP-96 · Low · TaskTemplateSettings never surfaces a save error at all
+`src/components/TasksConfigTab.vue` (`templateAutosave`, lines 107-116)
+computes an `error` ref via `useAutosave` exactly like every sibling field,
+but `<TaskTemplateSettings>` (lines 227-234) is never passed one —
+`TaskTemplateSettings.vue`'s `defineProps` (line 8) declares only
+`extraFrontmatter`/`bodyTemplate`, no `error` prop at all. **Failure
+scenario:** a rejected `set_task_template_config` (an unknown vault id — the
+vault was removed while settings were open — or a disk-level failure from
+`update_vault_config`) sets `templateAutosave.error.value` to the detailed
+message, but nothing in this card ever renders it; only the shared
+`settingsStatus` header's generic failure indicator (if the user happens to
+be looking at it) hints anything went wrong. **Why distinct from GAP-95
+above:** this is not merely "no revert" — the per-field error is
+unreachable BY CONSTRUCTION (never wired to a prop), not just hidden behind
+a stale conditional the way the Task-ID toggle's was before this round's
+fix. **Fix shape:** add an `error: string | null` prop to
+`TaskTemplateSettings.vue` (the `TaskIdSettings.vue` precedent) and pass
+`:error="templateAutosave.error.value"` from `TasksConfigTab.vue`; a
+revert-on-failure story is a separate, smaller question here since both
+fields are free text, not a persisted-state indicator like the toggle.
+
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
 scroll listener closed the menu on every scroll event, including the

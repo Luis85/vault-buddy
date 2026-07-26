@@ -71,14 +71,22 @@ const emit = defineEmits<{
           @input="emit('update:property', ($event.target as HTMLInputElement).value)"
           @blur="emit('blur')"
         >
-        <p
-          v-if="error"
-          data-testid="task-id-error"
-          class="mt-1 text-xs text-danger-fg"
-        >
-          {{ error }}
-        </p>
       </div>
+      <!-- Deliberately OUTSIDE the `v-if="enabled"` block above: a refused
+           DISABLE reverts `enabled` back to true once the parent reloads disk
+           truth, so this would end up visible either way today — but the
+           guard's whole point (design spec §2a: "an inline error naming the
+           count and the remedy") is a refusal the user can actually read, and
+           that must not depend on some OTHER state (the toggle) happening to
+           land the right way first. A save failure while `enabled` is false
+           must never be structurally unreachable. -->
+      <p
+        v-if="error"
+        data-testid="task-id-error"
+        class="mt-1 text-xs text-danger-fg"
+      >
+        {{ error }}
+      </p>
     </div>
   </section>
 </template>
