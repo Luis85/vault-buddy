@@ -57,6 +57,21 @@ function remapListPrefs(cfg: TasksConfig | undefined, from: string, to: string |
   };
 }
 
+// Every LOADED vault's archived list names, keyed by vault id — what the
+// hierarchy's open-subtask count needs (GAP-91), including in the aggregate
+// view where the per-vault `archivedLists` computed is deliberately [] (there
+// is no single archived set across vaults, and list names collide between
+// them, so one vault's archived "Old" must never suppress another's live one).
+// A SEPARATE value rather than a replacement for that computed: the Lists
+// GROUPING's aggregate behavior is its own documented simplification and is
+// not being redefined here. Module-level and pure, like the two helpers above
+// — it keeps useTaskLists itself under the per-function LOC cap.
+function archivedListsByVault(configs: Map<string, TasksConfig>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [id, cfg] of configs) out.set(id, cfg.archivedLists ?? []);
+  return out;
+}
+
 // `onListRemap(from, to)` lets the container keep OTHER list references in sync
 // with a lifecycle change the way `syncListPrefs` keeps the persisted prefs in
 // sync — today the add composer's touched pick, so renaming/archiving/deleting
@@ -84,6 +99,7 @@ export function useTaskLists(
   const archivedLists = computed(() =>
     vaultId !== null ? (vaultConfigs.value.get(vaultId)?.archivedLists ?? []) : [],
   );
+  const archivedByVault = computed(() => archivedListsByVault(vaultConfigs.value));
   const knownLists = computed(() => {
     const seen = new Map<string, string>();
     for (const lists of vaultLists.value.values())
@@ -324,6 +340,7 @@ export function useTaskLists(
     listOrder,
     knownLists,
     archivedLists,
+    archivedByVault,
     creatingList,
     composerVaultId,
     composerLists,

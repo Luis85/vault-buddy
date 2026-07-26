@@ -50,6 +50,7 @@ const {
   listOrder,
   knownLists,
   archivedLists,
+  archivedByVault,
   creatingList,
   composerVaultId,
   composerLists,
@@ -103,7 +104,7 @@ async function onToggleFilter() {
 // second rule. setHierarchyTasks stores an archived-INCLUSIVE superset for
 // resolution (an archived parent must still resolve) while `tasks` below
 // keeps loading the archived-EXCLUDED, historical visible set.
-const { hierarchyOf, setHierarchyTasks, setHierarchyStatus } = useTaskListHierarchy();
+const { hierarchyOf, setHierarchyTasks, setHierarchyStatus } = useTaskListHierarchy(archivedByVault);
 // Write side: row actions (toggle/archive/open/editor save) + the busy guard.
 const {
   busy,
@@ -263,9 +264,11 @@ onMounted(async () => {
       const failed: string[] = [];
       const results = await Promise.all(
         vaults.map(async (v) => {
-          // The list enumeration rides the same fan-out (its own catch —
-          // a lists failure must not mark the vault's TASKS as failed).
+          // Lists + config ride the same fan-out, each with its own catch: no
+          // read failure here may mark the vault's TASKS as failed. Without the
+          // config this view has no archived data at all (GAP-91).
           void loadVaultLists(v.id);
+          void loadVaultConfig(v.id);
           try {
             const items = await invoke<TaskItem[]>("list_tasks", { id: v.id, includeArchived: true });
             return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));

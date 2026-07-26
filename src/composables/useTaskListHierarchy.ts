@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, type Ref, ref } from "vue";
 
 import type { AggTask } from "../types";
 import { buildHierarchyInfoByVault, buildParentIndexByVault, type HierarchyInfo } from "../utils/taskHierarchy";
@@ -30,6 +30,13 @@ const NO_HIERARCHY: HierarchyInfo = { parent: null, openSubtaskCount: 0 };
  * (Task 12's perf fix: a checkbox toggle or filter keystroke on a thousand-
  * task vault was redoing Θ(n²) comparisons per render).
  *
+ * `archivedByVault` (a REF the caller owns, not local state) supplies the
+ * open-subtask count's archived-list exclusion (GAP-91). A per-vault MAP, never
+ * one flat set: the aggregate view renders many vaults at once and list names
+ * collide across them. Taken reactively rather than through a setter because
+ * configs load lazily per vault — the count must re-derive as each lands, and
+ * an imperative sync in the container would be one more thing to forget.
+ *
  * Incremental status updates (`setHierarchyStatus`, below): a toggle mutates
  * `task.done`/`task.status` IN PLACE on the object `tasks.value` and
  * `hierarchyTasks` both hold, so it is visible here for free. An archive is
@@ -40,10 +47,12 @@ const NO_HIERARCHY: HierarchyInfo = { parent: null, openSubtaskCount: 0 };
  * `buildHierarchyInfoByVault`'s open-subtask count would keep counting an
  * archived child as open until the next full reload.
  */
-export function useTaskListHierarchy() {
+export function useTaskListHierarchy(archivedByVault: Ref<Map<string, string[]>>) {
   const hierarchyTasks = ref<AggTask[]>([]);
   const byVault = computed(() => buildParentIndexByVault(hierarchyTasks.value));
-  const infoByVault = computed(() => buildHierarchyInfoByVault(hierarchyTasks.value, byVault.value));
+  const infoByVault = computed(() =>
+    buildHierarchyInfoByVault(hierarchyTasks.value, byVault.value, archivedByVault.value),
+  );
 
   function hierarchyOf(task: AggTask): HierarchyInfo {
     return infoByVault.value.get(task.vaultId)?.get(task.path) ?? NO_HIERARCHY;

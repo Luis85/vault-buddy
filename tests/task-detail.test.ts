@@ -1535,3 +1535,353 @@ describe("TaskDetail.vue Subtasks section", () => {
     expect(addInput().disabled).toBe(false);
   });
 });
+
+// GAP-90's UI half and GAP-92, both on the Add-subtask path.
+describe("TaskDetail.vue Subtasks — archiving", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const mountWith = async (open: AggTask, archivedLists: string[], calls: any[] = []) => {
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config")
+        return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists };
+      if (cmd === "list_tasks") return [open];
+      if (cmd === "add_task")
+        return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: open } });
+    await new Promise((r) => setTimeout(r));
+    return wrapper;
+  };
+  const addInputOf = (w: any) =>
+    w.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement;
+
+  it("disables Add subtask on an ARCHIVED task", async () => {
+    // Core refuses an archived parent (reject_archived_parent), but an
+    // unguarded input would meet the user with an error toast instead of an
+    // affordance. The archived task's own detail IS reachable — an active
+    // child's parent chip opens it with no gate (GAP-90).
+    const w = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md", status: "archived" }),
+      [],
+    );
+    expect(addInputOf(w).disabled).toBe(true);
+  });
+
+  it("keeps Add subtask enabled on an active task", async () => {
+    const w = await mountWith(task({ vaultId: "v1", id: "p", path: "/v1/p.md" }), []);
+    expect(addInputOf(w).disabled).toBe(false);
+  });
+
+  it("discloses when a new subtask lands in an ARCHIVED list", async () => {
+    // GAP-92: the child correctly INHERITS the parent's list, but an archived
+    // list is hidden from the Lists view and from count_open_tasks the instant
+    // the task is created — silently, before this.
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const spy = vi.spyOn(useNotificationsStore(), "notify");
+    const w = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Old" }),
+      ["Old"],
+    );
+    await w.get('[data-testid="task-detail-add-subtask"]').setValue("Child");
+    await w.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      spy.mock.calls.some(([, msg]) => String(msg).toLowerCase().includes("archived")),
+    ).toBe(true);
+  });
+
+  it("raises no archived disclosure for a live list", async () => {
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const spy = vi.spyOn(useNotificationsStore(), "notify");
+    const w = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Live" }),
+      ["Old"],
+    );
+    await w.get('[data-testid="task-detail-add-subtask"]').setValue("Child");
+    await w.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      spy.mock.calls.some(([, msg]) => String(msg).toLowerCase().includes("archived")),
+    ).toBe(false);
+  });
+});
+
+// The create-path twin of the parent-picker's own readiness gate (below):
+// onAddSubtask's disclosure (the "archiving" describe block above) reads the
+// exact same archivedLists ref, so Add subtask must defer to the same
+// unresolved/failed config state instead of racing ahead of the read — the
+// sibling control the reviewer's own fix for the picker missed (Codex P2,
+// PR #78).
+describe("TaskDetail.vue Subtasks — archived-list config readiness", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const mountWith = async (opts: { fail?: boolean; hold?: boolean } = {}) => {
+    const open = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const calls: any[] = [];
+    let release: (() => void) | undefined;
+    let configCalls = 0;
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") {
+        configCalls += 1;
+        if (opts.fail && configCalls === 1) throw new Error("config unreadable");
+        const cfg = { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+        if (opts.hold && configCalls === 1) return new Promise((r) => { release = () => r(cfg); });
+        return cfg;
+      }
+      if (cmd === "list_tasks") return [open];
+      if (cmd === "add_task")
+        return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: open } });
+    await new Promise((r) => setTimeout(r));
+    return { wrapper, calls, release: () => release?.() };
+  };
+  const addInputOf = (w: any) =>
+    w.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement;
+
+  it("disables Add subtask while the archived-list config is still loading", async () => {
+    const { wrapper } = await mountWith({ hold: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+  });
+
+  it("enables Add subtask once the held config resolves", async () => {
+    const { wrapper, release } = await mountWith({ hold: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+    release();
+    await new Promise((r) => setTimeout(r));
+    expect(addInputOf(wrapper).disabled).toBe(false);
+  });
+
+  it("keeps Add subtask disabled when the archived-list config read fails", async () => {
+    const { wrapper } = await mountWith({ fail: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+  });
+
+  it("re-enables Add subtask once a Retry from the Parent row succeeds, with no retry control of its own", async () => {
+    // Judgement call: reuse the ONE retry affordance parent assignment already
+    // renders (TaskParentRow's Retry, wired to loadListsConfig) rather than a
+    // second button — both gates clear from the exact same
+    // archivedListsResolved/archivedListsError refs, so a single retry
+    // unblocks both consumers.
+    const { wrapper } = await mountWith({ fail: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+    await wrapper.get('[data-testid="task-detail-parent-retry"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(addInputOf(wrapper).disabled).toBe(false);
+  });
+
+  it("never invokes add_task while the config is unresolved, even attempting the real gesture", async () => {
+    // End-to-end behavioral confirmation that the gate is not cosmetic: typing
+    // a title and pressing Enter — the actual user gesture the reviewer's
+    // finding describes — must not reach add_task while archivedLists is
+    // still unknown, not just report `.disabled === true` in isolation.
+    const { wrapper, calls } = await mountWith({ hold: true });
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Sneaky");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(calls.some((c) => c[0] === "add_task")).toBe(false);
+  });
+});
+
+// GAP-91's load-ordering half (Codex P2, PR #78). Core deliberately does NOT
+// validate archived LISTS, so the frontend is the SOLE enforcement point for
+// that rule — which makes it matter that the rule is actually in force by the
+// time the picker becomes interactive. A pick made while archivedLists is
+// still empty writes a real, persisted relationship; it does not self-heal.
+describe("TaskDetail.vue parent picker — archived-list config readiness", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const mountWith = async (
+    open: AggTask,
+    opts: { listsFail?: boolean; holdConfig?: boolean } = {},
+  ) => {
+    let releaseConfig: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") {
+        if (opts.listsFail) throw new Error("enumeration failed");
+        return [];
+      }
+      if (cmd === "get_tasks_config") {
+        const cfg = { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: ["Old"] };
+        if (!opts.holdConfig) return cfg;
+        return new Promise((r) => { releaseConfig = () => r(cfg); });
+      }
+      if (cmd === "list_tasks")
+        return [open, task({ vaultId: "v1", id: "z", path: "/v1/z.md", list: "Old" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: open } });
+    await new Promise((r) => setTimeout(r));
+    return { wrapper, release: () => releaseConfig?.() };
+  };
+
+  it("still applies the archived filter when list_task_lists FAILS", async () => {
+    // The two reads shared one Promise.all, so a rejected enumeration
+    // discarded a SUCCESSFUL config — silently leaving archivedLists empty
+    // and disabling the archived-list exclusion outright.
+    const { wrapper } = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md" }),
+      { listsFail: true },
+    );
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    // The archived-list task must NOT be offered even though the sibling
+    // enumeration call failed.
+    expect(wrapper.find('[data-testid="task-parent-picker-option-/v1/z.md"]').exists()).toBe(false);
+  });
+
+  it("holds parent assignment until the archived-list config resolves", async () => {
+    const { wrapper, release } = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md" }),
+      { holdConfig: true },
+    );
+    const change = () =>
+      wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement;
+    expect(change().disabled).toBe(true);
+    release();
+    await new Promise((r) => setTimeout(r));
+    expect(change().disabled).toBe(false);
+  });
+
+  it("keeps parent assignment gated when the config read FAILS, rather than silently treating it as 'nothing archived'", async () => {
+    // Overturns the previous (Low-severity) design: resolving true on BOTH
+    // arms silently disabled the frontend's SOLE enforcement of the
+    // archived-list rule the instant a read failed, while everything else
+    // kept looking like it still enforced it. A failed read must not be
+    // indistinguishable from a genuinely empty archived set — the picker
+    // stays gated until a config read actually SUCCEEDS (Codex P2, PR #78).
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") throw new Error("config unreadable");
+      if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, {
+      props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
+    });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      (wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("surfaces a visible error and a Retry affordance when the config read fails, instead of degrading silently", async () => {
+    // The whole point of staying gated (above) is defeated if the user has no
+    // way to know WHY the Change button is stuck, or how to get unstuck.
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") throw new Error("config unreadable");
+      if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, {
+      props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
+    });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-error"]').text()).toContain(
+      "config unreadable",
+    );
+    expect(wrapper.find('[data-testid="task-detail-parent-retry"]').exists()).toBe(true);
+  });
+
+  it("Retry re-runs only the config read; success clears the error and re-enables assignment", async () => {
+    // The judgement call: retry re-invokes get_tasks_config alone, not the
+    // whole onMounted load (list_task_lists/reloadTaskSet are independent
+    // reads with their own failure handling — re-running them on THIS retry
+    // would be both wasteful and would blur which read actually recovered).
+    let configCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") {
+        configCalls += 1;
+        if (configCalls === 1) throw new Error("config unreadable");
+        return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      }
+      if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, {
+      props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
+    });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      (wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    await wrapper.get('[data-testid="task-detail-parent-retry"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(configCalls).toBe(2); // the retry actually re-invoked get_tasks_config
+    expect(wrapper.find('[data-testid="task-detail-parent-error"]').exists()).toBe(false);
+    expect(
+      (wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("disables Retry while a retry request is in flight, so a second click can't pile up", async () => {
+    let resolveRetry: (() => void) | undefined;
+    let configCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") {
+        configCalls += 1;
+        if (configCalls === 1) throw new Error("config unreadable");
+        return new Promise((r) => {
+          resolveRetry = () =>
+            r({ tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] });
+        });
+      }
+      if (cmd === "list_tasks") return [task({ vaultId: "v1", id: "p", path: "/v1/p.md" })];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, {
+      props: { task: task({ vaultId: "v1", id: "p", path: "/v1/p.md" }) },
+    });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-retry"]').trigger("click"); // slow retry
+    await new Promise((r) => setTimeout(r));
+    expect(
+      (wrapper.get('[data-testid="task-detail-parent-retry"]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    resolveRetry?.();
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.find('[data-testid="task-detail-parent-retry"]').exists()).toBe(false);
+  });
+
+  it("Clear stays available while assignment is gated by a failed config read", async () => {
+    // Judgement call: clearing a relationship never needs the archived set
+    // (it removes a pair, it does not pick a new parent from the excluded
+    // candidates), so the SAME failure that gates Change/Set-parent must not
+    // also gate Clear — preserved from the pre-existing design.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") throw new Error("config unreadable");
+      if (cmd === "list_tasks") return [parent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      (wrapper.get('[data-testid="task-detail-parent-clear"]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+});

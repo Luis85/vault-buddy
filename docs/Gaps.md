@@ -1060,115 +1060,6 @@ write this call itself just made; alternatively, have `reload()` report
 success/failure and retain the prior `allTasks.value` on a failed or
 suspiciously-empty response rather than unconditionally replacing it.
 
-### GAP-90 · Low · Add Subtask can assign an ARCHIVED task as a new parent, bypassing the Parent picker's own exclusion rule
-`src/components/TaskDetail.vue` (`onAddSubtask`) and
-`src/components/TaskSubtasks.vue` (the "Add subtask" input) versus
-`src/composables/useTaskDetailTaskSet.ts` (`pickerCandidates`). The Parent
-row's Change/Clear picker (`TaskParentPicker.vue`, fed `pickerCandidates`)
-deliberately excludes archived Tasks from the list of assignable NEW
-parents — `pickerCandidates` filters `t.status !== "archived"` specifically
-so a user can only ever INHERIT an already-archived parent (set before it
-was archived), never newly pick one. That exclusion is enforced nowhere
-else: `TaskSubtasks.vue`'s "Add subtask" input is gated only on the shared
-`busy` write-lock, with no check on the CURRENT Task's own archived status,
-and `TaskDetail.vue`'s `onAddSubtask` unconditionally sends
-`parentPath: props.task.path` — the currently-open Task, archived or not —
-to `add_task`. The backend agrees: `services::tasks::parent::add_subtask`'s
-phase-1 validation (containment, self-parent, ambiguous id, cycle) never
-inspects `status` either, so an archived parent is accepted exactly like
-any other. **Reachability:** an archived Task's own Task Detail is not
-reachable from the ordinary list (archived-status Tasks are excluded from
-`list_tasks`'s plain view), but IS reachable through the hierarchy feature
-this same increment shipped — an active child's Parent row resolves and
-renders its parent even after that parent was later archived (deliberately,
-so the relationship is not silently hidden), and its parent chip opens
-that archived Task's own Task Detail with no gate. Once there, the
-Subtasks section's Add-subtask input is fully live. **This is the direct,
-foreseeable follow-on of making archived parents visible, not a
-regression of that fix** — the visibility change was correct (an active
-child must still show its real, if archived, parent), and it is precisely
-what opened this second entry point to the same archived-task-as-parent
-assignment the picker was built to prevent from the first entry point. **Why
-Low:** no data corruption and no cycle/ambiguity violation (core's other
-guards still apply in full) — the sole effect is an inconsistency between
-two enforcement points for the same policy: an archived Task can become a
-brand-new subtask's parent via Add Subtask even though the Parent picker
-would refuse to let you pick that same archived Task from the other
-direction. **Fix shape, not implemented here:** either disable (or hide)
-the Add-subtask input when the open Task's own `status` is `archived`, or —
-more robust against a third entry point appearing later — enforce the
-archived exclusion inside the shared backend validation
-(`add_subtask`/`set_task_parent`'s phase 1) so every caller, present and
-future, agrees without each one re-implementing the check.
-
-### GAP-91 · Low · The parent picker offers a Task whose LIST is archived, checking only the Task's own status
-`src/composables/useTaskDetailTaskSet.ts` (`pickerCandidates`, line 31):
-`allTasks.value.filter((t) => t.status !== "archived")`. List archiving is
-meant to hide a whole list — and everything filed under it — from every
-picker; `archivedMatcher` (`src/utils/taskSections.ts`) is the shared
-frontend rule every OTHER grouping/picker surface applies
-(`useTaskDisplay.ts`'s Lists grouping, `useTaskLists.ts`'s composer/editor
-list picker), and `count_open_tasks` (core) enforces the equivalent
-case-insensitive exclusion for the open-task badge. `pickerCandidates`
-never applies either: it filters solely on `t.status`, never on whether
-`t.list` is one of the vault's `archivedLists`.
-**Failure scenario:** an ACTIVE (non-archived) Task filed inside a list that
-has since been archived is still offered as an assignable NEW parent in
-`TaskParentPicker.vue` — the one exclusion every other archived-list
-consumer already enforces is silently missing here. **Why Low:** no
-corruption or cycle — the resulting relationship is a perfectly valid
-parent-id/parent pair, core's own guards still apply in full; the only
-effect is inconsistency with the app's own "an archived list is hidden
-everywhere" rule. **Fix shape:** thread the vault's `archivedLists` (already
-loaded elsewhere in `TaskDetail.vue` for the List picker) into
-`useTaskDetailTaskSet`, and filter `pickerCandidates` on
-`!archivedMatcher(archivedLists)(t.list)` in addition to the existing
-status check — the same two-part test `useTaskDisplay.ts` already applies.
-
-**Third facet, same root cause — the open-subtask COUNT.**
-`src/utils/taskHierarchy.ts` (`buildHierarchyInfoByVault`, line 134) counts a
-child from its `status`/`done` fields alone and is never handed
-`archivedLists` at all. So an open child inside a since-archived list keeps
-inflating its parent's subtask badge **even after a reload**, while the
-default Lists view and both the per-vault and All-tasks open counts exclude
-that same child — the badge and the counts beside it disagree about the same
-task. This is the same defect as the picker above (the frontend hierarchy
-code has no notion of list archiving), reached through the main list rather
-than Task Detail, which is why it is recorded here rather than as its own
-entry. **Fix shape:** thread the per-vault `archivedLists` into
-`useTaskListHierarchy`'s computed and apply `archivedMatcher` alongside the
-existing `done` test — note this is a per-VAULT map in the aggregate ("All
-tasks") view, so it must be keyed by vault exactly as the parent index
-already is, not flattened into one set.
-**Whoever picks this up: fix all three facets together.** They are one piece
-of work — "the frontend hierarchy code does not know about archived lists" —
-and fixing any one alone leaves the surfaces disagreeing in a different
-place rather than agreeing.
-
-### GAP-92 · Low · Add Subtask can create a NEW subtask inside an ARCHIVED list
-`src/components/TaskDetail.vue` (`onAddSubtask`, line 189: `list:
-props.task.list`). The currently-open Task's own List is reachable even when
-that list is archived — Plan and Tags grouping both render a Task regardless
-of its list's archived status (only the Lists GROUPING itself hides an
-archived list's section), and an active child's Parent chip opens its
-parent's Task Detail with no list-archived gate either (the same reachability
-GAP-91 above describes). Add Subtask unconditionally creates the new child
-with `list: props.task.list` — inheriting the CURRENTLY open Task's list,
-archived or not. **Failure scenario:** open a Task filed in an archived list
-via Plan/Tags grouping, add a subtask; the new Task is created successfully
-but lands inside that same archived list — absent from the default Lists
-view and excluded from `count_open_tasks`'s badge (which skips open tasks
-whose own list is archived, per AGENTS.md's Lists section) the instant it is
-created, with no disclosure that this happened. **Why Low:** the Task is not
-lost — fully readable/editable via Plan/Tags grouping or by unarchiving the
-list — and "the new subtask inherits the parent's list" is the existing,
-correct design for the ordinary (non-archived) case; only the archived
-combination is silently surprising. **Fix shape:** before creating, check
-whether `props.task.list` is archived; if so, either route the new subtask to
-the vault's default list (mirroring the existing `remapListRef` pick-
-reconciliation precedent for a list that becomes unavailable) or disclose to
-the user that the subtask landed in a hidden list.
-
 ### GAP-95 · Low · Sibling settings-tab autosaves don't revert their optimistic value on a rejected save (audited alongside the Task-ID toggle fix)
 `src/components/TasksConfigTab.vue` (`autosave`, lines 36-46, feeding the
 tasks-folder field via `onFolderInput`, lines 132-135) and
@@ -1253,6 +1144,54 @@ non-string id is unusable and reject it up front, which is simpler and matches
 `parent_index`/`parent_index_for_validation` and `count_parent_links` must all
 adopt it together — they are the same rule seen from three places, and this
 branch's most repeated defect was fixing one such site and leaving its siblings.
+
+### GAP-98 · Low · An unread archived-list config reads as a CONFIRMED-empty one in the list badge
+`src/utils/taskHierarchy.ts` (`openSubtaskCounts`, the
+`archivedByVault.get(vaultId) ?? []` fallback). When `get_tasks_config` fails
+for a vault, `loadVaultConfig` leaves that vault out of the map entirely, and
+the `?? []` treats the absence as "this vault archives no lists" rather than
+"we do not know". Any open child that IS in an archived list therefore keeps
+counting toward its parent's open-subtask badge for the rest of the mounted
+session — the badge disagreeing with the open-task counts beside it, which
+apply the exclusion.
+
+**Why this is filed rather than fixed, while the visually similar Task Detail
+case WAS fixed:** the two differ on the axis this codebase draws everywhere —
+*a view may degrade; a guard must refuse.* Task Detail's parent picker
+**authorizes a write**: an unknown archived set there let the user persist a
+relationship the rule forbids, and core deliberately does not validate archived
+LISTS, so the frontend is the only enforcement point. That is a guard, so it now
+gates on the config having actually resolved and offers a retry. The subtask
+badge **displays a number**. A wrong count is visibly wrong, corrects itself on
+the next successful load, and authorizes nothing. Gating it would mean either
+suppressing a badge the user expects or plumbing an error state through a purely
+presentational path, for a degradation the project's own rule permits.
+
+**Fix shape, if it is ever worth it:** represent the missing entry as
+*unresolved* rather than empty (`Map<string, string[] | undefined>` is already
+the shape — the `?? []` is what erases the distinction), and have the count
+either suppress itself or retry for an unresolved vault. Note the same `?? []`
+idiom appears wherever a per-vault archived set is read; fix them together or
+the surfaces will disagree in a new place, which is the defect this file already
+records three facets of under GAP-91.
+
+### GAP-99 · Low · TaskDetail's List picker does not gate on the archived-list config either
+`src/components/TaskDetail.vue` (the `lists` computed feeding `TaskListPicker`
+/ `draftList`). The third consumer of `archivedLists` on that surface, found by
+the per-consumer audit the Add-Subtask gate prompted. Unlike the parent picker
+and Add Subtask — both now gated on `archivedListsResolved` — this one still
+reads the set while it may be unresolved or failed, so an archived list can be
+offered as a destination.
+
+**Deliberately left alone**, for three reasons that make it materially different
+from its two siblings: it predates this whole increment (present since
+`TaskDetail.vue`'s first commit, `a213873`); it is an **explicit user pick** of
+a destination rather than a silent inherited assignment, so nothing happens
+without the user choosing it and seeing it; and `TaskListPicker.vue` is shared
+with `Tasks.vue`'s composer and editor, so gating it here would ripple into
+surfaces this increment never touched. **Fix shape:** if it is taken up, gate at
+the shared component rather than at this one call site, or the three consumers
+drift apart again.
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
 scroll listener closed the menu on every scroll event, including the
