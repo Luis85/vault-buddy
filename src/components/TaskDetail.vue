@@ -42,6 +42,11 @@ const archivedLists = ref<string[]>([]);
 // See loadListsConfig: gates the parent picker's Change until the archived set
 // is known, since the frontend is the SOLE enforcement point for that rule.
 const archivedListsResolved = ref(false);
+// Non-null when the config read failed — rendered by TaskParentRow as a
+// Banner + Retry. `archivedListsLoading` disables Retry while a request
+// (initial or retried) is in flight, so a second click can't pile up.
+const archivedListsError = ref<string | null>(null);
+const archivedListsLoading = ref(false);
 const {
   allTasks,
   pickerCandidates,
@@ -86,22 +91,33 @@ async function loadLists(): Promise<void> {
     logWarning(`task detail: could not load task lists: ${String(e)}`);
   }
 }
-// `archivedListsResolved` means "we have finished ASKING", not "we got an
-// answer" — it flips on BOTH arms. Until then the parent picker's Change is
-// held: an unloaded archivedLists is indistinguishable from a genuinely empty
-// one, and core deliberately does NOT validate archived lists, so a pick made
-// in that window writes a real, PERSISTED relationship rather than a transient
-// display glitch that self-heals. A FAILED read still resolves, degrading to
-// the pre-existing behavior instead of stranding the user on a transient error.
+// `archivedListsResolved` means "we have a CONFIRMED answer" — it flips true
+// ONLY on success. Until then (including a FAILED read) the parent picker's
+// Change stays held: an unresolved archivedLists is indistinguishable from a
+// genuinely empty one, and core deliberately does NOT validate archived
+// lists, so a pick made in that window would write a real, PERSISTED
+// relationship the rule should have excluded.
+//
+// This used to flip `resolved` on BOTH arms — a failed read "degraded to the
+// pre-existing behavior instead of stranding the user". That was a false
+// dichotomy: it silently stopped enforcing the archived-list rule while every
+// other affordance kept looking like it still did. Surfacing the error
+// (archivedListsError, rendered by TaskParentRow as a Banner + Retry) strands
+// nobody — the user can retry — and never drops enforcement in the meantime
+// (Codex P2, PR #78).
 async function loadListsConfig(): Promise<void> {
+  archivedListsLoading.value = true;
   try {
     const cfg = await invoke<TasksConfig>("get_tasks_config", { id: props.task.vaultId });
     listOrder.value = cfg.listOrder ?? [];
     archivedLists.value = cfg.archivedLists ?? [];
+    archivedListsError.value = null;
+    archivedListsResolved.value = true;
   } catch (e) {
+    archivedListsError.value = String(e);
     logWarning(`task detail: could not load the tasks config: ${String(e)}`);
   } finally {
-    archivedListsResolved.value = true;
+    archivedListsLoading.value = false;
   }
 }
 onMounted(async () => {
@@ -388,8 +404,11 @@ function openSubtaskDetail(t: AggTask) {
       :all-tasks="pickerCandidates"
       :invalid-paths="invalidParentPaths"
       :can-assign="archivedListsResolved"
+      :assign-error="archivedListsError"
+      :retrying="archivedListsLoading"
       @open-parent="openParentDetail"
       @select="setParent"
+      @retry="loadListsConfig"
     />
 
     <TaskSubtasks

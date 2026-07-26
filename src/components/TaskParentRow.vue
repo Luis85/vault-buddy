@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from "vue";
 
 import type { AggTask } from "../types";
+import TaskParentAssignError from "./TaskParentAssignError.vue";
 import TaskParentPicker from "./TaskParentPicker.vue";
 import Chip from "./ui/Chip.vue";
 
@@ -18,18 +19,27 @@ const props = defineProps<{
   busy: boolean;
   allTasks: AggTask[];
   invalidPaths: string[];
-  /** False while the vault's archived-list set is still being read. Gates
-   * ASSIGNMENT only — Clear stays available, since removing a relationship
-   * never needs the archived set. The frontend is the SOLE enforcement point
-   * for the archived-list rule (core deliberately validates only archived
-   * STATUS), so offering candidates before that set is known would let a pick
-   * write a real, persisted relationship the rule should have excluded
-   * (Codex P2, PR #78). */
+  /** False while the vault's archived-list set is still being read OR THAT
+   * READ FAILED. Gates ASSIGNMENT only — Clear stays available, since
+   * removing a relationship never needs the archived set. The frontend is
+   * the SOLE enforcement point for the archived-list rule (core deliberately
+   * validates only archived STATUS), so offering candidates before that set
+   * is known would let a pick write a real, persisted relationship the rule
+   * should have excluded (Codex P2, PR #78). A FAILED read stays gated too —
+   * see `assignError` below — rather than treating "unknown" as "empty". */
   canAssign: boolean;
+  /** Non-null when the archived-list config read failed. Rendered as a
+   * Banner + Retry so the user knows WHY Change/Set-parent is stuck and how
+   * to get unstuck, instead of a silently-inert disabled button. */
+  assignError: string | null;
+  /** True while the config read (initial or retried) is in flight — disables
+   * Retry so a second click can't queue up a concurrent read. */
+  retrying: boolean;
 }>();
 const emit = defineEmits<{
   (e: "openParent"): void;
   (e: "select", path: string | null): void;
+  (e: "retry"): void;
 }>();
 
 const changing = ref(false);
@@ -48,6 +58,16 @@ const statusLabel = computed(() => {
   if (props.parent.status === "archived") return "(archived)";
   return null;
 });
+// Two more template-level ternaries pulled out alongside statusLabel, same
+// reason: fallow's template-complexity count treats an inline `a ? b : c` as
+// its own branch, same as a `v-if`, and adding the archived-error branch
+// above pushed this template past the quality-ratchet threshold. Neither
+// ternary is complex in itself — moving it to script is purely about the
+// template's OWN branch count, not readability.
+const changeLabel = computed(() => (props.parent ? "Change" : "Set parent"));
+const changeTitle = computed(() =>
+  props.assignError ? "On hold: could not confirm which lists are archived" : undefined,
+);
 
 async function open() {
   // Defensive: the trigger below is already :disabled="busy || !canAssign" (a
@@ -109,10 +129,11 @@ function onRootKeydown(e: KeyboardEvent) {
         type="button"
         data-testid="task-detail-parent-change"
         :disabled="busy || !canAssign"
+        :title="changeTitle"
         class="cursor-pointer rounded-control border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-fg-secondary hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-default disabled:opacity-50"
         @click="open"
       >
-        {{ parent ? "Change" : "Set parent" }}
+        {{ changeLabel }}
       </button>
       <button
         v-if="parent"
@@ -124,6 +145,11 @@ function onRootKeydown(e: KeyboardEvent) {
       >
         Clear
       </button>
+      <TaskParentAssignError
+        :error="assignError"
+        :retrying="retrying"
+        @retry="emit('retry')"
+      />
     </div>
     <TaskParentPicker
       v-else
