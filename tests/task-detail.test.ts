@@ -1535,3 +1535,77 @@ describe("TaskDetail.vue Subtasks section", () => {
     expect(addInput().disabled).toBe(false);
   });
 });
+
+// GAP-90's UI half and GAP-92, both on the Add-subtask path.
+describe("TaskDetail.vue Subtasks — archiving", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const mountWith = async (open: AggTask, archivedLists: string[], calls: any[] = []) => {
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config")
+        return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists };
+      if (cmd === "list_tasks") return [open];
+      if (cmd === "add_task")
+        return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: open } });
+    await new Promise((r) => setTimeout(r));
+    return wrapper;
+  };
+  const addInputOf = (w: any) =>
+    w.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement;
+
+  it("disables Add subtask on an ARCHIVED task", async () => {
+    // Core refuses an archived parent (reject_archived_parent), but an
+    // unguarded input would meet the user with an error toast instead of an
+    // affordance. The archived task's own detail IS reachable — an active
+    // child's parent chip opens it with no gate (GAP-90).
+    const w = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md", status: "archived" }),
+      [],
+    );
+    expect(addInputOf(w).disabled).toBe(true);
+  });
+
+  it("keeps Add subtask enabled on an active task", async () => {
+    const w = await mountWith(task({ vaultId: "v1", id: "p", path: "/v1/p.md" }), []);
+    expect(addInputOf(w).disabled).toBe(false);
+  });
+
+  it("discloses when a new subtask lands in an ARCHIVED list", async () => {
+    // GAP-92: the child correctly INHERITS the parent's list, but an archived
+    // list is hidden from the Lists view and from count_open_tasks the instant
+    // the task is created — silently, before this.
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const spy = vi.spyOn(useNotificationsStore(), "notify");
+    const w = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Old" }),
+      ["Old"],
+    );
+    await w.get('[data-testid="task-detail-add-subtask"]').setValue("Child");
+    await w.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      spy.mock.calls.some(([, msg]) => String(msg).toLowerCase().includes("archived")),
+    ).toBe(true);
+  });
+
+  it("raises no archived disclosure for a live list", async () => {
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const spy = vi.spyOn(useNotificationsStore(), "notify");
+    const w = await mountWith(
+      task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Live" }),
+      ["Old"],
+    );
+    await w.get('[data-testid="task-detail-add-subtask"]').setValue("Child");
+    await w.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(
+      spy.mock.calls.some(([, msg]) => String(msg).toLowerCase().includes("archived")),
+    ).toBe(false);
+  });
+});

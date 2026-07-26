@@ -178,6 +178,16 @@ function openParentDetail() {
   vaults.openTaskDetail(parent.value);
 }
 
+// GAP-90's UI hint. An archived task's own detail IS reachable — an active
+// child's Parent chip opens it with no gate — and its Add-subtask input was
+// gated only on the write lock, so it offered an assignment core refuses.
+// A HINT only: reject_archived_parent remains the authority.
+const addSubtaskDisabledReason = computed(() =>
+  props.task.status === "archived"
+    ? "This task is archived. Unarchive it to add subtasks."
+    : null,
+);
+
 // Add subtask (Task 9): the create-path twin of useTaskHierarchy's setParent
 // above — same shared `busy` guard, same reload-vs-patch branch on
 // `idsEnabled`, and the same TASK_IDS_ENABLED_MESSAGE disclosure, since Add
@@ -214,6 +224,20 @@ async function onAddSubtask(title: string) {
       allTasks.value.push({ ...fields, vaultId: props.task.vaultId, vaultName: props.task.vaultName });
     }
     subtasksRef.value?.reset();
+    // GAP-92: the child correctly INHERITS the parent's list, keeping it
+    // beside its parent — but an archived list is hidden from the Lists view
+    // and excluded from count_open_tasks the instant the task is created. The
+    // task is not lost (it renders in this section and under Plan/Tags
+    // grouping), so the defect was the SILENCE: disclose it rather than
+    // rerouting the child away from its parent, which would break the
+    // inheritance design to solve a visibility problem.
+    if (archivedMatcher(archivedLists.value)(props.task.list)) {
+      notifications.notify(
+        "info",
+        `Added to "${props.task.list}", an archived list hidden from the Lists view.`,
+        {},
+      );
+    }
   } catch (e) {
     notifications.error(String(e));
     logWarning(`add_task (subtask) failed: ${String(e)}`);
@@ -353,6 +377,7 @@ function openSubtaskDetail(t: AggTask) {
       :children="children"
       :progress="progress"
       :busy="busy"
+      :disabled-reason="addSubtaskDisabledReason"
       @add="onAddSubtask"
       @toggle="onToggleSubtask"
       @open="openSubtaskDetail"
