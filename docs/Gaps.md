@@ -499,12 +499,23 @@ a block scalar (`description: |` / `>`), a multi-line quoted scalar, and a flow
 collection (`[..]` / `{..}`) all degrade to `None` — deliberately, so the field
 never surfaces a partial/wrong value or a bare `|`/`>` marker. So a task whose
 `description` was hand-authored in one of those forms shows a BLANK description
-in the Task Detail surface. There is no corruption: `set_fields` consumes a
-block scalar / block list / multi-line quoted value whole on the next save (its
-`skip_block_scalar` path), so saving a new description cleanly REPLACES the old
-block rather than orphaning its continuation lines — the original multi-line
-content is simply not displayed, and is replaced on that save. The app only
-ever WRITES escaped single-line scalars (`core::yaml_scalar`). **Why Low:**
+in the Task Detail surface. `set_fields` consumes a block scalar / block list /
+multi-line quoted value whole on the next save (its `skip_block_scalar` path via
+`opens_multiline_quoted`), so saving a new description over an UNDECORATED
+block/multi-line form cleanly REPLACES the old block rather than orphaning its
+continuation lines — the original multi-line content is simply not displayed,
+and is replaced on that save. **This no-corruption claim held only for the
+undecorated forms** (fixed in the final whole-branch review, task report): a
+YAML tag or anchor decorating a multi-line QUOTED value (`description: !!str
+"abc` / `  def"`, `description: &a "abc` / `  def"`) hid it from
+`opens_multiline_quoted`'s bare `starts_with('"')` check, so a save DID orphan
+the continuation line and broke the file's very next YAML parse — the same
+corruption class this entry used to say couldn't happen. `opens_multiline_
+quoted` now peels a leading anchor/tag (reusing `parse::strip_leading_tag` /
+`id::strip_anchor`) before its quote-open test, closing this for `description`
+and, since the same gate covers every key `set_fields` rewrites, for `title` on
+a rename too. The app only ever WRITES escaped single-line scalars
+(`core::yaml_scalar`). **Why Low:**
 hand-authored multi-line descriptions are rare and the failure mode is "not
 shown / replaced on edit", never broken frontmatter. **Future enhancement:**
 teach `description_field` + the detail editor to round-trip a multi-line

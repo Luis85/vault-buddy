@@ -87,7 +87,12 @@ pub(in crate::tasks) fn frontmatter_scalar_ci(
 /// `raw` unchanged when it does not open with `!`, or the `!` has no
 /// following whitespace at all — a shape this reader declines to guess at,
 /// the same posture `tasks::id::strip_anchor` takes for a malformed `&`.
-fn strip_leading_tag(raw: &str) -> &str {
+///
+/// `pub(in crate::tasks)`, not private: `description::opens_multiline_quoted`
+/// also needs to peel a leading tag before its own quote-open test (Fix 1,
+/// final whole-branch review task report) — reusing this rather than growing
+/// a second tag peeler beside it.
+pub(in crate::tasks) fn strip_leading_tag(raw: &str) -> &str {
     if !raw.starts_with('!') {
         return raw;
     }

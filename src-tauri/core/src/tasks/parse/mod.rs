@@ -16,7 +16,7 @@ use std::collections::HashSet;
 mod scalar;
 pub(super) use scalar::{
     frontmatter_scalar_ci, is_valid_scalar_source, key_opens_block, key_opens_flow, scalar_id_ci,
-    strip_scalar_comment, top_level_raw_value_ci,
+    strip_leading_tag, strip_scalar_comment, top_level_raw_value_ci,
 };
 pub(crate) use scalar::{id_property_unassignable, strict_scalar_field};
 

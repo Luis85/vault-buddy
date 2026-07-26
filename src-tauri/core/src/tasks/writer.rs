@@ -550,6 +550,68 @@ mod tests {
     }
 
     #[test]
+    fn set_fields_consumes_a_decorated_multiline_quoted_scalar_continuation() {
+        // Fix 1 (final whole-branch review, task report): `opens_multiline_
+        // quoted` recognized only a BARE leading quote — a YAML tag or anchor
+        // decorating an otherwise-identical multi-line quoted value hid it
+        // from the block-consumption gate above, so the rewrite here left the
+        // continuation line as an orphan and broke the very next YAML parse
+        // of the file (the undecorated form is already covered by the
+        // sibling `set_fields_consumes_a_multiline_quoted_scalar_
+        // continuation` test above). Both a tag (`!!str`) and an anchor
+        // (`&a`) are valid YAML that decorate an otherwise-identical
+        // multi-line double-quoted scalar.
+        for decorated in [
+            "description: !!str \"abc\n  def\"",
+            "description: &a \"abc\n  def\"",
+        ] {
+            let doc =
+                format!("---\ntype: Task\nstatus: new\n{decorated}\ntitle: \"A\"\n---\nbody\n");
+            let out = set_fields(&doc, &[("description", Some("\"one line\""))])
+                .unwrap_or_else(|| panic!("set_fields must accept a document with {decorated}"));
+            assert!(
+                out.contains("description: \"one line\"\n"),
+                "got {out} for {decorated}"
+            );
+            assert!(
+                !out.contains("def\""),
+                "the continuation must be consumed, not orphaned: {out} for {decorated}"
+            );
+            assert!(out.contains("title: \"A\"\n"), "got {out} for {decorated}");
+            assert!(out.contains("\nbody\n"), "got {out} for {decorated}");
+            // The rewritten frontmatter must itself be valid YAML — an
+            // orphaned continuation line is exactly the corruption that
+            // stops Obsidian's own properties block from parsing at all.
+            let fm = out.split("---\n").nth(1).expect("frontmatter body");
+            serde_yaml_ng::from_str::<serde_yaml_ng::Value>(fm).unwrap_or_else(|e| {
+                panic!("rewritten frontmatter must parse as YAML: {e}\n{out} for {decorated}")
+            });
+        }
+    }
+
+    #[test]
+    fn set_fields_consumes_a_tag_decorated_multiline_quoted_title_on_rename() {
+        // The finding's concrete "reached by any rename" case: `opens_
+        // multiline_quoted` gates EVERY matched key's OLD value, not only
+        // `description` — renaming a task (rewriting `title:`) runs the
+        // identical block-consumption check against title's own old value,
+        // so an undetected decorated multi-line title orphans its
+        // continuation exactly like description's does.
+        let doc =
+            "---\ntype: Task\nstatus: new\ntitle: !!str \"abc\n  def\"\ndue: 2026-07-10\n---\n";
+        let out = set_fields(doc, &[("title", Some("\"Renamed\""))]).unwrap();
+        assert!(out.contains("title: \"Renamed\"\n"), "got {out}");
+        assert!(
+            !out.contains("def\""),
+            "the continuation must be consumed, not orphaned: {out}"
+        );
+        assert!(out.contains("due: 2026-07-10\n"), "got {out}");
+        let fm = out.split("---\n").nth(1).expect("frontmatter body");
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(fm)
+            .unwrap_or_else(|e| panic!("rewritten frontmatter must parse as YAML: {e}\n{out}"));
+    }
+
+    #[test]
     fn set_fields_block_scalar_body_bullets_are_never_body_content() {
         // The consumed block ends at the closing fence; a `- bullet` in the BODY
         // (after the fence) is never touched by the scalar consumption.

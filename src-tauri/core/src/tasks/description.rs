@@ -79,7 +79,26 @@ pub(super) fn decode_single_quoted(s: &str) -> Option<String> {
 /// continuation lives on the following indented lines. Both the reader (which
 /// rejects it) and `set_fields` (which consumes its continuation on a rewrite so
 /// nothing orphans) key off this, so they agree (Codex P2, PR #76).
+///
+/// A leading YAML anchor (`&name`) or tag (`!!str`, `!foo`) is peeled off
+/// FIRST (Fix 1, final whole-branch review task report): neither decoration
+/// changes whether the node underneath is quoted, but the bare
+/// `starts_with('"')` check below is blind to either one sitting in front of
+/// the quote. Undetected, a decorated multi-line quoted value's continuation
+/// line was never consumed on a rewrite — `set_fields` rewrote only the key's
+/// own line, orphaning the continuation into the frontmatter and breaking the
+/// very next YAML parse of the file. Reuses the two existing peelers rather
+/// than adding a third shape check: `parse::strip_leading_tag` and
+/// `id::strip_anchor` — the same two the write side (`mirror_id_reference`)
+/// and the strict decoder (`strict_scalar_field`) already special-case for
+/// their own, adjacent problems.
 pub(super) fn opens_multiline_quoted(value: &str) -> bool {
+    let value = if value.starts_with('&') {
+        super::id::strip_anchor(value).unwrap_or(value)
+    } else {
+        value
+    };
+    let value = super::parse::strip_leading_tag(value);
     (value.starts_with('"') && double_quoted_slice(value).is_none())
         || (value.starts_with('\'') && decode_single_quoted(value).is_none())
 }
