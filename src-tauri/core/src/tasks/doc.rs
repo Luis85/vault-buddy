@@ -81,6 +81,23 @@ mod tests {
     }
 
     #[test]
+    fn is_task_tolerates_an_anchored_or_tagged_type_value() {
+        // Fix 3 (final whole-branch review, task report): `scalar_field`
+        // (what `is_task` reads `type:` through) never peeled a leading YAML
+        // anchor or tag before its block/plain classification — unlike
+        // `strict_scalar_field`, which already strips an anchor for the
+        // id-focused reads. Both `&t Task` and `!!str Task` are valid YAML
+        // that Obsidian/Dataview read as `Task`, so the structural guard must
+        // agree — the same class of bug the `.MD` extension fix closed for
+        // the FILENAME check, just for the `type:` VALUE instead.
+        assert!(is_task("---\ntype: &t Task\n---\n"));
+        assert!(is_task("---\ntype: !!str Task\n---\n"));
+        // A decorated non-task type is still not a task.
+        assert!(!is_task("---\ntype: &t Meeting\n---\n"));
+        assert!(!is_task("---\ntype: !!str Meeting\n---\n"));
+    }
+
+    #[test]
     fn is_task_false_for_unterminated_frontmatter() {
         // A type: Task block that never closes is malformed: set_status refuses
         // to toggle it, so the list must not surface it as a task either — the

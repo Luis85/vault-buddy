@@ -304,6 +304,51 @@ fn refuses_a_cycle_routed_through_an_uppercase_md_task() {
 }
 
 #[test]
+fn refuses_a_cycle_routed_through_a_tag_decorated_type_task() {
+    // Fix 3 (final whole-branch review, task report): the structural scan's
+    // `is_task` guard reads `type:` via the LENIENT `scalar_field`, which —
+    // unlike the strict id-focused decoder — never peeled a leading YAML tag
+    // (or anchor). A -> B -> C is a REAL on-disk parent chain, but a
+    // tag-decorated `type: !!str Task` on B (valid YAML Obsidian/Dataview
+    // read as `Task`) made the structural scan treat B as NOT a task at all —
+    // so as far as validation is concerned A has no outgoing edge, and
+    // assigning C's parent to A (closing A -> B -> C -> A) was wrongly
+    // accepted. Structurally identical to the `.MD` bug above, one level
+    // down: the FILENAME check was single-sourced, the `type:` VALUE check
+    // never got the same sweep.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    write(
+        &root,
+        "a.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: aaaaaaaa\nparent-id: bbbbbbbb\n---\n",
+    );
+    write(
+        &root,
+        "b.md",
+        "---\ntype: !!str Task\nstatus: new\ntitle: \"B\"\ntask-id: bbbbbbbb\nparent-id: cccccccc\n---\n",
+    );
+    let c = write(
+        &root,
+        "c.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"C\"\ntask-id: cccccccc\n---\n",
+    );
+    let a = root.join("a.md");
+    let before = std::fs::read_to_string(&c).unwrap();
+    let err = set_task_parent(&paths, &vault, &c, Some(&a));
+    assert!(
+        err.is_err(),
+        "a cycle routed through a tag-decorated type: Task must be refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&c).unwrap(),
+        before,
+        "a refused cycle must write nothing onto the child"
+    );
+}
+
+#[test]
 fn refuses_a_cycle_routed_through_a_differently_cased_parent_id_key() {
     // Fix 2 (final whole-branch review, task report): the SAME class of bug
     // as the `.MD` case above, one level down — `parent_id_field` matched the

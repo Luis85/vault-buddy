@@ -149,8 +149,8 @@ fn strip_scalar_tags_comment(rest: &str) -> &str {
     rest
 }
 
-/// Read a STRUCTURED frontmatter scalar (status/created/due/priority): the
-/// raw `note_field` value with an inline YAML comment stripped, plus one
+/// Read a STRUCTURED frontmatter scalar (status/created/due/priority/type):
+/// the raw `note_field` value with an inline YAML comment stripped, plus one
 /// unquote pass for the quoted-then-commented corner (`due: "…" # x` —
 /// note_field's own unquote no-ops there because the raw value doesn't end
 /// with the quote). Valid values of these fields never contain `#`, spaces,
@@ -158,8 +158,25 @@ fn strip_scalar_tags_comment(rest: &str) -> &str {
 /// on raw `note_field`: free text, where the lenient read keeps everything.
 /// Codex review, PR #46: `due: 2026-07-15 # client` was failing is_valid_due
 /// and bucketing as no-date; `priority: high # urgent` degraded to normal.
+///
+/// A leading YAML anchor (`&name`) or tag (`!!str`, `!foo`) is peeled off
+/// FIRST (Fix 3, final whole-branch review task report) — mirroring
+/// `strict_scalar_field`'s own anchor strip and `strip_scalar_comment`'s own
+/// tag strip, reused here rather than re-implemented: `is_task` reads `type:`
+/// through this function, and a hand-authored `type: &t Task` / `type: !!str
+/// Task` (both valid YAML that Obsidian/Dataview read as `Task`) used to read
+/// as decorated text that never matched the plain `Task` compare — the same
+/// class of bug the `.MD`-extension fix closed for the structural scan's
+/// FILENAME check, just for the `type:` VALUE instead.
 pub(super) fn scalar_field(content: &str, key: &str) -> Option<String> {
     let raw = note_field(content, key)?;
+    let raw = raw.trim();
+    let raw = if raw.starts_with('&') {
+        super::id::strip_anchor(raw).unwrap_or(raw)
+    } else {
+        raw
+    };
+    let raw = scalar::strip_leading_tag(raw);
     let stripped = strip_inline_comment(raw.trim()).trim();
     let unwrapped = if stripped.len() >= 2
         && ((stripped.starts_with('"') && stripped.ends_with('"'))
