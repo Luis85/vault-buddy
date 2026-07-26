@@ -109,11 +109,26 @@ pub fn update_task(
             // No parent to validate, no ids needed — `ensure_id: None`, a
             // clear removes a relationship, it does not edit the task (the
             // same reason a status toggle never stamps). Mirrors
-            // `set_task_parent`'s own clear branch.
+            // `set_task_parent`'s own clear branch, including the on-disk
+            // casing resolution (Fix 2, final whole-branch review task
+            // report): a clear must target whatever casing the file actually
+            // carries, or a hand-authored `Parent-Id:`/`Parent:` line
+            // survives untouched while the app believes it cleared the
+            // relationship.
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Err(parent_write_error(
+                        fields_saved,
+                        format!("Cannot read task: {e}"),
+                    ))
+                }
+            };
+            let (id_key, link_key) = parent::parent_field_keys(&content);
             match tasks::update_task_fields(
                 &root,
                 path,
-                &[("parent-id", None), ("parent", None)],
+                &[(id_key.as_str(), None), (link_key.as_str(), None)],
                 None,
             ) {
                 Ok(_) => (None, None, false, None),
@@ -156,16 +171,22 @@ pub fn update_task(
                     // `parent_id_ref` is already the exact YAML text that
                     // means the same thing as the parent's own id line
                     // (`tasks::mirror_id_reference`, resolved once inside
-                    // `resolve_parent_for_write` alongside `parent_id`).
+                    // `resolve_parent_for_write` alongside `parent_id`). The
+                    // key CASING is resolved fresh here, from a read of
+                    // `child_p`'s CURRENT content (Fix 2, final whole-branch
+                    // review task report) — this closure runs after the lock,
+                    // and nothing before it has written to this CHILD, so the
+                    // read reflects whatever the file actually carries.
+                    let content = std::fs::read_to_string(&child_p)
+                        .map_err(|e| format!("Cannot read task: {e}"))?;
+                    let (id_key, link_key) = parent::parent_field_keys(&content);
+                    let link_value = crate::yaml_scalar::yaml_quote(&resolved.link);
                     tasks::update_task_fields(
                         &root,
                         &child_p,
                         &[
-                            ("parent-id", Some(resolved.parent_id_ref.as_str())),
-                            (
-                                "parent",
-                                Some(&crate::yaml_scalar::yaml_quote(&resolved.link) as &str),
-                            ),
+                            (id_key.as_str(), Some(resolved.parent_id_ref.as_str())),
+                            (link_key.as_str(), Some(link_value.as_str())),
                         ],
                         Some(&prop),
                     )
@@ -465,6 +486,45 @@ mod tests {
     }
 
     #[test]
+    fn a_parent_set_replaces_an_existing_differently_cased_line_instead_of_duplicating_it() {
+        // Fix 2 (final whole-branch review, task report): `update_task`'s own
+        // SET branch (update.rs, not `set_task_parent`) needs the identical
+        // on-disk-casing fix — `update_task_fields`/`set_fields` matches a key
+        // case-SENSITIVELY, so writing the canonical lowercase `parent-id`
+        // onto a child that already carries `Parent-Id:` would insert a
+        // case-mismatched DUPLICATE rather than replacing the stale line.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["p.md"]);
+        let root = tasks_root(&paths, &vault);
+        let parent = root.join("p.md");
+        let child = root.join("c.md");
+        std::fs::write(
+            &child,
+            "---\ntype: Task\nstatus: new\ntitle: \"C\"\nParent-Id: old99999\n---\n",
+        )
+        .unwrap();
+        update_task(&paths, &vault, &child, &[], ParentOp::Set(parent)).unwrap();
+        let out = std::fs::read_to_string(&child).unwrap();
+        let id_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("parent-id:"))
+            .collect();
+        assert_eq!(
+            id_lines.len(),
+            1,
+            "must replace the existing line, not insert a case-mismatched duplicate: got {out}"
+        );
+        assert!(
+            id_lines[0].starts_with("Parent-Id:"),
+            "must preserve the file's own on-disk casing, got {out}"
+        );
+        assert!(
+            !id_lines[0].contains("old99999"),
+            "the stale value must be replaced, got {out}"
+        );
+    }
+
+    #[test]
     fn a_parent_only_clear_removes_both_keys_and_reports_no_parent() {
         let dir = tempfile::tempdir().unwrap();
         let (paths, vault) = fixture_with_ids_enabled(dir.path(), &["p.md", "c.md"]);
@@ -503,6 +563,36 @@ mod tests {
         let after = std::fs::read_to_string(&child).unwrap();
         assert!(!after.contains("parent-id"));
         assert!(!after.contains("parent:"));
+    }
+
+    #[test]
+    fn a_parent_clear_removes_a_differently_cased_existing_line_not_a_lowercase_no_op() {
+        // The clear-branch counterpart to the SET-branch casing fix above:
+        // `update_task`'s own `ParentOp::Clear` arm must target whatever
+        // casing is ACTUALLY on disk, or the stale hand-authored line
+        // survives untouched while the app believes it cleared the
+        // relationship.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&paths, &vault);
+        let child = root.join("c.md");
+        std::fs::write(
+            &child,
+            "---\ntype: Task\nstatus: new\ntitle: \"C\"\nParent-Id: x\nParent: \"[[p]]\"\n---\n",
+        )
+        .unwrap();
+        let result = update_task(&paths, &vault, &child, &[], ParentOp::Clear).unwrap();
+        assert_eq!(result.parent_id, None);
+        assert_eq!(result.parent_link, None);
+        let out = std::fs::read_to_string(&child).unwrap();
+        assert!(
+            !out.to_ascii_lowercase().contains("parent-id:"),
+            "the differently-cased parent-id line must be removed, got {out}"
+        );
+        assert!(
+            !out.to_ascii_lowercase().contains("\nparent:"),
+            "the differently-cased parent line must be removed, got {out}"
+        );
     }
 
     #[cfg(unix)]

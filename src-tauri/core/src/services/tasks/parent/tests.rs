@@ -304,6 +304,116 @@ fn refuses_a_cycle_routed_through_an_uppercase_md_task() {
 }
 
 #[test]
+fn refuses_a_cycle_routed_through_a_differently_cased_parent_id_key() {
+    // Fix 2 (final whole-branch review, task report): the SAME class of bug
+    // as the `.MD` case above, one level down — `parent_id_field` matched the
+    // literal lowercase `"parent-id:"` (`capture_note::raw_scalar_field`'s
+    // `strip_prefix`), unlike the sibling `task-id` reader
+    // (`frontmatter_scalar_ci`), which already folds case because Obsidian
+    // folds frontmatter key case. A -> B -> C is a REAL on-disk parent chain
+    // spelled `Parent-Id:` throughout, but the case-sensitive read made every
+    // edge invisible — so assigning C's parent to A (closing A -> B -> C -> A)
+    // was wrongly accepted.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    write(
+        &root,
+        "a.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"A\"\ntask-id: aaaaaaaa\nParent-Id: bbbbbbbb\n---\n",
+    );
+    write(
+        &root,
+        "b.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"B\"\ntask-id: bbbbbbbb\nParent-Id: cccccccc\n---\n",
+    );
+    let c = write(
+        &root,
+        "c.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"C\"\ntask-id: cccccccc\n---\n",
+    );
+    let a = root.join("a.md");
+    let before = std::fs::read_to_string(&c).unwrap();
+    let err = set_task_parent(&paths, &vault, &c, Some(&a));
+    assert!(
+        err.is_err(),
+        "a cycle routed through a differently-cased Parent-Id key must be refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&c).unwrap(),
+        before,
+        "a refused cycle must write nothing onto the child"
+    );
+}
+
+#[test]
+fn assigning_a_parent_replaces_an_existing_differently_cased_line_instead_of_duplicating_it() {
+    // Fix 2's write-side half: a case-insensitive READ alone is not enough —
+    // `update_task_fields`/`set_fields` still matches a key case-SENSITIVELY,
+    // so writing the canonical lowercase `parent-id`/`parent` onto a child
+    // that already carries `Parent-Id:`/`Parent:` would insert a
+    // case-mismatched DUPLICATE rather than replacing the stale line (the
+    // exact hazard `ensure_id`'s `blank_casing` already guards against for
+    // `task-id` — disk.rs:200-204). Obsidian folds the two into one property,
+    // but the file itself is left with two conflicting lines.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["p.md"]);
+    let root = tasks_root(&paths, &vault);
+    let parent = root.join("p.md");
+    let child = write(
+        &root,
+        "c.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"C\"\nParent-Id: old99999\n---\n",
+    );
+    set_task_parent(&paths, &vault, &child, Some(&parent)).unwrap();
+    let out = std::fs::read_to_string(&child).unwrap();
+    let id_lines: Vec<&str> = out
+        .lines()
+        .filter(|l| l.to_ascii_lowercase().starts_with("parent-id:"))
+        .collect();
+    assert_eq!(
+        id_lines.len(),
+        1,
+        "must replace the existing line, not insert a case-mismatched duplicate: got {out}"
+    );
+    assert!(
+        id_lines[0].starts_with("Parent-Id:"),
+        "must preserve the file's own on-disk casing, got {out}"
+    );
+    assert!(
+        !id_lines[0].contains("old99999"),
+        "the stale value must be replaced, got {out}"
+    );
+}
+
+#[test]
+fn clearing_a_differently_cased_parent_removes_the_existing_line_not_a_lowercase_no_op() {
+    // The clear-branch counterpart: a clear must target whatever casing is
+    // ACTUALLY on disk, or the stale hand-authored line survives untouched
+    // while the app believes it cleared the relationship. No parent file is
+    // needed — `set_task_parent(.., None)` clears unconditionally, without
+    // validating a parent.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    let child = write(
+        &root,
+        "c.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"C\"\nParent-Id: x\nParent: \"[[p]]\"\n---\n",
+    );
+    set_task_parent(&paths, &vault, &child, None).unwrap();
+    let out = std::fs::read_to_string(&child).unwrap();
+    assert!(
+        !out.to_ascii_lowercase().contains("parent-id:"),
+        "the differently-cased parent-id line must be removed, got {out}"
+    );
+    assert!(
+        !out.to_ascii_lowercase().contains("\nparent:"),
+        "the differently-cased parent line must be removed, got {out}"
+    );
+}
+
+#[test]
 fn refuses_a_cycle_using_dormant_ids_while_generation_is_disabled() {
     // Hand-authored ids exist even with the feature off; the ordinary
     // list_tasks walk suppresses them, so validation must read the property

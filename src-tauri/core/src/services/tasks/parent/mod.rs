@@ -15,6 +15,30 @@ use crate::capture_config::{self, VaultCaptureConfig};
 use crate::services::{app_config, ServicePaths};
 use crate::tasks;
 
+/// The `(parent-id, parent)` frontmatter keys to write into an EXISTING
+/// file's CURRENT content — cased to match whatever the file already carries
+/// under either identity key, falling back to the canonical lowercase
+/// spelling when absent (Fix 2, final whole-branch review task report).
+/// `set_fields` matches a key CASE-SENSITIVELY, so writing the literal
+/// lowercase `"parent-id"`/`"parent"` onto a child that already carries a
+/// hand-authored `Parent-Id:`/`Parent:` line would insert a case-mismatched
+/// DUPLICATE — the case-insensitive READ (`parent_id_field`/
+/// `parent_link_field`) then shadows the stale original, but the file itself
+/// keeps both lines — rather than replacing it. Mirrors exactly what
+/// `ensure_id` already does for `task-id` (`tasks::disk::update_task_fields`'s
+/// `blank_casing`, Codex PR #59). The read is unconditional — even a CLEAR
+/// (removing both keys) must target whatever casing is actually on disk, or
+/// the stale line survives untouched while the app believes it cleared the
+/// relationship. `pub(super)`: shared by every write site in this module and
+/// by `update.rs`, the sibling module under `services::tasks` with the same
+/// two write branches.
+pub(super) fn parent_field_keys(content: &str) -> (String, String) {
+    (
+        tasks::parse::on_disk_key_or(content, "parent-id"),
+        tasks::parse::on_disk_key_or(content, "parent"),
+    )
+}
+
 /// The effective pair written, so the caller can reflect it without a reload.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,10 +75,13 @@ pub fn set_task_parent(
         // clear removes a relationship, it does not edit the task (the same
         // reason a status toggle never stamps).
         let child = canonical_task_in_root(&root, child_path)?;
+        let content =
+            std::fs::read_to_string(&child).map_err(|e| format!("Cannot read task: {e}"))?;
+        let (id_key, link_key) = parent_field_keys(&content);
         tasks::update_task_fields(
             &root,
             &child,
-            &[("parent-id", None), ("parent", None)],
+            &[(id_key.as_str(), None), (link_key.as_str(), None)],
             None,
         )?;
         return Ok(ParentSet {
@@ -92,7 +119,15 @@ pub fn set_task_parent(
         },
         |resolved| {
             // Phase 3b: the child's pair. `ensure_id` rides along, so a legacy
-            // child picks up its own id in the same write.
+            // child picks up its own id in the same write. The key CASING is
+            // resolved fresh here (not at phase 1) — this closure runs after
+            // the lock, and phase 3a above may itself have just committed to
+            // the parent, but never to this CHILD, so a fresh read of `child`
+            // is safe and reflects whatever the file actually carries.
+            let content =
+                std::fs::read_to_string(&child).map_err(|e| format!("Cannot read task: {e}"))?;
+            let (id_key, link_key) = parent_field_keys(&content);
+            let link_value = crate::yaml_scalar::yaml_quote(&resolved.link);
             tasks::update_task_fields(
                 &root,
                 &child,
@@ -102,11 +137,8 @@ pub fn set_task_parent(
                     // (`tasks::mirror_id_reference`, resolved once above
                     // alongside `parent_id`) — not re-derived here, so this
                     // call site can't drift from how it was decided.
-                    ("parent-id", Some(resolved.parent_id_ref.as_str())),
-                    (
-                        "parent",
-                        Some(&crate::yaml_scalar::yaml_quote(&resolved.link) as &str),
-                    ),
+                    (id_key.as_str(), Some(resolved.parent_id_ref.as_str())),
+                    (link_key.as_str(), Some(link_value.as_str())),
                 ],
                 Some(&prop),
             )?;
@@ -609,10 +641,17 @@ fn recompose_parent_link(
     if fresh == current {
         return Ok(()); // unchanged — never spend a write to rewrite a file identically
     }
+    // On-disk casing (Fix 2, final whole-branch review task report): `content`
+    // was already read above to find `current` via the case-insensitive
+    // `parent_link_field` — a hand-authored `Parent:` line must be REPLACED
+    // under its own casing, not left behind while a case-mismatched
+    // `parent:` duplicate is inserted alongside it.
+    let link_key = tasks::parse::on_disk_key_or(&content, "parent");
+    let link_value = crate::yaml_scalar::yaml_quote(&fresh);
     tasks::update_task_fields(
         root,
         &child,
-        &[("parent", Some(&crate::yaml_scalar::yaml_quote(&fresh)))],
+        &[(link_key.as_str(), Some(link_value.as_str()))],
         None,
     )?;
     Ok(())

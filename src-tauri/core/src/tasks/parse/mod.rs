@@ -18,7 +18,7 @@ pub(super) use scalar::{
     frontmatter_scalar_ci, is_valid_scalar_source, key_opens_block, key_opens_flow, scalar_id_ci,
     strip_leading_tag, strip_scalar_comment, top_level_raw_value_ci,
 };
-pub(crate) use scalar::{id_property_unassignable, strict_scalar_field};
+pub(crate) use scalar::{id_property_unassignable, on_disk_key_or, strict_scalar_field};
 
 /// True iff `s` is a plain `YYYY-MM-DD` (digits and hyphens in position — no
 /// calendar validity check; Obsidian tolerates e.g. 2026-02-31 and the UI

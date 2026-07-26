@@ -62,6 +62,26 @@ pub(in crate::tasks) fn top_level_raw_value_ci<'a>(content: &'a str, key: &str) 
     crate::capture_note::raw_scalar_field(content, on_disk)
 }
 
+/// The on-disk casing of `key`'s first top-level line, or `key` itself when
+/// the key is absent from the document (Fix 2, final whole-branch review task
+/// report). Obsidian folds frontmatter key case — the same reason
+/// `frontmatter_scalar_ci`'s own doc comment gives for reading `task-id`
+/// case-insensitively — so a caller about to WRITE a new value under `key`
+/// must target an EXISTING hand-authored line under its own casing, or
+/// `set_fields`' case-sensitive match inserts a case-mismatched duplicate the
+/// case-insensitive READ side then shadows. Generalizes the `blank_casing`
+/// rule `update_task_fields` already applies for `task-id` (Codex, PR #59) to
+/// the other two identity keys this domain reads case-insensitively:
+/// `parent-id`/`parent` (`tasks::parent`'s readers, fixed alongside this).
+/// `pub(crate)`: needed by `services::tasks::parent`/`update`, which write
+/// those two keys onto an EXISTING file from outside this crate's `tasks`
+/// module tree.
+pub(crate) fn on_disk_key_or(content: &str, key: &str) -> String {
+    top_level_key_ci(content, key)
+        .map(str::to_string)
+        .unwrap_or_else(|| key.to_string())
+}
+
 /// The first TOP-LEVEL `key:` line matched CASE-INSENSITIVELY: its ACTUAL
 /// on-disk key name AND parsed scalar value. Obsidian folds frontmatter key
 /// case and `is_valid_id_property` accepts case variants, so reads and writes

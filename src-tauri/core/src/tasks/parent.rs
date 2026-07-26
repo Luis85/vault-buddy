@@ -38,11 +38,22 @@ pub fn parent_link_field(content: &str) -> Option<String> {
 /// The decode itself now lives in `parse::strict_scalar_field` (Defect A): a
 /// task's OWN id (`scalar_id_ci`) must decode a quoted YAML scalar
 /// IDENTICALLY to a `parent-id` reference, or the two sides of an id
-/// comparison can never agree — see that function's doc comment. This is a
-/// thin named wrapper so `parent_id_field`/`parent_link_field` read
-/// naturally; it carries no logic of its own anymore.
+/// comparison can never agree — see that function's doc comment.
+///
+/// The key lookup is CASE-INSENSITIVE (Fix 2, final whole-branch review task
+/// report): `strict_scalar_field` itself only matches the exact literal `key`
+/// passed in, so this resolves `key`'s on-disk casing first via
+/// `parse::on_disk_key_or` — the SAME case-insensitive lookup `task-id`
+/// already gets via `frontmatter_scalar_ci`/`scalar_id_ci`. Obsidian folds
+/// frontmatter key case; a hand-authored `Parent-Id:`/`Parent:` line was
+/// invisible to the literal-lowercase match, which under-counted
+/// `count_parent_links`'s orphan guard and silently dropped the edge from the
+/// cycle guard's graph. Absent stays absent: `on_disk_key_or` returns `key`
+/// unchanged when no case variant exists, so `strict_scalar_field` correctly
+/// finds nothing, exactly as before.
 fn scalar(content: &str, key: &str, link: bool) -> Option<String> {
-    super::parse::strict_scalar_field(content, key, link)
+    let on_disk = super::parse::on_disk_key_or(content, key);
+    super::parse::strict_scalar_field(content, &on_disk, link)
 }
 
 #[cfg(test)]
@@ -67,6 +78,34 @@ mod tests {
         let c = "---\ntype: Task\nparent-id: ab12cd34\nparent: \"[[Tasks/Work/p]]\"\n---\n";
         assert_eq!(parent_id_field(c), Some("ab12cd34".to_string()));
         assert_eq!(parent_link_field(c), Some("[[Tasks/Work/p]]".to_string()));
+    }
+
+    #[test]
+    fn reads_a_differently_cased_key_case_insensitively() {
+        // Fix 2 (final whole-branch review, task report): the sibling
+        // `task-id` reader (`frontmatter_scalar_ci`) folds case because
+        // Obsidian folds frontmatter key case — its own doc comment says so.
+        // `parent_id_field`/`parent_link_field` never got that rule: they
+        // matched the literal lowercase key via `capture_note::
+        // raw_scalar_field`'s `strip_prefix`, so a hand-authored `Parent-Id:`/
+        // `Parent:` line was invisible — the count_parent_links guard
+        // undercounts, and the cycle guard's graph silently drops the edge.
+        let c = "---\ntype: Task\nParent-Id: ab12cd34\nParent: \"[[Tasks/Work/p]]\"\n---\n";
+        assert_eq!(parent_id_field(c), Some("ab12cd34".to_string()));
+        assert_eq!(parent_link_field(c), Some("[[Tasks/Work/p]]".to_string()));
+    }
+
+    #[test]
+    fn a_differently_cased_parent_id_is_not_confused_with_a_differently_cased_parent() {
+        // The two keys stay distinguishable under case-insensitive lookup
+        // too: `PARENT-ID:` must never be read as a `parent` link, and
+        // `PARENT:` must never be read as a `parent-id`.
+        let c = "---\ntype: Task\nPARENT-ID: ab12cd34\n---\n";
+        assert_eq!(parent_id_field(c), Some("ab12cd34".to_string()));
+        assert_eq!(parent_link_field(c), None);
+        let c2 = "---\ntype: Task\nPARENT: \"[[Tasks/p]]\"\n---\n";
+        assert_eq!(parent_id_field(c2), None);
+        assert_eq!(parent_link_field(c2), Some("[[Tasks/p]]".to_string()));
     }
 
     #[test]

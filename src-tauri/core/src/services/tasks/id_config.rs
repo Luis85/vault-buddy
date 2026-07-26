@@ -261,6 +261,30 @@ mod tests {
         assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 1);
     }
 
+    #[test]
+    fn count_parent_links_detects_a_differently_cased_parent_id_key() {
+        // Fix 2 (final whole-branch review, task report): `parent_id_field`
+        // matched the literal lowercase `"parent-id:"` case-sensitively, so a
+        // hand-authored `Parent-Id:` line undercounted here — letting
+        // `set_task_id_config` disable or re-point the property while a real
+        // reference still existed, defeating the very guard this lock exists
+        // for.
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+        let root = tasks_root(&vault);
+        write(
+            &root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
+        );
+        write(
+            &root,
+            "b.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"B\"\nParent-Id: x\n---\n",
+        );
+        assert_eq!(count_parent_links(&paths, VAULT_ID).unwrap(), 1);
+    }
+
     // Review finding 1: the ORIGINAL version of this test appended an
     // archived task carrying parent-id to a fixture that ALREADY had a
     // non-archived parent-id from a sibling `write` call, so its "archived
