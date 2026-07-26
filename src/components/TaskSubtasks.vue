@@ -113,6 +113,11 @@ defineExpose({ reset });
       @keydown.enter="onEnter"
       @keydown.esc="onEscape"
     >
-    <p v-if="disabledReason" class="text-micro text-fg-subtle">{{ disabledReason }}</p>
+    <p
+      v-if="disabledReason"
+      class="text-micro text-fg-subtle"
+    >
+      {{ disabledReason }}
+    </p>
   </div>
 </template>

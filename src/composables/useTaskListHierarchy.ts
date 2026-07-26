@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, type Ref, ref } from "vue";
 
 import type { AggTask } from "../types";
 import { buildHierarchyInfoByVault, buildParentIndexByVault, type HierarchyInfo } from "../utils/taskHierarchy";
@@ -30,6 +30,13 @@ const NO_HIERARCHY: HierarchyInfo = { parent: null, openSubtaskCount: 0 };
  * (Task 12's perf fix: a checkbox toggle or filter keystroke on a thousand-
  * task vault was redoing Θ(n²) comparisons per render).
  *
+ * `archivedByVault` (a REF the caller owns, not local state) supplies the
+ * open-subtask count's archived-list exclusion (GAP-91). A per-vault MAP, never
+ * one flat set: the aggregate view renders many vaults at once and list names
+ * collide across them. Taken reactively rather than through a setter because
+ * configs load lazily per vault — the count must re-derive as each lands, and
+ * an imperative sync in the container would be one more thing to forget.
+ *
  * Incremental status updates (`setHierarchyStatus`, below): a toggle mutates
  * `task.done`/`task.status` IN PLACE on the object `tasks.value` and
  * `hierarchyTasks` both hold, so it is visible here for free. An archive is
@@ -40,14 +47,8 @@ const NO_HIERARCHY: HierarchyInfo = { parent: null, openSubtaskCount: 0 };
  * `buildHierarchyInfoByVault`'s open-subtask count would keep counting an
  * archived child as open until the next full reload.
  */
-export function useTaskListHierarchy() {
+export function useTaskListHierarchy(archivedByVault: Ref<Map<string, string[]>>) {
   const hierarchyTasks = ref<AggTask[]>([]);
-  // Per-vault archived list names, feeding the open-subtask count's
-  // archived-list exclusion (GAP-91). A MAP, never one flat set: the aggregate
-  // view renders many vaults at once and list names collide across them.
-  // Populated asynchronously — configs load lazily per vault — so it starts
-  // empty and the count simply excludes nothing until the first config lands.
-  const archivedByVault = ref(new Map<string, string[]>());
   const byVault = computed(() => buildParentIndexByVault(hierarchyTasks.value));
   const infoByVault = computed(() =>
     buildHierarchyInfoByVault(hierarchyTasks.value, byVault.value, archivedByVault.value),
@@ -73,9 +74,5 @@ export function useTaskListHierarchy() {
     if (found) found.status = status;
   }
 
-  function setArchivedByVault(next: Map<string, string[]>): void {
-    archivedByVault.value = next;
-  }
-
-  return { hierarchyOf, setHierarchyTasks, setHierarchyStatus, setArchivedByVault };
+  return { hierarchyOf, setHierarchyTasks, setHierarchyStatus };
 }
