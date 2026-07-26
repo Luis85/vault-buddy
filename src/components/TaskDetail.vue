@@ -34,7 +34,12 @@ const vaults = useVaultsStore();
 // its cheap two-row patch when a write turns Task IDs on for the vault: the
 // set was loaded id-suppressed, so EVERY cached id is null, not just the two
 // rows that write touched (Codex P2, PR #77).
-const { allTasks, reload: reloadTaskSet, invalidParentPaths } = useTaskDetailTaskSet(taskRef);
+const {
+  allTasks,
+  pickerCandidates,
+  reload: reloadTaskSet,
+  invalidParentPaths,
+} = useTaskDetailTaskSet(taskRef);
 const { parent, children, progress, setParent } = useTaskHierarchy(taskRef, allTasks, busy, reloadTaskSet);
 const notifications = useNotificationsStore();
 const subtasksRef = ref<InstanceType<typeof TaskSubtasks> | null>(null);
@@ -333,7 +338,7 @@ function openSubtaskDetail(t: AggTask) {
     <TaskParentRow
       :parent="parent"
       :busy="busy"
-      :all-tasks="allTasks"
+      :all-tasks="pickerCandidates"
       :invalid-paths="invalidParentPaths"
       @open-parent="openParentDetail"
       @select="setParent"

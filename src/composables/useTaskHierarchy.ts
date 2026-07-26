@@ -87,9 +87,18 @@ export function useTaskHierarchy(
     );
   });
 
+  // `allTasks` is archived-INCLUSIVE (Fix 1: an archived PARENT must still
+  // resolve — see `parent` above, which deliberately does NOT filter status).
+  // Children are the opposite case: archiving a task removes it from view
+  // everywhere else, so it must not resurface here just because the loaded
+  // set now includes it for resolution purposes — a status: archived task is
+  // excluded from its OWN parent's Subtasks list and progress count.
   const children = computed<AggTask[]>(() =>
     allTasks.value.filter(
-      (t) => t.vaultId === task.value.vaultId && index.value.get(t.path) === task.value.path,
+      (t) =>
+        t.vaultId === task.value.vaultId &&
+        t.status !== "archived" &&
+        index.value.get(t.path) === task.value.path,
     ),
   );
 

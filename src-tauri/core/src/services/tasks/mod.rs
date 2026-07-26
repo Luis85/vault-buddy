@@ -140,6 +140,31 @@ pub fn list_tasks(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
         .collect()
 }
 
+/// The archived-inclusive counterpart of `list_tasks` — the one additional
+/// read the subtasks vault-UX-polish increment needed (see core::tasks::
+/// list_tasks_including_archived's own doc comment): an archived task can
+/// still be somebody's PARENT, and a resolver built only from the archived-
+/// EXCLUDED view can never see that edge, wrongly reporting no relationship
+/// for an active child whose parent was later archived — inviting a silent
+/// overwrite. Same containment/degrade posture as `list_tasks`: still a
+/// best-effort VIEW, not a write-time guard, so this shares every gate
+/// `list_tasks` applies rather than opening a second, unguarded path.
+pub fn list_tasks_including_archived(paths: &ServicePaths, id: &str) -> Vec<TaskDto> {
+    let Ok((vault_path, root, cfg)) = tasks_root_for(paths, id) else {
+        return Vec::new();
+    };
+    if let Err(e) = assert_root_if_exists(&vault_path, &root) {
+        log::warn!("list_tasks_including_archived: tasks folder resolves outside the vault: {e}");
+        return Vec::new();
+    }
+    let id_property =
+        tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
+    tasks::list_tasks_including_archived(&root, id_property)
+        .into_iter()
+        .map(TaskDto::from_item)
+        .collect()
+}
+
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it. `today`
 /// (`YYYY-MM-DD`) is supplied by the caller — no clock in core. `due`,

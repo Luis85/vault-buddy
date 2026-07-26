@@ -71,6 +71,36 @@ describe("useTaskHierarchy", () => {
     const h = useTaskHierarchy(ref(orphan), ref([orphan]));
     expect(h.parent.value).toBeNull();
   });
+
+  it("excludes an archived child from the Subtasks list and its progress count", () => {
+    // Fix 1 (subtasks vault-UX-polish increment): allTasks is now archived-
+    // inclusive (so an archived PARENT still resolves — see the setParent
+    // describe block below), but archiving a task removes it from view
+    // everywhere else; it must not resurface as a subtask row just because
+    // the loaded set now includes it for resolution purposes.
+    const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const archivedKid = task({
+      vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", status: "archived",
+    });
+    const openKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md" });
+    const h = useTaskHierarchy(ref(p), ref([p, archivedKid, openKid]));
+    expect(h.children.value.map((t) => t.path)).toEqual(["/v1/c2.md"]);
+    expect(h.progress.value).toEqual({ done: 0, total: 1 });
+  });
+
+  it("still resolves an archived task as a parent (only the CHILD list excludes archived)", () => {
+    // The other half of Fix 1: an archived task must still resolve AS a
+    // parent (that's the whole point of the fix — the parent row must not
+    // go blind just because the parent was archived), even though the
+    // exclusion above hides archived CHILDREN from its own Subtasks list.
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/p.md", status: "archived", title: "Old Parent",
+    });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const h = useTaskHierarchy(ref(child), ref([archivedParent, child]));
+    expect(h.parent.value?.path).toBe("/v1/p.md");
+    expect(h.parent.value?.title).toBe("Old Parent");
+  });
 });
 
 // The write path: setParent(path | null) -> update_task. Fresh parent/child/
@@ -299,5 +329,30 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const info = buildHierarchyInfoByVault(all, byVault);
     expect(info.get("v1")!.get("/Shared-Parent.md")!.openSubtaskCount).toBe(1);
     expect(info.get("v2")!.get("/Shared-Parent.md")!.openSubtaskCount).toBe(1);
+  });
+
+  it("excludes an archived task from its former parent's open-subtask count", () => {
+    // Fix 1 (subtasks vault-UX-polish increment): archiving a task removes it
+    // from view everywhere else; it must not keep inflating its parent's open
+    // count. One-directional — the sibling case below shows an archived task
+    // still resolves AS a parent.
+    const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const archivedKid = task({
+      vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", status: "archived",
+    });
+    const openKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md" });
+    const all = [p, archivedKid, openKid];
+    const byVault = buildParentIndexByVault(all);
+    expect(buildHierarchyInfoByVault(all, byVault).get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(1);
+  });
+
+  it("still resolves an archived task as a parent (only the subtask COUNT excludes archived)", () => {
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/p.md", status: "archived", title: "Old Parent",
+    });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const all = [archivedParent, child];
+    const byVault = buildParentIndexByVault(all);
+    expect(buildHierarchyInfoByVault(all, byVault).get("v1")!.get("/v1/c.md")!.parent).toBe(archivedParent);
   });
 });

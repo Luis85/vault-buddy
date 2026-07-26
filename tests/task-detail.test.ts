@@ -903,6 +903,93 @@ describe("TaskDetail.vue Parent row", () => {
     expect(wrapper.find('[data-testid="task-detail-parent-clear"]').exists()).toBe(true);
   });
 
+  // Fix 1 (subtasks vault-UX-polish increment): an active child's parent can
+  // be archived later. list_tasks (the view) drops status: archived rows, so
+  // a resolver built only from that view could never see the parent — and,
+  // believing there is no parent, the user could pick a new one, silently
+  // REPLACING the real relationship they were never shown. The task set this
+  // surface loads must be archived-inclusive so that can never happen.
+  it("resolves an archived parent's title instead of showing 'No parent'", async () => {
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Old Parent", status: "archived",
+    });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [archivedParent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Old Parent");
+    expect(wrapper.find('[data-testid="task-detail-parent-change"]').text()).toBe("Change");
+    // The read must be archived-inclusive — a plain { id } call would hide
+    // exactly the row this resolution depends on.
+    const call = calls.find((c) => c[0] === "list_tasks");
+    expect(call[1]).toMatchObject({ includeArchived: true });
+  });
+
+  it("marks an archived parent's chip legibly instead of rendering it identically to an active one", async () => {
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Old Parent", status: "archived",
+    });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [archivedParent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-status"]').text()).toBe("(archived)");
+  });
+
+  it("does not mark an active parent's chip as archived", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    // An active parent's chip already says everything — no status span at all.
+    expect(wrapper.find('[data-testid="task-detail-parent-status"]').exists()).toBe(false);
+  });
+
+  it("excludes an archived task from the picker's selectable candidates", async () => {
+    // Archived rows belong IN the index (the case above) but OUT of the
+    // picker's candidates — you should not be able to newly ASSIGN an
+    // archived parent, only inherit one that was already set before the
+    // archive.
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    const active = task({ vaultId: "v1", id: "a", path: "/v1/Tasks/active.md", title: "Active Task" });
+    const archived = task({
+      vaultId: "v1", id: "o", path: "/v1/Tasks/old.md", title: "Old Task", status: "archived",
+    });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self, active, archived];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    expect(wrapper.find(`[data-testid="task-parent-picker-option-${active.path}"]`).exists()).toBe(true);
+    expect(wrapper.find(`[data-testid="task-parent-picker-option-${archived.path}"]`).exists()).toBe(false);
+  });
+
   it("clicking the parent chip opens the parent's own detail view", async () => {
     const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
     const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });

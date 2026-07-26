@@ -13,13 +13,30 @@ import { buildParentIndex, descendantPaths } from "../utils/taskHierarchy";
  * while this one shows, so there is nothing to share) purely to keep
  * TaskDetail's own script small and focused; this file has no reason to be
  * reused elsewhere yet.
+ *
+ * Loaded archived-INCLUSIVE (Fix 1, subtasks vault-UX-polish increment): an
+ * active child's parent can be archived later, and `list_tasks`'s plain view
+ * drops `status: archived` rows — a resolver built from that view could
+ * never see the parent, and a user shown "No parent" could pick a new one,
+ * silently REPLACING the real relationship. `allTasks` decides whether a
+ * relationship exists, so it belongs on the archived-inclusive read, exactly
+ * like core's own hierarchy guard (`list_tasks_structural`). `pickerCandidates`
+ * is the deliberately narrower, archived-EXCLUDED view of the SAME set for
+ * `TaskParentPicker`'s options — you should not be able to newly ASSIGN an
+ * archived task as a parent, only inherit one that was already set before it
+ * was archived.
  */
 export function useTaskDetailTaskSet(task: Ref<AggTask>) {
   const allTasks = ref<AggTask[]>([]);
+  const pickerCandidates = computed(() => allTasks.value.filter((t) => t.status !== "archived"));
 
   async function reload(): Promise<void> {
     try {
-      const items = (await invoke<TaskItem[]>("list_tasks", { id: task.value.vaultId })) ?? [];
+      const items =
+        (await invoke<TaskItem[]>("list_tasks", {
+          id: task.value.vaultId,
+          includeArchived: true,
+        })) ?? [];
       // The row for THIS task keeps the exact `task.value` object identity
       // rather than a freshly mapped clone: useTaskHierarchy mutates
       // `task.value` (parentId/parentLink/id) directly, and buildParentIndex
@@ -54,5 +71,5 @@ export function useTaskDetailTaskSet(task: Ref<AggTask>) {
     Array.from(descendantPaths(buildParentIndex(allTasks.value, task.value.vaultId), task.value.path)),
   );
 
-  return { allTasks, reload, invalidParentPaths };
+  return { allTasks, pickerCandidates, reload, invalidParentPaths };
 }

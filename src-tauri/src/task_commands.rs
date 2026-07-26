@@ -159,15 +159,32 @@ fn validated_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
 /// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
 /// folder → empty list, never an error (mirrors list_recordings). Never writes.
 ///
+/// `include_archived` is an explicit opt-in flag on this SAME command rather
+/// than a second one (Fix 1, subtasks vault-UX-polish increment): the
+/// frontend's parent/subtask hierarchy resolution (Task Detail's Parent row,
+/// the main list's parent chip/subtask count) needs an archived-inclusive
+/// read — an archived task can still be somebody's PARENT, and a resolver
+/// built from the archived-EXCLUDED default can never see that edge, wrongly
+/// reporting no relationship for an active child whose parent was later
+/// archived. Every existing caller keeps passing `false` and gets today's
+/// exact behavior; both branches ride the identical containment/degrade
+/// gates in `services::tasks` — this opens no new unguarded path.
+///
 /// ASYNC (GAP-22): recursive tasks-folder walk — off the main thread.
 #[tauri::command]
-pub async fn list_tasks(id: String) -> Vec<TaskDto> {
-    tauri::async_runtime::spawn_blocking(move || services::list_tasks(&ServicePaths::real(), &id))
-        .await
-        .unwrap_or_else(|e| {
-            log::warn!("list_tasks: task failed: {e}");
-            Vec::new()
-        })
+pub async fn list_tasks(id: String, include_archived: bool) -> Vec<TaskDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if include_archived {
+            services::list_tasks_including_archived(&ServicePaths::real(), &id)
+        } else {
+            services::list_tasks(&ServicePaths::real(), &id)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_tasks: task failed: {e}");
+        Vec::new()
+    })
 }
 
 /// Create a task from a title (creating the tasks folder if needed). Rejects
@@ -560,7 +577,11 @@ mod tests {
         fn is_future<F: std::future::Future>(_: fn(String) -> F) {}
         fn is_future2<F: std::future::Future>(_: fn(String, String) -> F) {}
         fn is_future3<F: std::future::Future>(_: fn(String, String, String) -> F) {}
-        is_future(list_tasks);
+        // list_tasks gained the include_archived flag (Fix 1) — its own
+        // arity, so it needs its own compile-time async pin rather than
+        // sharing is_future2's (String, String) shape.
+        fn is_future_bool<F: std::future::Future>(_: fn(String, bool) -> F) {}
+        is_future_bool(list_tasks);
         is_future(count_open_tasks);
         is_future(list_task_lists);
         is_future2(create_task_list);

@@ -93,8 +93,8 @@ export function buildParentIndexByVault(tasks: AggTask[]): Map<string, Map<strin
   return byVault;
 }
 
-/** One task's resolved parent row (or null) and open (not-done) subtask
- * count — the list's per-row derivation (Task 10). */
+/** One task's resolved parent row (or null) and open (not-done, not-archived)
+ * subtask count — the list's per-row derivation (Task 10). */
 export interface HierarchyInfo {
   parent: AggTask | null;
   openSubtaskCount: number;
@@ -115,7 +115,8 @@ function vaultBucket<V>(outer: Map<string, Map<string, V>>, vaultId: string): Ma
 }
 
 /** Pass 1 of {@link buildHierarchyInfoByVault}: `(vaultId, path)` -> the task
- * itself, for resolving a PARENT's own row. */
+ * itself, for resolving a PARENT's own row — unfiltered by status, since an
+ * archived task must still resolve (Fix 1). */
 function taskByPath(tasks: AggTask[]): Map<string, Map<string, AggTask>> {
   const byPath = new Map<string, Map<string, AggTask>>();
   for (const t of tasks) vaultBucket(byPath, t.vaultId).set(t.path, t);
@@ -123,14 +124,14 @@ function taskByPath(tasks: AggTask[]): Map<string, Map<string, AggTask>> {
 }
 
 /** Pass 2 of {@link buildHierarchyInfoByVault}: `(vaultId, parentPath)` ->
- * open (not done) child count. */
+ * open (not done, not archived) child count. */
 function openSubtaskCounts(
   tasks: AggTask[],
   byVault: Map<string, Map<string, string>>,
 ): Map<string, Map<string, number>> {
   const counts = new Map<string, Map<string, number>>();
   for (const t of tasks) {
-    if (t.done) continue;
+    if (t.done || t.status === "archived") continue;
     const parentPath = byVault.get(t.vaultId)?.get(t.path);
     if (!parentPath) continue;
     const bucket = vaultBucket(counts, t.vaultId);
@@ -155,6 +156,14 @@ function openSubtaskCounts(
  * the trivial `{parent: null, openSubtaskCount: 0}` default themselves
  * (`useTaskListHierarchy.hierarchyOf`) rather than this function padding
  * every path with a value nothing asked for.
+ *
+ * An ARCHIVED task is excluded from every open-subtask COUNT (archiving
+ * removes it from view everywhere else; it must not keep inflating its
+ * former parent's badge) but — like `buildParentIndex`'s own edges — still
+ * resolves as somebody's PARENT: hiding an archived parent from resolution
+ * is exactly the bug Fix 1 closed (an active child's parent going invisible
+ * invited a silent overwrite via the picker). `taskByPath`/`openSubtaskCounts`
+ * apply that split once, rather than at every call site.
  */
 export function buildHierarchyInfoByVault(
   tasks: AggTask[],

@@ -107,23 +107,56 @@ pub fn list_tasks_structural(
     Ok(out)
 }
 
-/// Which of the two callers is walking. One enum instead of two independent
-/// bools, so the two combinations actually used — lenient+presentation,
-/// strict+structural — can't drift apart from a third nobody asked for.
+/// The archived-INCLUSIVE counterpart of `list_tasks`, for a READ that
+/// decides whether a relationship exists rather than merely displaying a
+/// list — the frontend's parent/subtask hierarchy resolution (Task Detail's
+/// Parent row and the main list's parent chip/subtask count, both built
+/// through the one shared `buildParentIndex` rule). An archived task can
+/// still be somebody's PARENT: a resolver built from the archived-EXCLUDED
+/// `list_tasks` view can never see that edge at all, so it wrongly reports
+/// "no parent" for an active child whose parent was later archived — and a
+/// user who believes there is no relationship can then pick a new parent,
+/// silently REPLACING the real one they were never shown. That is why this
+/// mirrors `list_tasks_structural`'s archived-inclusive posture — but NOT
+/// its abort-on-unreadable-file strictness: this is still a best-effort
+/// VIEW, not a write-time guard, so a single unreadable file degrades and
+/// the scan continues, and a missing root is simply empty, exactly like
+/// `list_tasks`. "A view may degrade; a guard must refuse" — this function
+/// is the view that must not filter archived rows, not the guard that must
+/// not miss an edge.
+pub fn list_tasks_including_archived(root: &Path, id_property: Option<&str>) -> Vec<TaskItem> {
+    let mut out = scan(root, id_property, ScanMode::ViewIncludingArchived).unwrap_or_default();
+    sort_tasks(&mut out);
+    out
+}
+
+/// Which of the three callers is walking. Two independent properties
+/// (include-archived, abort-on-unreadable) used to collapse to only two
+/// combinations — lenient+presentation, strict+structural — so this enum
+/// deliberately had no room for a third nobody had asked for. Fix 1 (the
+/// subtasks vault-UX-polish increment) asked for exactly that third
+/// combination: `ViewIncludingArchived` is lenient like `View` (a single
+/// unreadable file degrades and the scan continues — this reader has no
+/// write to protect, so there is nothing to refuse) but keeps `status:
+/// archived` rows like `Structural` (an archived task can still be
+/// somebody's PARENT; see `list_tasks_including_archived`'s own doc comment
+/// for the failure this prevents). It is intentional, not accidental drift,
+/// precisely because it is still a genuine best-effort VIEW.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ScanMode {
     View,
+    ViewIncludingArchived,
     Structural,
 }
 
 impl ScanMode {
-    /// Structural keeps `status: archived` Tasks; View drops them.
+    /// Only View drops `status: archived` Tasks; both other modes keep them.
     pub(super) fn include_archived(self) -> bool {
-        self == ScanMode::Structural
+        self != ScanMode::View
     }
 
-    /// Structural aborts the whole scan on the first unreadable `.md` file;
-    /// View skips it and keeps going (today's degrade-silently behavior).
+    /// Only Structural aborts the whole scan on the first unreadable `.md`
+    /// file; both View variants degrade-and-continue.
     pub(super) fn strict(self) -> bool {
         self == ScanMode::Structural
     }
@@ -540,6 +573,105 @@ mod tests {
         let all = list_tasks_structural(root, None).unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|t| t.parent_id.as_deref() == Some("x")));
+    }
+
+    // Fix 1 (subtasks-vault-UX-polish increment): an archived task can still
+    // be somebody's PARENT. The hierarchy read that decides whether that
+    // relationship exists must see it, exactly as the structural guard does —
+    // but it is still a best-effort VIEW (no write to protect), not a guard,
+    // so it must NOT inherit list_tasks_structural's abort-on-unreadable-file
+    // posture. These three tests pin that exact split.
+    #[test]
+    fn list_tasks_including_archived_keeps_archived_rows_but_list_tasks_still_hides_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "open.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"Open\"\ncreated: 2026-07-08\n---\n",
+        );
+        write(
+            root,
+            "arch.md",
+            "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\ncreated: 2026-07-06\n---\n",
+        );
+        // The main todo-list presentation is UNCHANGED by this fix.
+        assert_eq!(list_tasks(root, None).len(), 1);
+        let titles: Vec<String> = list_tasks_including_archived(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, vec!["Open", "Arch"]);
+    }
+
+    #[test]
+    fn list_tasks_including_archived_missing_root_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(list_tasks_including_archived(&dir.path().join("nope"), None).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tasks_including_archived_degrades_on_an_unreadable_file_unlike_the_structural_guard() {
+        // The precise behavior that must NOT be inherited from
+        // list_tasks_structural: an unreadable sibling file must not blank
+        // this read entirely — it has no write to protect, so there is
+        // nothing to refuse. Same fixture shape as
+        // structural_scan_errors_on_an_unreadable_task above, opposite
+        // expectation.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
+        );
+        let locked = root.join("b.md");
+        std::fs::write(&locked, "---\ntype: Task\nstatus: new\ntitle: \"B\"\n---\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let bypassed = std::fs::read_to_string(&locked).is_ok();
+        if bypassed {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+            return;
+        }
+        let titles: Vec<String> = list_tasks_including_archived(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            titles,
+            vec!["A"],
+            "an unreadable file degrades rather than failing the whole read"
+        );
+    }
+
+    // uid-independent counterpart, mirroring
+    // structural_scan_errors_on_a_non_utf8_task_file: read_to_string fails
+    // with InvalidData for non-UTF-8 bytes regardless of uid/permissions, so
+    // this exercises the lenient-degrade guarantee even when tests run as
+    // root (the chmod-based test above self-skips there).
+    #[test]
+    fn list_tasks_including_archived_degrades_on_a_non_utf8_task_file_unlike_the_structural_guard()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root,
+            "a.md",
+            "---\ntype: Task\nstatus: new\ntitle: \"A\"\n---\n",
+        );
+        std::fs::write(root.join("b.md"), [0xff, 0xfe]).unwrap();
+        let titles: Vec<String> = list_tasks_including_archived(root, None)
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["A"],
+            "a non-UTF-8 file degrades rather than failing the whole read"
+        );
     }
 
     #[cfg(unix)]

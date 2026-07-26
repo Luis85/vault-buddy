@@ -244,6 +244,34 @@ fn list_tasks_ignores_a_reserved_id_property_configured_by_hand() {
     );
 }
 
+// Fix 1 (subtasks vault-UX-polish increment): the archived-inclusive
+// counterpart the frontend's hierarchy resolution needs (an archived task
+// can still be somebody's PARENT — see core::tasks::
+// list_tasks_including_archived's own doc comment). Same containment/
+// degrade posture as list_tasks: still a best-effort VIEW, not a guard.
+#[test]
+fn list_tasks_including_archived_surfaces_archived_rows_that_list_tasks_hides() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture(dir.path(), "MyVault");
+    std::fs::create_dir_all(vault.join("Tasks")).unwrap();
+    std::fs::write(
+        vault.join("Tasks").join("arch.md"),
+        "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\n---\n",
+    )
+    .unwrap();
+    assert!(list_tasks(&paths, "deadbeef01234567").is_empty());
+    let all = list_tasks_including_archived(&paths, "deadbeef01234567");
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].title, "Arch");
+}
+
+#[test]
+fn list_tasks_including_archived_degrades_to_empty_for_an_unknown_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, _vault) = fixture(dir.path(), "MyVault");
+    assert!(list_tasks_including_archived(&paths, "unknown").is_empty());
+}
+
 #[test]
 fn count_open_tasks_excludes_open_tasks_in_archived_lists() {
     // The vault-row badge must agree with the DEFAULT Lists grouping,

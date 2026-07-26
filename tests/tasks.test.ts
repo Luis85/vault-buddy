@@ -90,7 +90,13 @@ describe("Tasks", () => {
   it("loads tasks, lists, and the lists config for the vault on mount", async () => {
     const { calls } = mountView();
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({ cmd: "list_tasks", args: { id: "v1" } });
+    // includeArchived: true — the list's hierarchy resolution needs the
+    // archived-inclusive superset too (Fix 1); `tasks.value` itself still
+    // renders only the archived-excluded subset, unchanged.
+    expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({
+      cmd: "list_tasks",
+      args: { id: "v1", includeArchived: true },
+    });
     // The Lists increment reintroduced ONE config read (defaultList/
     // listOrder feed the composer and the Lists grouping) plus the list
     // enumeration; the folder setting itself still lives in Vault settings.
@@ -2163,6 +2169,25 @@ describe("Tasks", () => {
     await chip.trigger("click");
     expect(store.taskDetailTask?.path).toBe("/v1/p.md");
   });
+
+  it("still resolves an archived parent's chip (Fix 1: the list shares Task Detail's fix)", async () => {
+    // Task Detail's own fix for the identical blind spot: list_tasks (the
+    // view) excludes status:archived rows, so a resolver built only from the
+    // displayed set can never see an archived task's outgoing parent-id
+    // edge. The list must not diverge from that fix — an archived parent
+    // still needs to resolve, even though the archived task itself never
+    // renders as its own row.
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/p.md", title: "Old Parent", status: "archived",
+    });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const w = await mountTasks([archivedParent, child]);
+    expect(w.get('[data-testid="task-parent-chip"]').text()).toContain("Old Parent");
+    // The archived task itself is still not a row of its own in the list —
+    // only the child renders.
+    expect(w.findAll('[data-testid="task-row"]')).toHaveLength(1);
+  });
+
   it("shows no chip or count for a duplicated id (matches core and Detail)", async () => {
     // The list consumes the SAME index builder, so an ambiguous id resolves
     // nothing here exactly as it does in core (Codex P2, PR #77).

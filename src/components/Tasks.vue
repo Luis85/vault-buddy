@@ -127,8 +127,10 @@ const { quickSchedule, rescheduleOverdue, reschedulingOverdue } =
   useTaskSchedule({ tasks, sortInPlace, busy });
 // Task 10: the subtask-count badge + parent chip, resolved through the SAME
 // index useTaskHierarchy builds for Task Detail (taskHierarchy.ts) — never a
-// second rule.
-const { hierarchyOf } = useTaskListHierarchy(tasks);
+// second rule. setHierarchyTasks stores an archived-INCLUSIVE superset for
+// resolution (an archived parent must still resolve) while `tasks` below
+// keeps loading the archived-EXCLUDED, historical visible set.
+const { hierarchyOf, setHierarchyTasks } = useTaskListHierarchy();
 
 // New list flow: create + cache, then re-select here. `target` (the vault
 // createList used) blocks a mid-create composer vault switch from adopting the
@@ -158,7 +160,7 @@ async function onControlsCreateList(name: string) {
 const sectionBusy = ref(new Set<string>());
 const sectionMenuResetNonce = ref(0);
 // Split out to make room for the hierarchy lookup below (GAP-65).
-const { reloadTasks } = useTaskListReload(props.vaultId, tasks, sortInPlace);
+const { reloadTasks } = useTaskListReload(props.vaultId, tasks, setHierarchyTasks, sortInPlace);
 
 async function runSectionAction(
   list: string,
@@ -241,13 +243,13 @@ onMounted(async () => {
     if (props.vaultId !== null) {
       const id = props.vaultId;
       const [items] = await Promise.all([
-        invoke<TaskItem[]>("list_tasks", { id }),
+        invoke<TaskItem[]>("list_tasks", { id, includeArchived: true }),
         // Lists + config feed the Lists grouping and the composer's picker;
         // a failed read degrades (log-only, same posture as the tasks load).
         loadVaultLists(id),
         loadVaultConfig(id),
       ]);
-      tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
+      tasks.value = setHierarchyTasks(items.map((t) => ({ ...t, vaultId: id, vaultName: "" })));
       // Core hands back Default order; a persisted non-default sort must
       // apply to the initial load too, not only after edits.
       sortInPlace();
@@ -265,7 +267,7 @@ onMounted(async () => {
           // a lists failure must not mark the vault's TASKS as failed).
           void loadVaultLists(v.id);
           try {
-            const items = await invoke<TaskItem[]>("list_tasks", { id: v.id });
+            const items = await invoke<TaskItem[]>("list_tasks", { id: v.id, includeArchived: true });
             return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));
           } catch (e) {
             failed.push(v.name);
@@ -277,7 +279,7 @@ onMounted(async () => {
       if (vaults.length > 0 && failed.length === vaults.length) {
         loadError.value = "Couldn't load tasks from any vault.";
       } else {
-        tasks.value = results.flat();
+        tasks.value = setHierarchyTasks(results.flat());
         sortInPlace();
         if (failed.length > 0) {
           notifications.error(`Couldn't load tasks from ${failed.join(", ")}.`);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 
 import type { AggTask } from "../types";
 import TaskParentPicker from "./TaskParentPicker.vue";
@@ -27,6 +27,19 @@ const emit = defineEmits<{
 const changing = ref(false);
 const changeBtn = ref<HTMLButtonElement | null>(null);
 const picker = ref<InstanceType<typeof TaskParentPicker> | null>(null);
+
+// One combined status label instead of two template-level v-if/v-else-if
+// branches (fallow flagged the extra branch — extracted here, matching the
+// class-level comment above about keeping this component's own template
+// simple). An archived parent still resolves (Fix 1) but must not render
+// identically to an active one — a silent "no relationship" read is exactly
+// the misreading that fix closed, so it stays legible; `null` means the chip
+// alone (an active parent) already says everything there is to say.
+const statusLabel = computed(() => {
+  if (!props.parent) return "No parent";
+  if (props.parent.status === "archived") return "(archived)";
+  return null;
+});
 
 async function open() {
   // Defensive: the trigger below is already :disabled="busy" (a disabled
@@ -79,9 +92,10 @@ function onRootKeydown(e: KeyboardEvent) {
         {{ parent.title }}
       </Chip>
       <span
-        v-else
+        v-if="statusLabel"
+        data-testid="task-detail-parent-status"
         class="text-xs text-fg-muted"
-      >No parent</span>
+      >{{ statusLabel }}</span>
       <button
         ref="changeBtn"
         type="button"
