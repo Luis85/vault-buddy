@@ -29,6 +29,16 @@ const NO_HIERARCHY: HierarchyInfo = { parent: null, openSubtaskCount: 0 };
  * across every row lookup — O(1) per row instead of an O(n) find+filter
  * (Task 12's perf fix: a checkbox toggle or filter keystroke on a thousand-
  * task vault was redoing Θ(n²) comparisons per render).
+ *
+ * Incremental status updates (`setHierarchyStatus`, below): a toggle mutates
+ * `task.done`/`task.status` IN PLACE on the object `tasks.value` and
+ * `hierarchyTasks` both hold, so it is visible here for free. An archive is
+ * different — `useTaskActions.archive` optimistically SPLICES the row out of
+ * the DISPLAYED array rather than editing the object, which touches neither
+ * this array's contents nor the removed task's fields. Left uncalled, this
+ * superset would keep reporting the pre-archive status forever, and
+ * `buildHierarchyInfoByVault`'s open-subtask count would keep counting an
+ * archived child as open until the next full reload.
  */
 export function useTaskListHierarchy() {
   const hierarchyTasks = ref<AggTask[]>([]);
@@ -44,5 +54,16 @@ export function useTaskListHierarchy() {
     return items.filter((t) => t.status !== "archived");
   }
 
-  return { hierarchyOf, setHierarchyTasks };
+  // Keyed by (vaultId, path) rather than an object reference the caller
+  // happens to hold — the superset must stay correct even if a future load
+  // path stops sharing task objects with the displayed `tasks` array. A
+  // missing match is a silent no-op (e.g. a stale path after an unrelated
+  // reload already replaced the superset) rather than an error, matching
+  // this file's other defensive lookups.
+  function setHierarchyStatus(vaultId: string, path: string, status: string): void {
+    const found = hierarchyTasks.value.find((t) => t.vaultId === vaultId && t.path === path);
+    if (found) found.status = status;
+  }
+
+  return { hierarchyOf, setHierarchyTasks, setHierarchyStatus };
 }

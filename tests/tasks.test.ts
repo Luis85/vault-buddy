@@ -2251,4 +2251,62 @@ describe("Tasks", () => {
     expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
   });
 
+  it("drops the badge live when a child is toggled done (no reload needed)", async () => {
+    // Confirms the counterpart the archive case below is compared against:
+    // toggle() flips task.done/status IN PLACE on the shared task object, so
+    // useTaskListHierarchy's archived-inclusive superset (a separate array
+    // holding the SAME task references) sees the change for free — no
+    // dedicated mutation hook needed for this path.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const kid1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "Kid one" });
+    const kid2 = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Kid two" });
+    const w = await mountTasks([parent, kid1, kid2]);
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("2");
+    const kidRow = w.findAllComponents(TaskRow).find((r) => r.props("task").title === "Kid one")!;
+    await kidRow.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
+  });
+
+  it("drops the badge live when a child is archived (no reload needed)", async () => {
+    // Regression: archive() optimistically SPLICES the row out of the
+    // displayed `tasks` array instead of mutating the task in place (unlike
+    // toggle, tested above) — so the archived-inclusive hierarchy superset
+    // kept reporting the child's pre-archive status, and the parent's badge
+    // never dropped until something else forced a full reload.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const kid1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "Kid one" });
+    const kid2 = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Kid two" });
+    const w = await mountTasks([parent, kid1, kid2]);
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("2");
+    const kidRow = w.findAllComponents(TaskRow).find((r) => r.props("task").title === "Kid one")!;
+    await kidRow.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
+  });
+
+  it("keeps the badge in sync when a failed archive is reverted", async () => {
+    // The mark-as-archived above is optimistic and can be reverted (the
+    // row-level write pattern this whole view follows) — the revert must
+    // restore the hierarchy superset's status too, or a reverted archive
+    // would leave the parent's badge under-counting a child that is
+    // visibly open again right next to it.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const kid1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "Kid one" });
+    const kid2 = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Kid two" });
+    mockIPC((cmd) => {
+      if (cmd === "list_tasks") return [parent, kid1, kid2];
+      if (cmd === "set_task_status") throw new Error("disk full");
+      return undefined;
+    });
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-subtask-count"]').text()).toBe("2");
+    const kidRow = wrapper.findAllComponents(TaskRow).find((r) => r.props("task").title === "Kid one")!;
+    await kidRow.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Kid one"); // reverted: the row is back
+    expect(wrapper.get('[data-testid="task-subtask-count"]').text()).toBe("2"); // and the badge agrees
+  });
+
 });

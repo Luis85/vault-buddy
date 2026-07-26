@@ -98,6 +98,12 @@ async function onToggleFilter() {
     filter.value = "";
   }
 }
+// Task 10: the subtask-count badge + parent chip, resolved through the SAME
+// index useTaskHierarchy builds for Task Detail (taskHierarchy.ts) — never a
+// second rule. setHierarchyTasks stores an archived-INCLUSIVE superset for
+// resolution (an archived parent must still resolve) while `tasks` below
+// keeps loading the archived-EXCLUDED, historical visible set.
+const { hierarchyOf, setHierarchyTasks, setHierarchyStatus } = useTaskListHierarchy();
 // Write side: row actions (toggle/archive/open/editor save) + the busy guard.
 const {
   busy,
@@ -111,7 +117,7 @@ const {
   startEdit,
   cancelEdit,
   onEditorSave,
-} = useTaskActions({ tasks, sortInPlace });
+} = useTaskActions({ tasks, sortInPlace, setHierarchyStatus });
 // Switching grouping re-keys every row (bucket keys differ per grouping), so an
 // open inline editor unmounts WITHOUT firing cancel/save — leaving editingKey/
 // editingPath pointing at a row that's no longer rendered. A stale editingPath
@@ -125,12 +131,6 @@ watch(grouping, () => cancelEdit());
 // actions above, so a schedule write can't race a toggle/edit on one task.
 const { quickSchedule, rescheduleOverdue, reschedulingOverdue } =
   useTaskSchedule({ tasks, sortInPlace, busy });
-// Task 10: the subtask-count badge + parent chip, resolved through the SAME
-// index useTaskHierarchy builds for Task Detail (taskHierarchy.ts) — never a
-// second rule. setHierarchyTasks stores an archived-INCLUSIVE superset for
-// resolution (an archived parent must still resolve) while `tasks` below
-// keeps loading the archived-EXCLUDED, historical visible set.
-const { hierarchyOf, setHierarchyTasks } = useTaskListHierarchy();
 
 // New list flow: create + cache, then re-select here. `target` (the vault
 // createList used) blocks a mid-create composer vault switch from adopting the

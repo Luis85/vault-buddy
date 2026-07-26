@@ -14,10 +14,15 @@ import { applyMovedTask, applyScalarFields, type MovedTask, reflectStampedId } f
 export function useTaskActions(opts: {
   tasks: Ref<AggTask[]>;
   sortInPlace: () => void;
+  // useTaskListHierarchy's incremental status reflector (see its own doc
+  // comment) — archive() below is the one write path here that removes a
+  // task from `tasks` instead of editing it in place, so it must tell the
+  // hierarchy superset about the status change explicitly.
+  setHierarchyStatus: (vaultId: string, path: string, status: string) => void;
 }) {
   const notifications = useNotificationsStore();
   const vaultsStore = useVaultsStore();
-  const { tasks, sortInPlace } = opts;
+  const { tasks, sortInPlace, setHierarchyStatus } = opts;
 
   // Task paths whose write is in flight. A second action on the same row
   // while its write is pending would race the first (on a slow disk the two
@@ -64,17 +69,27 @@ export function useTaskActions(opts: {
   async function archive(task: AggTask) {
     if (busy.value.has(task.path)) return;
     busy.value.add(task.path);
+    // Captured before the optimistic change (the toggle() precedent) so a
+    // failed write can restore the hierarchy superset to the task's ACTUAL
+    // prior status, not just any non-archived guess.
+    const prevStatus = task.status;
     // Optimistic: remove from the list; on failure push back + re-sort rather
     // than re-inserting at a captured index (GAP-32: the index goes stale —
     // one slot off — if a concurrent add landed while this write was in
     // flight; recomputing placement via sortInPlace is always correct).
     const index = tasks.value.findIndex((t) => t.path === task.path);
     const removed = tasks.value.splice(index, 1)[0];
+    // The splice above only detaches the row from THIS displayed array —
+    // useTaskListHierarchy's superset is a separate array and does not learn
+    // of the change unless told (see its own doc comment), so a former
+    // parent's open-subtask badge would otherwise stay stale until a reload.
+    setHierarchyStatus(task.vaultId, task.path, "archived");
     try {
       await invoke("set_task_status", { id: task.vaultId, path: task.path, status: "archived" });
       void vaultsStore.refreshTaskCount(task.vaultId);
     } catch (e) {
       tasks.value.push(removed);
+      setHierarchyStatus(task.vaultId, task.path, prevStatus);
       sortInPlace();
       notifications.error(String(e));
       logWarning(`archive failed: ${String(e)}`);

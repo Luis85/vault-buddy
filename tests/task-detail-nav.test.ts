@@ -30,7 +30,7 @@ describe("task detail navigation", () => {
     );
     const s = useVaultsStore();
     const t = task();
-    const actions = useTaskActions({ tasks: ref([t]), sortInPlace: () => {} });
+    const actions = useTaskActions({ tasks: ref([t]), sortInPlace: () => {}, setHierarchyStatus: () => {} });
     const pending = actions.toggle(t); // slow write → t.path enters the busy set
     await new Promise((r) => setTimeout(r));
     actions.onOpenTask(t, new MouseEvent("click")); // plain click while the row is busy
