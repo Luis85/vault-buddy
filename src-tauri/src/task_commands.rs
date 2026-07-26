@@ -166,9 +166,16 @@ fn validated_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
 /// read — an archived task can still be somebody's PARENT, and a resolver
 /// built from the archived-EXCLUDED default can never see that edge, wrongly
 /// reporting no relationship for an active child whose parent was later
-/// archived. Every existing caller keeps passing `false` and gets today's
-/// exact behavior; both branches ride the identical containment/degrade
-/// gates in `services::tasks` — this opens no new unguarded path.
+/// archived. Every existing caller (`Tasks.vue`'s per-vault and aggregate
+/// loads, `useTaskDetailTaskSet.ts`, `useTaskListReload.ts`) now passes
+/// `true` for exactly that reason — the frontend reproduces today's
+/// archived-EXCLUDED display behavior itself, client-side
+/// (`useTaskListHierarchy`'s `setHierarchyTasks` filters the response back
+/// down for the rendered list while keeping the full superset for hierarchy
+/// resolution). `false` still exists and is exercised the same way (both
+/// branches ride the identical containment/degrade gates in
+/// `services::tasks` — this opens no new unguarded path); it is simply not
+/// what any shipped caller sends today.
 ///
 /// ASYNC (GAP-22): recursive tasks-folder walk — off the main thread.
 #[tauri::command]
