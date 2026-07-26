@@ -50,6 +50,7 @@ const {
   listOrder,
   knownLists,
   archivedLists,
+  archivedByVault,
   creatingList,
   composerVaultId,
   composerLists,
@@ -103,7 +104,13 @@ async function onToggleFilter() {
 // second rule. setHierarchyTasks stores an archived-INCLUSIVE superset for
 // resolution (an archived parent must still resolve) while `tasks` below
 // keeps loading the archived-EXCLUDED, historical visible set.
-const { hierarchyOf, setHierarchyTasks, setHierarchyStatus } = useTaskListHierarchy();
+const { hierarchyOf, setHierarchyTasks, setHierarchyStatus, setArchivedByVault } =
+  useTaskListHierarchy();
+// The count's archived-list exclusion (GAP-91) reads a per-vault map. Configs
+// arrive asynchronously and lazily per vault (the aggregate fan-out, the
+// composer's vault pick), so this WATCHES rather than setting once — a
+// set-at-mount would freeze an empty map and silently exclude nothing.
+watch(archivedByVault, (m) => setArchivedByVault(m), { immediate: true });
 // Write side: row actions (toggle/archive/open/editor save) + the busy guard.
 const {
   busy,
@@ -263,9 +270,14 @@ onMounted(async () => {
       const failed: string[] = [];
       const results = await Promise.all(
         vaults.map(async (v) => {
-          // The list enumeration rides the same fan-out (its own catch —
-          // a lists failure must not mark the vault's TASKS as failed).
+          // The list enumeration AND the tasks config both ride the same
+          // fan-out, each with its own catch — a lists or config failure must
+          // not mark the vault's TASKS as failed. Without the config load the
+          // All-tasks view had no archived-list data at all, so the hierarchy
+          // count's archived-list exclusion silently did nothing in exactly
+          // the view that renders every vault at once (GAP-91).
           void loadVaultLists(v.id);
+          void loadVaultConfig(v.id);
           try {
             const items = await invoke<TaskItem[]>("list_tasks", { id: v.id, includeArchived: true });
             return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));

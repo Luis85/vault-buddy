@@ -84,6 +84,18 @@ export function useTaskLists(
   const archivedLists = computed(() =>
     vaultId !== null ? (vaultConfigs.value.get(vaultId)?.archivedLists ?? []) : [],
   );
+  // Every LOADED vault's archived list names, keyed by vault id — what the
+  // hierarchy's open-subtask count needs (GAP-91), including in the aggregate
+  // view where the per-vault `archivedLists` computed above is deliberately []
+  // (there is no single archived set across vaults, and list names collide
+  // between them). Deliberately a SEPARATE value rather than a replacement for
+  // that computed: the Lists GROUPING's aggregate behavior is its own
+  // documented simplification and is not being redefined here.
+  const archivedByVault = computed(() => {
+    const out = new Map<string, string[]>();
+    for (const [id, cfg] of vaultConfigs.value) out.set(id, cfg.archivedLists ?? []);
+    return out;
+  });
   const knownLists = computed(() => {
     const seen = new Map<string, string>();
     for (const lists of vaultLists.value.values())
@@ -324,6 +336,7 @@ export function useTaskLists(
     listOrder,
     knownLists,
     archivedLists,
+    archivedByVault,
     creatingList,
     composerVaultId,
     composerLists,

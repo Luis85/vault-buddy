@@ -609,3 +609,39 @@ describe("Tasks — lists & sorting", () => {
     });
   });
 });
+
+// GAP-91's aggregate half. Recorded here rather than in task-hierarchy.test.ts
+// because it is about the VIEW's fan-out, not the pure resolution rule.
+describe("Tasks — aggregate archived-list data", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  afterEach(() => clearMocks());
+
+  it("loads every vault's tasks config in the aggregate fan-out", async () => {
+    // The All-tasks view fanned out list_task_lists but never get_tasks_config,
+    // so vaultConfigs stayed empty and archivedLists was [] there BY
+    // CONSTRUCTION — the open-subtask count's archived-list exclusion would
+    // have silently done nothing in exactly the view that renders every vault
+    // at once ("fixed one site, left its sibling").
+    const { calls } = mountAggregate();
+    await flushPromises();
+    const configVaults = calls
+      .filter((c) => c.cmd === "get_tasks_config")
+      .map((c) => (c.args as { id: string }).id);
+    expect([...new Set(configVaults)].sort()).toEqual(["va", "vb"]);
+  });
+
+  it("still renders tasks when a vault's config read fails", async () => {
+    // The config load rides the fan-out with its OWN catch: a failed config
+    // read must not mark that vault's TASKS as failed, exactly as
+    // loadVaultLists already behaves on that loop.
+    const { wrapper } = mountAggregate({
+      get_tasks_config: (args) => {
+        if ((args as { id: string }).id === "vb") throw new Error("nope");
+        return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Beta task");
+    expect(wrapper.text()).not.toContain("Couldn't load tasks from any vault.");
+  });
+});
