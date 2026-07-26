@@ -16,6 +16,32 @@ import { archivedMatcher } from "./taskSections";
 export const TASK_IDS_ENABLED_MESSAGE =
   "Task IDs were turned on for this vault so subtasks can reference their parent.";
 
+/** Add Subtask's disabled reason (GAP-90's UI hint, widened — Codex P2, PR #78
+ * follow-up). The archived-TASK check it shipped with is necessary but not
+ * sufficient: `onAddSubtask`'s own archived-list disclosure reads the same
+ * `archivedLists` ref the parent picker's `canAssign` gate exists for, and
+ * core never validates archived lists at all (the frontend is the SOLE
+ * enforcement point — see TaskParentRow). Enabling the input before a
+ * `get_tasks_config` read resolves — or after one fails — lets a create land
+ * in a hidden list with that disclosure silently skipped, the create-path
+ * twin of the candidate-offering race `canAssign` already closed for
+ * assignment. Reuses that gate's own vocabulary ("Couldn't check archived
+ * lists" / "on hold") for the identical condition rather than inventing a
+ * second one, and its retry affordance (TaskParentRow's Retry, already
+ * rendered above this section whenever `archivedListsError` is set) rather
+ * than a duplicate control — this reason clears the instant that ONE read
+ * succeeds, with nothing new to wire up here. */
+export function subtaskCreateDisabledReason(
+  taskStatus: string,
+  archivedListsResolved: boolean,
+  archivedListsError: string | null,
+): string | null {
+  if (taskStatus === "archived") return "This task is archived. Unarchive it to add subtasks.";
+  if (archivedListsError) return "Couldn't check archived lists — adding a subtask is on hold.";
+  if (!archivedListsResolved) return "Checking archived lists…";
+  return null;
+}
+
 // Same rule as core::tasks::ambiguous_ids, per vault: an id carried by more
 // than one task identifies nothing, so it resolves no relationship.
 function ambiguousIds(tasks: AggTask[], vaultId: string): Set<string> {

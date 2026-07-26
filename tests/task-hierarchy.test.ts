@@ -10,7 +10,11 @@ import { useTaskDetailTaskSet } from "../src/composables/useTaskDetailTaskSet";
 import { useTaskHierarchy } from "../src/composables/useTaskHierarchy";
 import { useNotificationsStore } from "../src/stores/notifications";
 import type { AggTask } from "../src/types";
-import { buildHierarchyInfoByVault, buildParentIndexByVault } from "../src/utils/taskHierarchy";
+import {
+  buildHierarchyInfoByVault,
+  buildParentIndexByVault,
+  subtaskCreateDisabledReason,
+} from "../src/utils/taskHierarchy";
 
 const task = (o: Partial<AggTask> = {}): AggTask => ({
   path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
@@ -459,5 +463,35 @@ describe("useTaskDetailTaskSet — pickerCandidates", () => {
     expect(set.pickerCandidates.value).toHaveLength(2);
     archived.value = ["Old"];
     expect(set.pickerCandidates.value).toHaveLength(1);
+  });
+});
+
+// TaskDetail.vue's Add-subtask gate (Codex P2, PR #78 follow-up): pins the
+// precedence order and the "unresolved vs failed" text distinction directly
+// on the pure function, decoupled from mounting the whole component.
+describe("subtaskCreateDisabledReason", () => {
+  it("blocks on an archived task regardless of the config state", () => {
+    expect(subtaskCreateDisabledReason("archived", true, null)).toMatch(/archived/i);
+    // Even a FAILED config read doesn't override the archived-task reason —
+    // it is the more specific, permanently-blocking condition of the two.
+    expect(subtaskCreateDisabledReason("archived", false, "boom")).toMatch(/unarchive/i);
+  });
+
+  it("blocks while the archived-list config is still unresolved (no error yet)", () => {
+    expect(subtaskCreateDisabledReason("new", false, null)).not.toBeNull();
+  });
+
+  it("blocks with a DIFFERENT reason when the config read failed outright", () => {
+    // The judgement call: "still loading" and "we could not check" are
+    // different situations, so they must not collapse to the same string —
+    // matching TaskParentRow's own Banner-vs-plain-disabled distinction.
+    const loading = subtaskCreateDisabledReason("new", false, null);
+    const failed = subtaskCreateDisabledReason("new", false, "boom");
+    expect(failed).not.toBeNull();
+    expect(failed).not.toBe(loading);
+  });
+
+  it("allows creation once the config resolved successfully with no error", () => {
+    expect(subtaskCreateDisabledReason("new", true, null)).toBeNull();
   });
 });

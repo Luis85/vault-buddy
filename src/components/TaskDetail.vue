@@ -10,7 +10,7 @@ import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
 import type { AddTaskResult, AggTask, TaskEditorPatch, TasksConfig } from "../types";
 import { buildTaskPatch, dueOf, scheduledOf } from "../utils/taskFields";
-import { TASK_IDS_ENABLED_MESSAGE } from "../utils/taskHierarchy";
+import { subtaskCreateDisabledReason, TASK_IDS_ENABLED_MESSAGE } from "../utils/taskHierarchy";
 import { reflectStampedId } from "../utils/taskMutations";
 import { archivedMatcher, orderLists } from "../utils/taskSections";
 import TaskListPicker from "./TaskListPicker.vue";
@@ -213,14 +213,13 @@ function openParentDetail() {
   vaults.openTaskDetail(parent.value);
 }
 
-// GAP-90's UI hint. An archived task's own detail IS reachable — an active
-// child's Parent chip opens it with no gate — and its Add-subtask input was
-// gated only on the write lock, so it offered an assignment core refuses.
-// A HINT only: reject_archived_parent remains the authority.
+// GAP-90's UI hint (archived task) plus the archived-list config's own
+// readiness (Codex P2, PR #78 follow-up) — see subtaskCreateDisabledReason's
+// own doc comment for why creation must defer to the same
+// archivedListsResolved/archivedListsError state the Parent row's Change
+// button already does.
 const addSubtaskDisabledReason = computed(() =>
-  props.task.status === "archived"
-    ? "This task is archived. Unarchive it to add subtasks."
-    : null,
+  subtaskCreateDisabledReason(props.task.status, archivedListsResolved.value, archivedListsError.value),
 );
 
 // Add subtask (Task 9): the create-path twin of useTaskHierarchy's setParent
@@ -228,7 +227,14 @@ const addSubtaskDisabledReason = computed(() =>
 // `idsEnabled`, and the same TASK_IDS_ENABLED_MESSAGE disclosure, since Add
 // subtask is often a vault's FIRST hierarchy operation (design spec §2).
 async function onAddSubtask(title: string) {
-  if (busy.value) return;
+  // Defensive: the input below is already :disabled="busy || Boolean(disabledReason)"
+  // (a disabled input can't dispatch the Enter that reaches this), so this only
+  // matters if that ever drifts — same posture as TaskParentRow.open()'s
+  // re-check of canAssign. It matters more here than there: unlike an archived
+  // PARENT (core's reject_archived_parent is the backstop), core has no
+  // authority at all over archived LISTS, so a create that slipped past would
+  // silently write with the disclosure below evaluated against an unknown set.
+  if (busy.value || addSubtaskDisabledReason.value) return;
   busy.value = true;
   try {
     const result = await invoke<AddTaskResult>("add_task", {

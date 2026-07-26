@@ -1610,6 +1610,87 @@ describe("TaskDetail.vue Subtasks — archiving", () => {
   });
 });
 
+// The create-path twin of the parent-picker's own readiness gate (below):
+// onAddSubtask's disclosure (the "archiving" describe block above) reads the
+// exact same archivedLists ref, so Add subtask must defer to the same
+// unresolved/failed config state instead of racing ahead of the read — the
+// sibling control the reviewer's own fix for the picker missed (Codex P2,
+// PR #78).
+describe("TaskDetail.vue Subtasks — archived-list config readiness", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const mountWith = async (opts: { fail?: boolean; hold?: boolean } = {}) => {
+    const open = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const calls: any[] = [];
+    let release: (() => void) | undefined;
+    let configCalls = 0;
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") {
+        configCalls += 1;
+        if (opts.fail && configCalls === 1) throw new Error("config unreadable");
+        const cfg = { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+        if (opts.hold && configCalls === 1) return new Promise((r) => { release = () => r(cfg); });
+        return cfg;
+      }
+      if (cmd === "list_tasks") return [open];
+      if (cmd === "add_task")
+        return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: open } });
+    await new Promise((r) => setTimeout(r));
+    return { wrapper, calls, release: () => release?.() };
+  };
+  const addInputOf = (w: any) =>
+    w.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement;
+
+  it("disables Add subtask while the archived-list config is still loading", async () => {
+    const { wrapper } = await mountWith({ hold: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+  });
+
+  it("enables Add subtask once the held config resolves", async () => {
+    const { wrapper, release } = await mountWith({ hold: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+    release();
+    await new Promise((r) => setTimeout(r));
+    expect(addInputOf(wrapper).disabled).toBe(false);
+  });
+
+  it("keeps Add subtask disabled when the archived-list config read fails", async () => {
+    const { wrapper } = await mountWith({ fail: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+  });
+
+  it("re-enables Add subtask once a Retry from the Parent row succeeds, with no retry control of its own", async () => {
+    // Judgement call: reuse the ONE retry affordance parent assignment already
+    // renders (TaskParentRow's Retry, wired to loadListsConfig) rather than a
+    // second button — both gates clear from the exact same
+    // archivedListsResolved/archivedListsError refs, so a single retry
+    // unblocks both consumers.
+    const { wrapper } = await mountWith({ fail: true });
+    expect(addInputOf(wrapper).disabled).toBe(true);
+    await wrapper.get('[data-testid="task-detail-parent-retry"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(addInputOf(wrapper).disabled).toBe(false);
+  });
+
+  it("never invokes add_task while the config is unresolved, even attempting the real gesture", async () => {
+    // End-to-end behavioral confirmation that the gate is not cosmetic: typing
+    // a title and pressing Enter — the actual user gesture the reviewer's
+    // finding describes — must not reach add_task while archivedLists is
+    // still unknown, not just report `.disabled === true` in isolation.
+    const { wrapper, calls } = await mountWith({ hold: true });
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Sneaky");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(calls.some((c) => c[0] === "add_task")).toBe(false);
+  });
+});
+
 // GAP-91's load-ordering half (Codex P2, PR #78). Core deliberately does NOT
 // validate archived LISTS, so the frontend is the SOLE enforcement point for
 // that rule — which makes it matter that the rule is actually in force by the
