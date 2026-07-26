@@ -190,7 +190,10 @@ fn scan_vault(
     let canon_root = std::fs::canonicalize(Path::new(&vault.path)).ok()?;
     let mut name_hits: Vec<SearchHit> = Vec::new();
     let mut content_hits: Vec<SearchHit> = Vec::new();
-    walk_vault(&canon_root, &mut |path, name| {
+    // Search is a presentation scan (like list_tasks' VIEW mode) — an
+    // unreadable directory is scan noise, not a refusal, so the walk's
+    // report of what it skipped is deliberately discarded here.
+    let _ = walk_vault(&canon_root, &mut |path, name| {
         if is_cancelled() {
             return Flow::Stop;
         }
@@ -261,7 +264,7 @@ pub fn warm_vault(vault: &Vault, cache: &SearchCache, is_cancelled: &(dyn Fn() -
     let Ok(canon_root) = std::fs::canonicalize(Path::new(&vault.path)) else {
         return;
     };
-    walk_vault(&canon_root, &mut |path, name| {
+    let _ = walk_vault(&canon_root, &mut |path, name| {
         if is_cancelled() || cache.is_full() {
             return Flow::Stop;
         }

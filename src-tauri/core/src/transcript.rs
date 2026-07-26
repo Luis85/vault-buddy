@@ -6,6 +6,7 @@
 
 use crate::capture_note::{format_duration, write_atomic_replacing, write_note_atomic, yaml_quote};
 use crate::capture_paths::is_capture_base;
+use crate::vault_walk::dir_entries;
 use std::path::{Path, PathBuf};
 
 /// Frontmatter marker line values. `pending`/`failed` sidecars are ours to
@@ -369,21 +370,6 @@ pub fn pending_transcriptions(root: &Path) -> Vec<PathBuf> {
 
 pub(crate) fn is_digit_dir(name: &str, len: usize) -> bool {
     name.len() == len && name.chars().all(|c| c.is_ascii_digit())
-}
-
-pub(crate) fn dir_entries(dir: &Path) -> Vec<(PathBuf, std::fs::FileType, String)> {
-    let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            // file_type() reads the dirent WITHOUT following symlinks — a
-            // symlinked dir/junction must never let the scan escape the vault.
-            if let Ok(ft) = entry.file_type() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                out.push((entry.path(), ft, name));
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

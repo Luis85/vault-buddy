@@ -3,7 +3,7 @@ import { type Ref, ref } from "vue";
 
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
-import type { AggTask } from "../types";
+import type { AggTask, TaskWriteResult } from "../types";
 import type { Grouping } from "../utils/taskGrouping";
 import { applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 import { planReorder } from "../utils/taskOrder";
@@ -110,11 +110,15 @@ export function useTaskReorderCommit(opts: {
       // update_task returns the task's current id (freshly stamped when this
       // order-only reorder is the first edit on an id-enabled vault) — reflect
       // it so the editor's copy-id row shows without a reload, the same reason
-      // applyFieldPatch captures it (Codex, PR #59).
-      reflectStampedId(
-        task,
-        await invoke<string | null>("update_task", { id: task.vaultId, path: task.path, patch: { order } }),
-      );
+      // applyFieldPatch captures it (Codex, PR #59). Return type widened to
+      // TaskWriteResult (Task 7); an order-only patch never touches the
+      // parent, so only `.id` is reflected.
+      const result = await invoke<TaskWriteResult>("update_task", {
+        id: task.vaultId,
+        path: task.path,
+        patch: { order },
+      });
+      reflectStampedId(task, result.id);
     } catch (e) {
       task.order = prev;
       sortInPlace();
@@ -163,10 +167,12 @@ export function useTaskReorderCommit(opts: {
         // Reflect a freshly-stamped id here too (see writeSingleRank) — a
         // materialize can be the first edit on several previously-unranked
         // legacy tasks at once.
-        reflectStampedId(
-          t,
-          await invoke<string | null>("update_task", { id: t.vaultId, path: t.path, patch: { order: t.order } }),
-        );
+        const result = await invoke<TaskWriteResult>("update_task", {
+          id: t.vaultId,
+          path: t.path,
+          patch: { order: t.order },
+        });
+        reflectStampedId(t, result.id);
         written.add(t.path);
       }
     } catch (e) {

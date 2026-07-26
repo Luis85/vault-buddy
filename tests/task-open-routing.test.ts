@@ -7,7 +7,7 @@ import type { AggTask } from "../src/types";
 const task = (): AggTask => ({
   path: "p", title: "T", status: "new", created: "2026-07-01", done: false,
   due: null, scheduled: null, priority: null, tags: [], list: "", order: null,
-  id: null, description: null, vaultId: "v1", vaultName: "V",
+  id: null, description: null, parentId: null, parentLink: null, vaultId: "v1", vaultName: "V",
 });
 
 describe("TaskRow open emit", () => {

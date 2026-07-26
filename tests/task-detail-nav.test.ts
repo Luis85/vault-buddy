@@ -10,7 +10,7 @@ import type { AggTask } from "../src/types";
 const task = (over: Partial<AggTask> = {}): AggTask => ({
   path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
   done: false, due: null, scheduled: null, priority: null, tags: [], list: "",
-  order: null, id: null, description: null, vaultId: "v1", vaultName: "V", ...over,
+  order: null, id: null, description: null, parentId: null, parentLink: null, vaultId: "v1", vaultName: "V", ...over,
 });
 
 describe("task detail navigation", () => {
@@ -30,7 +30,7 @@ describe("task detail navigation", () => {
     );
     const s = useVaultsStore();
     const t = task();
-    const actions = useTaskActions({ tasks: ref([t]), sortInPlace: () => {} });
+    const actions = useTaskActions({ tasks: ref([t]), sortInPlace: () => {}, setHierarchyStatus: () => {} });
     const pending = actions.toggle(t); // slow write → t.path enters the busy set
     await new Promise((r) => setTimeout(r));
     actions.onOpenTask(t, new MouseEvent("click")); // plain click while the row is busy

@@ -33,8 +33,8 @@ The seven-stage journey every piece of information follows inside Vault Buddy: C
 _Avoid_: Workflow — a Workflow is one concrete automation; the Lifecycle is the overarching journey every capability serves
 
 **Task**:
-A first-class knowledge object, stored as its own Markdown document inside a Vault's Task Folder, connected via frontmatter to the notes, Projects, or Captures it originated from, and optionally to a parent Task — letting Tasks form hierarchies of child Tasks. Progress inside a single Task is tracked with Todos in its body; a Todo is never itself a Task, and a Note carrying only a Task Tag is not a Task either.
-_Avoid_: Task Note (redundant — a Task is always a note, "Task" alone is canonical), subtask (ambiguous — say "child Task" for a Task-level hierarchy or "Todo" for an inline checklist line), checklist item
+A first-class knowledge object, stored as its own Markdown document inside a Vault's Task Folder, connected via frontmatter to the notes, Projects, or Captures it originated from, and optionally naming a Parent Task — letting Tasks form hierarchies of Subtasks. Progress inside a single Task is tracked with Todos in its body; a Todo is never itself a Task, and a Note carrying only a Task Tag is not a Task either.
+_Avoid_: Task Note (redundant — a Task is always a note, "Task" alone is canonical), checklist item — and see Subtask below for the one distinction that still needs active guarding
 
 **Task Tag**:
 A tag placed on a Note whose frontmatter type is not Task, marking that Note itself as something to be done. The Note keeps its own type, location and purpose — Task Management surfaces it as actionable without relocating it into the Task Folder or granting it Task properties (Status, Priority, Parent Task, …).
@@ -63,6 +63,14 @@ _Avoid_: Index, position (both imply a dense sequence; ranks are sparse and gap-
 **Task ID**:
 A generated, stable identifier for a Task: eight random base36 characters written into its frontmatter under a configurable property (default `task-id`). Opt-in per Vault — once turned on, a new Task gets one at creation and an existing Task is stamped with one the next time it's edited, but an ID already present is never overwritten or regenerated. Distinct from both the file path (which can move or be renamed) and Order (the hand-arranged sort rank) — a Task keeps the same Task ID across either kind of change, which is the point of having one.
 _Avoid_: UID, key, index — the ID is random, not sequential, and it never doubles as the sort rank
+
+**Parent Task**:
+The Task a Subtask names as its ancestor, addressed by the parent's own Task ID (the authoritative reference — resolution never depends on the parent's title or file path) plus an Obsidian link carried alongside for click-through and Dataview. Shown as the Parent row on the child's Task Detail surface, with Change / Clear and a picker that will not let you create a cycle. Setting a Vault's first Parent Task turns on Task IDs for it automatically, since the reference depends on one existing.
+_Avoid_: parent note, parent item — a Parent Task is always a Task, addressed the same way any other Task is; category or folder (that is a Task List, a different relationship)
+
+**Subtask**:
+A Task that names another Task as its Parent Task — the Task-level hierarchy relationship, shown as the Subtasks section (with Add Subtask) on the parent's Task Detail surface, and as a light-touch subtask-count badge / parent chip in the main Task list. A Subtask is still an ordinary, independent Task — its own Status, Priority, Tags, List — completing it does not complete its Parent Task, and completing every Subtask does not complete the parent either; the parent only ever shows *progress*, never enforcement.
+_Avoid_: "subtask" for a Todo, or "checklist item" for a Subtask — the confusion this term used to be avoided over entirely, now drawn precisely instead: a Subtask is always its own Task document (its own file, its own frontmatter, a Parent Task reference); a Todo is an inline checklist line with no file and no identity of its own. Where the two could still be confused, say "Subtask" for the former and "Todo" (or "checklist line") for the latter.
 
 **Do Date** (the `scheduled` frontmatter field):
 The day you plan to WORK a Task — the "when will I do this" — kept distinct from the Task's **deadline** (the `due` date, "when is it due"). Stored as an optional `scheduled: YYYY-MM-DD` in the Task's frontmatter, read leniently (a non-date value is treated as unscheduled). It is the field the Plan grouping buckets by: a Task's effective plan date is its Do Date if set, else its deadline, so setting a Do Date moves a Task's plan even when its deadline is already past; a Task with neither sits under **Anytime**.

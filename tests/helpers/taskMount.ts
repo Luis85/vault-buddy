@@ -2,7 +2,18 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { mount } from "@vue/test-utils";
 
 import Tasks from "../../src/components/Tasks.vue";
-import type { TaskItem } from "../../src/types";
+import type { TaskItem, TaskWriteResult } from "../../src/types";
+
+// update_task's default reply: a no-relationship-change TaskWriteResult (id
+// null, matching the pre-Task-7 default-mock behavior of "no id stamped").
+// A test that cares about the id/parent fields overrides `update_task`
+// itself, same as every other per-command override in this file.
+const defaultUpdateTaskResult: TaskWriteResult = {
+  id: null,
+  parentId: null,
+  parentLink: null,
+  idsEnabled: false,
+};
 
 // Shared mount fixtures for the Tasks-view suites (tests/tasks.test.ts and
 // tests/tasks-lists.test.ts) — the suite outgrew one file when the lists/
@@ -21,7 +32,7 @@ export const aggTask = (
   extra: Partial<TaskItem> = {},
 ): TaskItem => ({
   path: `C:/${vault}/Tasks/${title.replace(/\s+/g, "-")}.md`,
-  title, status: "new", created, done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, ...extra,
+  title, status: "new", created, done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null, ...extra,
 });
 
 type Handlers = Partial<Record<string, (args: unknown) => unknown>>;
@@ -42,6 +53,7 @@ export function mountAggregate(handlers: Handlers = {}) {
         : [aggTask("vb", "Beta task", "2026-07-09")];
     }
     if (cmd === "set_task_status") return null;
+    if (cmd === "update_task") return defaultUpdateTaskResult;
   });
   const wrapper = mount(Tasks, { props: { vaultId: null } });
   return { wrapper, calls };
@@ -58,16 +70,17 @@ export function mountAggregateAttached(handlers: Handlers = {}) {
     if (cmd === "list_tasks") return [];
     if (cmd === "add_task") {
       const a = args as { id: string; title: string };
-      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null };
+      return { path: `C:/${a.id}/Tasks/new.md`, title: a.title, status: "new", created: "2026-07-10", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null };
     }
+    if (cmd === "update_task") return defaultUpdateTaskResult;
   });
   const wrapper = mount(Tasks, { props: { vaultId: null }, attachTo: document.body });
   return { wrapper, calls };
 }
 
 export const sample: TaskItem[] = [
-  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
-  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
+  { path: "C:/v/Tasks/2026-07-08-b.md", title: "B open", status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null },
+  { path: "C:/v/Tasks/2026-07-06-a.md", title: "A done", status: "done", created: "2026-07-06", done: true, due: null, scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null },
 ];
 
 export function mountView(handlers: Handlers = {}, opts: { attach?: boolean } = {}) {
@@ -84,11 +97,12 @@ export function mountView(handlers: Handlers = {}, opts: { attach?: boolean } = 
     if (cmd === "list_tasks") return list;
     if (cmd === "add_task") {
       const a = args as { title: string; due?: string; priority?: string; tags?: string[] };
-      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, scheduled: null, priority: a.priority ?? null, tags: a.tags ?? [], list: "", order: null, id: null, description: null };
+      const created = { path: "C:/v/Tasks/2026-07-08-new.md", title: a.title, status: "new", created: "2026-07-08", done: false, due: a.due ?? null, scheduled: null, priority: a.priority ?? null, tags: a.tags ?? [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null };
       list = [created, ...list];
       return created;
     }
     if (cmd === "set_task_status") return null;
+    if (cmd === "update_task") return defaultUpdateTaskResult;
   });
   // attach: true mounts into document.body — needed by tests that assert
   // focus (document.activeElement) or real window-level event propagation;

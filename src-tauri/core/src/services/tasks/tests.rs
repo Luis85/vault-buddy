@@ -19,8 +19,10 @@ fn add_list_and_toggle_tasks_through_the_service() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(created.title, "Buy milk");
     assert!(!created.done);
     assert!(vault.join("Tasks").is_dir());
@@ -57,8 +59,10 @@ fn add_task_applies_the_vaults_configured_template() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     let body = std::fs::read_to_string(&created.path).unwrap();
     assert!(
         body.contains("project: Alpha"),
@@ -89,8 +93,10 @@ fn add_task_writes_a_generated_id_when_enabled() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     let body = std::fs::read_to_string(&created.path).unwrap();
     let line = body
         .lines()
@@ -117,8 +123,10 @@ fn add_task_writes_no_id_when_disabled() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert!(!std::fs::read_to_string(&created.path)
         .unwrap()
         .contains("task-id"));
@@ -148,8 +156,10 @@ fn add_task_skips_id_for_a_reserved_property() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     let body = std::fs::read_to_string(&created.path).unwrap();
     assert_eq!(
         body.matches("status:").count(),
@@ -180,8 +190,10 @@ fn list_tasks_reads_the_generated_id_when_the_property_is_valid() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     let id = created
         .id
         .expect("add_task must stamp an id for a valid property");
@@ -216,8 +228,10 @@ fn list_tasks_ignores_a_reserved_id_property_configured_by_hand() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(
         created.id, None,
         "a reserved property must not be stamped (pre-existing add_task gate)"
@@ -228,6 +242,34 @@ fn list_tasks_ignores_a_reserved_id_property_configured_by_hand() {
         listed[0].id, None,
         "list_tasks must not surface the task's own status: value (\"new\") as its id"
     );
+}
+
+// Fix 1 (subtasks vault-UX-polish increment): the archived-inclusive
+// counterpart the frontend's hierarchy resolution needs (an archived task
+// can still be somebody's PARENT — see core::tasks::
+// list_tasks_including_archived's own doc comment). Same containment/
+// degrade posture as list_tasks: still a best-effort VIEW, not a guard.
+#[test]
+fn list_tasks_including_archived_surfaces_archived_rows_that_list_tasks_hides() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture(dir.path(), "MyVault");
+    std::fs::create_dir_all(vault.join("Tasks")).unwrap();
+    std::fs::write(
+        vault.join("Tasks").join("arch.md"),
+        "---\ntype: Task\nstatus: archived\ntitle: \"Arch\"\n---\n",
+    )
+    .unwrap();
+    assert!(list_tasks(&paths, "deadbeef01234567").is_empty());
+    let all = list_tasks_including_archived(&paths, "deadbeef01234567");
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].title, "Arch");
+}
+
+#[test]
+fn list_tasks_including_archived_degrades_to_empty_for_an_unknown_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, _vault) = fixture(dir.path(), "MyVault");
+    assert!(list_tasks_including_archived(&paths, "unknown").is_empty());
 }
 
 #[test]
@@ -257,8 +299,10 @@ fn count_open_tasks_excludes_open_tasks_in_archived_lists() {
             &[],
             Some(list),
             None,
+            None,
         )
         .unwrap()
+        .task
     };
     mk("Parked", "old"); // archived under a case variant → hidden → not counted
     mk("Rooted", ""); // No list → counted
@@ -283,6 +327,7 @@ fn task_service_errors_mirror_the_command_layer() {
         &[],
         None,
         None,
+        None,
     )
     .is_err());
     // The spec requires MCP/IPC failures to carry the same user-facing
@@ -296,6 +341,7 @@ fn task_service_errors_mirror_the_command_layer() {
         None,
         None,
         &[],
+        None,
         None,
         None,
     )
@@ -328,6 +374,7 @@ fn add_task_refuses_a_missing_vault_dir() {
         &[],
         None,
         None,
+        None,
     )
     .err()
     .expect("missing vault dir must fail");
@@ -352,8 +399,10 @@ fn add_task_lands_in_the_picked_list() {
         &[],
         Some("Inbox"),
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(created.list, "Inbox");
     assert!(vault.join("Tasks").join("Inbox").is_dir());
     assert!(std::path::Path::new(&created.path).starts_with(vault.join("Tasks").join("Inbox")));
@@ -388,6 +437,7 @@ fn add_task_rejects_a_list_symlinked_outside_the_tasks_root() {
         None,
         &[],
         Some("Work"),
+        None,
         None,
     );
     assert!(
@@ -427,6 +477,7 @@ fn add_task_rejects_a_nested_list_through_an_escaping_link_without_mkdir() {
         None,
         &[],
         Some("Link/Sub"),
+        None,
         None,
     );
     assert!(
@@ -470,8 +521,10 @@ fn add_task_with_an_escaping_default_list_degrades_to_the_root() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(created.list, ""); // landed at the tasks root, not "Escape"
     assert!(std::path::Path::new(&created.path).starts_with(&tasks));
     // Nothing leaked through the link.
@@ -486,7 +539,8 @@ fn add_task_with_an_escaping_default_list_degrades_to_the_root() {
         None,
         &[],
         Some("Escape"),
-        None
+        None,
+        None,
     )
     .is_err());
 }
@@ -513,8 +567,10 @@ fn add_task_honors_the_config_default_list_and_explicit_root_overrides() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(defaulted.list, "Inbox");
     assert!(vault.join("Tasks").join("Inbox").is_dir());
     let rooted = add_task(
@@ -527,13 +583,139 @@ fn add_task_honors_the_config_default_list_and_explicit_root_overrides() {
         &[],
         Some(""),
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(rooted.list, "");
     assert!(std::path::Path::new(&rooted.path)
         .parent()
         .unwrap()
         .ends_with("Tasks"));
+}
+
+#[test]
+fn add_subtask_bootstraps_ids_when_the_vault_has_none() {
+    // Add subtask is very often a vault's FIRST hierarchy operation: IDs are
+    // off by default and the parent is unstamped, so validation alone would
+    // leave no authoritative parent-id to write (Codex P1, PR #77).
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture(dir.path(), "MyVault");
+    let root = vault.join("Tasks");
+    std::fs::create_dir_all(&root).unwrap();
+    let parent_path = root.join("2026-07-25-parent.md");
+    std::fs::write(
+        &parent_path,
+        "---\ntype: Task\nstatus: new\ntitle: \"Parent\"\n---\n",
+    )
+    .unwrap();
+
+    let result = add_task(
+        &paths,
+        "deadbeef01234567",
+        "Child",
+        "2026-07-25",
+        None,
+        None,
+        &[],
+        None,
+        None,
+        Some(&parent_path),
+    )
+    .unwrap();
+    assert!(result.ids_enabled, "this call turned Task IDs on");
+    let cfg = capture_config::vault_config(&app_config(&paths), "deadbeef01234567");
+    assert!(cfg.task_id_enabled); // bootstrapped
+
+    let pid = result
+        .task
+        .parent_id
+        .clone()
+        .expect("the child names a parent");
+    assert!(!pid.is_empty());
+    // …and it RESOLVES: the parent now carries that exact id.
+    assert!(std::fs::read_to_string(&parent_path)
+        .unwrap()
+        .contains(&format!("task-id: {pid}")));
+    // The CHILD also gets its own stable id, derived from the POST-enable
+    // config — a stale pre-enable snapshot would leave it id-less.
+    let cid = result
+        .task
+        .id
+        .clone()
+        .expect("the child gets its own id once IDs are on");
+    assert!(!cid.is_empty());
+    assert!(std::fs::read_to_string(&result.task.path)
+        .unwrap()
+        .contains(&format!("task-id: {cid}")));
+}
+
+#[test]
+fn add_task_without_a_parent_is_unaffected_by_the_hierarchy_machinery() {
+    // The additive guarantee, one layer up from render_task's own byte-exact
+    // pin: a plain add_task (parent_path: None) must not enable ids or write
+    // any parent pair, and idsEnabled must read false.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, _vault) = fixture(dir.path(), "MyVault");
+    let result = add_task(
+        &paths,
+        "deadbeef01234567",
+        "Buy milk",
+        "2026-07-09",
+        None,
+        None,
+        &[],
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(!result.ids_enabled);
+    assert_eq!(result.task.parent_id, None);
+    assert_eq!(result.task.parent_link, None);
+    assert!(!std::fs::read_to_string(&result.task.path)
+        .unwrap()
+        .contains("parent"));
+}
+
+#[test]
+fn add_subtask_under_an_id_enabled_vault_does_not_report_a_bootstrap() {
+    // The complement of the bootstrap test: when the vault already has Task
+    // IDs on, idsEnabled must read false — the frontend's disclosure note is
+    // "this call turned it on", not "it happens to be on".
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture(dir.path(), "MyVault");
+    std::fs::write(
+        paths.config_json.as_ref().unwrap(),
+        r#"{ "vaults": { "deadbeef01234567": { "taskIdEnabled": true } } }"#,
+    )
+    .unwrap();
+    let root = vault.join("Tasks");
+    std::fs::create_dir_all(&root).unwrap();
+    let parent_path = root.join("p.md");
+    std::fs::write(
+        &parent_path,
+        "---\ntype: Task\nstatus: new\ntitle: \"Parent\"\n---\n",
+    )
+    .unwrap();
+    let result = add_task(
+        &paths,
+        "deadbeef01234567",
+        "Child",
+        "2026-07-25",
+        None,
+        None,
+        &[],
+        None,
+        None,
+        Some(&parent_path),
+    )
+    .unwrap();
+    assert!(
+        !result.ids_enabled,
+        "ids were already on, not turned on by this call"
+    );
+    assert!(result.task.parent_id.is_some());
 }
 
 #[test]
@@ -557,6 +739,7 @@ fn add_task_rejects_an_escaping_list_but_degrades_a_bad_default() {
                 &[],
                 Some(explicit),
                 None,
+                None,
             )
             .is_err(),
             "explicit list {explicit:?} must error"
@@ -577,8 +760,10 @@ fn add_task_rejects_an_escaping_list_but_degrades_a_bad_default() {
         &[],
         None,
         None,
+        None,
     )
-    .unwrap();
+    .unwrap()
+    .task;
     assert_eq!(created.list, "", "bad default degrades to the root");
     // And the task is really at the root, not a hidden folder.
     assert_eq!(

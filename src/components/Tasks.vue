@@ -4,6 +4,8 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 
 import { useTaskActions } from "../composables/useTaskActions";
 import { useTaskDisplay } from "../composables/useTaskDisplay";
+import { useTaskListHierarchy } from "../composables/useTaskListHierarchy";
+import { useTaskListReload } from "../composables/useTaskListReload";
 import { useTaskLists } from "../composables/useTaskLists";
 import { useTaskReorder } from "../composables/useTaskReorder";
 import { useTaskReorderCommit } from "../composables/useTaskReorderCommit";
@@ -11,7 +13,7 @@ import { useTaskSchedule } from "../composables/useTaskSchedule";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskItem, Vault } from "../types";
+import type { AddTaskResult, AggTask, TaskItem, Vault } from "../types";
 import { crossListDropTargetKey } from "../utils/taskSections";
 import AppIcon from "./AppIcon.vue";
 import TaskComposer from "./TaskComposer.vue";
@@ -96,6 +98,12 @@ async function onToggleFilter() {
     filter.value = "";
   }
 }
+// Task 10: the subtask-count badge + parent chip, resolved through the SAME
+// index useTaskHierarchy builds for Task Detail (taskHierarchy.ts) — never a
+// second rule. setHierarchyTasks stores an archived-INCLUSIVE superset for
+// resolution (an archived parent must still resolve) while `tasks` below
+// keeps loading the archived-EXCLUDED, historical visible set.
+const { hierarchyOf, setHierarchyTasks, setHierarchyStatus } = useTaskListHierarchy();
 // Write side: row actions (toggle/archive/open/editor save) + the busy guard.
 const {
   busy,
@@ -109,7 +117,7 @@ const {
   startEdit,
   cancelEdit,
   onEditorSave,
-} = useTaskActions({ tasks, sortInPlace });
+} = useTaskActions({ tasks, sortInPlace, setHierarchyStatus });
 // Switching grouping re-keys every row (bucket keys differ per grouping), so an
 // open inline editor unmounts WITHOUT firing cancel/save — leaving editingKey/
 // editingPath pointing at a row that's no longer rendered. A stale editingPath
@@ -151,20 +159,8 @@ async function onControlsCreateList(name: string) {
 // precedent).
 const sectionBusy = ref(new Set<string>());
 const sectionMenuResetNonce = ref(0);
-
-// Re-fetch this vault's tasks after a rename/delete relocates files on disk.
-// Per-vault only (the section menu is hidden in the aggregate).
-async function reloadTasks() {
-  if (props.vaultId === null) return;
-  const id = props.vaultId;
-  try {
-    const items = await invoke<TaskItem[]>("list_tasks", { id });
-    tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
-    sortInPlace();
-  } catch (e) {
-    logWarning(`list_tasks reload failed for vault ${id}: ${String(e)}`);
-  }
-}
+// Split out to make room for the hierarchy lookup below (GAP-65).
+const { reloadTasks } = useTaskListReload(props.vaultId, tasks, setHierarchyTasks, sortInPlace);
 
 async function runSectionAction(
   list: string,
@@ -247,13 +243,13 @@ onMounted(async () => {
     if (props.vaultId !== null) {
       const id = props.vaultId;
       const [items] = await Promise.all([
-        invoke<TaskItem[]>("list_tasks", { id }),
+        invoke<TaskItem[]>("list_tasks", { id, includeArchived: true }),
         // Lists + config feed the Lists grouping and the composer's picker;
         // a failed read degrades (log-only, same posture as the tasks load).
         loadVaultLists(id),
         loadVaultConfig(id),
       ]);
-      tasks.value = items.map((t) => ({ ...t, vaultId: id, vaultName: "" }));
+      tasks.value = setHierarchyTasks(items.map((t) => ({ ...t, vaultId: id, vaultName: "" })));
       // Core hands back Default order; a persisted non-default sort must
       // apply to the initial load too, not only after edits.
       sortInPlace();
@@ -271,7 +267,7 @@ onMounted(async () => {
           // a lists failure must not mark the vault's TASKS as failed).
           void loadVaultLists(v.id);
           try {
-            const items = await invoke<TaskItem[]>("list_tasks", { id: v.id });
+            const items = await invoke<TaskItem[]>("list_tasks", { id: v.id, includeArchived: true });
             return items.map((t) => ({ ...t, vaultId: v.id, vaultName: v.name }));
           } catch (e) {
             failed.push(v.name);
@@ -283,7 +279,7 @@ onMounted(async () => {
       if (vaults.length > 0 && failed.length === vaults.length) {
         loadError.value = "Couldn't load tasks from any vault.";
       } else {
-        tasks.value = results.flat();
+        tasks.value = setHierarchyTasks(results.flat());
         sortInPlace();
         if (failed.length > 0) {
           notifications.error(`Couldn't load tasks from ${failed.join(", ")}.`);
@@ -327,9 +323,9 @@ async function add(payload: AddPayload) {
     // default — the composer only omits it before its default has loaded, so
     // a quick add during that window still lands in the default list.
     if (payload.list !== undefined) args.list = payload.list;
-    const created = await invoke<TaskItem>("add_task", args);
+    const { idsEnabled, ...taskFields } = await invoke<AddTaskResult>("add_task", args); // AddTaskResult = TaskItem + idsEnabled (Task 7), a disclosure flag dropped here so it never rides onto the row
     tasks.value.unshift({
-      ...created,
+      ...taskFields,
       vaultId: targetVault,
       vaultName: allVaults.value.find((v) => v.id === targetVault)?.name ?? "",
     });
@@ -505,6 +501,8 @@ async function add(payload: AddPayload) {
               v-for="(task, i) in bucket.tasks"
               :key="rowKey(bucket.key, task)"
               :task="task"
+              :parent="hierarchyOf(task).parent"
+              :subtask-count="hierarchyOf(task).openSubtaskCount"
               :busy="isBusy(task.path)"
               :is-aggregate="isAggregate"
               :editing="editingKey === rowKey(bucket.key, task)"
@@ -522,6 +520,7 @@ async function add(payload: AddPayload) {
               @archive="archive(task)"
               @edit="startEdit(task, bucket.key)"
               @open="onOpenTask(task, $event)"
+              @open-parent="!isBusy(hierarchyOf(task).parent!.path) && vaultsStore.openTaskDetail(hierarchyOf(task).parent!)"
               @tag-click="tagFilter = $event"
               @schedule="quickSchedule(task, $event)"
               @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"

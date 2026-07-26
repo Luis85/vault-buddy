@@ -6,6 +6,7 @@ import TaskDragHandle from "./TaskDragHandle.vue";
 import TaskScheduleMenu from "./TaskScheduleMenu.vue";
 import Avatar from "./ui/Avatar.vue";
 import Chip from "./ui/Chip.vue";
+import CountBadge from "./ui/CountBadge.vue";
 import IconButton from "./ui/IconButton.vue";
 import StatusDot from "./ui/StatusDot.vue";
 
@@ -16,10 +17,15 @@ import StatusDot from "./ui/StatusDot.vue";
 // shows the grip handle (Manual sort, no filters); the raw pointer/key
 // events travel up — the container's reorder composable owns the drag.
 // `reorderBusy` (a view-wide rank write in flight) makes the grip inert
-// without unmounting it, so keyboard focus survives the write.
+// without unmounting it, so keyboard focus survives the write. `parent`/
+// `subtaskCount` (Task 10) are the container's already-resolved hierarchy
+// lookup (useTaskListHierarchy) — this row only renders them, never resolves
+// them itself, same division of labor as every other prop here.
 withDefaults(
   defineProps<{
     task: AggTask;
+    parent?: AggTask | null;
+    subtaskCount?: number;
     busy: boolean;
     isAggregate: boolean;
     editing: boolean;
@@ -28,13 +34,21 @@ withDefaults(
     dragging?: boolean;
     dropTarget?: boolean;
   }>(),
-  { reorderable: false, reorderBusy: false, dragging: false, dropTarget: false },
+  {
+    parent: null,
+    subtaskCount: 0,
+    reorderable: false,
+    reorderBusy: false,
+    dragging: false,
+    dropTarget: false,
+  },
 );
 defineEmits<{
   (e: "toggle"): void;
   (e: "archive"): void;
   (e: "edit"): void;
   (e: "open", ev: MouseEvent): void;
+  (e: "openParent"): void;
   (e: "tagClick", tag: string): void;
   (e: "schedule", value: string | null): void;
   (e: "reorderPointerDown", ev: PointerEvent): void;
@@ -94,7 +108,7 @@ function scheduledChip(t: AggTask): string | null {
           type="button"
           data-testid="task-open"
           class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          :aria-label="`Open ${task.title}`"
+          :aria-label="`Open ${task.title}${subtaskCount > 0 ? ` (${subtaskCount} open subtask${subtaskCount === 1 ? '' : 's'})` : ''}`"
           :title="`Open ${task.title} — ⌘/Ctrl-click to open in Obsidian`"
           @click="$emit('open', $event)"
         >
@@ -117,7 +131,21 @@ function scheduledChip(t: AggTask): string | null {
           >
             {{ task.title }}
           </span>
+          <CountBadge
+            :count="subtaskCount"
+            data-testid="task-subtask-count"
+            :title="`${subtaskCount} open subtask${subtaskCount === 1 ? '' : 's'}`"
+          />
         </button>
+        <Chip
+          v-if="parent"
+          variant="interactive"
+          data-testid="task-parent-chip"
+          :title="`Open ${parent.title}`"
+          @click="$emit('openParent')"
+        >
+          {{ parent.title }}
+        </Chip>
         <Chip
           v-for="tag in task.tags"
           :key="tag"

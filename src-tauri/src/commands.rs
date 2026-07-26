@@ -480,7 +480,7 @@ pub fn get_panel_config() -> PanelConfigDto {
 /// The new size takes effect the next time the panel goes hidden → shown
 /// (`position_panel`'s guard above), which the frontend triggers by re-showing
 /// the panel after a successful save.
-/// Read-modify-write under `ConfigWriteLock`, mirroring the sibling
+/// Read-modify-write under `config_write_lock()`, mirroring the sibling
 /// app-global-section writers (`set_transcription_config`,
 /// `mcp_commands::set_mcp_config`'s `persist`): resolve `config_path`, then
 /// call `capture_config::update_panel_config_at` — the same config-write
@@ -496,19 +496,15 @@ pub fn get_panel_config() -> PanelConfigDto {
 /// via a stale/future client) safely lands on `Comfortable` instead of
 /// rejecting the save.
 #[tauri::command]
-pub async fn set_panel_size(
-    lock: tauri::State<'_, crate::capture_commands::ConfigWriteLock>,
-    size: String,
-) -> Result<(), String> {
+pub async fn set_panel_size(size: String) -> Result<(), String> {
     use vault_buddy_core::capture_config;
-    use vault_buddy_core::sync_util::lock_ignoring_poison;
     let new_size = capture_config::PanelSize::from_str(&size);
     // The body is synchronous but the command is `async`, so Tauri runs it on
     // the async runtime, not the main thread — a slow/contended fsync'd config
     // write must not freeze window/drag handling (the sibling `set_task_id_config`
     // / `set_mcp_config` posture). There is no `.await` after the lock, so the
     // `std::sync` guard is never held across a suspension point.
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
     capture_config::update_panel_config_at(&path, capture_config::PanelConfig { size: new_size })
         .map_err(|e| format!("Could not save panel settings: {e}"))?;

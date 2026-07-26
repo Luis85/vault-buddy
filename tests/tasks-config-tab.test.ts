@@ -258,32 +258,48 @@ describe("TasksConfigTab", () => {
     expect(wrapper.find('[data-testid="tasks-folder-error"]').exists()).toBe(false);
   });
 
-  it("disabling task ids succeeds despite a stuck invalid draft property (Codex review)", async () => {
-    // Regression: the settings UI hides the property field once disabled, so
-    // an invalid draft typed while enabled (its autosave failed) lingers in
-    // taskIdProperty. Unchecking the toggle still sends that draft — the
-    // FIX lives in set_task_id_config, which must validate/apply the
-    // property only while enabling and ignore it (preserving the stored
-    // value) while disabling, or the user could never turn IDs off again.
-    // This mock mirrors that exact backend contract: reject an invalid
-    // property only when enabled === true, accept any payload when
-    // enabled === false.
+  it("disabling task ids succeeds even after an earlier invalid property attempt (Codex review, refined by Fix 1)", async () => {
+    // Originally regression-tested that disabling succeeds DESPITE a stuck
+    // invalid draft property lingering in taskIdProperty (the settings UI
+    // hides the property field once disabled, so nothing let the user fix or
+    // clear it) — the fix lived in set_task_id_config, which validates/applies
+    // the property only while enabling and ignores it while disabling.
+    // Fix 1's reload-on-failure (idAutosave, this file) goes further: ANY
+    // rejected save now reloads disk truth immediately, which also resets the
+    // property field — so the draft no longer lingers AT ALL, it isn't merely
+    // tolerated by the backend on the next save. This test now pins the
+    // surviving half of the original guarantee (disabling still succeeds
+    // after an earlier failed property edit) and the new one (the draft is
+    // gone, not stuck).
     const status = useSettingsStatusStore();
     const calls: Array<{ id: string; enabled: boolean; property: string | null }> = [];
+    // Stateful — a successful set_task_id_config changes what the next
+    // get_tasks_config reports, a REJECTED one leaves it unchanged. This
+    // fidelity is load-bearing now that a rejected save reloads from
+    // get_tasks_config (Fix 1); a stateless mock would report stale
+    // last-mount truth forever, which no real backend does.
+    let persisted = { taskIdEnabled: false, taskIdProperty: "task-id" };
     const { wrapper } = mountTab({
+      onGet: () => ({
+        tasksFolder: null,
+        defaultList: null,
+        listOrder: [],
+        taskIdEnabled: persisted.taskIdEnabled,
+        taskIdProperty: persisted.taskIdProperty,
+      }),
       onSetId: (a) => {
         const args = a as { id: string; enabled: boolean; property: string | null };
         calls.push(args);
         if (args.enabled && args.property && !/^[A-Za-z0-9_-]+$/.test(args.property)) {
           throw "Invalid ID property name (letters, digits, - and _ only; not a reserved task field)";
         }
+        persisted = { taskIdEnabled: args.enabled, taskIdProperty: args.property ?? "task-id" };
         return null;
       },
     });
     await flushPromises();
 
-    // Enable, type an invalid property, blur — the save fails and the
-    // invalid draft ("bad prop") stays in taskIdProperty.
+    // Enable, type an invalid property, blur — the save fails.
     await wrapper.get('[data-testid="task-id-enabled"]').setValue(true);
     await flushPromises();
     await wrapper.get('[data-testid="task-id-property"]').setValue("bad prop");
@@ -291,16 +307,65 @@ describe("TasksConfigTab", () => {
     await flushPromises();
     expect(wrapper.get('[data-testid="task-id-error"]').text()).toContain("Invalid ID property name");
     expect(status.state).toBe("error");
+    // The rejected draft does NOT linger: Fix 1's reload already ran, so the
+    // property field reads back the real (default/empty) persisted value
+    // instead of keeping "bad prop" around indefinitely.
+    expect(wrapper.get<HTMLInputElement>('[data-testid="task-id-property"]').element.value).toBe("");
 
-    // Uncheck the toggle. The frontend still sends the stuck invalid draft
-    // (unchanged behavior — the fix is not a frontend guard), but disabling
-    // must succeed against the fixed backend contract regardless.
+    // Uncheck the toggle. Nothing invalid is queued anymore (the reload
+    // already cleared it), so this is an ordinary, unremarkable disable.
     await wrapper.get('[data-testid="task-id-enabled"]').setValue(false);
     await flushPromises();
 
     const disableCall = calls[calls.length - 1];
-    expect(disableCall).toEqual({ id: "v1", enabled: false, property: "bad prop" });
+    expect(disableCall).toEqual({ id: "v1", enabled: false, property: null });
     expect(status.state).not.toBe("error"); // disabling persisted, not rejected
+  });
+
+  it("reverts the toggle to disk truth and keeps the guard's error visible when a disable is refused (design spec §2a)", async () => {
+    // Regression: onIdEnabledChange set taskIdEnabled optimistically and never
+    // reverted it when set_task_id_config rejected. A REFUSED disable (the
+    // parent-link guard) left config.json's taskIdEnabled untouched (still
+    // true) while the checkbox read unchecked — the settings screen asserting
+    // a persisted state that was false — and TaskIdSettings rendered the
+    // count-and-remedy error only inside `v-if="enabled"`, hiding the very
+    // message the guard was built to report at exactly the moment it fired.
+    const REFUSAL =
+      "This vault has 2 tasks with a parent, referencing Task IDs under the current property. " +
+      "Clear the parent links before changing the Task ID settings.";
+    const { wrapper, calls } = mountTab({
+      onGet: () => ({
+        tasksFolder: null,
+        defaultList: null,
+        listOrder: [],
+        taskIdEnabled: true,
+        taskIdProperty: "task-id",
+      }),
+      onSetId: (a) => {
+        if (!(a as { enabled: boolean }).enabled) throw REFUSAL;
+        return null;
+      },
+    });
+    await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('[data-testid="task-id-enabled"]').element.checked).toBe(true);
+    // Baseline BEFORE the failed save — TaskListSettings' own onMounted also
+    // reads get_tasks_config, so the absolute count isn't 1; only the DELTA
+    // this failed save adds is what we're pinning.
+    const getCallsBefore = calls.filter((c) => c.cmd === "get_tasks_config").length;
+
+    await wrapper.get('[data-testid="task-id-enabled"]').setValue(false);
+    await flushPromises();
+
+    // The toggle reflects what's ACTUALLY on disk (still enabled), not the
+    // rejected optimistic value.
+    expect(wrapper.get<HTMLInputElement>('[data-testid="task-id-enabled"]').element.checked).toBe(true);
+    // Reverted via a fresh disk read, not a locally-cached "previous" value —
+    // the only source of truth that's still correct whether the refusal came
+    // from this guard, some other rejection, or a concurrent external write.
+    expect(calls.filter((c) => c.cmd === "get_tasks_config")).toHaveLength(getCallsBefore + 1);
+    // The detailed count-and-remedy error is visible, not swallowed by a
+    // reverted-but-still-hidden enabled state.
+    expect(wrapper.get('[data-testid="task-id-error"]').text()).toBe(REFUSAL);
   });
 
   it("loads the task template from disk", async () => {

@@ -4,7 +4,7 @@ import { type Ref, ref, watch } from "vue";
 import { logWarning } from "../logging";
 import { useNotificationsStore } from "../stores/notifications";
 import { useVaultsStore } from "../stores/vaults";
-import type { AggTask, TaskEditorPatch } from "../types";
+import type { AggTask, TaskEditorPatch, TaskWriteResult } from "../types";
 import { applyDetailFields, applyMovedTask, type MovedTask, reflectStampedId } from "../utils/taskMutations";
 
 // A save failure AFTER the fields already persisted is a move failure: name the
@@ -47,13 +47,16 @@ export function useTaskDetail(task: Ref<AggTask>) {
     let fieldsSaved = false;
     try {
       if (hasFields) {
-        const id = await invoke<string | null>("update_task", {
+        // update_task's return widened from a bare id to TaskWriteResult
+        // (Task 7, path-keyed parent) — `fieldPatch` here never sets
+        // parentPath/clearParent, so only `.id` is reflected.
+        const result = await invoke<TaskWriteResult>("update_task", {
           id: task.value.vaultId,
           path: task.value.path,
           patch: fieldPatch,
         });
         applyDetailFields(task.value, fieldPatch);
-        reflectStampedId(task.value, id);
+        reflectStampedId(task.value, result.id);
         fieldsSaved = true;
       }
       if (targetList !== undefined && targetList !== task.value.list) {

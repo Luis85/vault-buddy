@@ -16,7 +16,7 @@ const t = (title: string, extra: Partial<AggTask> = {}): AggTask => ({
   list: "",
   order: null,
   id: null,
-  description: null,
+  description: null, parentId: null, parentLink: null,
   vaultId: "v",
   vaultName: "",
   ...extra,

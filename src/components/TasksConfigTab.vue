@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from "vue";
 
 import { useAutosave } from "../composables/useAutosave";
 import { useSettingsLoad } from "../composables/useSettingsLoad";
+import { logWarning } from "../logging";
 import type { TasksConfig } from "../types";
 import TaskIdSettings from "./TaskIdSettings.vue";
 import TaskListSettings from "./TaskListSettings.vue";
@@ -53,13 +54,45 @@ const taskIdEnabled = ref(false);
 // Empty means "use the default"; the default name is shown as a placeholder.
 const taskIdProperty = ref("");
 
+// Re-read the persisted Task ID fields after a REJECTED save (see idAutosave
+// below). A locally-cached "previous value" is the wrong thing to revert to:
+// it assumes the rejection is this guard specifically (set_task_id_config
+// also rejects on an unknown vault or a disk error, where there IS no
+// meaningful "previous" beyond disk) and it can't see a concurrent external
+// write. Disk is the only source of truth for what actually landed, whatever
+// the rejection reason. Best-effort: if even this read fails, leave the
+// rejected optimistic value in place rather than compound one failure with a
+// second logged one — idAutosave.error still carries the original message.
+async function reloadIdFields() {
+  try {
+    const cfg = await invoke<TasksConfig>("get_tasks_config", { id: props.vaultId });
+    taskIdEnabled.value = cfg.taskIdEnabled ?? false;
+    taskIdProperty.value =
+      cfg.taskIdProperty && cfg.taskIdProperty !== DEFAULT_TASK_ID_PROPERTY ? cfg.taskIdProperty : "";
+  } catch (e) {
+    logWarning(`get_tasks_config reload failed after a rejected task-id save: ${String(e)}`);
+  }
+}
+
 const idAutosave = useAutosave(
   async () => {
-    await invoke("set_task_id_config", {
-      id: props.vaultId,
-      enabled: taskIdEnabled.value,
-      property: taskIdProperty.value.trim() || null,
-    });
+    try {
+      await invoke("set_task_id_config", {
+        id: props.vaultId,
+        enabled: taskIdEnabled.value,
+        property: taskIdProperty.value.trim() || null,
+      });
+    } catch (e) {
+      // A refused disable/re-point (design spec §2a's parent-link guard) — or
+      // any other rejection — must not leave the toggle/property showing a
+      // value config.json never actually took (Fix 1: the toggle used to stay
+      // optimistically flipped, so the settings screen asserted a persisted
+      // state that was false, and TaskIdSettings' error only rendered inside
+      // `v-if="enabled"` — hiding the guard's count-and-remedy message at
+      // exactly the moment it fired).
+      await reloadIdFields();
+      throw e; // useAutosave's save() contract: must still reject on failure
+    }
   },
   { label: "task ids" },
 );

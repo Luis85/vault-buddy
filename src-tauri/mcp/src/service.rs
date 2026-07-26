@@ -391,6 +391,10 @@ impl VaultBuddyMcp {
             // priority/tags stay absent (the IPC command's widened surface).
             // list: None honors the vault's configured defaultList — MCP adds
             // land where the panel's unpicked adds land.
+            // .task: the MCP tool's output stays TaskDto-shaped (unchanged
+            // contract for existing clients) — idsEnabled is a Tauri-IPC-only
+            // disclosure this slice (Codex P2, PR #77, surfaced in the panel's
+            // Task 8/9, not MCP).
             let task = services::add_task(
                 &deps.paths,
                 &vault_id,
@@ -403,7 +407,11 @@ impl VaultBuddyMcp {
                 // The MCP add_task tool does not expose scheduling this
                 // increment — no input field for it in AddTaskParams.
                 None,
-            )?;
+                // Nor a parent — MCP's add_task tool is title-only; a
+                // hierarchy write from MCP is not in this slice's scope.
+                None,
+            )?
+            .task;
             Ok((vault.name, task))
         })
         .await;

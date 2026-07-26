@@ -8,10 +8,14 @@ import type { AggTask, TaskPatch } from "../types";
  * vault opts in and the file lacked one, `null` when IDs are off. */
 export type MovedTask = { path: string; id: string | null };
 
-/** Reflect a freshly-stamped task id (update_task / move_task_to_list's
- * return) onto the row so the editor's copy-id affordance shows without a
- * reload. No-op when ids are off (the command returns null). One helper so
- * the edit, reorder, and both move call sites can't drift (review, PR #59). */
+/** Reflect a freshly-stamped task id (update_task's TaskWriteResult.id / a
+ * move's MovedTask.id) onto the row so the editor's copy-id affordance shows
+ * without a reload. No-op when ids are off (the value is null). One helper
+ * so the edit, reorder, and both move call sites can't drift (review, PR
+ * #59). Takes the bare id (not update_task's whole TaskWriteResult) so this
+ * stays usable for MovedTask.id too, which carries no other overlapping
+ * field — this task does not yet reflect parentId/parentLink onto the row,
+ * since nothing here sends parentPath/clearParent (Task 8's job). */
 export function reflectStampedId(task: AggTask, id: string | null): void {
   if (id) task.id = id;
 }

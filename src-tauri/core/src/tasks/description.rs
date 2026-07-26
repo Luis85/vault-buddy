@@ -10,7 +10,7 @@ use crate::yaml_scalar::yaml_unquote_multiline;
 /// `"` and `\` are ASCII, so byte-scanning can never mismatch inside a
 /// multi-byte char; any trailing ` # comment` after the close is left out.
 /// None when the scalar is unterminated.
-fn double_quoted_slice(s: &str) -> Option<&str> {
+pub(super) fn double_quoted_slice(s: &str) -> Option<&str> {
     let b = s.as_bytes();
     let mut i = 1;
     while i < b.len() {
@@ -23,11 +23,36 @@ fn double_quoted_slice(s: &str) -> Option<&str> {
     None
 }
 
+/// Extract the `'...'` span of a single-quoted scalar starting at `s[0] ==
+/// '\''`, through its closing quote — a `'` that is NOT doubled (`''`
+/// collapses to one embedded literal `'` and is not the close). Mirrors
+/// `double_quoted_slice`, but a single-quoted scalar escapes by DOUBLING the
+/// quote character rather than a backslash prefix. None when unterminated.
+/// Used by `parse::scalar`'s strict decoder to find where the scalar ends so
+/// it can reject stray text after it — `decode_single_quoted` below only
+/// tells you the decoded value, never where it stopped reading.
+pub(super) fn single_quoted_slice(s: &str) -> Option<&str> {
+    let b = s.as_bytes();
+    let mut i = 1;
+    while i < b.len() {
+        if b[i] == b'\'' {
+            if b.get(i + 1) == Some(&b'\'') {
+                i += 2; // doubled '' — an escaped literal quote, not the close
+            } else {
+                return Some(&s[..=i]);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
 /// Decode a single-quoted YAML scalar starting at `s[0] == '\''`: the content up
 /// to the closing quote (a `'` that is NOT doubled), collapsing each `''` to one
 /// `'`. A trailing ` # comment` after the close is dropped. None when
 /// unterminated.
-fn decode_single_quoted(s: &str) -> Option<String> {
+pub(super) fn decode_single_quoted(s: &str) -> Option<String> {
     let inner = &s[1..];
     let b = inner.as_bytes();
     let mut out = String::with_capacity(inner.len());
@@ -54,7 +79,26 @@ fn decode_single_quoted(s: &str) -> Option<String> {
 /// continuation lives on the following indented lines. Both the reader (which
 /// rejects it) and `set_fields` (which consumes its continuation on a rewrite so
 /// nothing orphans) key off this, so they agree (Codex P2, PR #76).
+///
+/// A leading YAML anchor (`&name`) or tag (`!!str`, `!foo`) is peeled off
+/// FIRST (Fix 1, final whole-branch review task report): neither decoration
+/// changes whether the node underneath is quoted, but the bare
+/// `starts_with('"')` check below is blind to either one sitting in front of
+/// the quote. Undetected, a decorated multi-line quoted value's continuation
+/// line was never consumed on a rewrite — `set_fields` rewrote only the key's
+/// own line, orphaning the continuation into the frontmatter and breaking the
+/// very next YAML parse of the file. Reuses the two existing peelers rather
+/// than adding a third shape check: `parse::strip_leading_tag` and
+/// `id::strip_anchor` — the same two the write side (`mirror_id_reference`)
+/// and the strict decoder (`strict_scalar_field`) already special-case for
+/// their own, adjacent problems.
 pub(super) fn opens_multiline_quoted(value: &str) -> bool {
+    let value = if value.starts_with('&') {
+        super::id::strip_anchor(value).unwrap_or(value)
+    } else {
+        value
+    };
+    let value = super::parse::strip_leading_tag(value);
     (value.starts_with('"') && double_quoted_slice(value).is_none())
         || (value.starts_with('\'') && decode_single_quoted(value).is_none())
 }
@@ -163,6 +207,21 @@ pub(super) fn description_field(content: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::single_quoted_slice;
+
+    #[test]
+    fn single_quoted_slice_stops_at_the_first_unescaped_close_and_keeps_a_doubled_quote() {
+        assert_eq!(single_quoted_slice("'abc'"), Some("'abc'"));
+        // A doubled `''` is an escaped literal quote, not the close.
+        assert_eq!(single_quoted_slice("'a''b'"), Some("'a''b'"));
+        // Anything after the real closing quote is NOT part of the span —
+        // callers that need to know whether that remainder is legal trailing
+        // content read past `span.len()` themselves.
+        assert_eq!(single_quoted_slice("'abc'junk"), Some("'abc'"));
+        // Unterminated (no closing quote at all) is None.
+        assert_eq!(single_quoted_slice("'abc"), None);
+    }
+
     #[test]
     fn description_field_decodes_a_multiline_scalar_and_ignores_comment_hash() {
         let content = "---\ntype: Task\ndescription: \"fix bug #42\\nsee notes\"\n---\n\nbody\n";

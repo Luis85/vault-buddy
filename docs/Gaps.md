@@ -393,6 +393,26 @@ count) or continue best-effort and aggregate per-file failures, without
 breaking the existing `Result<DeleteListOutcome, String>` contract today's
 callers depend on.
 
+**Update (subtasks & parent-tasks increment):** `tasks::delete_task_list`'s
+error is now `DeleteListError { message, landed }`
+(`core/src/tasks/lists/relocate.rs`)
+— the "error variant carrying the partial paths" this entry's Fix section
+named, though core's own `Result<DeleteListOutcome, String>` contract still
+changed (only the ONE caller, the service layer, needed updating).
+`services::tasks::lists::delete_task_list` uses `landed` to repair each
+already-relocated child's own stale fallback `parent` link (design spec
+`2026-07-25-task-subtasks-and-parent-tasks-design.md` §7 — a relocated
+child's markdown-fallback link is depth-relative, so a move always stales it)
+BEFORE propagating the failure, closing the parent-link consequence this
+partial-failure window left when the subtasks increment landed. The residual
+is narrower than before: the mid-loop `move_task_to_list` failure's own
+message still doesn't name `moved` (only the remove_dir failure's message
+did, and still does); and the shell command
+(`task_commands.rs::delete_task_list`) still surfaces only a `String` to the
+frontend, so a caller wanting the landed count/paths on failure — not just
+the best-effort repair core now performs — would need `DeleteListDto`/the IPC
+contract widened too.
+
 ### GAP-65 · Low · Tasks-polish increment residuals (list lifecycle / copy-ID / drag-to-move, accepted)
 - ~~**A move stamps a Task ID on disk but the row reflects it only after a
   reload.**~~ — FIXED in the polish pass (Codex, PR #59): `move_task_to_list`
@@ -479,12 +499,23 @@ a block scalar (`description: |` / `>`), a multi-line quoted scalar, and a flow
 collection (`[..]` / `{..}`) all degrade to `None` — deliberately, so the field
 never surfaces a partial/wrong value or a bare `|`/`>` marker. So a task whose
 `description` was hand-authored in one of those forms shows a BLANK description
-in the Task Detail surface. There is no corruption: `set_fields` consumes a
-block scalar / block list / multi-line quoted value whole on the next save (its
-`skip_block_scalar` path), so saving a new description cleanly REPLACES the old
-block rather than orphaning its continuation lines — the original multi-line
-content is simply not displayed, and is replaced on that save. The app only
-ever WRITES escaped single-line scalars (`core::yaml_scalar`). **Why Low:**
+in the Task Detail surface. `set_fields` consumes a block scalar / block list /
+multi-line quoted value whole on the next save (its `skip_block_scalar` path via
+`opens_multiline_quoted`), so saving a new description over an UNDECORATED
+block/multi-line form cleanly REPLACES the old block rather than orphaning its
+continuation lines — the original multi-line content is simply not displayed,
+and is replaced on that save. **This no-corruption claim held only for the
+undecorated forms** (fixed in the final whole-branch review, task report): a
+YAML tag or anchor decorating a multi-line QUOTED value (`description: !!str
+"abc` / `  def"`, `description: &a "abc` / `  def"`) hid it from
+`opens_multiline_quoted`'s bare `starts_with('"')` check, so a save DID orphan
+the continuation line and broke the file's very next YAML parse — the same
+corruption class this entry used to say couldn't happen. `opens_multiline_
+quoted` now peels a leading anchor/tag (reusing `parse::strip_leading_tag` /
+`id::strip_anchor`) before its quote-open test, closing this for `description`
+and, since the same gate covers every key `set_fields` rewrites, for `title` on
+a rename too. The app only ever WRITES escaped single-line scalars
+(`core::yaml_scalar`). **Why Low:**
 hand-authored multi-line descriptions are rare and the failure mode is "not
 shown / replaced on edit", never broken frontmatter. **Future enhancement:**
 teach `description_field` + the detail editor to round-trip a multi-line
@@ -613,6 +644,280 @@ files the user did not touch. (Codex re-raised migration/block on PR #75; the
 document-only posture is the approved spec's decision — revisiting it is a human
 call, recorded for the final review.)
 
+### GAP-83 · ~~Medium~~ FIXED 2026-07-25 · No per-file lock serialized concurrent task-file writes (lost updates, deleted-file resurrection, moved-file duplication)
+`src-tauri/core/src/tasks/disk.rs` (`update_task_fields`),
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`),
+`src-tauri/core/src/tasks/lists/relocate.rs` (`move_task_to_list`). None of
+the three sanctioned task-file writers took any lock keyed on the file they
+were about to touch: each is a plain read -> compute -> atomic-write (or
+read -> unlink, or read -> rename) with nothing serializing two IN-PROCESS
+callers on the SAME file. The embedded MCP server's
+`set_task_status`/`add_task` reach the exact same `core::services` functions
+on their own "mcp-blocking" OS thread (see AGENTS.md's MCP section),
+genuinely concurrently with a panel write — and the frontend's per-row
+`busy` guard is per-webview, so it cannot see an MCP call at all. Three
+concretely reachable failure modes, all silent (nothing surfaces the
+corruption as an error):
+- **Lost update** (`update_task_fields` racing itself): two concurrent field
+  writes to the same task both read the same pre-edit content; whichever
+  writes second silently discards the first writer's key along with
+  everything else it re-derived from that stale read.
+- **Resurrection** (`delete_task` racing a concurrent field write): a write
+  that already read the file before delete unlinks it will `rename` its own
+  temp onto that path afterward — `write_atomic_replacing`'s rename
+  recreates the destination unconditionally — bringing back a file the user
+  just deleted.
+- **Duplication** (`move_task_to_list` racing a concurrent field write): the
+  same pattern at the file's OLD path after a move relocates it elsewhere,
+  leaving the same document at both the old (a stale resurrected copy) and
+  the new path.
+
+The subtasks/parent-tasks increment made the first failure mode a worse
+casualty: `resolve_parent_for_write` stamps the parent's Task ID via
+`update_task_fields`, and a racing `set_task_status` on that same parent file
+can overwrite the stamp away, silently orphaning the child's `parent-id`
+reference the moment the hierarchy is created.
+
+**Fixed:** a process-wide, canonical-path-keyed lock
+(`disk::with_task_file_lock`, a `Weak`-pruned map so it cannot grow
+unboundedly with how many files this process has ever touched — only with
+how many are being written RIGHT NOW) is now held across each of the three
+writers' own read-through-write/unlink/rename sequence. Lock ordering is a
+documented invariant at the definition site: `capture_config::
+config_write_lock()` may be acquired before this lock, never after —
+`resolve_parent_for_write` already does so across two calls into it, and
+nothing that takes the new lock ever reaches back into config. Regression
+tests (`tasks::disk::tests`, `tasks::structural::tests`,
+`tasks::lists::relocate::tests`): Barrier-synchronized two-thread races for
+all three writers, the exact parent-id-vs-status-flip scenario
+(`concurrent_parent_id_stamp_and_status_flip_never_lose_either`), a
+canonical-vs-symlink-path aliasing test proving the lock cannot be
+sidestepped by a different spelling of the same file, and a lock-map
+growth-bounding test. Pre-fix, all four race scenarios reproduced their
+failure on 299-300 out of 300 iterations across repeated runs in the
+authoring environment — a reliably reproducible defect, not a rare
+interleaving that needed an injected hook or a sleep to hit.
+
+**What remains open, by design:**
+- **Cross-process writes are entirely out of scope.** This is an in-process
+  lock; it cannot and does not serialize against Obsidian itself or a sync
+  client (OneDrive/Dropbox/Syncthing) writing the same file from another
+  process. That is the same pre-existing, accepted reality already true of
+  the rest of the vault domain — nothing here claims otherwise.
+- **`structural::duplicate_task` deliberately does NOT take the lock.** It
+  reads the source exactly once and writes to a brand-new path nobody else
+  could be racing (the collision-safe writer picks that path itself); a
+  concurrent source edit can make the copy a stale-but-consistent snapshot
+  (never torn — `update_task_fields` only ever replaces the source via a
+  full create-temp-then-rename), but never a lost or resurrected one. A
+  different, accepted category from the three fixed above.
+- **`lists/mod.rs`'s `rename_task_list` (a whole-FOLDER `std::fs::rename`,
+  not a per-file write) was evaluated and left unchanged.** A concurrent
+  `update_task_fields` racing a folder rename fails cleanly — its temp-file
+  create targets a parent directory that, after the rename, no longer
+  exists at that path — a legitimate write error, not a resurrection or a
+  duplication; a materially milder failure shape than the three fixed here.
+  Extending the per-file lock to a whole-subtree rename would mean locking
+  every contained file (or inventing a coarser folder-level lock with its
+  own new ordering rules) to harden a failure mode that already degrades
+  safely — deferred as disproportionate to the risk.
+
+### GAP-84 · Low · Moving a Parent Task leaves its children's `parent` link stale (design decision, tracked)
+`src-tauri/core/src/services/tasks/parent/mod.rs` (`repair_parent_link`,
+called from `services::tasks::lists::move_task_to_list`) and
+`src-tauri/core/src/tasks/lists/relocate.rs` (`move_task_to_list`). A moved
+Task recomposes its OWN `parent` link when it is itself a child on the
+markdown-fallback form (the destination is relative to the child's own
+directory, so a depth change would otherwise point at nothing). It does
+**not** do the reverse: moving a Task that is itself a **parent** never
+touches the `parent` link recorded on any of its children, because their
+own paths did not change — only the PARENT's path did, and the markdown
+fallback destination is computed at write time from the child's directory,
+which is unaffected. **Consequence:** every child of a moved parent that
+uses the markdown-fallback link form (a List name containing a wikilink
+metacharacter — `# | [ ] ^`) now has a `parent` link that resolves to
+nothing, or — for a child still on the plain wikilink form — a
+vault-relative wikilink is unaffected by the parent's move (Obsidian
+resolves wikilinks by name/path lookup regardless of the linking note's own
+location), so only the fallback form actually degrades. **Why this is
+harmless to the app's own logic:** `parent-id` is authoritative for every
+resolution VB itself performs (children, ancestors, cycle checks); only
+Obsidian's click-through and Dataview degrade, and they degrade *visibly*
+(an unresolved link) rather than silently resolving to the wrong Task — the
+whole reason the link form was chosen at all. The link self-heals the next
+time that parent is set again (a fresh `parent` link is always recomposed
+against the current path pair). **Why deliberately NOT fixed:** refreshing
+every child of a moved parent is an unbounded batch write with no natural
+size limit — the exact thing this increment's design
+(`docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`
+§7) declines to bolt onto the move path, for the same reason `delete_task`
+stays a single-file op instead of cascading. **Tracked fix, if this ever
+proves real:** on a parent's own move, enumerate its direct children (a
+`parent_index` lookup already available from the loaded task set) and run
+the same best-effort, warn-only `repair_parent_link` on each — bounded by
+this vault's own child count, not the whole tree, and still never failing
+the move that carried it.
+
+### GAP-85 · Low · Deleting a Parent Task leaves orphaned children with stale `parent-id`/`parent` keys (design decision, tracked)
+`src-tauri/core/src/tasks/structural.rs` (`delete_task`). Deleting a Task
+that is somebody's parent does not touch its children at all: their
+`parent-id` now names an id no Task answers to, and their `parent` link
+resolves to nothing. `tasks::hierarchy::parent_index` already handles this
+gracefully for display — an unresolvable `parent-id` yields no edge, so
+each orphaned child renders as an ordinary top-level Task, not a broken row
+— but the stale keys themselves remain on disk, harmless but inert, until
+the user next sets (or clears) that Task's parent, which rewrites both keys
+from scratch. **Why deliberately NOT fixed:** `delete_task` is the app's
+ONE destructive vault write, deliberately scoped to a single, identity-
+re-validated file (docs/Gaps.md GAP-79/GAP-80) — bolting a "find and clear
+every child's parent keys" batch write onto it would both widen that
+destructive path's blast radius and duplicate the exact batch-write problem
+GAP-84 above declines to solve for a move. The design spec (§7) records the
+tidier alternative explicitly: best-effort clearing each child's parent
+keys, mirroring how `delete_task_list` relocates (not deletes) the tasks in
+a removed list rather than leaving them dangling. **Tracked fix, if orphan
+clutter ever proves real in practice:** a best-effort, warn-only sweep — using
+the already-loaded task set to find every child of the path about to be
+deleted and clearing (not touching anything else) their `parent-id`/`parent`
+pair — run before or after the unlink, never allowed to fail the delete
+itself.
+
+### GAP-86 · Low · Reserving `parent`/`parent-id` disables ID generation for a (formerly settable) `parent`-as-id-property config
+`src-tauri/core/src/tasks/mod.rs` (`RESERVED_TASK_KEYS`, now including
+`parent-id` and `parent`) and `src-tauri/core/src/tasks/id.rs`
+(`is_valid_id_property`, `id_property_for_generation`). Before this
+increment, neither `parent` nor `parent-id` was reserved, so the supported
+`set_task_id_config` command would have ACCEPTED either literal string as a
+vault's task-id property — this is the exact GAP-68 (`scheduled`)/GAP-77
+(`description`) shape, not a new failure mode. A vault that had
+`task_id_enabled` on with its property set to the literal `parent` or
+`parent-id` therefore has on-disk Tasks carrying `parent: <stable-id>` or
+`parent-id: <stable-id>` as their OWN id, not a relationship reference.
+**Consequence:** reserving both keys now makes `id_property_for_generation`
+re-validate and turn id generation OFF for that vault (logged); `list_tasks`
+stops surfacing the stored ids under that property, and creates/edits stop
+stamping, while the stored config still reads `enabled`. **Why Low /
+document-only, same reasoning as GAP-68/GAP-77:** the exposure needs a
+property literally named `parent` or `parent-id` — an especially perverse
+choice now that both are meaningful, reserved relationship fields, so the
+realistic affected population is effectively zero, and the remedy (re-point
+the id property to a non-reserved name in the vault's Task ID settings) is a
+one-line change. Consistent with the established precedent, this is
+document-only, not auto-migrated (rewriting every Task's id property is the
+mass vault mutation this app forbids) and not hard-blocked (punishing every
+other vault for a config essentially no one has).
+
+### GAP-87 · Low · The Parent Task write's three phases are not atomic — accepted, since every partial state is benign (by design)
+`src-tauri/core/src/services/tasks/parent/mod.rs`
+(`resolve_parent_for_write`). Setting a Task's parent is, on disk, up to
+three separate writes under one `config_write_lock()`: (2) idempotently
+enabling Task IDs for the vault if they were off, (3a) stamping the
+parent's own id if it lacked one, and (3b) writing the child's `parent-id`/
+`parent` pair. This app has no journal, so a crash or a process kill between
+any two of those writes is a genuine partial state, not merely a race the
+per-file/config locks (GAP-83) can close. **Why this is accepted rather than
+a gap needing work:** the ordering is deliberately chosen so every
+reachable partial state is self-correcting — enabling Task IDs and stamping
+an id are both additive and idempotent (exactly what a later edit would do
+anyway), and the one write that actually creates the relationship, the
+child's pair, is LAST. A crash can therefore leave Task IDs enabled and/or a
+stamped parent id with nothing pointing at either yet, but it can **never**
+leave a `parent-id` that no Task answers to — the property that actually
+matters for the hierarchy's integrity. Claiming true transactionality here
+would be dishonest (there is no rollback), but the weaker guarantee — no
+dangling reference is ever created by a partial failure — is both accurate
+and sufficient, and is the explicit design call recorded in
+`docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`
+§2 ("On transactionality"). No fix is tracked; a real journal/transaction
+log would be a substantially larger change to the whole task-write path,
+disproportionate to a failure mode that already can't corrupt the graph.
+
+### GAP-88 · Low · The anchor-stripping charset in `mirror_id_reference` is conservative (disclosed limit, not a silent gap)
+`src-tauri/core/src/tasks/id.rs` (`mirror_id_reference`, `strip_anchor`).
+When a parent's own id line carries a YAML anchor (`&name value`, e.g.
+`task-id: &stable abc`), mirroring it onto a child must strip the anchor
+annotation (copying it verbatim would define a SECOND anchor of the same
+name in the child's document) and mirror only the value. The anchor NAME is
+matched against `[A-Za-z0-9_-]+` — the same conservative charset this
+module already uses for id PROPERTY names — not the full legal YAML anchor
+character set (which is far broader: YAML permits most printable
+characters in an anchor name apart from flow indicators and whitespace). An
+anchor name using a character outside `[A-Za-z0-9_-]` fails the charset
+match and falls back to the safe, quoted encoding of the DECODED value
+(`quote_id_if_needed`) rather than being mirrored — never a wrong or
+corrupt mirror, just a less literal one for that one uncommon case. **Why
+Low / disclosed limit:** a hand-authored YAML anchor name outside the
+conservative charset is rare to begin with (most authoring tools and
+conventions produce alphanumeric anchor names), and the fallback path is
+always safe — it still resolves to the identical decoded string the strict
+reader would report, just via a quoted scalar instead of a bare mirrored
+token. This is a documented, deliberate scope limit of a line-oriented
+reader that was never meant to be a full YAML parser (the same posture the
+rest of the id/parent reading takes), not an oversight; widening the
+charset (or replacing the line-oriented scan with a real YAML anchor
+parser) is the fix if a real anchor-name collision is ever reported.
+
+### GAP-93 · Low · The parent link's markdown-fallback destination hardcodes a lowercase `.md`
+`src-tauri/core/src/tasks/parent_link.rs` (`compose`, line 45:
+`format!("[{}]({dest}.md)", escape_label(parent_title))`). `dest` is built
+from `rel_no_ext` — the parent's vault-relative path with its extension
+ALREADY stripped case-agnostically (`uri::vault_relative_no_ext`'s
+`.with_extension("")`), so the composer has no idea what the ORIGINAL
+extension's casing was by the time it reappends a literal `.md`. **Failure
+scenario:** a parent Task lives at a hand-authored, case-sensitive/synced
+path like `Tasks/Proj#1/Plan.MD` (a legal on-disk form this domain already
+treats leniently everywhere else — `is_markdown_name`/`collect.rs` match
+`.md`/`.MD`/`.Md` alike, precisely so a hand-authored mixed-case file isn't
+invisible to the structural scan). Because `Proj#1` contains a wikilink-
+unsafe `#`, `compose` falls back to the percent-encoded markdown form —
+and reappends `.md` unconditionally, producing
+`[Plan](../Tasks/Proj%231/Plan.md)`: a dead link, since the real file is
+`Plan.MD`. `repair_parent_link` (the post-move link-repair path) recomposes
+the IDENTICAL wrong form, so the link can never self-heal even after a
+move that would otherwise refresh it. **Why Low:** requires BOTH a
+mixed-case markdown extension (rare — most authoring tools emit lowercase
+`.md`) AND a wikilink-unsafe List name (the metacharacter is what forces the
+markdown-fallback branch at all; the far more common wikilink form never
+appends an extension and is entirely unaffected); the failure is a dead
+click-through link, not data loss or corruption, and harmless on Windows'
+case-insensitive filesystem. **Fix shape:** thread the parent's ACTUAL
+on-disk extension (available from `parent_path` before `vault_relative_
+no_ext` strips it) through to the markdown-fallback branch instead of a
+hardcoded literal, or special-case only when the source casing differs
+from `.md`.
+
+### GAP-94 · Low · A double-anchored id property orphans the relationship on write (invalid-source, narrow)
+`src-tauri/core/src/tasks/id.rs` (`mirror_id_reference`/`strip_anchor`).
+Both the write-side mirror and the read-side strict decoder strip only ONE
+leading YAML anchor. A source carrying two — `task-id: &a &b c` — is itself
+unusual/borderline-invalid YAML (a scalar carries at most one anchor in
+any real authoring tool), but nothing here rejects it outright.
+**Verified by trace:** `strip_anchor("&a &b c")` peels `&a`, leaving `&b c`;
+`mirror_id_reference` treats that remainder as an ordinary mirrorable plain
+scalar (`is_valid_scalar_source` parses `&b c` as the scalar "c" decorated
+by anchor "b", which is scalar-shaped) and mirrors it VERBATIM — so the
+child's `parent-id:` becomes `&b c`, which DEFINES a second anchor named
+"b" inside the CHILD's own document, exactly the corruption
+`mirror_id_reference`'s own doc comment says copying an anchor verbatim
+must never cause. Meanwhile the READ side hits the identical one-anchor
+limit from the other direction: the PARENT's own id, decoded via
+`scalar_id_ci`/`strict_scalar_field`, also strips only the first anchor and
+reports `"&b c"` (the leftover second anchor is never recognized as
+anything but ordinary text) — so the parent's `id` ("&b c") and the child's
+`parentId` (which decodes its OWN, already-mirrored "&b c" down to "c",
+since IT only carries one anchor) never compare equal as strings, and
+`parent_index` resolves no edge at all. **Why Low:** the triggering source
+line is not something any real tool or Obsidian's own properties UI would
+ever author — a double anchor on one scalar is degenerate YAML to begin
+with — and the outcome is "no edge" (an orphan, the domain's own "wrong
+reference is worse than none" posture holding even here) plus a stray,
+unreferenced anchor definition, never a crash or a wrong-parent mismatch.
+**Fix shape:** either reject a value whose stripped remainder ITSELF starts
+with `&` (fold back to the safe quoted-decoded encoding, matching every
+other anchor-adjacent fallback in this module) or loop `strip_anchor`
+until it stops matching, so a doubly (or N-times) anchored source degrades
+safely instead of leaking a second anchor into the child.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
@@ -712,6 +1017,242 @@ app-wide panel concern (it should cover the inline editor too), deliberately
 not bolted onto TaskDetail alone. Codex raised it (P2, PR #76) against Task
 Detail specifically.
 
+### GAP-89 · Low · A hierarchy write that also bootstraps Task IDs can silently hide its own success behind a degraded reload
+`src/composables/useTaskHierarchy.ts` (`setParent`) and
+`src/composables/useTaskDetailTaskSet.ts` (`reload`). When a parent-set (or
+Add Subtask) is the vault's FIRST hierarchy write, the backend's response
+carries `idsEnabled: true` — the whole cached task set was loaded with every
+id suppressed, so `setParent` deliberately skips its cheap two-row
+optimistic patch and instead calls `reload()` to re-fetch everything with
+ids now visible (the two-row patch would correctly reveal the relationship
+just created, but leave any PRE-EXISTING dormant hierarchy — hand-authored
+ids + parent links that were invisible only because ids were off — still
+orphaned on screen). The problem is that `reload()` is best-effort in
+exactly the way `list_tasks` (the `include_archived: true` path,
+`services::list_tasks_including_archived`) already documents itself to be:
+an inaccessible tasks root degrades to an EMPTY array, and one unreadable or
+non-UTF8 `type: Task` file is silently skipped — both as a **successful**
+resolve, never a rejected promise (`reload`'s own `try`/`catch` only ever
+fires on a genuine IPC-bridge failure, which `list_tasks`'s never-throw
+contract makes rare in practice). `reload()` has no plausibility check on
+what comes back — it unconditionally replaces the ENTIRE cached
+`allTasks.value` with whatever `list_tasks` returned, even an empty or
+partial array. So the parent write that just landed on disk (the backend
+call already returned success) can be followed, within the same `setParent`
+call, by a "successful" reload that returns fewer rows than before —
+silently dropping the just-made relationship from view (the Parent row
+reads "No parent" again) and potentially discarding the WHOLE previously-
+loaded, correct hierarchy for this Task Detail session, not just the two
+rows the write touched. **Failure scenario:** a vault on a flaky network
+share or sync client where the tasks root or a specific file is transiently
+unreadable for the split second between the write and the immediate
+follow-up reload — plausible for exactly the kind of vault this app already
+documents as a source of transient read failures elsewhere (search's
+content cache, the capture recovery sweep). **Why Low:** no data loss (the
+write already landed correctly on disk) and no crash; the view self-heals
+the next time this Task Detail is remounted (drilling away and back, or a
+panel reopen) and successfully re-fetches the real state. **Fix shape, not
+implemented here:** apply the returned `TaskWriteResult`'s patch onto the
+CURRENT two rows unconditionally (as the non-bootstrap branch already does)
+before — or regardless of the outcome of — the reload, so a degraded reload
+can only fail to reveal a pre-existing dormant hierarchy, never hide the
+write this call itself just made; alternatively, have `reload()` report
+success/failure and retain the prior `allTasks.value` on a failed or
+suspiciously-empty response rather than unconditionally replacing it.
+
+### GAP-90 · Low · Add Subtask can assign an ARCHIVED task as a new parent, bypassing the Parent picker's own exclusion rule
+`src/components/TaskDetail.vue` (`onAddSubtask`) and
+`src/components/TaskSubtasks.vue` (the "Add subtask" input) versus
+`src/composables/useTaskDetailTaskSet.ts` (`pickerCandidates`). The Parent
+row's Change/Clear picker (`TaskParentPicker.vue`, fed `pickerCandidates`)
+deliberately excludes archived Tasks from the list of assignable NEW
+parents — `pickerCandidates` filters `t.status !== "archived"` specifically
+so a user can only ever INHERIT an already-archived parent (set before it
+was archived), never newly pick one. That exclusion is enforced nowhere
+else: `TaskSubtasks.vue`'s "Add subtask" input is gated only on the shared
+`busy` write-lock, with no check on the CURRENT Task's own archived status,
+and `TaskDetail.vue`'s `onAddSubtask` unconditionally sends
+`parentPath: props.task.path` — the currently-open Task, archived or not —
+to `add_task`. The backend agrees: `services::tasks::parent::add_subtask`'s
+phase-1 validation (containment, self-parent, ambiguous id, cycle) never
+inspects `status` either, so an archived parent is accepted exactly like
+any other. **Reachability:** an archived Task's own Task Detail is not
+reachable from the ordinary list (archived-status Tasks are excluded from
+`list_tasks`'s plain view), but IS reachable through the hierarchy feature
+this same increment shipped — an active child's Parent row resolves and
+renders its parent even after that parent was later archived (deliberately,
+so the relationship is not silently hidden), and its parent chip opens
+that archived Task's own Task Detail with no gate. Once there, the
+Subtasks section's Add-subtask input is fully live. **This is the direct,
+foreseeable follow-on of making archived parents visible, not a
+regression of that fix** — the visibility change was correct (an active
+child must still show its real, if archived, parent), and it is precisely
+what opened this second entry point to the same archived-task-as-parent
+assignment the picker was built to prevent from the first entry point. **Why
+Low:** no data corruption and no cycle/ambiguity violation (core's other
+guards still apply in full) — the sole effect is an inconsistency between
+two enforcement points for the same policy: an archived Task can become a
+brand-new subtask's parent via Add Subtask even though the Parent picker
+would refuse to let you pick that same archived Task from the other
+direction. **Fix shape, not implemented here:** either disable (or hide)
+the Add-subtask input when the open Task's own `status` is `archived`, or —
+more robust against a third entry point appearing later — enforce the
+archived exclusion inside the shared backend validation
+(`add_subtask`/`set_task_parent`'s phase 1) so every caller, present and
+future, agrees without each one re-implementing the check.
+
+### GAP-91 · Low · The parent picker offers a Task whose LIST is archived, checking only the Task's own status
+`src/composables/useTaskDetailTaskSet.ts` (`pickerCandidates`, line 31):
+`allTasks.value.filter((t) => t.status !== "archived")`. List archiving is
+meant to hide a whole list — and everything filed under it — from every
+picker; `archivedMatcher` (`src/utils/taskSections.ts`) is the shared
+frontend rule every OTHER grouping/picker surface applies
+(`useTaskDisplay.ts`'s Lists grouping, `useTaskLists.ts`'s composer/editor
+list picker), and `count_open_tasks` (core) enforces the equivalent
+case-insensitive exclusion for the open-task badge. `pickerCandidates`
+never applies either: it filters solely on `t.status`, never on whether
+`t.list` is one of the vault's `archivedLists`.
+**Failure scenario:** an ACTIVE (non-archived) Task filed inside a list that
+has since been archived is still offered as an assignable NEW parent in
+`TaskParentPicker.vue` — the one exclusion every other archived-list
+consumer already enforces is silently missing here. **Why Low:** no
+corruption or cycle — the resulting relationship is a perfectly valid
+parent-id/parent pair, core's own guards still apply in full; the only
+effect is inconsistency with the app's own "an archived list is hidden
+everywhere" rule. **Fix shape:** thread the vault's `archivedLists` (already
+loaded elsewhere in `TaskDetail.vue` for the List picker) into
+`useTaskDetailTaskSet`, and filter `pickerCandidates` on
+`!archivedMatcher(archivedLists)(t.list)` in addition to the existing
+status check — the same two-part test `useTaskDisplay.ts` already applies.
+
+**Third facet, same root cause — the open-subtask COUNT.**
+`src/utils/taskHierarchy.ts` (`buildHierarchyInfoByVault`, line 134) counts a
+child from its `status`/`done` fields alone and is never handed
+`archivedLists` at all. So an open child inside a since-archived list keeps
+inflating its parent's subtask badge **even after a reload**, while the
+default Lists view and both the per-vault and All-tasks open counts exclude
+that same child — the badge and the counts beside it disagree about the same
+task. This is the same defect as the picker above (the frontend hierarchy
+code has no notion of list archiving), reached through the main list rather
+than Task Detail, which is why it is recorded here rather than as its own
+entry. **Fix shape:** thread the per-vault `archivedLists` into
+`useTaskListHierarchy`'s computed and apply `archivedMatcher` alongside the
+existing `done` test — note this is a per-VAULT map in the aggregate ("All
+tasks") view, so it must be keyed by vault exactly as the parent index
+already is, not flattened into one set.
+**Whoever picks this up: fix all three facets together.** They are one piece
+of work — "the frontend hierarchy code does not know about archived lists" —
+and fixing any one alone leaves the surfaces disagreeing in a different
+place rather than agreeing.
+
+### GAP-92 · Low · Add Subtask can create a NEW subtask inside an ARCHIVED list
+`src/components/TaskDetail.vue` (`onAddSubtask`, line 189: `list:
+props.task.list`). The currently-open Task's own List is reachable even when
+that list is archived — Plan and Tags grouping both render a Task regardless
+of its list's archived status (only the Lists GROUPING itself hides an
+archived list's section), and an active child's Parent chip opens its
+parent's Task Detail with no list-archived gate either (the same reachability
+GAP-91 above describes). Add Subtask unconditionally creates the new child
+with `list: props.task.list` — inheriting the CURRENTLY open Task's list,
+archived or not. **Failure scenario:** open a Task filed in an archived list
+via Plan/Tags grouping, add a subtask; the new Task is created successfully
+but lands inside that same archived list — absent from the default Lists
+view and excluded from `count_open_tasks`'s badge (which skips open tasks
+whose own list is archived, per AGENTS.md's Lists section) the instant it is
+created, with no disclosure that this happened. **Why Low:** the Task is not
+lost — fully readable/editable via Plan/Tags grouping or by unarchiving the
+list — and "the new subtask inherits the parent's list" is the existing,
+correct design for the ordinary (non-archived) case; only the archived
+combination is silently surprising. **Fix shape:** before creating, check
+whether `props.task.list` is archived; if so, either route the new subtask to
+the vault's default list (mirroring the existing `remapListRef` pick-
+reconciliation precedent for a list that becomes unavailable) or disclose to
+the user that the subtask landed in a hidden list.
+
+### GAP-95 · Low · Sibling settings-tab autosaves don't revert their optimistic value on a rejected save (audited alongside the Task-ID toggle fix)
+`src/components/TasksConfigTab.vue` (`autosave`, lines 36-46, feeding the
+tasks-folder field via `onFolderInput`, lines 132-135) and
+`src/components/TaskListSettings.vue` (`onDefaultChange` line 102, `move`
+line 109, `unarchive` line 123, all backed by its own `autosave` at line 58)
+all mutate a ref optimistically, call `saveNow()`/`schedule()`, and never
+revert on a caught rejection — the same no-revert shape the Task-ID toggle
+had before this round's fix (`TasksConfigTab.vue`'s `onIdEnabledChange` /
+`idAutosave`, which now reloads from `get_tasks_config` in its `catch`).
+**Failure scenario:** a rejected `set_tasks_config` leaves the folder input
+showing the rejected text indefinitely — `pendingFolderChange` stays `true`,
+so `TaskListSettings` stays replaced by the "reload once the tasks folder is
+saved…" placeholder until the user manually retypes the last-good folder or
+a later save succeeds; a rejected `set_task_lists_config` from a default-list
+pick, a reorder, or an unarchive leaves the picker/order/archived-set showing
+a choice that was never actually persisted. **Why filed as a gap rather than
+fixed alongside the toggle:** unlike the toggle, none of these fields gate a
+message behind their own state — each one's inline error
+(`tasks-folder-error`, `task-lists-error`) renders unconditionally alongside
+the stale value, so the specific "the error is hidden exactly when it fires"
+compounding bug does not reproduce here; the residual is a UI that silently
+disagrees with disk until the next successful save, not an invisible
+refusal. **Fix shape:** the same one applied to the Task-ID toggle — reload
+the affected field(s) from `get_tasks_config` in each `catch` block instead
+of trusting a locally-cached "previous" value, which a concurrent external
+change could already have invalidated.
+
+### GAP-96 · Low · TaskTemplateSettings never surfaces a save error at all
+`src/components/TasksConfigTab.vue` (`templateAutosave`, lines 107-116)
+computes an `error` ref via `useAutosave` exactly like every sibling field,
+but `<TaskTemplateSettings>` (lines 227-234) is never passed one —
+`TaskTemplateSettings.vue`'s `defineProps` (line 8) declares only
+`extraFrontmatter`/`bodyTemplate`, no `error` prop at all. **Failure
+scenario:** a rejected `set_task_template_config` (an unknown vault id — the
+vault was removed while settings were open — or a disk-level failure from
+`update_vault_config`) sets `templateAutosave.error.value` to the detailed
+message, but nothing in this card ever renders it; only the shared
+`settingsStatus` header's generic failure indicator (if the user happens to
+be looking at it) hints anything went wrong. **Why distinct from GAP-95
+above:** this is not merely "no revert" — the per-field error is
+unreachable BY CONSTRUCTION (never wired to a prop), not just hidden behind
+a stale conditional the way the Task-ID toggle's was before this round's
+fix. **Fix shape:** add an `error: string | null` prop to
+`TaskTemplateSettings.vue` (the `TaskIdSettings.vue` precedent) and pass
+`:error="templateAutosave.error.value"` from `TasksConfigTab.vue`; a
+revert-on-failure story is a separate, smaller question here since both
+fields are free text, not a persisted-state indicator like the toggle.
+
+
+### GAP-97 · Low · Duplicate-ID detection compares decoded strings, not YAML scalar identity
+`src-tauri/core/src/tasks/hierarchy.rs` (`ambiguous_ids`, line 26) counts ids
+by their decoded Rust `String`. Since the subtasks increment, the WRITE path
+deliberately preserves a parent's YAML scalar TYPE (`id::mirror_id_reference`,
+so Obsidian/Dataview equality between `task-id` and `parent-id` holds), but
+this read-side collision check never got the same type awareness. Two
+directions fall out, and the second is the worse one:
+
+- **False ambiguity (fails closed).** One Task with `task-id: 123` (a YAML
+  NUMBER) and another with `task-id: "123"` (a STRING) decode to the same
+  Rust `"123"`, so both are marked ambiguous: their children render as
+  top-level orphans and either Task is refused as a prospective parent. Wrong,
+  but it errs toward refusing — the direction this domain's defensive posture
+  prefers.
+- **False DISTINCTNESS (fails open — the more concerning half).** The strict
+  reader does not decode tags, so `task-id: !!str 123` surfaces as the literal
+  text `!!str 123` while a sibling's `task-id: "123"` surfaces as `123`. We
+  treat those as two different ids and resolve a child confidently to one of
+  them — but js-yaml resolves BOTH to the string `"123"`, so Obsidian and
+  Dataview see a genuine collision we told the user does not exist. That is
+  the one case here where we are confidently wrong rather than conservatively
+  unhelpful.
+
+**Why Low:** both need TWO hand-authored Tasks whose ids differ only in YAML
+spelling — nothing Vault Buddy itself ever writes (generated ids are
+letter-first base36, always plain). No corruption: nothing is written
+incorrectly, and the false-ambiguity direction refuses rather than mis-links.
+**Fix shape:** give the read side the same type awareness the write side has —
+canonicalise to a type-tagged identity (resolved value + resolved YAML type)
+before counting, rather than comparing display strings; or decide that a
+non-string id is unusable and reject it up front, which is simpler and matches
+`new_task_id`'s own letter-first rule. Whichever is chosen, `ambiguous_ids`,
+`parent_index`/`parent_index_for_validation` and `count_parent_links` must all
+adopt it together — they are the same rule seen from three places, and this
+branch's most repeated defect was fixing one such site and leaving its siblings.
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
 scroll listener closed the menu on every scroll event, including the
@@ -1172,6 +1713,16 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   GAP-06 non-decisive-error fallback itself is no longer untested: the
   non-Windows arm has direct contract tests, and the `cfg(windows)` twin
   now executes on the Windows CI runner, fixed 2026-07-10.)
+- `services::tasks::mod.rs`'s `assert_root_if_exists` — the tasks-domain
+  wrapper every task read/write command calls before touching a vault's
+  tasks folder, gating `capture_paths::assert_root_inside_vault` behind
+  `root.exists()` — has no test constructing a `tasksFolder` that resolves,
+  via symlink, outside the vault while the folder is actually present on
+  disk. Verified for this task report: replacing its body with an
+  unconditional `Ok(())` (a global no-op) leaves all 693 core tests green.
+  Pre-existing (not a regression introduced by this branch's fixes) — the
+  guard itself is real (`assert_root_inside_vault` does canonicalize and
+  compare), simply unexercised by anything in the suite.
 - `capture_note.rs`: `write_atomic_replacing`'s numbered-temp squatter path
   and failure-cleanup branch (only `write_note_atomic`'s squatter is
   tested).

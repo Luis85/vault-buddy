@@ -11,10 +11,7 @@
 //! it lives beside its per-vault sibling instead.
 
 use std::path::Path;
-use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths};
-
-use crate::capture_commands::ConfigWriteLock;
 
 pub const BITRATES_KBPS: [u32; 3] = [128, 160, 192];
 pub const TRANSCRIPTION_MODELS: [&str; 4] = ["base", "small", "medium", "turbo"];
@@ -91,12 +88,19 @@ fn clean_folder(raw: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// ASYNC (GAP-22 class, widened by the config-lock collapse): the write is
+/// fsync'd file I/O, and it now shares `config_write_lock()` with
+/// `services::set_task_parent`, which can hold that lock across a full
+/// recursive scan of every task file in the vault (see
+/// `core/src/services/tasks/parent.rs`). A sync command runs on the MAIN
+/// thread, so a debounced settings autosave landing mid-scan would freeze
+/// window show/hide/drag until the scan finished — the one thing a sync
+/// command must never do. The body below is synchronous — no `.await`
+/// appears after the lock is taken — so the guard's scope stays exactly as
+/// it was; only the command itself moves off the main thread, the same
+/// `set_panel_size` / `set_task_id_config` posture.
 #[tauri::command]
-pub fn set_capture_config(
-    lock: tauri::State<ConfigWriteLock>,
-    id: String,
-    cfg: CaptureConfigDto,
-) -> Result<(), String> {
+pub async fn set_capture_config(id: String, cfg: CaptureConfigDto) -> Result<(), String> {
     let mode = capture_config::RecordingMode::from_key(&cfg.mode)
         .ok_or_else(|| format!("Unknown recording mode: {}", cfg.mode))?;
     if !BITRATES_KBPS.contains(&cfg.bitrate_kbps) {
@@ -116,7 +120,7 @@ pub fn set_capture_config(
     for folder in [&meeting_folder, &voice_note_folder].into_iter().flatten() {
         capture_paths::safe_recording_root(Path::new(&vault.path), folder)?;
     }
-    let _guard = lock_ignoring_poison(&lock.0);
+    let _guard = capture_config::config_write_lock();
     // Preserve fields CaptureConfigDto doesn't carry (tasks are configured on
     // their own surface) so saving capture settings can't reset them. The read
     // must sit INSIDE the lock: a concurrent set_tasks_config also
@@ -206,12 +210,15 @@ pub fn get_transcription_config() -> TranscriptionConfigDto {
 /// Persist the GPU toggle. Read-modify-write INSIDE the lock, like every
 /// sibling app-global-section writer (mcp/document-import), so a concurrent
 /// vault- or other-section save can't clobber this one or vice versa.
+///
+/// ASYNC for the same reason as `set_capture_config` above: the shared
+/// `config_write_lock()` can now be held across a full task-vault scan
+/// (`services::set_task_parent`), so this fsync'd write must run off the
+/// main thread. No `.await` follows the lock, so the guard's scope is
+/// unchanged — only synchronous.
 #[tauri::command]
-pub fn set_transcription_config(
-    lock: tauri::State<ConfigWriteLock>,
-    cfg: TranscriptionConfigDto,
-) -> Result<(), String> {
-    let _guard = lock_ignoring_poison(&lock.0);
+pub async fn set_transcription_config(cfg: TranscriptionConfigDto) -> Result<(), String> {
+    let _guard = capture_config::config_write_lock();
     let path = capture_config::config_path().ok_or("Cannot resolve the config directory")?;
     let result = capture_config::update_transcription_config_at(
         &path,

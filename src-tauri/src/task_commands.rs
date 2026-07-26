@@ -1,225 +1,6 @@
 use std::path::{Path, PathBuf};
 use vault_buddy_core::services::{self, ServicePaths, TaskDto};
-use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_note, capture_paths, tasks, uri};
-
-use crate::capture_commands::ConfigWriteLock;
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TasksConfigDto {
-    pub tasks_folder: Option<String>,
-    /// The lists settings object: where unpicked new tasks land (None → the
-    /// tasks root) and the display order for list sections/pickers.
-    pub default_list: Option<String>,
-    pub list_order: Vec<String>,
-    /// `/`-joined relative names of lists hidden from the Lists grouping and
-    /// pickers (the folder + tasks stay on disk).
-    pub archived_lists: Vec<String>,
-    /// Whether generated task IDs are enabled for this vault.
-    pub task_id_enabled: bool,
-    /// The RESOLVED id property name (default "task-id" when unset) — the UI
-    /// shows it as the placeholder/current value.
-    pub task_id_property: String,
-    /// Additive per-vault task-document template. None → today's exact
-    /// create_task output (identity frontmatter only, no body).
-    pub task_extra_frontmatter: Option<String>,
-    pub task_body_template: Option<String>,
-}
-
-/// The vault's configured tasks folder (or None → the frontend shows the
-/// default "Tasks") plus the lists settings object. Unknown vaults return
-/// the defaults — never an error.
-#[tauri::command]
-pub fn get_tasks_config(id: String) -> TasksConfigDto {
-    let cfg = capture_config::vault_config(&capture_config::load_config(), &id);
-    let task_id_property = cfg.task_id_property_name().to_string();
-    TasksConfigDto {
-        task_id_enabled: cfg.task_id_enabled,
-        task_id_property,
-        tasks_folder: cfg.tasks_folder,
-        default_list: cfg.default_list,
-        list_order: cfg.list_order,
-        archived_lists: cfg.archived_lists,
-        task_extra_frontmatter: cfg.task_extra_frontmatter,
-        task_body_template: cfg.task_body_template,
-    }
-}
-
-/// Persist the vault's tasks folder. Validates the folder stays inside the
-/// vault BEFORE writing (an invalid folder is an inline error, nothing is
-/// saved), serialized behind ConfigWriteLock so a concurrent per-vault write
-/// isn't lost. Read-modify-write preserves the vault's other config.
-#[tauri::command]
-pub fn set_tasks_config(
-    lock: tauri::State<ConfigWriteLock>,
-    id: String,
-    tasks_folder: Option<String>,
-) -> Result<(), String> {
-    let vault = crate::commands::find_vault(&id)?;
-    let folder = tasks_folder
-        .as_deref()
-        .map(str::trim)
-        .filter(|f| !f.is_empty())
-        .map(str::to_string);
-    // Validate the folder that will ACTUALLY be used — the explicit one, or the
-    // default "Tasks" when the field is cleared — against a symlink/junction at
-    // any existing ancestor (even when the leaf doesn't exist yet; the lexical
-    // check can't see through a link). Clearing to a default that is itself a
-    // symlink outside the vault must be rejected up front too, not just custom
-    // folders, else the setting saves but list/add/toggle can't use it.
-    // ("Tasks" mirrors VaultCaptureConfig::tasks_root()'s default.)
-    let effective = folder.as_deref().unwrap_or("Tasks");
-    let root = capture_paths::safe_recording_root(Path::new(&vault.path), effective)?;
-    capture_paths::assert_path_inside_vault(Path::new(&vault.path), &root)?;
-    let _guard = lock_ignoring_poison(&lock.0);
-    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
-    value.tasks_folder = folder;
-    capture_config::update_vault_config(&id, value)
-}
-
-/// Persist the vault's lists settings object (default list + list order +
-/// archived lists), preserving the tasks folder and every other per-vault
-/// field via the same read-modify-write under ConfigWriteLock that
-/// set_tasks_config uses. Its own command — not a widened set_tasks_config —
-/// so a lists-config failure can't block the folder save and vice versa (the
-/// CaptureSettings pattern of independent field-level saves).
-///
-/// `archived_lists` is OPTIONAL (Codex, PR #59 regression): Task 3 first
-/// added it as a REQUIRED `Vec<String>`, but the existing caller
-/// (`TaskListSettings.vue`, wired before the archive UI existed) invokes
-/// this command with only `id`/`defaultList`/`listOrder` — Tauri v2 rejects
-/// an invoke missing a required argument before the command body ever runs,
-/// so every default-list/list-order save started erroring and persisting
-/// nothing. A missing `Option<T>` argument deserializes to `None`, so
-/// today's caller keeps working (preserves the stored set, see
-/// `resolve_archived_lists`) and the future archive/unarchive UI (Tasks
-/// 9/10) passes `Some(_)` to replace it.
-///
-/// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
-#[tauri::command]
-pub async fn set_task_lists_config(
-    lock: tauri::State<'_, ConfigWriteLock>,
-    id: String,
-    default_list: Option<String>,
-    list_order: Vec<String>,
-    archived_lists: Option<Vec<String>>,
-) -> Result<(), String> {
-    crate::commands::find_vault(&id)?;
-    // Write-strict on the default list (the settings UI offers existing
-    // lists, so anything unsafe is bad input, not hand-edited config):
-    // normalize rejects `..`/absolute forms; empty → None (the tasks root).
-    let default_list = match default_list.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(l) => Some(tasks::normalize_list_rel(l)?).filter(|n| !n.is_empty()),
-    };
-    let list_order: Vec<String> = list_order
-        .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    let _guard = lock_ignoring_poison(&lock.0);
-    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
-    value.default_list = default_list;
-    value.list_order = list_order;
-    value.archived_lists = resolve_archived_lists(value.archived_lists.clone(), archived_lists);
-    capture_config::update_vault_config(&id, value)
-}
-
-/// Resolve the `archived_lists` field for a `set_task_lists_config` save.
-/// `Some(incoming)` normalizes and REPLACES it — same best-effort posture as
-/// `list_order` rather than command-failing: a stale name left over from a
-/// since renamed/deleted list must not block saving the rest of the
-/// picker's selections, so an unsafe or empty entry (the tasks-root
-/// sentinel, `""`, is not a real list) is dropped rather than erroring.
-/// `None` (an omitting caller — today's `TaskListSettings.vue`, which
-/// predates the archive UI) returns `existing` untouched, which is what
-/// lets that caller keep saving the default list / list order without
-/// silently wiping a previously-stored archived set.
-fn resolve_archived_lists(existing: Vec<String>, incoming: Option<Vec<String>>) -> Vec<String> {
-    let Some(incoming) = incoming else {
-        return existing;
-    };
-    incoming
-        .into_iter()
-        .filter_map(|s| match tasks::normalize_list_rel(s.trim()) {
-            Ok(n) if !n.is_empty() => Some(n),
-            Ok(_) => None,
-            Err(e) => {
-                log::warn!("set_task_lists_config: dropping unsafe archived list {s:?}: {e}");
-                None
-            }
-        })
-        .collect()
-}
-
-/// Persist the vault's Task ID settings (enable + frontmatter property),
-/// preserving every other per-vault field via the same read-modify-write
-/// under ConfigWriteLock. Write-strict on the property: empty → the default
-/// (stored as None); an invalid or reserved name is an inline error. Its own
-/// command — the independent field-save pattern of set_task_lists_config.
-///
-/// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
-#[tauri::command]
-pub async fn set_task_id_config(
-    lock: tauri::State<'_, ConfigWriteLock>,
-    id: String,
-    enabled: bool,
-    property: Option<String>,
-) -> Result<(), String> {
-    crate::commands::find_vault(&id)?;
-    // Validate + apply the property ONLY when enabling. When disabling, the
-    // property is moot (no id is written), so an invalid draft must not block
-    // turning IDs off — and the property field is hidden when off, so the user
-    // couldn't fix it. Some(_) = set the property; None = preserve the stored
-    // one. Validation stays before the lock (fail-fast; never hold it across a
-    // doomed write), matching set_tasks_config/set_task_lists_config.
-    let property_to_set: Option<Option<String>> = if enabled {
-        Some(match property.as_deref().map(str::trim) {
-            None | Some("") => None,
-            Some(p) if tasks::is_valid_id_property(p) => Some(p.to_string()),
-            Some(p) => {
-                return Err(format!(
-                    "Invalid ID property name (letters, digits, - and _ only; not a reserved task field): {p}"
-                ))
-            }
-        })
-    } else {
-        None
-    };
-    let _guard = lock_ignoring_poison(&lock.0);
-    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
-    value.task_id_enabled = enabled;
-    if let Some(prop) = property_to_set {
-        value.task_id_property = prop;
-    }
-    capture_config::update_vault_config(&id, value)
-}
-
-/// Persist the vault's per-vault task template (extra frontmatter + body).
-/// Independent field-save (the set_task_id_config pattern): a template save
-/// can't block the folder/lists/id saves and vice versa. Blank→None. ASYNC —
-/// fsync'd config write.
-#[tauri::command]
-pub async fn set_task_template_config(
-    lock: tauri::State<'_, ConfigWriteLock>,
-    id: String,
-    extra_frontmatter: Option<String>,
-    body_template: Option<String>,
-) -> Result<(), String> {
-    crate::commands::find_vault(&id)?;
-    let clean = |s: Option<String>| {
-        s.as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-    };
-    let _guard = lock_ignoring_poison(&lock.0);
-    let mut value = capture_config::vault_config(&capture_config::load_config(), &id);
-    value.task_extra_frontmatter = clean(extra_frontmatter);
-    value.task_body_template = clean(body_template);
-    capture_config::update_vault_config(&id, value)
-}
 
 /// Read-only enumeration of a vault's list folders. Best-effort empty on an
 /// unknown vault / unsafe root, mirroring list_tasks. Never writes.
@@ -378,24 +159,59 @@ fn validated_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
 /// Read-only list of a vault's tasks. Unknown vault / unsafe folder / missing
 /// folder → empty list, never an error (mirrors list_recordings). Never writes.
 ///
+/// `include_archived` is an explicit opt-in flag on this SAME command rather
+/// than a second one (Fix 1, subtasks vault-UX-polish increment): the
+/// frontend's parent/subtask hierarchy resolution (Task Detail's Parent row,
+/// the main list's parent chip/subtask count) needs an archived-inclusive
+/// read — an archived task can still be somebody's PARENT, and a resolver
+/// built from the archived-EXCLUDED default can never see that edge, wrongly
+/// reporting no relationship for an active child whose parent was later
+/// archived. Every existing caller (`Tasks.vue`'s per-vault and aggregate
+/// loads, `useTaskDetailTaskSet.ts`, `useTaskListReload.ts`) now passes
+/// `true` for exactly that reason — the frontend reproduces today's
+/// archived-EXCLUDED display behavior itself, client-side
+/// (`useTaskListHierarchy`'s `setHierarchyTasks` filters the response back
+/// down for the rendered list while keeping the full superset for hierarchy
+/// resolution). `false` still exists and is exercised the same way (both
+/// branches ride the identical containment/degrade gates in
+/// `services::tasks` — this opens no new unguarded path); it is simply not
+/// what any shipped caller sends today.
+///
 /// ASYNC (GAP-22): recursive tasks-folder walk — off the main thread.
 #[tauri::command]
-pub async fn list_tasks(id: String) -> Vec<TaskDto> {
-    tauri::async_runtime::spawn_blocking(move || services::list_tasks(&ServicePaths::real(), &id))
-        .await
-        .unwrap_or_else(|e| {
-            log::warn!("list_tasks: task failed: {e}");
-            Vec::new()
-        })
+pub async fn list_tasks(id: String, include_archived: bool) -> Vec<TaskDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if include_archived {
+            services::list_tasks_including_archived(&ServicePaths::real(), &id)
+        } else {
+            services::list_tasks(&ServicePaths::real(), &id)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::warn!("list_tasks: task failed: {e}");
+        Vec::new()
+    })
 }
 
 /// Create a task from a title (creating the tasks folder if needed). Rejects
 /// an empty title; returns the created task so the UI can prepend it.
+/// `parent_path` (optional, appended last) is the prospective parent Task's
+/// PATH — never its id: with Task IDs off (the default) no id is surfaced
+/// anywhere, so a path is the only identity the frontend can supply (design
+/// spec §2). `Some` runs the FULL shared resolve-the-parent path in
+/// `services::add_task` (validate, lock, re-check, enable, stamp, compose the
+/// link), not read-only validation alone — Add subtask is very often a
+/// vault's FIRST hierarchy operation. The returned `AddTaskResult` flattens
+/// the created task's fields (backward-compatible wire shape) and adds
+/// `idsEnabled`, true only when THIS call turned Task IDs on — the frontend
+/// cannot infer that from a bare task (Codex P2, PR #77).
 ///
 /// ASYNC (GAP-22 class, Codex PR #46): the fsync'd create + collision retry is
 /// blocking disk I/O — offloaded so a slow/cloud/network vault can't freeze
 /// the panel/buddy event loop. The cheap up-front validation stays inline so
 /// a bad due/scheduled/priority/tag errors before any thread hop.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn add_task(
     id: String,
@@ -405,7 +221,8 @@ pub async fn add_task(
     tags: Option<Vec<String>>,
     list: Option<String>,
     scheduled: Option<String>,
-) -> Result<TaskDto, String> {
+    parent_path: Option<String>,
+) -> Result<services::AddTaskResult, String> {
     // Local calendar date (YYYY-MM-DD), matching every other date-sensitive
     // path in the app (capture uses chrono::Local::now().date_naive()). A UTC
     // date would name a task with tomorrow's/yesterday's date near local
@@ -420,6 +237,8 @@ pub async fn add_task(
     let tags = validated_tags(tags.unwrap_or_default())?;
     // The list is validated in services (normalize_list_rel — the same gate
     // the move uses); None falls back to the vault's configured defaultList.
+    // The parent path's containment/is_task/self-parent/cycle validation all
+    // live in services too — the shell never reaches into the tasks folder.
     tauri::async_runtime::spawn_blocking(move || {
         services::add_task(
             &ServicePaths::real(),
@@ -431,6 +250,7 @@ pub async fn add_task(
             &tags,
             list.as_deref(),
             scheduled.as_deref(),
+            parent_path.as_deref().map(Path::new),
         )
     })
     .await
@@ -473,7 +293,7 @@ pub async fn count_open_tasks(id: String) -> usize {
     })
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskPatchDto {
     #[serde(default)]
@@ -500,30 +320,73 @@ pub struct TaskPatchDto {
     pub description: Option<String>,
     #[serde(default)]
     pub clear_description: bool,
+    /// The parent Task's PATH (never its id — with IDs disabled, the default,
+    /// no id is surfaced anywhere, so a path is the only identity the frontend
+    /// can supply; design spec §2).
+    #[serde(default)]
+    pub parent_path: Option<String>,
+    #[serde(default)]
+    pub clear_parent: bool,
+}
+
+/// Whether a patch has nothing to do: no ordinary field set/cleared AND no
+/// parent relationship change. Checked BEFORE any per-field validation or
+/// vault I/O so a truly empty patch costs nothing. A parent-only patch — the
+/// Parent picker's Change/Clear sends exactly `{parentPath}` or
+/// `{clearParent}` with no ordinary field — must NOT read as empty, or every
+/// picker action silently no-ops (Codex P1, PR #77). Extracted so the
+/// emptiness decision is testable and has ONE definition.
+fn patch_is_empty(patch: &TaskPatchDto) -> bool {
+    patch.title.is_none()
+        && !patch.clear_due
+        && patch.due.is_none()
+        && !patch.clear_scheduled
+        && patch.scheduled.is_none()
+        && patch.priority.is_none()
+        && patch.tags.is_none()
+        && patch.order.is_none()
+        && patch.description.is_none()
+        && !patch.clear_description
+        && patch.parent_path.is_none()
+        && !patch.clear_parent
 }
 
 /// Apply an inline-editor patch to a task: rename, set/clear the due date,
-/// set/clear the do (scheduled) date, set the priority, set/clear tags —
-/// validated up front, then ONE surgical multi-key frontmatter write (title
-/// quoted here; `priority: normal` and a cleared due/scheduled remove their
-/// lines; an empty tags list clears the line/block). An empty patch is a
-/// no-op Ok.
+/// set/clear the do (scheduled) date, set the priority, set/clear tags, and/or
+/// set/clear the parent — validated up front, then dispatched to
+/// `services::update_task` (core), which runs the ordinary field write and
+/// the parent relationship change in the phase order its own doc comment
+/// describes (validate the parent before any write; the field write lands
+/// before the parent write). An empty patch is a no-op Ok — see
+/// `patch_is_empty`, which now ALSO covers `parentPath`/`clearParent` so the
+/// Parent picker's Change/Clear (which sends no ordinary field) never no-ops
+/// (Codex P1, PR #77).
 ///
 /// ASYNC (GAP-22 class, Codex PR #46): validation + patch assembly are cheap
-/// and stay inline (so a bad field errors before any thread hop), but the
-/// vault resolution, containment canonicalize, read, and atomic fsync'd write
-/// are offloaded — a save to a slow/cloud/network vault must not freeze the UI.
+/// and stay inline (so a bad field errors before any thread hop), but vault
+/// resolution, containment, the surgical write(s), and the ID stamp are
+/// offloaded (now inside `services::update_task`) — a save to a slow/cloud/
+/// network vault must not freeze the UI.
 ///
-/// Returns the task's current ID (the freshly-stamped one when the vault opts
-/// in and the task lacked one, or the existing value) so the row can show its
-/// copy-ID affordance immediately instead of only after a view reload; `None`
-/// when IDs are off. An empty patch is `Ok(None)` (Codex, PR #59).
+/// Returns a `TaskWriteResult`: `id` keeps its pre-Task-7 meaning (the task's
+/// current effective id, `None` when IDs are off); `parentId`/`parentLink`
+/// are the pair actually written THIS call (`None` when the patch carried no
+/// relationship change); `idsEnabled` is true only when THIS call turned Task
+/// IDs on for the vault.
 #[tauri::command]
 pub async fn update_task(
     id: String,
     path: String,
     patch: TaskPatchDto,
-) -> Result<Option<String>, String> {
+) -> Result<services::TaskWriteResult, String> {
+    if patch_is_empty(&patch) {
+        return Ok(services::TaskWriteResult {
+            id: None,
+            parent_id: None,
+            parent_link: None,
+            ids_enabled: false,
+        });
+    }
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
     if let Some(title) = &patch.title {
         let t = title.trim();
@@ -581,26 +444,25 @@ pub async fn update_task(
             Some(capture_note::yaml_quote_multiline(desc)),
         ));
     }
-    if updates.is_empty() {
-        return Ok(None);
-    }
+    // Clear wins over set — the same precedence clearDue/clearScheduled/
+    // clearDescription already use above.
+    let parent_op = if patch.clear_parent {
+        services::ParentOp::Clear
+    } else if let Some(p) = patch.parent_path {
+        services::ParentOp::Set(PathBuf::from(p))
+    } else {
+        services::ParentOp::Keep
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        let (vault_path, root, cfg) = tasks_root_for(&id)?;
-        if root.exists() {
-            capture_paths::assert_root_inside_vault(&vault_path, &root)?;
-        }
         let refs: Vec<(&str, Option<&str>)> =
             updates.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-        // Stamp a generated ID when the vault opted in and the task lacks one:
-        // update_task_fields generates + writes internally only when the
-        // property has no usable value. Any update_task write — a field edit
-        // OR an order-only reorder — stamps. cfg comes from tasks_root_for,
-        // which already loaded config.json for the folder resolution above —
-        // reusing it here avoids a second uncached read and the TOCTOU window
-        // a second read would open against a concurrent config write.
-        let id_property =
-            tasks::id_property_for_generation(cfg.task_id_enabled, cfg.task_id_property_name());
-        tasks::update_task_fields(&root, Path::new(&path), &refs, id_property)
+        services::update_task(
+            &ServicePaths::real(),
+            &id,
+            Path::new(&path),
+            &refs,
+            parent_op,
+        )
     })
     .await
     .map_err(|e| format!("update_task: task failed: {e}"))?
@@ -693,6 +555,25 @@ mod tests {
         assert!(validated_scheduled(Some("next week".to_string())).is_err());
     }
 
+    #[test]
+    fn a_parent_only_patch_is_not_treated_as_empty() {
+        // The Parent picker's Change/Clear sends {parentPath} / {clearParent}
+        // with NO ordinary field updates. update_task no-ops an empty patch, so
+        // unless the relationship fields count toward "is there anything to do",
+        // every picker action is a silent no-op (Codex P1, PR #77).
+        let patch = TaskPatchDto {
+            parent_path: Some("/v/Tasks/p.md".into()),
+            ..Default::default()
+        };
+        assert!(!patch_is_empty(&patch));
+        let clearing = TaskPatchDto {
+            clear_parent: true,
+            ..Default::default()
+        };
+        assert!(!patch_is_empty(&clearing));
+        assert!(patch_is_empty(&TaskPatchDto::default()));
+    }
+
     // GAP-22: list_tasks/count_open_tasks must be async — the recursive
     // tasks-folder walk ran on the main thread on every panel open. The
     // lists commands walk/write the same folders, so they carry the same
@@ -703,55 +584,16 @@ mod tests {
         fn is_future<F: std::future::Future>(_: fn(String) -> F) {}
         fn is_future2<F: std::future::Future>(_: fn(String, String) -> F) {}
         fn is_future3<F: std::future::Future>(_: fn(String, String, String) -> F) {}
-        is_future(list_tasks);
+        // list_tasks gained the include_archived flag (Fix 1) — its own
+        // arity, so it needs its own compile-time async pin rather than
+        // sharing is_future2's (String, String) shape.
+        fn is_future_bool<F: std::future::Future>(_: fn(String, bool) -> F) {}
+        is_future_bool(list_tasks);
         is_future(count_open_tasks);
         is_future(list_task_lists);
         is_future2(create_task_list);
         is_future2(delete_task_list);
         is_future3(move_task_to_list);
         is_future3(rename_task_list);
-    }
-
-    // Codex, PR #59 (P2): Task 3 first added `archived_lists` to
-    // set_task_lists_config as a REQUIRED `Vec<String>`. TaskListSettings.vue
-    // predates the archive UI and invokes the command without an
-    // `archivedLists` argument at all, so Tauri v2 rejected the whole invoke
-    // (missing required argument) before the command body ever ran — every
-    // default-list/list-order save started erroring and persisting nothing.
-    // These two tests pin resolve_archived_lists, the pure helper the command
-    // body now delegates to for the field: it is the one place that can be
-    // exercised without a real vault/config.json (set_task_lists_config
-    // itself takes tauri::State and calls ServicePaths::real(), so it can
-    // only run against a developer's real app config — not unit-testable
-    // here, same as every other State-taking command in this file).
-
-    #[test]
-    fn resolve_archived_lists_none_preserves_existing() {
-        // None is what an omitting caller (today's TaskListSettings.vue)
-        // deserializes to — it must leave the stored archived set untouched,
-        // not wipe it.
-        let existing = vec!["Inbox".to_string(), "Archive/Old".to_string()];
-        assert_eq!(resolve_archived_lists(existing.clone(), None), existing);
-    }
-
-    #[test]
-    fn resolve_archived_lists_some_normalizes_and_replaces() {
-        // Some(_) is the future archive/unarchive UI (Tasks 9/10): it
-        // REPLACES the stored set (existing "Stale" must not survive) after
-        // normalizing exactly like list_order — trimmed, the tasks-root
-        // sentinel ("") and unsafe entries (dot-prefixed, escaping) dropped
-        // best-effort rather than failing the whole save.
-        let existing = vec!["Stale".to_string()];
-        let incoming = vec![
-            "Inbox".to_string(),
-            "  Work/Q3  ".to_string(),
-            "".to_string(),
-            ".hidden".to_string(),
-            "../escape".to_string(),
-        ];
-        assert_eq!(
-            resolve_archived_lists(existing, Some(incoming)),
-            vec!["Inbox".to_string(), "Work/Q3".to_string()]
-        );
     }
 }

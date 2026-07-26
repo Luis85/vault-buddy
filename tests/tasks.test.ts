@@ -3,12 +3,17 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import TaskRow from "../src/components/TaskRow.vue";
 import Tasks from "../src/components/Tasks.vue";
 import { useNotificationsStore } from "../src/stores/notifications";
 import { useVaultsStore } from "../src/stores/vaults";
-import type { TaskItem } from "../src/types";
+import type { AggTask, TaskItem, TaskWriteResult } from "../src/types";
 import { localToday } from "../src/utils/taskFields";
 import { aggTask, mountAggregate, mountAggregateAttached, mountView, sample } from "./helpers/taskMount";
+
+// update_task's mocked "the write succeeded, no relationship change" reply
+// (Task 7 widened the command's return from a bare id to this object).
+const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
@@ -26,15 +31,49 @@ const many = (n: number): TaskItem[] =>
     list: "",
     order: null,
     id: null,
-    description: null,
+    description: null, parentId: null, parentLink: null,
   }));
 
 // Two due-in-the-past tasks land in Overdue given a real localToday() — no
 // fake timers needed as long as the sandbox clock is after 2026-01-02.
 const overdueFixture = (): TaskItem[] => [
-  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
-  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null },
+  { path: "C:/v/Tasks/a.md", title: "A", status: "new", created: "2026-01-01", done: false, due: "2026-01-01", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null },
+  { path: "C:/v/Tasks/b.md", title: "B", status: "new", created: "2026-01-01", done: false, due: "2026-01-02", scheduled: null, priority: null, tags: [], list: "", order: null, id: null, description: null, parentId: null, parentLink: null },
 ];
+
+// Task 10 (list badge/chip) fixtures: a local `task()` factory matching
+// task-detail.test.ts / task-hierarchy.test.ts's own (already-resolved
+// AggTask rows, unlike the TaskItem fixtures above) rather than a fourth
+// shared helper.
+const task = (o: Partial<AggTask> = {}): AggTask => ({
+  path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
+  done: false, due: null, scheduled: null, priority: null, tags: [], list: "",
+  order: null, id: null, description: null, parentId: null, parentLink: null,
+  vaultId: "v1", vaultName: "V", ...o,
+});
+
+// Mounts Tasks.vue over an already-resolved fixture list: list_tasks (and, in
+// aggregate mode, list_vaults) are both derived straight from `fixtures`, so a
+// test only describes the ROWS. vaultId: null selects aggregate mode, mirroring
+// Tasks.vue's own props.vaultId contract.
+async function mountTasks(fixtures: AggTask[], opts: { vaultId?: string | null } = {}) {
+  const vaultId = opts.vaultId === undefined ? "v1" : opts.vaultId;
+  mockIPC((cmd, args) => {
+    if (cmd === "list_vaults") {
+      const names = new Map<string, string>();
+      for (const t of fixtures) if (!names.has(t.vaultId)) names.set(t.vaultId, t.vaultName);
+      return [...names].map(([id, name]) => ({ id, name, path: `C:/${id}`, open: false }));
+    }
+    if (cmd === "list_tasks") {
+      const id = (args as { id: string }).id;
+      return fixtures.filter((t) => t.vaultId === id);
+    }
+    return undefined;
+  });
+  const wrapper = mount(Tasks, { props: { vaultId } });
+  await flushPromises();
+  return wrapper;
+}
 
 describe("Tasks", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -51,7 +90,13 @@ describe("Tasks", () => {
   it("loads tasks, lists, and the lists config for the vault on mount", async () => {
     const { calls } = mountView();
     await flushPromises();
-    expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({ cmd: "list_tasks", args: { id: "v1" } });
+    // includeArchived: true — the list's hierarchy resolution needs the
+    // archived-inclusive superset too (Fix 1); `tasks.value` itself still
+    // renders only the archived-excluded subset, unchanged.
+    expect(calls.find((c) => c.cmd === "list_tasks")).toEqual({
+      cmd: "list_tasks",
+      args: { id: "v1", includeArchived: true },
+    });
     // The Lists increment reintroduced ONE config read (defaultList/
     // listOrder feed the composer and the Lists grouping) plus the list
     // enumeration; the folder setting itself still lives in Vault settings.
@@ -75,6 +120,42 @@ describe("Tasks", () => {
     await flushPromises();
     expect(calls.find((c) => c.cmd === "add_task")).toEqual({ cmd: "add_task", args: { id: "v1", title: "Ship it" } });
     expect(wrapper.text()).toContain("Ship it");
+  });
+
+  it("does not leak add_task's idsEnabled disclosure flag onto the new row", async () => {
+    // add_task's real wire shape is TaskItem + idsEnabled (AddTaskResult) —
+    // spreading the whole reply into the row put a stray, inert idsEnabled
+    // field on every AggTask, which is not part of the task model.
+    const { wrapper } = mountView({
+      add_task: (args) => {
+        const a = args as { title: string };
+        return {
+          path: "C:/v/Tasks/2026-07-08-new.md",
+          title: a.title,
+          status: "new",
+          created: "2026-07-08",
+          done: false,
+          due: null,
+          scheduled: null,
+          priority: null,
+          tags: [],
+          list: "",
+          order: null,
+          id: null,
+          description: null,
+          parentId: null,
+          parentLink: null,
+          idsEnabled: true,
+        };
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="task-input"]').setValue("Ship it");
+    await wrapper.get('[data-testid="task-add"]').trigger("click");
+    await flushPromises();
+    const row = wrapper.findAllComponents(TaskRow).find((r) => r.props("task").title === "Ship it");
+    expect(row).toBeTruthy();
+    expect(row!.props("task")).not.toHaveProperty("idsEnabled");
   });
 
   it("toggles a task via set_task_status with a status string", async () => {
@@ -402,7 +483,7 @@ describe("Tasks", () => {
   });
 
   it("quick-schedules a task from its row popover, writing the do-date optimistically", async () => {
-    const { wrapper, calls } = mountView({ update_task: () => null });
+    const { wrapper, calls } = mountView({ update_task: () => updateTaskOk });
     await flushPromises();
     await wrapper.get('[data-testid="task-schedule-B open"]').trigger("click");
     await wrapper.get('[data-testid="task-schedule-today"]').trigger("click");
@@ -419,7 +500,7 @@ describe("Tasks", () => {
   it("reschedules all overdue to today from the Overdue header", async () => {
     const { wrapper, calls } = mountView({
       list_tasks: () => overdueFixture(),
-      update_task: () => null,
+      update_task: () => updateTaskOk,
     });
     await flushPromises();
     // Lists is the default grouping — switch to Plan (grouping key "dates")
@@ -468,13 +549,13 @@ describe("Tasks", () => {
       ],
       update_task: () => {
         updateCalls++;
-        if (updateCalls === 1) return new Promise<null>(() => {}); // C's own edit save — never resolves
+        if (updateCalls === 1) return new Promise<TaskWriteResult>(() => {}); // C's own edit save — never resolves
         if (updateCalls === 2) {
-          return new Promise<null>((r) => {
-            resolveReschedule = () => r(null);
+          return new Promise<TaskWriteResult>((r) => {
+            resolveReschedule = () => r(updateTaskOk);
           });
         }
-        return null;
+        return updateTaskOk;
       },
     });
     await flushPromises();
@@ -503,7 +584,7 @@ describe("Tasks", () => {
     // grouping-change watch must clear the editing refs so BOTH A and B reschedule.
     const { wrapper, calls } = mountView({
       list_tasks: () => overdueFixture(),
-      update_task: () => null,
+      update_task: () => updateTaskOk,
     });
     await flushPromises();
     const rowA = wrapper.findAll('[data-testid="task-row"]').find((r) => r.text().includes("A"))!;
@@ -965,7 +1046,7 @@ describe("Tasks", () => {
 
   it("tag and title filters combine (AND)", async () => {
     const tagged = (n: number, tags: string[]): TaskItem => ({
-      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null, description: null,
+      path: `C:/v/Tasks/${n}.md`, title: `Task ${n}`, status: "new", created: "2026-07-08", done: false, due: null, scheduled: null, priority: null, tags, list: "", order: null, id: null, description: null, parentId: null, parentLink: null,
     });
     const { wrapper } = mountView({
       list_tasks: () => [tagged(0, ["work"]), tagged(1, ["work"]), tagged(2, []), tagged(3, []), tagged(4, []), tagged(5, [])],
@@ -2060,6 +2141,210 @@ describe("Tasks", () => {
     const { wrapper } = mountAggregate();
     await flushPromises();
     expect(wrapper.find('[data-testid="task-drag"]').exists()).toBe(false);
+  });
+
+  // Task 10: the main list's subtask-count badge and parent chip. The list
+  // consumes buildParentIndex exactly as Task Detail does (src/utils/
+  // taskHierarchy.ts), so every case below mirrors a useTaskHierarchy case in
+  // tests/task-hierarchy.test.ts one-for-one — same fixture, same resolution.
+  it("shows an open-subtask count badge on a parent, and none when all are done", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const openKid = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md" });
+    const doneKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", done: true, status: "done" });
+    const w = await mountTasks([parent, openKid, doneKid]);
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1"); // open only
+    // With every child done the badge disappears entirely.
+    const w2 = await mountTasks([parent, doneKid]);
+    expect(w2.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("shows a parent chip on a child that opens the parent's detail", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "Big" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    const w = await mountTasks([parent, child]);
+    const chip = w.get('[data-testid="task-parent-chip"]');
+    expect(chip.text()).toContain("Big");
+    await chip.trigger("click");
+    expect(store.taskDetailTask?.path).toBe("/v1/p.md");
+  });
+
+  it("does not open a busy parent's detail from the chip (Fix 2: gate on the PARENT's own busy state)", async () => {
+    // The parent may have its OWN write in flight elsewhere in the same list
+    // (its own toggle/archive/edit/schedule) — Detail's save/delete replaces
+    // the whole document, and racing that in-flight write is exactly what
+    // onOpenTask already guards against for a title click
+    // (useTaskActions.ts), just keyed on the TARGET (parent) row here, not
+    // the clicked (child) row the chip lives on.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "Big" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    let resolveToggle: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults") return [{ id: "v1", name: "V", path: "C:/v", open: false }];
+      if (cmd === "list_tasks") return [parent, child];
+      if (cmd === "set_task_status") {
+        return new Promise<null>((r) => {
+          resolveToggle = () => r(null);
+        });
+      }
+      return undefined;
+    });
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+    await flushPromises();
+    // Start the PARENT's OWN toggle — its row's write is now in flight.
+    const parentRow = wrapper
+      .findAll('[data-testid="task-row"]')
+      .find((r) => r.text().includes("Big"))!;
+    await parentRow.get('[data-testid="task-checkbox"]').trigger("change");
+    // Click the CHILD's parent chip WHILE the parent's own write is pending.
+    const chip = wrapper.get('[data-testid="task-parent-chip"]');
+    await chip.trigger("click");
+    expect(store.taskDetailTask).toBeNull(); // must NOT have navigated
+    resolveToggle?.();
+    await flushPromises();
+    wrapper.unmount();
+  });
+
+  it("still resolves an archived parent's chip (Fix 1: the list shares Task Detail's fix)", async () => {
+    // Task Detail's own fix for the identical blind spot: list_tasks (the
+    // view) excludes status:archived rows, so a resolver built only from the
+    // displayed set can never see an archived task's outgoing parent-id
+    // edge. The list must not diverge from that fix — an archived parent
+    // still needs to resolve, even though the archived task itself never
+    // renders as its own row.
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/p.md", title: "Old Parent", status: "archived",
+    });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const w = await mountTasks([archivedParent, child]);
+    expect(w.get('[data-testid="task-parent-chip"]').text()).toContain("Old Parent");
+    // The archived task itself is still not a row of its own in the list —
+    // only the child renders.
+    expect(w.findAll('[data-testid="task-row"]')).toHaveLength(1);
+  });
+
+  it("shows no chip or count for a duplicated id (matches core and Detail)", async () => {
+    // The list consumes the SAME index builder, so an ambiguous id resolves
+    // nothing here exactly as it does in core (Codex P2, PR #77).
+    const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p1.md", title: "One" });
+    const p2 = task({ vaultId: "v1", id: "p", path: "/v1/p2.md", title: "Two" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const w = await mountTasks([p1, p2, child]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("shows no chip or count for a hand-authored cycle", async () => {
+    const a = task({ vaultId: "v1", id: "a", parentId: "b", path: "/v1/a.md" });
+    const b = task({ vaultId: "v1", id: "b", parentId: "a", path: "/v1/b.md" });
+    const w = await mountTasks([a, b]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("scopes the index per vault in aggregate mode", async () => {
+    // Ids are unique only WITHIN a vault, so the aggregate view must never link a
+    // child in one vault to a same-id task in another.
+    const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "V1 parent" });
+    const foreign = task({ vaultId: "v2", id: "c", parentId: "p", path: "/v2/c.md" });
+    const w = await mountTasks([p1, foreign], { vaultId: null });
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+  });
+
+  it("renders a child whose parent id resolves to nothing as an ordinary top-level row", async () => {
+    const orphan = task({ vaultId: "v1", id: "c", parentId: "gone", path: "/v1/c.md", title: "Orphan" });
+    const w = await mountTasks([orphan]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.text()).toContain("Orphan"); // still listed, just parentless
+  });
+
+  it("shows no chip or count when Task IDs are off (the default — every row has id: null)", async () => {
+    // The common case: no task carries an id, so buildParentIndex resolves
+    // nothing anywhere. A prior P1 on this branch shipped precisely because
+    // every test elsewhere pre-stamped ids and none exercised this path —
+    // the badge/count must quietly not render, never error or show a zero.
+    const a = task({ vaultId: "v1", path: "/v1/a.md", title: "A" });
+    const b = task({ vaultId: "v1", path: "/v1/b.md", title: "B" });
+    const w = await mountTasks([a, b]);
+    expect(w.find('[data-testid="task-parent-chip"]').exists()).toBe(false);
+    expect(w.find('[data-testid="task-subtask-count"]').exists()).toBe(false);
+    expect(w.text()).toContain("A");
+    expect(w.text()).toContain("B");
+  });
+
+  it("keeps the subtask count vault-scoped even when two vaults share a literal path", async () => {
+    // Every hierarchy lookup in this codebase pairs vaultId+path (path is
+    // only unique WITHIN a vault — useTaskHierarchy's own children/parent
+    // computeds pair the same way). A count that matched by path alone would
+    // double-count an unrelated same-path row from a different vault — this
+    // fixture makes that mistake visible as "2", not just a silent absence.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const openKid = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/Shared.md" });
+    const unrelated = task({ vaultId: "v2", id: "x", path: "/Shared.md", title: "Unrelated" });
+    const w = await mountTasks([parent, openKid, unrelated], { vaultId: null });
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
+  });
+
+  it("drops the badge live when a child is toggled done (no reload needed)", async () => {
+    // Confirms the counterpart the archive case below is compared against:
+    // toggle() flips task.done/status IN PLACE on the shared task object, so
+    // useTaskListHierarchy's archived-inclusive superset (a separate array
+    // holding the SAME task references) sees the change for free — no
+    // dedicated mutation hook needed for this path.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const kid1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "Kid one" });
+    const kid2 = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Kid two" });
+    const w = await mountTasks([parent, kid1, kid2]);
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("2");
+    const kidRow = w.findAllComponents(TaskRow).find((r) => r.props("task").title === "Kid one")!;
+    await kidRow.get('[data-testid="task-checkbox"]').trigger("change");
+    await flushPromises();
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
+  });
+
+  it("drops the badge live when a child is archived (no reload needed)", async () => {
+    // Regression: archive() optimistically SPLICES the row out of the
+    // displayed `tasks` array instead of mutating the task in place (unlike
+    // toggle, tested above) — so the archived-inclusive hierarchy superset
+    // kept reporting the child's pre-archive status, and the parent's badge
+    // never dropped until something else forced a full reload.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const kid1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "Kid one" });
+    const kid2 = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Kid two" });
+    const w = await mountTasks([parent, kid1, kid2]);
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("2");
+    const kidRow = w.findAllComponents(TaskRow).find((r) => r.props("task").title === "Kid one")!;
+    await kidRow.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="task-subtask-count"]').text()).toBe("1");
+  });
+
+  it("keeps the badge in sync when a failed archive is reverted", async () => {
+    // The mark-as-archived above is optimistic and can be reverted (the
+    // row-level write pattern this whole view follows) — the revert must
+    // restore the hierarchy superset's status too, or a reverted archive
+    // would leave the parent's badge under-counting a child that is
+    // visibly open again right next to it.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const kid1 = task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "Kid one" });
+    const kid2 = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Kid two" });
+    mockIPC((cmd) => {
+      if (cmd === "list_tasks") return [parent, kid1, kid2];
+      if (cmd === "set_task_status") throw new Error("disk full");
+      return undefined;
+    });
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="task-subtask-count"]').text()).toBe("2");
+    const kidRow = wrapper.findAllComponents(TaskRow).find((r) => r.props("task").title === "Kid one")!;
+    await kidRow.get('[data-testid="task-archive"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Kid one"); // reverted: the row is back
+    expect(wrapper.get('[data-testid="task-subtask-count"]').text()).toBe("2"); // and the badge agrees
   });
 
 });

@@ -9,12 +9,16 @@ vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }
 import TaskListPicker from "../src/components/TaskListPicker.vue";
 import { useTaskDetail } from "../src/composables/useTaskDetail";
 import { logWarning } from "../src/logging";
-import type { AggTask } from "../src/types";
+import type { AggTask, TaskWriteResult } from "../src/types";
+
+// update_task's mocked "the write succeeded, no relationship change" reply
+// (Task 7 widened the command's return from a bare id to this object).
+const updateTaskOk: TaskWriteResult = { id: null, parentId: null, parentLink: null, idsEnabled: false };
 
 const task = (o: Partial<AggTask> = {}): AggTask => ({
   path: "/v/Tasks/t.md", title: "T", status: "new", created: "2026-07-01",
   done: false, due: null, scheduled: null, priority: null, tags: [], list: "",
-  order: null, id: null, description: null, vaultId: "v1", vaultName: "V", ...o,
+  order: null, id: null, description: null, parentId: null, parentLink: null, vaultId: "v1", vaultName: "V", ...o,
 });
 
 describe("useTaskDetail", () => {
@@ -22,7 +26,7 @@ describe("useTaskDetail", () => {
 
   it("save sends description and reflects it locally", async () => {
     const calls: any[] = [];
-    mockIPC((cmd, args) => { calls.push([cmd, args]); return cmd === "update_task" ? null : undefined; });
+    mockIPC((cmd, args) => { calls.push([cmd, args]); return cmd === "update_task" ? updateTaskOk : undefined; });
     const t = ref(task());
     const { save } = useTaskDetail(t);
     await save({ description: "notes" });
@@ -81,7 +85,7 @@ describe("useTaskDetail", () => {
     const calls: string[] = [];
     mockIPC((cmd) => {
       calls.push(cmd);
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       if (cmd === "move_task_to_list") return { path: "/v/Tasks/Home/t.md", id: "abc" };
       return undefined;
     });
@@ -108,7 +112,7 @@ describe("useTaskDetail", () => {
     // The fields ARE persisted; only the list move didn't land — surface that
     // specifically rather than a bare error (final review, PR #76).
     mockIPC((cmd) => {
-      if (cmd === "update_task") return null; // fields save OK
+      if (cmd === "update_task") return updateTaskOk; // fields save OK
       if (cmd === "move_task_to_list") throw new Error("move boom"); // the move fails
       return undefined;
     });
@@ -185,7 +189,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -206,7 +210,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -225,7 +229,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -249,7 +253,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -295,7 +299,7 @@ describe("TaskDetail.vue", () => {
       calls.push([cmd, args]);
       if (cmd === "list_task_lists") return [];
       if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
-      if (cmd === "update_task") return null;
+      if (cmd === "update_task") return updateTaskOk;
       return undefined;
     });
     const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
@@ -799,5 +803,735 @@ describe("TaskDetail.vue", () => {
     expect(wrapper.get('[data-testid="task-detail-delete-confirm"]').text()).toBe("Deleting…");
     resolveDelete?.();
     await new Promise((r) => setTimeout(r));
+  });
+
+  it("re-seeds every draft when drilling from one task's detail to another", async () => {
+    // The rendered FIELDS must follow the task, not just the store path.
+    // openTaskDetail only swaps store.taskDetailTask; TaskDetail seeds its
+    // seven draft refs once in setup with no watcher on props.task, so
+    // without ActionPanel keying <TaskDetail> by path, drilling from one
+    // task's detail to another would leave the OLD task's fields on screen
+    // while useTaskDetail's toRef already points at the new path — and Save
+    // would write the old values onto the newly opened task (Codex P1, PR #77).
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "Parent", description: "pd" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", title: "Child", description: "cd" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, child];
+      return undefined;
+    });
+    // Both dynamic imports resolved BEFORE any store mutation: a first-time
+    // import of ActionPanel's whole component graph is slow enough under
+    // istanbul instrumentation to open a real async gap, and something in that
+    // window (module transform work, observed empirically) can leave
+    // getActivePinia() pointing at a stale instance by the time mount() runs —
+    // manifesting as ActionPanel rendering with a fresh default-state store
+    // instead of the one just configured below. Pre-warming both imports
+    // first keeps the store-setup -> mount critical section free of slow
+    // awaits, which is the actual fix; it is not merely a speed optimization.
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const ActionPanel = (await import("../src/components/ActionPanel.vue")).default;
+    const store = useVaultsStore();
+    store.openTaskDetail(parent);
+    const wrapper = mount(ActionPanel);
+    await new Promise((r) => setTimeout(r));
+    expect((wrapper.get('[data-testid="task-detail-title"]').element as HTMLInputElement).value).toBe("Parent");
+    store.openTaskDetail(child); // drill through
+    await new Promise((r) => setTimeout(r));
+    expect((wrapper.get('[data-testid="task-detail-title"]').element as HTMLInputElement).value).toBe("Child");
+    expect((wrapper.get('[data-testid="task-detail-description"]').element as HTMLTextAreaElement).value).toBe("cd");
+    // Explicit timeout: mounting the full ActionPanel tree (the point of the
+    // test — a props-only re-mount wouldn't exercise the :key remount at all)
+    // reliably exceeds Vitest's 5s default under istanbul coverage
+    // instrumentation even with the import pre-warming above.
+  }, 15000);
+});
+
+describe("TaskDetail.vue Parent row", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("logs and leaves the Parent row at 'No parent' when list_tasks rejects", async () => {
+    (logWarning as ReturnType<typeof vi.fn>).mockClear();
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") throw new Error("boom");
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.find('[data-testid="task-detail-parent-chip"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="task-detail-parent-change"]').text()).toBe("Set parent");
+    expect(logWarning).toHaveBeenCalledWith(
+      expect.stringContaining("task detail: could not load the task set"),
+    );
+  });
+
+  it("shows 'No parent' and a Set-parent control when the task has none", async () => {
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.find('[data-testid="task-detail-parent-chip"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="task-detail-parent-clear"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="task-detail-parent-change"]').text()).toBe("Set parent");
+  });
+
+  it("shows the parent's title as a chip with Change/Clear when a parent is resolved", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Parent Task");
+    expect(wrapper.get('[data-testid="task-detail-parent-change"]').text()).toBe("Change");
+    expect(wrapper.find('[data-testid="task-detail-parent-clear"]').exists()).toBe(true);
+  });
+
+  // Fix 1 (subtasks vault-UX-polish increment): an active child's parent can
+  // be archived later. list_tasks (the view) drops status: archived rows, so
+  // a resolver built only from that view could never see the parent — and,
+  // believing there is no parent, the user could pick a new one, silently
+  // REPLACING the real relationship they were never shown. The task set this
+  // surface loads must be archived-inclusive so that can never happen.
+  it("resolves an archived parent's title instead of showing 'No parent'", async () => {
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Old Parent", status: "archived",
+    });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [archivedParent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Old Parent");
+    expect(wrapper.find('[data-testid="task-detail-parent-change"]').text()).toBe("Change");
+    // The read must be archived-inclusive — a plain { id } call would hide
+    // exactly the row this resolution depends on.
+    const call = calls.find((c) => c[0] === "list_tasks");
+    expect(call[1]).toMatchObject({ includeArchived: true });
+  });
+
+  it("marks an archived parent's chip legibly instead of rendering it identically to an active one", async () => {
+    const archivedParent = task({
+      vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Old Parent", status: "archived",
+    });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [archivedParent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-status"]').text()).toBe("(archived)");
+  });
+
+  it("does not mark an active parent's chip as archived", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    // An active parent's chip already says everything — no status span at all.
+    expect(wrapper.find('[data-testid="task-detail-parent-status"]').exists()).toBe(false);
+  });
+
+  it("excludes an archived task from the picker's selectable candidates", async () => {
+    // Archived rows belong IN the index (the case above) but OUT of the
+    // picker's candidates — you should not be able to newly ASSIGN an
+    // archived parent, only inherit one that was already set before the
+    // archive.
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    const active = task({ vaultId: "v1", id: "a", path: "/v1/Tasks/active.md", title: "Active Task" });
+    const archived = task({
+      vaultId: "v1", id: "o", path: "/v1/Tasks/old.md", title: "Old Task", status: "archived",
+    });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self, active, archived];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    expect(wrapper.find(`[data-testid="task-parent-picker-option-${active.path}"]`).exists()).toBe(true);
+    expect(wrapper.find(`[data-testid="task-parent-picker-option-${archived.path}"]`).exists()).toBe(false);
+  });
+
+  it("clicking the parent chip opens the parent's own detail view", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, self];
+      return undefined;
+    });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    const spy = vi.spyOn(store, "openTaskDetail");
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-chip"]').trigger("click");
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ path: "/v1/Tasks/parent.md" }));
+  });
+
+  it("Clear sends clearParent and the row returns to 'No parent'", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, self];
+      if (cmd === "update_task") return { id: null, parentId: null, parentLink: null, idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-clear"]').trigger("click");
+    await new Promise((r) => setTimeout(r));
+    const call = calls.find((c) => c[0] === "update_task");
+    expect(call[1].patch).toEqual({ clearParent: true });
+    expect(wrapper.find('[data-testid="task-detail-parent-chip"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="task-detail-parent-change"]').text()).toBe("Set parent");
+  });
+
+  it("Change opens the picker; picking a task sets the parent and closes it", async () => {
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    const other = task({ vaultId: "v1", id: "o", path: "/v1/Tasks/other.md", title: "Other Task" });
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self, other];
+      if (cmd === "update_task") return { id: null, parentId: "o", parentLink: "[[Tasks/other]]", idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    expect(wrapper.find('[data-testid="task-parent-picker-filter"]').exists()).toBe(true);
+    await wrapper.get(`[data-testid="task-parent-picker-option-${other.path}"]`).trigger("click");
+    await new Promise((r) => setTimeout(r));
+    const call = calls.find((c) => c[0] === "update_task");
+    expect(call[1].patch).toEqual({ parentPath: "/v1/Tasks/other.md" });
+    expect(wrapper.find('[data-testid="task-parent-picker-filter"]').exists()).toBe(false); // picker closed
+    expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Other Task");
+  });
+
+  it("filters the picker's options by title", async () => {
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    const other = task({ vaultId: "v1", id: "o", path: "/v1/Tasks/other.md", title: "Other Task" });
+    const groceries = task({ vaultId: "v1", id: "g", path: "/v1/Tasks/groceries.md", title: "Groceries" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self, other, groceries];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    await wrapper.get('[data-testid="task-parent-picker-filter"]').setValue("other");
+    expect(wrapper.find(`[data-testid="task-parent-picker-option-${other.path}"]`).exists()).toBe(true);
+    expect(wrapper.find(`[data-testid="task-parent-picker-option-${groceries.path}"]`).exists()).toBe(false);
+  });
+
+  it("disables self and its descendants in the picker as invalid parent choices", async () => {
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    const kid = task({ vaultId: "v1", id: "k", parentId: "s", path: "/v1/Tasks/kid.md", title: "Kid" });
+    const other = task({ vaultId: "v1", id: "o", path: "/v1/Tasks/other.md", title: "Other Task" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self, kid, other];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    expect(
+      (wrapper.get(`[data-testid="task-parent-picker-option-${self.path}"]`).element as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (wrapper.get(`[data-testid="task-parent-picker-option-${kid.path}"]`).element as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (wrapper.get(`[data-testid="task-parent-picker-option-${other.path}"]`).element as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("focuses the picker's search input when Change is clicked", async () => {
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self }, attachTo: document.body });
+    try {
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+      await new Promise((r) => setTimeout(r));
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="task-parent-picker-filter"]').element);
+    } finally {
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("Escape closes the picker without writing, swallowing the key and returning focus to Change", async () => {
+    const self = task({ vaultId: "v1", id: "s", path: "/v1/Tasks/self.md", title: "Self" });
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [self];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self }, attachTo: document.body });
+    const seen: string[] = [];
+    const onDocKeydown = (e: Event) => seen.push((e as KeyboardEvent).key);
+    document.addEventListener("keydown", onDocKeydown);
+    try {
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-parent-picker-filter"]').trigger("keydown", { key: "Escape" });
+      await new Promise((r) => setTimeout(r));
+      expect(seen).not.toContain("Escape"); // swallowed, never reaches the panel's own handler
+      expect(wrapper.find('[data-testid="task-parent-picker-filter"]').exists()).toBe(false);
+      expect(calls).not.toContain("update_task");
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="task-detail-parent-change"]').element);
+    } finally {
+      document.removeEventListener("keydown", onDocKeydown);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("adopts the bootstrap write's fresh ids so the Parent row resolves without a remount", async () => {
+    // The headline path of the whole subtasks slice: a vault that starts with
+    // Task IDs OFF (every fixture row's id is null, the task() default) and
+    // the FIRST parent assignment bootstraps ids for the whole vault. On that
+    // path setParent skips its cheap two-row patch and relies entirely on
+    // reload() — this guards that reload() actually ADOPTS the freshly
+    // loaded ids onto the current task instead of discarding them in favor of
+    // the pre-write object it already held (the bug: Parent stayed "No
+    // parent" until the view was remounted even though the write succeeded).
+    const self = task({ vaultId: "v1", path: "/v1/Tasks/self.md", title: "Self" });
+    const other = task({ vaultId: "v1", path: "/v1/Tasks/other.md", title: "Other Task" });
+    let listTasksCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") {
+        listTasksCalls += 1;
+        // First call: the initial mount load — still IDs-off, matching the
+        // vault on disk. Second call: the reload triggered by setParent's
+        // idsEnabled bootstrap — the real backend would have just stamped
+        // both rows on disk by the time this fires.
+        return listTasksCalls === 1
+          ? [self, other]
+          : [
+              { ...self, id: "sid", parentId: "oid" },
+              { ...other, id: "oid" },
+            ];
+      }
+      if (cmd === "update_task") {
+        return { id: "sid", parentId: "oid", parentLink: "[[Tasks/other]]", idsEnabled: true };
+      }
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-parent-change"]').trigger("click");
+    await wrapper.get(`[data-testid="task-parent-picker-option-${other.path}"]`).trigger("click");
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-parent-chip"]').text()).toBe("Other Task");
+  });
+
+  it("disables the parent Change/Clear controls while a DIFFERENT detail write is in flight (shared busy guard)", async () => {
+    // Same invariant as the composable-level test, checked at the rendered
+    // control: Change/Clear must use useTaskDetail's OWN busy ref, not an
+    // independent one, or a slow duplicate/save wouldn't disable them.
+    let resolveDup: (() => void) | undefined;
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/Tasks/parent.md", title: "Parent Task" });
+    const self = task({ vaultId: "v1", id: "s", parentId: "p", path: "/v1/Tasks/self.md", title: "Self" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, self];
+      if (cmd === "duplicate_task")
+        return new Promise<string>((r) => {
+          resolveDup = () => r("/v1/Tasks/self (copy).md");
+        });
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: self } });
+    await new Promise((r) => setTimeout(r));
+    const change = () => wrapper.get('[data-testid="task-detail-parent-change"]').element as HTMLButtonElement;
+    const clear = () => wrapper.get('[data-testid="task-detail-parent-clear"]').element as HTMLButtonElement;
+    expect(change().disabled).toBe(false);
+    expect(clear().disabled).toBe(false);
+    await wrapper.get('[data-testid="task-detail-duplicate"]').trigger("click"); // slow write starts
+    await new Promise((r) => setTimeout(r));
+    expect(change().disabled).toBe(true);
+    expect(clear().disabled).toBe(true);
+    resolveDup?.();
+    await new Promise((r) => setTimeout(r));
+    expect(change().disabled).toBe(false);
+    expect(clear().disabled).toBe(false);
+  });
+});
+
+// Task 9: the Subtasks section + Add subtask. Brief's Step 1 + Step 2 tests
+// reproduced verbatim, followed by supplementary regression coverage for
+// pieces the brief describes but doesn't enumerate a test for (the checkbox
+// toggle, the Escape/busy-guard/failure-retains-draft behavior expected of
+// every other write control on this surface, and the disclosure note).
+describe("TaskDetail.vue Subtasks section", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("lists children with a done/total progress line", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Work" });
+    const kids = [
+      task({ vaultId: "v1", id: "c1", parentId: "p", path: "/v1/c1.md", title: "One", done: true, status: "done" }),
+      task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", title: "Two" }),
+    ];
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, ...kids];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("1 / 2");
+    expect(wrapper.findAll('[data-testid="task-detail-subtask"]')).toHaveLength(2);
+  });
+
+  it("Add subtask creates a child with this task as the parent and inherits its List", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Work" });
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent];
+      if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("New child");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    const add = calls.find((c) => c[0] === "add_task");
+    expect(add[1].parentPath).toBe("/v1/p.md");
+    expect(add[1].list).toBe("Work"); // inherits the parent's List
+  });
+
+  it("clicking a child's title drills into that child's detail", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", title: "Kid" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, child];
+      return undefined;
+    });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-subtask-open"]').trigger("click");
+    expect(store.taskDetailTask?.path).toBe("/v1/c.md");
+  });
+
+  it("stamps the current task's cached id from the created child (IDs-off)", async () => {
+    // First hierarchy op in an IDs-off vault: the backend enables IDs and stamps
+    // the PARENT, returning the child with parentId. Without copying that onto the
+    // parent's cached row, `children` compares against a still-null id and the new
+    // subtask (and the progress line) stay invisible until a reload.
+    const parent = task({ vaultId: "v1", id: null, path: "/v1/p.md", title: "Parent", list: "" });
+    let listCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      // idsEnabled: true takes the RELOAD branch (Task 8), so list_tasks must
+      // return the post-enable state on the second call — the stamped parent AND
+      // the created child. Returning the original id-less parent forever would
+      // make these assertions unreachable (Codex P2, PR #77).
+      if (cmd === "list_tasks") {
+        listCalls += 1;
+        return listCalls === 1
+          ? [parent]
+          : [{ ...parent, id: "pid" }, task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" })];
+      }
+      if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: true };
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(listCalls).toBeGreaterThan(1); // the reload branch ran
+    expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1");
+    expect(wrapper.findAll('[data-testid="task-detail-subtask"]')).toHaveLength(1);
+  });
+
+  it("stamps the current task's cached id from the created child even when Task IDs were already enabled (cheap-patch branch, no reload)", async () => {
+    // A DIFFERENT bootstrap shape than the test above, isolating the copy step
+    // from the reload branch: Task IDs are already ON for the vault (idsEnabled:
+    // false — this call didn't flip anything), but this parent was hand-authored
+    // and never got an id of its own. add_subtask's shared resolve-the-parent
+    // path stamps the parent's id unconditionally (core's phase 3a — it runs
+    // whether or not THIS call is what enabled ids), so the response still
+    // carries the freshly-stamped parentId — but idsEnabled is false, so the
+    // CHEAP-PATCH branch runs, never a reload. list_tasks is mocked to keep
+    // returning the stale id-less parent forever, so if the create path doesn't
+    // copy parentId onto the cached row itself, nothing else here ever will.
+    const parent = task({ vaultId: "v1", id: null, path: "/v1/p.md", title: "Parent", list: "" });
+    let listCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") {
+        listCalls += 1;
+        return [parent];
+      }
+      if (cmd === "add_task") {
+        return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: false };
+      }
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(listCalls).toBe(1); // no reload — the cheap-patch branch ran
+    expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1");
+    expect(wrapper.findAll('[data-testid="task-detail-subtask"]')).toHaveLength(1);
+    // Cleared on success, same as every other add-flow draft in this codebase.
+    expect((wrapper.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement).value).toBe("");
+  });
+
+  it("surfaces the Task-IDs-enabled note when Add subtask bootstraps ids for the vault", async () => {
+    const parent = task({ vaultId: "v1", id: null, path: "/v1/p.md" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent];
+      if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "cid", parentId: "pid", path: "/v1/c.md", title: "Kid" }), idsEnabled: true };
+      return undefined;
+    });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const notify = vi.spyOn(useNotificationsStore(), "notify");
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("Task IDs"), expect.anything());
+  });
+
+  it("does NOT surface the Task-IDs-enabled note on an ordinary add (ids already on, nothing bootstrapped)", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent];
+      if (cmd === "add_task") return { ...task({ vaultId: "v1", id: "n", parentId: "p", path: "/v1/n.md" }), idsEnabled: false };
+      return undefined;
+    });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const notify = vi.spyOn(useNotificationsStore(), "notify");
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("toggles a child's status via the shared busy guard, updating the progress line", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", title: "Kid" });
+    const calls: any[] = [];
+    mockIPC((cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, child];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1");
+    await wrapper.get('[data-testid="task-detail-subtask-checkbox"]').trigger("change");
+    await new Promise((r) => setTimeout(r));
+    const call = calls.find((c) => c[0] === "set_task_status");
+    expect(call[1]).toEqual({ id: "v1", path: "/v1/c.md", status: "done" });
+    expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("1 / 1");
+  });
+
+  it("reverts the optimistic toggle and surfaces an error when set_task_status fails", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", title: "Kid" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, child];
+      if (cmd === "set_task_status") throw new Error("locked");
+      return undefined;
+    });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-subtask-checkbox"]').trigger("change");
+    await new Promise((r) => setTimeout(r));
+    expect(wrapper.get('[data-testid="task-detail-subtask-progress"]').text()).toContain("0 / 1"); // reverted
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("locked"));
+  });
+
+  it("Escape clears the add-subtask draft without creating a task, and stops it bubbling to the panel", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent];
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent }, attachTo: document.body });
+    const seen: string[] = [];
+    const onDocKeydown = (e: Event) => seen.push((e as KeyboardEvent).key);
+    document.addEventListener("keydown", onDocKeydown);
+    try {
+      await new Promise((r) => setTimeout(r));
+      await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Half-typed");
+      await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Escape" });
+      expect(seen).not.toContain("Escape"); // swallowed, never reaches the panel's own close handler
+      expect((wrapper.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement).value).toBe("");
+      expect(calls).not.toContain("add_task");
+    } finally {
+      document.removeEventListener("keydown", onDocKeydown);
+      wrapper.unmount();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("keeps the add-subtask draft and surfaces an error when the create fails", async () => {
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent];
+      if (cmd === "add_task") throw new Error("disk full");
+      return undefined;
+    });
+    const { useNotificationsStore } = await import("../src/stores/notifications");
+    const err = vi.spyOn(useNotificationsStore(), "error");
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').setValue("Kid");
+    await wrapper.get('[data-testid="task-detail-add-subtask"]').trigger("keydown", { key: "Enter" });
+    await new Promise((r) => setTimeout(r));
+    expect((wrapper.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement).value).toBe("Kid");
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+    expect((wrapper.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("disables the subtask controls while a DIFFERENT detail write is in flight (shared busy guard)", async () => {
+    let resolveDup: (() => void) | undefined;
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", title: "Kid" });
+    mockIPC((cmd) => {
+      if (cmd === "list_task_lists") return [];
+      if (cmd === "get_tasks_config") return { tasksFolder: null, defaultList: null, listOrder: [], archivedLists: [] };
+      if (cmd === "list_tasks") return [parent, child];
+      if (cmd === "duplicate_task")
+        return new Promise<string>((r) => {
+          resolveDup = () => r("/v1/p (copy).md");
+        });
+      return undefined;
+    });
+    const TaskDetail = (await import("../src/components/TaskDetail.vue")).default;
+    const wrapper = mount(TaskDetail, { props: { task: parent } });
+    await new Promise((r) => setTimeout(r));
+    const addInput = () => wrapper.get('[data-testid="task-detail-add-subtask"]').element as HTMLInputElement;
+    const checkbox = () => wrapper.get('[data-testid="task-detail-subtask-checkbox"]').element as HTMLInputElement;
+    const openBtn = () => wrapper.get('[data-testid="task-detail-subtask-open"]').element as HTMLButtonElement;
+    expect(addInput().disabled).toBe(false);
+    await wrapper.get('[data-testid="task-detail-duplicate"]').trigger("click"); // slow write starts
+    await new Promise((r) => setTimeout(r));
+    expect(addInput().disabled).toBe(true);
+    expect(checkbox().disabled).toBe(true);
+    expect(openBtn().disabled).toBe(true);
+    resolveDup?.();
+    await new Promise((r) => setTimeout(r));
+    expect(addInput().disabled).toBe(false);
   });
 });

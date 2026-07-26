@@ -476,7 +476,7 @@ describe("Tasks — lists & sorting", () => {
         list_tasks: () => [
           { path: "C:/v/Tasks/e.md", title: "Mover", status: "new", created: "2026-07-08", done: false, due: null, priority: null, tags: [], list: "", order: null, id: null },
         ],
-        update_task: () => "stamped9",
+        update_task: () => ({ id: "stamped9", parentId: null, parentLink: null, idsEnabled: false }),
       });
       await flushPromises();
       await wrapper.get('[data-testid="task-edit"]').trigger("click");
