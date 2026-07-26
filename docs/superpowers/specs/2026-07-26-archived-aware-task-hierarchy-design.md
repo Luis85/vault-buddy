@@ -32,13 +32,17 @@ view. The hierarchy surfaces shipped without joining that set.
 
 What exists to build on, against the real code:
 
-- **One shared phase-1 validator.** `validate_parent_assignment`
-  (`core/src/services/tasks/parent/mod.rs`) is the single validation entry point
-  for **both** `set_task_parent` and `add_subtask`. It already loads
-  `all = tasks::list_tasks_structural(root, Some(&prop))` — archived-inclusive
-  and fallible — and already looks a task up by path against it
-  (`reject_ambiguous_parent`). Every refusal it raises happens before any side
-  effect: nothing stamped, Task IDs still off.
+- **Two phase-1 sites that share their per-check helpers.**
+  `set_task_parent` validates through `validate_parent_assignment`;
+  `add_subtask` has its **own** phase 1 (deliberately — there is no child path
+  to validate yet, so it cannot reuse a validator that requires an existing
+  child). They are not one function, but they already share their individual
+  checks: **both** compute `all = tasks::list_tasks_structural(root,
+  Some(&prop))` — archived-inclusive and fallible — and **both** call the
+  shared `reject_ambiguous_parent(&all, &parent)` and `parent_id_unassignable`.
+  That shared-helper seam, not a shared validator, is where a new parent check
+  belongs. Every refusal either site raises happens before any side effect:
+  nothing stamped, Task IDs still off.
 - **A per-vault archived set on the frontend.** `TaskDetail.vue` already loads
   `archivedLists` from `get_tasks_config` for its List picker;
   `useTaskLists` caches a `vaultConfigs` map keyed by vault id.
@@ -70,16 +74,22 @@ Two rules, each with exactly one authority.
 Enforced in **core**, so every caller present and future agrees without
 re-implementing the check.
 
-`validate_parent_assignment` gains an archived-parent refusal, placed beside
-`reject_ambiguous_parent` — the same shape, the same `all` slice, the same
-find-by-path lookup. Because it is the shared phase-1 for both entry points,
-one check covers `set_task_parent` (the Parent row's Change) and `add_subtask`
-(Add Subtask), plus `update_task`'s combined-patch path which routes through
-the same resolve.
+A new shared helper, `reject_archived_parent(&all, &parent)`, is placed beside
+`reject_ambiguous_parent` and called from **both** phase-1 sites —
+`validate_parent_assignment` (serving `set_task_parent`, the Parent row's
+Change, and `update_task`'s combined-patch path) and `add_subtask`'s own phase 1
+(serving Add Subtask).
 
-It stays in **phase 1**, before every side effect — a refused assignment must
-leave Task IDs off and nothing stamped, exactly as the self-parent and cycle
-refusals already do.
+This mirrors exactly how `reject_ambiguous_parent` is already shared between the
+two sites: same `all` slice, same find-by-path lookup, no extra I/O, since both
+callers have already computed both values. Writing the check inline at either
+site instead would recreate the very "fix one site, leave its sibling" defect
+this branch has hit repeatedly — the helper is what makes the two unable to
+drift.
+
+Both call sites place it in **phase 1**, before every side effect — a refused
+assignment must leave Task IDs off and nothing stamped, exactly as the
+self-parent, ambiguous-id and cycle refusals already do.
 
 **Inheritance is deliberately untouched.** The rule governs *assigning* a
 parent, never *having* one:
@@ -181,9 +191,10 @@ Frontend (Vitest — the whole of Rules B and C, plus Rule A's hint):
 
 Core (Rust unit tests in the parent service):
 
-- `set_task_parent` refuses an archived parent; `add_subtask` refuses one too
-  (both entry points, since the value of a shared validator is that neither can
-  drift).
+- `set_task_parent` refuses an archived parent; `add_subtask` refuses one too.
+  **Both** entry points are tested explicitly: they are separate phase-1 sites
+  sharing a helper, so a test of only one would not catch the other losing the
+  call.
 - The refusal leaves Task IDs **off** and nothing stamped — the phase-ordering
   invariant this module exists to encode.
 - **Non-regression:** a relationship set while the parent was active continues
