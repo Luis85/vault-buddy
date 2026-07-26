@@ -182,7 +182,21 @@ fn resolve_archived_lists(existing: Vec<String>, incoming: Option<Vec<String>>) 
 /// the one site where doing the same would self-deadlock the very call it is
 /// about to make.
 ///
-/// ASYNC (GAP-22 class): the config write is fsync'd file I/O.
+/// ASYNC + OFFLOADED (GAP-22 class): unlike its siblings in this file (a
+/// small config.json read-modify-write each), `services::set_task_id_config`
+/// can hold `config_write_lock()` across a full recursive scan of every task
+/// file in the vault (`count_parent_links`, guarding a disable/re-point) BEFORE
+/// its own fsync'd write — the same "unbounded vault-wide work" shape as
+/// `add_task`/`update_task`/`move_task_to_list` in task_commands.rs, all of
+/// which run on `tauri::async_runtime::spawn_blocking`. Being `async fn` alone
+/// only gets this off the MAIN thread; without spawn_blocking the scan+write
+/// still runs inline on whichever Tauri async-runtime worker polls this
+/// future, occupying it (and, on that large/slow vault, delaying unrelated
+/// IPC queued behind it) for the scan's whole duration. The guard's lock is
+/// acquired INSIDE `services::set_task_id_config`, so it must move onto the
+/// blocking pool together with the call that takes it — splitting the lock
+/// from the work it protects would let a caller "await" past the point where
+/// the lock is actually held.
 #[tauri::command]
 pub async fn set_task_id_config(
     id: String,
@@ -190,7 +204,11 @@ pub async fn set_task_id_config(
     property: Option<String>,
 ) -> Result<(), String> {
     crate::commands::find_vault(&id)?;
-    services::set_task_id_config(&ServicePaths::real(), &id, enabled, property.as_deref())
+    tauri::async_runtime::spawn_blocking(move || {
+        services::set_task_id_config(&ServicePaths::real(), &id, enabled, property.as_deref())
+    })
+    .await
+    .map_err(|e| format!("set_task_id_config: task failed: {e}"))?
 }
 
 /// Persist the vault's per-vault task template (extra frontmatter + body).
@@ -261,6 +279,54 @@ mod tests {
         assert_eq!(
             resolve_archived_lists(existing, Some(incoming)),
             vec!["Inbox".to_string(), "Work/Q3".to_string()]
+        );
+    }
+
+    // Fix 2 (this round): set_task_id_config called services::set_task_id_config
+    // — a recursive parent-link scan (count_parent_links) plus an fsync'd
+    // config write — directly inside the async command body, so a large or
+    // slow vault occupied a Tauri async-runtime worker for the whole scan.
+    // Every OTHER filesystem-heavy task command in this codebase
+    // (task_commands.rs: list_tasks, add_task, update_task, move_task_to_list,
+    // delete_task_list, ...) offloads via
+    // `tauri::async_runtime::spawn_blocking`; this pins the same shape here.
+    //
+    // WHY A SOURCE SCAN, not a compile-time coercion check (the
+    // `task_list_commands_are_async`-style pin task_commands.rs uses) or a
+    // runtime/timing test: spawn_blocking usage isn't visible in the
+    // function's TYPE signature — both the fixed and the broken form are
+    // `async fn(String, bool, Option<String>) -> Result<(), String>` — so a
+    // coercion check would keep compiling, and passing, even reverted. A
+    // scheduling/timing test COULD distinguish them (spawn_blocking frees the
+    // polling worker even on a single-worker runtime; inline blocking I/O
+    // doesn't) but would need `tokio` as a direct dev-dependency (not in this
+    // workspace's Cargo.toml — `tauri::async_runtime`'s re-exports don't
+    // include its `#[tokio::test]` macro or `Builder`) and a controlled
+    // runtime flavor that `tauri::async_runtime`'s lazily-initialized,
+    // process-global singleton can't guarantee once shared across every test
+    // in this binary. A source scan is the established alternative for
+    // exactly this situation — `config_lock_guard.rs` is this codebase's
+    // precedent for pinning a structural invariant the type system can't
+    // express, including that file's own disclosed caveat: this is a text
+    // scan, not a parser — it cannot prove the call is reachable or that the
+    // work inside actually moved, only that the source names the mechanism.
+    #[test]
+    fn set_task_id_config_offloads_the_scan_and_write_to_the_blocking_pool() {
+        let src = include_str!("task_config_commands.rs");
+        let start = src
+            .find("pub async fn set_task_id_config")
+            .expect("set_task_id_config not found in its own source file");
+        // Bounded by the START of the NEXT command (set_task_template_config)
+        // so a match doesn't wander into unrelated code further down the file.
+        let body = &src[start..];
+        let body = &body[..body.find("#[tauri::command]").unwrap_or(body.len())];
+        assert!(
+            body.contains("spawn_blocking"),
+            "set_task_id_config must offload services::set_task_id_config's recursive \
+             parent-link scan + fsync'd write via tauri::async_runtime::spawn_blocking, \
+             matching every other filesystem-heavy task command (task_commands.rs) — \
+             calling it inline occupies a Tauri async-runtime worker for the scan's \
+             duration on a large/slow vault"
         );
     }
 }
