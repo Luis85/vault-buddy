@@ -380,10 +380,37 @@ and add `setArchivedByVault` to the returned object:
   return { hierarchyOf, setHierarchyTasks, setHierarchyStatus, setArchivedByVault };
 ```
 
+- [ ] **Step 4b: Update the EIGHT existing 2-argument callers (do not defer)**
+
+`archivedByVault` is deliberately **required**, not defaulted: there is exactly
+one production call site, and a silent default would let a future caller forget
+the map and silently over-report counts — the very bug this task fixes. The cost
+is that every existing caller must be updated *now*, in this step. A 2-argument
+call does not merely fail the typecheck: at runtime `archivedByVault` is
+`undefined` and `archivedByVault.get(...)` throws, so any fixture with an edge
+fails before Step 5 can report anything useful.
+
+The eight call sites in `tests/task-hierarchy.test.ts` are at lines 257, 271,
+283, 301, 312, 329, 346 and 356. Add `, new Map()` to each:
+
+```ts
+const info = buildHierarchyInfoByVault(all, byVault, new Map());
+```
+
+and for the two inline-expression forms:
+
+```ts
+expect(buildHierarchyInfoByVault([a, b], byVault, new Map()).size).toBe(0);
+expect(buildHierarchyInfoByVault(all, byVault, new Map()).get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(1);
+expect(buildHierarchyInfoByVault(all, byVault, new Map()).get("v1")!.get("/v1/c.md")!.parent).toBe(archivedParent);
+```
+
+Verify none remain: `grep -n "buildHierarchyInfoByVault(" tests/ src/` — every hit must pass three arguments.
+
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run tests/task-hierarchy.test.ts 2>&1 | tail -20`
-Expected: PASS. Fix any other call site the typechecker flags in Step 6.
+Expected: PASS — the three new tests and all eight pre-existing ones.
 
 - [ ] **Step 6: Typecheck**
 
@@ -661,13 +688,13 @@ it("disables Add subtask on an archived task", () => {
   // would meet the user with an error toast instead of an affordance. The
   // archived task's own detail IS reachable — via an active child's parent chip.
   const wrapper = mountDetail(task({ status: "archived" }));
-  const input = wrapper.find('[data-testid="add-subtask-input"]');
+  const input = wrapper.find('[data-testid="task-detail-add-subtask"]');
   expect(input.attributes("disabled")).toBeDefined();
 });
 
 it("keeps Add subtask enabled on an active task", () => {
   const wrapper = mountDetail(task({ status: "new" }));
-  expect(wrapper.find('[data-testid="add-subtask-input"]').attributes("disabled"))
+  expect(wrapper.find('[data-testid="task-detail-add-subtask"]').attributes("disabled"))
     .toBeUndefined();
 });
 
@@ -693,7 +720,13 @@ it("raises no archived disclosure for a live list", async () => {
 });
 ```
 
-**Read the existing `tests/task-detail.test.ts` mount helper first** and reuse it — write `mountDetail`/`addSubtask` to match the file's established shape rather than inventing new helpers. If the Add-subtask input has no `data-testid` yet, add `data-testid="add-subtask-input"` in Step 3.
+**The input's test id already exists and MUST NOT be renamed.**
+`TaskSubtasks.vue:102` carries `data-testid="task-detail-add-subtask"`, and
+`tests/task-detail.test.ts` selects it in 19 places. The new tests above use
+that exact existing id — renaming it to anything else breaks every one of those
+regressions.
+
+**Read the existing `tests/task-detail.test.ts` mount helper first** and reuse it — write `mountDetail`/`addSubtask` to match the file's established shape rather than inventing new helpers.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -716,7 +749,7 @@ Bind it on the input and its submit control:
 
 ```
 :disabled="Boolean(disabledReason) || busy"
-data-testid="add-subtask-input"
+data-testid="task-detail-add-subtask"
 ```
 
 and render the reason beneath the input when present:
