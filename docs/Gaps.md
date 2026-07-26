@@ -1217,6 +1217,42 @@ fix. **Fix shape:** add an `error: string | null` prop to
 revert-on-failure story is a separate, smaller question here since both
 fields are free text, not a persisted-state indicator like the toggle.
 
+
+### GAP-97 · Low · Duplicate-ID detection compares decoded strings, not YAML scalar identity
+`src-tauri/core/src/tasks/hierarchy.rs` (`ambiguous_ids`, line 26) counts ids
+by their decoded Rust `String`. Since the subtasks increment, the WRITE path
+deliberately preserves a parent's YAML scalar TYPE (`id::mirror_id_reference`,
+so Obsidian/Dataview equality between `task-id` and `parent-id` holds), but
+this read-side collision check never got the same type awareness. Two
+directions fall out, and the second is the worse one:
+
+- **False ambiguity (fails closed).** One Task with `task-id: 123` (a YAML
+  NUMBER) and another with `task-id: "123"` (a STRING) decode to the same
+  Rust `"123"`, so both are marked ambiguous: their children render as
+  top-level orphans and either Task is refused as a prospective parent. Wrong,
+  but it errs toward refusing — the direction this domain's defensive posture
+  prefers.
+- **False DISTINCTNESS (fails open — the more concerning half).** The strict
+  reader does not decode tags, so `task-id: !!str 123` surfaces as the literal
+  text `!!str 123` while a sibling's `task-id: "123"` surfaces as `123`. We
+  treat those as two different ids and resolve a child confidently to one of
+  them — but js-yaml resolves BOTH to the string `"123"`, so Obsidian and
+  Dataview see a genuine collision we told the user does not exist. That is
+  the one case here where we are confidently wrong rather than conservatively
+  unhelpful.
+
+**Why Low:** both need TWO hand-authored Tasks whose ids differ only in YAML
+spelling — nothing Vault Buddy itself ever writes (generated ids are
+letter-first base36, always plain). No corruption: nothing is written
+incorrectly, and the false-ambiguity direction refuses rather than mis-links.
+**Fix shape:** give the read side the same type awareness the write side has —
+canonicalise to a type-tagged identity (resolved value + resolved YAML type)
+before counting, rather than comparing display strings; or decide that a
+non-string id is unusable and reject it up front, which is simpler and matches
+`new_task_id`'s own letter-first rule. Whichever is chosen, `ambiguous_ids`,
+`parent_index`/`parent_index_for_validation` and `count_parent_links` must all
+adopt it together — they are the same rule seen from three places, and this
+branch's most repeated defect was fixing one such site and leaving its siblings.
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
 scroll listener closed the menu on every scroll event, including the
