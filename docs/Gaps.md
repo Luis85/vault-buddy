@@ -857,6 +857,67 @@ rest of the id/parent reading takes), not an oversight; widening the
 charset (or replacing the line-oriented scan with a real YAML anchor
 parser) is the fix if a real anchor-name collision is ever reported.
 
+### GAP-93 · Low · The parent link's markdown-fallback destination hardcodes a lowercase `.md`
+`src-tauri/core/src/tasks/parent_link.rs` (`compose`, line 45:
+`format!("[{}]({dest}.md)", escape_label(parent_title))`). `dest` is built
+from `rel_no_ext` — the parent's vault-relative path with its extension
+ALREADY stripped case-agnostically (`uri::vault_relative_no_ext`'s
+`.with_extension("")`), so the composer has no idea what the ORIGINAL
+extension's casing was by the time it reappends a literal `.md`. **Failure
+scenario:** a parent Task lives at a hand-authored, case-sensitive/synced
+path like `Tasks/Proj#1/Plan.MD` (a legal on-disk form this domain already
+treats leniently everywhere else — `is_markdown_name`/`collect.rs` match
+`.md`/`.MD`/`.Md` alike, precisely so a hand-authored mixed-case file isn't
+invisible to the structural scan). Because `Proj#1` contains a wikilink-
+unsafe `#`, `compose` falls back to the percent-encoded markdown form —
+and reappends `.md` unconditionally, producing
+`[Plan](../Tasks/Proj%231/Plan.md)`: a dead link, since the real file is
+`Plan.MD`. `repair_parent_link` (the post-move link-repair path) recomposes
+the IDENTICAL wrong form, so the link can never self-heal even after a
+move that would otherwise refresh it. **Why Low:** requires BOTH a
+mixed-case markdown extension (rare — most authoring tools emit lowercase
+`.md`) AND a wikilink-unsafe List name (the metacharacter is what forces the
+markdown-fallback branch at all; the far more common wikilink form never
+appends an extension and is entirely unaffected); the failure is a dead
+click-through link, not data loss or corruption, and harmless on Windows'
+case-insensitive filesystem. **Fix shape:** thread the parent's ACTUAL
+on-disk extension (available from `parent_path` before `vault_relative_
+no_ext` strips it) through to the markdown-fallback branch instead of a
+hardcoded literal, or special-case only when the source casing differs
+from `.md`.
+
+### GAP-94 · Low · A double-anchored id property orphans the relationship on write (invalid-source, narrow)
+`src-tauri/core/src/tasks/id.rs` (`mirror_id_reference`/`strip_anchor`).
+Both the write-side mirror and the read-side strict decoder strip only ONE
+leading YAML anchor. A source carrying two — `task-id: &a &b c` — is itself
+unusual/borderline-invalid YAML (a scalar carries at most one anchor in
+any real authoring tool), but nothing here rejects it outright.
+**Verified by trace:** `strip_anchor("&a &b c")` peels `&a`, leaving `&b c`;
+`mirror_id_reference` treats that remainder as an ordinary mirrorable plain
+scalar (`is_valid_scalar_source` parses `&b c` as the scalar "c" decorated
+by anchor "b", which is scalar-shaped) and mirrors it VERBATIM — so the
+child's `parent-id:` becomes `&b c`, which DEFINES a second anchor named
+"b" inside the CHILD's own document, exactly the corruption
+`mirror_id_reference`'s own doc comment says copying an anchor verbatim
+must never cause. Meanwhile the READ side hits the identical one-anchor
+limit from the other direction: the PARENT's own id, decoded via
+`scalar_id_ci`/`strict_scalar_field`, also strips only the first anchor and
+reports `"&b c"` (the leftover second anchor is never recognized as
+anything but ordinary text) — so the parent's `id` ("&b c") and the child's
+`parentId` (which decodes its OWN, already-mirrored "&b c" down to "c",
+since IT only carries one anchor) never compare equal as strings, and
+`parent_index` resolves no edge at all. **Why Low:** the triggering source
+line is not something any real tool or Obsidian's own properties UI would
+ever author — a double anchor on one scalar is degenerate YAML to begin
+with — and the outcome is "no edge" (an orphan, the domain's own "wrong
+reference is worse than none" posture holding even here) plus a stray,
+unreferenced anchor definition, never a crash or a wrong-parent mismatch.
+**Fix shape:** either reject a value whose stripped remainder ITSELF starts
+with `&` (fold back to the safe quoted-decoded encoding, matching every
+other anchor-adjacent fallback in this module) or loop `strip_anchor`
+until it stops matching, so a doubly (or N-times) anchored source degrades
+safely instead of leaking a second anchor into the child.
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
@@ -1039,6 +1100,54 @@ more robust against a third entry point appearing later — enforce the
 archived exclusion inside the shared backend validation
 (`add_subtask`/`set_task_parent`'s phase 1) so every caller, present and
 future, agrees without each one re-implementing the check.
+
+### GAP-91 · Low · The parent picker offers a Task whose LIST is archived, checking only the Task's own status
+`src/composables/useTaskDetailTaskSet.ts` (`pickerCandidates`, line 31):
+`allTasks.value.filter((t) => t.status !== "archived")`. List archiving is
+meant to hide a whole list — and everything filed under it — from every
+picker; `archivedMatcher` (`src/utils/taskSections.ts`) is the shared
+frontend rule every OTHER grouping/picker surface applies
+(`useTaskDisplay.ts`'s Lists grouping, `useTaskLists.ts`'s composer/editor
+list picker), and `count_open_tasks` (core) enforces the equivalent
+case-insensitive exclusion for the open-task badge. `pickerCandidates`
+never applies either: it filters solely on `t.status`, never on whether
+`t.list` is one of the vault's `archivedLists`.
+**Failure scenario:** an ACTIVE (non-archived) Task filed inside a list that
+has since been archived is still offered as an assignable NEW parent in
+`TaskParentPicker.vue` — the one exclusion every other archived-list
+consumer already enforces is silently missing here. **Why Low:** no
+corruption or cycle — the resulting relationship is a perfectly valid
+parent-id/parent pair, core's own guards still apply in full; the only
+effect is inconsistency with the app's own "an archived list is hidden
+everywhere" rule. **Fix shape:** thread the vault's `archivedLists` (already
+loaded elsewhere in `TaskDetail.vue` for the List picker) into
+`useTaskDetailTaskSet`, and filter `pickerCandidates` on
+`!archivedMatcher(archivedLists)(t.list)` in addition to the existing
+status check — the same two-part test `useTaskDisplay.ts` already applies.
+
+### GAP-92 · Low · Add Subtask can create a NEW subtask inside an ARCHIVED list
+`src/components/TaskDetail.vue` (`onAddSubtask`, line 189: `list:
+props.task.list`). The currently-open Task's own List is reachable even when
+that list is archived — Plan and Tags grouping both render a Task regardless
+of its list's archived status (only the Lists GROUPING itself hides an
+archived list's section), and an active child's Parent chip opens its
+parent's Task Detail with no list-archived gate either (the same reachability
+GAP-91 above describes). Add Subtask unconditionally creates the new child
+with `list: props.task.list` — inheriting the CURRENTLY open Task's list,
+archived or not. **Failure scenario:** open a Task filed in an archived list
+via Plan/Tags grouping, add a subtask; the new Task is created successfully
+but lands inside that same archived list — absent from the default Lists
+view and excluded from `count_open_tasks`'s badge (which skips open tasks
+whose own list is archived, per AGENTS.md's Lists section) the instant it is
+created, with no disclosure that this happened. **Why Low:** the Task is not
+lost — fully readable/editable via Plan/Tags grouping or by unarchiving the
+list — and "the new subtask inherits the parent's list" is the existing,
+correct design for the ordinary (non-archived) case; only the archived
+combination is silently surprising. **Fix shape:** before creating, check
+whether `props.task.list` is archived; if so, either route the new subtask to
+the vault's default list (mirroring the existing `remapListRef` pick-
+reconciliation precedent for a list that becomes unavailable) or disclose to
+the user that the subtask landed in a hidden list.
 
 ### GAP-58 · ~~Medium~~ FIXED 2026-07-11 · SelectMenu dismissed itself on ANY scroll — its own option list was unreachable
 User-reported on the All-tasks vault picker: the capture-phase `window`
@@ -1500,6 +1609,16 @@ core/capture/transcribe crates are otherwise well covered — see §10.)
   GAP-06 non-decisive-error fallback itself is no longer untested: the
   non-Windows arm has direct contract tests, and the `cfg(windows)` twin
   now executes on the Windows CI runner, fixed 2026-07-10.)
+- `services::tasks::mod.rs`'s `assert_root_if_exists` — the tasks-domain
+  wrapper every task read/write command calls before touching a vault's
+  tasks folder, gating `capture_paths::assert_root_inside_vault` behind
+  `root.exists()` — has no test constructing a `tasksFolder` that resolves,
+  via symlink, outside the vault while the folder is actually present on
+  disk. Verified for this task report: replacing its body with an
+  unconditional `Ok(())` (a global no-op) leaves all 693 core tests green.
+  Pre-existing (not a regression introduced by this branch's fixes) — the
+  guard itself is real (`assert_root_inside_vault` does canonicalize and
+  compare), simply unexercised by anything in the suite.
 - `capture_note.rs`: `write_atomic_replacing`'s numbered-temp squatter path
   and failure-cleanup branch (only `write_note_atomic`'s squatter is
   tested).
