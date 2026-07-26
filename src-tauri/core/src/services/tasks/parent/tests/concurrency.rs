@@ -1,12 +1,31 @@
 //! Concurrency/race regression tests for the parent-assignment write path,
-//! split out of `tests/mod.rs` for the Rust LOC cap — these three tests are
-//! grouped here on THEME, not just size: each one exists specifically to
-//! catch a race landing in the narrow window between a phase-1 (lock-free)
-//! check and this path's own `config_write_lock()` acquisition, which is
-//! exactly the class of defect a single-threaded test can never observe
-//! (see each test's own doc comment for its specific race). `use super::*`
-//! brings in every fixture helper `tests/mod.rs` already defines — same
-//! module tree, so nothing here needed new visibility.
+//! split out of `tests/mod.rs` for the Rust LOC cap — grouped here on THEME,
+//! not just size: each one exists specifically to catch a defect landing in
+//! the narrow window between a phase-1 (lock-free) check and this path's own
+//! `config_write_lock()` acquisition, which a single-threaded test that
+//! never touches disk between phase 1 and the lock can never observe (see
+//! each test's own doc comment for its specific case). `use super::*` brings
+//! in every fixture helper `tests/mod.rs` already defines — same module
+//! tree, so nothing here needed new visibility.
+//!
+//! Two TECHNIQUES for landing in that window, not one: the cycle race below
+//! (and the tasks-root-moved-mid-flight test above it) races two real
+//! threads, because a cycle-closing outcome is IMPOSSIBLE under every
+//! interleaving if the recheck is correct — a Barrier plus many iterations
+//! is a safe, timing-independent way to demonstrate that. Fix 2's archived
+//! recheck (PR #78) does NOT have that property (an assignment that
+//! genuinely completes before a later archive is not a bug — see
+//! `an_existing_relationship_survives_the_parent_being_archived` in
+//! `tests/mod.rs`), so a Barrier race there produces a FALSE failure
+//! whenever the concurrent archive simply loses the race outright — this was
+//! empirically confirmed, including after calibrating a filler-file count to
+//! this machine's own write-vs-scan cost ratio, which still left an
+//! unacceptable false-negative rate (a reverted fix slipped through roughly
+//! 1 run in 4). Those tests were replaced with the deterministic ones below,
+//! which call the exact recheck functions `set_task_parent`/`add_subtask`
+//! wire into `resolve_parent_for_write` directly, simulating the race by
+//! archiving the parent BEFORE the call rather than racing a real thread to
+//! do it DURING the call — zero timing dependence, same functions under test.
 
 use super::*;
 
@@ -63,7 +82,7 @@ fn resolve_parent_for_write_refuses_when_the_tasks_root_moved_mid_flight() {
     // Matched manually rather than `.unwrap_err()`: `ResolvedParent` (the Ok
     // payload) derives no `Debug`, and adding one purely for this assertion
     // would be a production-code change unrelated to the bug being fixed.
-    let err = match resolve_parent_for_write(&ctx, &parent, &child, || Ok(false), |_| Ok(())) {
+    let err = match resolve_parent_for_write(&ctx, &parent, &child, || Ok(()), |_| Ok(())) {
         Err(e) => e,
         Ok(_) => panic!("expected an error when the tasks root moved mid-flight"),
     };
@@ -303,4 +322,90 @@ fn the_under_lock_recheck_refuses_a_cycle_a_concurrent_write_would_otherwise_cre
              z.parent={z_parent:?}"
         );
     }
+}
+
+#[test]
+fn recheck_set_or_update_refuses_a_parent_archived_mid_flight() {
+    // Fix 2 (whole-branch review, PR #78). `recheck_set_or_update` is the
+    // EXACT function both `set_task_parent`'s and `update_task`'s own
+    // (`services/tasks/update.rs`) under-lock closures call — not a
+    // hand-rolled copy in this test — so a regression that drops either
+    // half of what it checks is caught here regardless of which call site
+    // it happens at. Simulates a concurrent `set_task_status(parent,
+    // "archived")` that already committed by archiving the parent BEFORE
+    // calling the recheck, rather than racing a real thread to do it DURING
+    // the call (see the module doc comment for why this fix's specific
+    // invariant makes that race unreliable to demonstrate on purpose).
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &["c.md"]);
+    let root = tasks_root(&paths, &vault);
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: archived\ntitle: \"P\"\n---\n",
+    );
+    let child = root.join("c.md");
+    let err = recheck_set_or_update(&root, "task-id", &child, &parent)
+        .expect_err("must refuse a parent archived on disk");
+    assert!(err.contains("archived"), "got {err}");
+}
+
+#[test]
+fn recheck_set_or_update_still_catches_a_cycle_beside_the_archived_check() {
+    // The archived check (Fix 2) sits in a `?`-chain right before the
+    // pre-existing cycle check inside the SAME function — this pins that the
+    // cycle half survived the edit. X's parent is Y; assigning Y's parent to
+    // X would close a 2-node cycle.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    write(
+        &root,
+        "x.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"X\"\ntask-id: x\nparent-id: y\n---\n",
+    );
+    let y = write(
+        &root,
+        "y.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"Y\"\ntask-id: y\n---\n",
+    );
+    let x = root.join("x.md");
+    let err = recheck_set_or_update(&root, "task-id", &y, &x).expect_err("must refuse a cycle");
+    assert_eq!(err, "That would make a task its own ancestor.");
+}
+
+#[test]
+fn recheck_add_subtask_refuses_a_parent_archived_mid_flight() {
+    // The SECOND entry point (Fix 2, PR #78): `add_subtask` has its OWN
+    // separate recheck function, `recheck_add_subtask` — a fix applied only
+    // to `recheck_set_or_update` does not reach it (the exact seam this PR
+    // has already produced one finding about). Same deterministic technique
+    // as the sibling test above.
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: archived\ntitle: \"P\"\n---\n",
+    );
+    let err = recheck_add_subtask(&root, "task-id", &parent)
+        .expect_err("must refuse a parent archived on disk");
+    assert!(err.contains("archived"), "got {err}");
+}
+
+#[test]
+fn recheck_add_subtask_passes_an_active_parent() {
+    // Sanity companion to the refusal test above: an active parent must not
+    // be refused by the SAME function (guards against a mutation that makes
+    // it unconditionally reject).
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &[]);
+    let root = tasks_root(&paths, &vault);
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: new\ntitle: \"P\"\n---\n",
+    );
+    assert!(recheck_add_subtask(&root, "task-id", &parent).is_ok());
 }

@@ -108,15 +108,7 @@ pub fn set_task_parent(
         &ctx,
         &parent,
         &child,
-        || {
-            // Re-validation under the lock, on the freshly-committed graph.
-            let all = tasks::list_tasks_structural(&root, Some(&prop))?;
-            Ok(tasks::would_create_cycle(
-                &tasks::parent_index_for_validation(&all),
-                &child,
-                &parent,
-            ))
-        },
+        || recheck_set_or_update(&root, &prop, &child, &parent),
         |resolved| {
             // Phase 3b: the child's pair. `ensure_id` rides along, so a legacy
             // child picks up its own id in the same write. The key CASING is
@@ -228,7 +220,9 @@ pub(super) fn validate_parent_assignment(
 }
 
 /// The one refusal message both cycle checks (pre-lock and under-lock) use —
-/// the user cannot tell the two apart, and they must never drift.
+/// the user cannot tell the two apart, and they must never drift. Private:
+/// both checks that need it (the pre-lock one below and `recheck_set_or_
+/// update`'s under-lock one, Fix 2, PR #78) live in this same module.
 const CYCLE_REFUSED: &str = "That would make a task its own ancestor.";
 
 /// What the shared resolve path needs to know about the vault it writes in.
@@ -268,18 +262,35 @@ pub(super) struct ResolvedParent {
 /// it. The guard outliving the caller's write is the point: dropping it at the
 /// end of this function would reopen the very race the re-check closes.
 ///
-/// Shared by `set_task_parent` (writes onto an existing child) and
-/// `add_subtask` below (passes the pair into `create_task`). Add-subtask is
-/// very often a vault's FIRST hierarchy operation — IDs off, parent unstamped
-/// — so the create path must run this WHOLE path, not just the read-only
-/// validation (design spec §2).
+/// Shared by `set_task_parent` (writes onto an existing child), `add_subtask`
+/// below (passes the pair into `create_task`), and `update_task`'s own
+/// SEPARATE call site (`services/tasks/update.rs`) — that module still
+/// builds its OWN `write` closure (the field write differs per caller), but
+/// delegates its `revalidate` closure to `recheck_set_or_update` below rather
+/// than hand-copying it (Fix 2, PR #78 — see that function's own doc
+/// comment). Add-subtask is very often a vault's FIRST hierarchy operation —
+/// IDs off, parent unstamped — so the create path must run this WHOLE path,
+/// not just the read-only validation (design spec §2).
+///
+/// `revalidate` is what each caller re-checks under THIS lock, against a
+/// FRESH read of disk — never what phase 1 already checked, which only ever
+/// saw the graph as it stood before this lock was acquired. (Fix 2, PR #78:
+/// this parameter used to be a narrower `recheck_cycle: impl FnOnce() ->
+/// Result<bool, String>`, converted to `Err(CYCLE_REFUSED)` centrally, right
+/// here, so both cycle checks — pre-lock and under-lock — could never drift
+/// apart in wording. Generalizing it to `Result<(), String>` lets each caller
+/// ALSO re-check the prospective parent's archived status the identical way:
+/// `set_task_parent`/`update_task` re-check archived status AND cycle
+/// (either can be introduced by a write landing in this exact window);
+/// `add_subtask` re-checks archived status only, since a brand-new leaf
+/// cannot already sit on a cycle — see its own doc comment.)
 pub(super) fn resolve_parent_for_write<T>(
     ctx: &ParentWriteCtx<'_>,
     parent: &Path,
     // The file the link is written INTO — the markdown fallback's destination
     // resolves relative to the note containing it (design spec §1).
     child: &Path,
-    recheck_cycle: impl FnOnce() -> Result<bool, String>,
+    revalidate: impl FnOnce() -> Result<(), String>,
     write: impl FnOnce(&ResolvedParent) -> Result<T, String>,
 ) -> Result<(ResolvedParent, T), String> {
     // ONE lock across the config re-check, the enable, the parent stamp and the
@@ -310,13 +321,13 @@ pub(super) fn resolve_parent_for_write<T>(
             "The vault's Task settings changed while this was in flight. Try again.".to_string(),
         );
     }
-    // UNCONDITIONAL — not only when the config changed. Two parent assignments
-    // can overlap (one setting A->B while the other sets B->A); both phase-1
-    // scans pass before either writes, so only a re-check under this lock sees
-    // the other's committed write and refuses (design spec §2).
-    if recheck_cycle()? {
-        return Err(CYCLE_REFUSED.to_string());
-    }
+    // UNCONDITIONAL — not only when the config changed. Two overlapping
+    // writes — two parent assignments (one setting A->B while the other sets
+    // B->A), or one assignment racing a concurrent archive of the prospective
+    // parent (Fix 2, PR #78) — can each pass phase 1 before either commits,
+    // so only a re-check under this lock sees the other's already-committed
+    // write and refuses (design spec §2).
+    revalidate()?;
 
     // ---- Phase 2: enable (idempotent, additive). ----
     let ids_enabled = !fresh.task_id_enabled;
@@ -374,12 +385,15 @@ pub(super) fn resolve_parent_for_write<T>(
 /// held guard, exactly like `set_task_parent`'s write closure — dropping the
 /// lock before creating the file would reopen the very race phases 2-3 close.
 ///
-/// Unlike `set_task_parent` there is no self-parent or cycle check here: the
+/// Unlike `set_task_parent` there is no self-parent or CYCLE check here: the
 /// child does not exist on disk yet, so it cannot already equal the chosen
 /// parent (`create_task` never clobbers an existing file, so the eventual
 /// child path can never coincide with a pre-existing one) and nothing can
-/// already reference a file that doesn't exist — the under-lock recheck is
-/// therefore unconditionally `Ok(false)`.
+/// already reference a file that doesn't exist — cycle-wise the under-lock
+/// recheck below can never trip. Archived status is a different story (Fix 2,
+/// PR #78): the PARENT already exists and can be concurrently archived in the
+/// exact phase-1-to-lock window this recheck exists to close, so — unlike the
+/// cycle half — the archived half of this recheck is NOT vacuous.
 ///
 /// The child's OWN id is drawn here, under the validated `prop` — which stays
 /// correct across phase 2's enable, since the property NAME never changes,
@@ -464,7 +478,7 @@ pub(super) fn add_subtask(
         &ctx,
         &parent,
         &prospective_child,
-        || Ok(false), // a brand-new leaf can never already be on a cycle
+        || recheck_add_subtask(root, &prop, &parent),
         |resolved| {
             // Reached only once Task IDs are enabled (already, or by phase 2
             // just above) under `prop` — generate the child's own id here,
@@ -560,7 +574,18 @@ fn reject_ambiguous_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(),
 ///
 /// A parent the walk never yielded (it skips symlinked files) has no recorded
 /// status and is left to the other guards, mirroring `reject_ambiguous_parent`.
-fn reject_archived_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(), String> {
+///
+/// Reused, UNMODIFIED, as the archived half of the under-lock recheck too
+/// (Fix 2, PR #78 — via `recheck_set_or_update`/`recheck_add_subtask` below):
+/// this phase-1 call only ever sees the graph as it stood before this
+/// module's `config_write_lock()` was acquired, so a concurrent
+/// `set_task_status(parent, "archived")` landing in that exact window needs
+/// the identical check re-run against a FRESH scan, same as the cycle check
+/// beside it. `pub(super)` so `update.rs`'s own hand-copied closure (a
+/// SEPARATE function — a fix applied to `set_task_parent`'s closure does not
+/// reach it, the same lesson this function's own phase-1 sharing already
+/// teaches) can call this rather than drifting its own copy.
+pub(super) fn reject_archived_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(), String> {
     if all
         .iter()
         .find(|t| t.path == parent)
@@ -571,6 +596,52 @@ fn reject_archived_parent(all: &[tasks::TaskItem], parent: &Path) -> Result<(), 
             .to_string());
     }
     Ok(())
+}
+
+/// The under-lock recheck `set_task_parent` and `update_task`'s own SEPARATE
+/// call site (`services/tasks/update.rs`) both need: archived status AND
+/// cycle, unconditionally, against a graph re-scanned fresh under THIS lock
+/// (Fix 2, PR #78 — see `resolve_parent_for_write`'s doc comment for why a
+/// caller-supplied `revalidate` closure exists at all, and why this check
+/// can't just live inside that shared function). Pulled out as its OWN named
+/// function — not left inline in each closure — for two reasons. First,
+/// `update.rs` used to hand-copy this exact logic into its OWN closure
+/// (this module's doc comment above still explains why it never shared one
+/// with `set_task_parent`'s); a named function both entry points call is
+/// what actually closes that seam, rather than two copies that reliably stay
+/// in sync only until someone edits one. Second, it gives a test a fast,
+/// deterministic target to call directly against a deliberately-archived
+/// parent, instead of racing two real threads against a wall-clock window
+/// this investigation found unreliable to hit on purpose (see the tests
+/// module for the full empirical reasoning behind that choice).
+pub(super) fn recheck_set_or_update(
+    root: &Path,
+    prop: &str,
+    child: &Path,
+    parent: &Path,
+) -> Result<(), String> {
+    let all = tasks::list_tasks_structural(root, Some(prop))?;
+    reject_archived_parent(&all, parent)?;
+    if tasks::would_create_cycle(&tasks::parent_index_for_validation(&all), child, parent) {
+        return Err(CYCLE_REFUSED.to_string());
+    }
+    Ok(())
+}
+
+/// `add_subtask`'s own under-lock recheck: archived status only. Cycle is
+/// structurally impossible here (see `add_subtask`'s own doc comment: the
+/// child doesn't exist on disk yet, so it cannot already be an ancestor of
+/// anything) — but the PARENT already exists and can be concurrently
+/// archived in the exact phase-1-to-lock window this recheck exists to
+/// close, so — unlike the cycle half of `recheck_set_or_update` — this
+/// recheck is not vacuous. A separate named function from
+/// `recheck_set_or_update` (not `recheck_set_or_update` with an
+/// always-false-would-create-cycle argument bolted on) because that would
+/// blur two functions with genuinely different contracts into one with a
+/// parameter that's a lie for one caller.
+pub(super) fn recheck_add_subtask(root: &Path, prop: &str, parent: &Path) -> Result<(), String> {
+    let all = tasks::list_tasks_structural(root, Some(prop))?;
+    reject_archived_parent(&all, parent)
 }
 
 /// True when phase 3a's `ensure_id` is FORECAST to fail on `parent_content` —
