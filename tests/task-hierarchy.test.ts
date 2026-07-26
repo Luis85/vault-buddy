@@ -6,6 +6,7 @@ import { type Ref,ref } from "vue";
 vi.mock("../src/logging", () => ({ logWarning: vi.fn(), logBreadcrumb: vi.fn() }));
 
 import { useTaskDetail } from "../src/composables/useTaskDetail";
+import { useTaskDetailTaskSet } from "../src/composables/useTaskDetailTaskSet";
 import { useTaskHierarchy } from "../src/composables/useTaskHierarchy";
 import { useNotificationsStore } from "../src/stores/notifications";
 import type { AggTask } from "../src/types";
@@ -401,5 +402,62 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const all = [p, c];
     const info = buildHierarchyInfoByVault(all, buildParentIndexByVault(all), new Map([["v1", ["Old"]]]));
     expect(info.get("v1")!.get("/v1/c.md")!.parent).toBe(p);
+  });
+});
+
+// The Task Detail picker's candidate set. Lives here beside the other pure
+// hierarchy rules (the file already owns the `task` fixture and tests
+// composables directly); TaskDetail.vue's own rendering is covered in
+// tests/task-detail.test.ts.
+describe("useTaskDetailTaskSet — pickerCandidates", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("excludes archived tasks AND tasks in an archived list", () => {
+    // GAP-91 (picker): pickerCandidates filtered on t.status alone, so an
+    // ACTIVE task filed in a since-archived list was still offered as an
+    // assignable NEW parent — the one exclusion every other archived-list
+    // consumer (Lists grouping, composer/editor pickers, count_open_tasks)
+    // already enforces.
+    const self = task({ path: "/v/a.md", vaultId: "v1" });
+    const set = useTaskDetailTaskSet(ref(self), ref(["Old"]));
+    set.allTasks.value = [
+      self,
+      task({ path: "/v/live.md", vaultId: "v1", list: "Live" }),
+      task({ path: "/v/arch.md", vaultId: "v1", status: "archived" }),
+      task({ path: "/v/inarchlist.md", vaultId: "v1", list: "Old" }),
+      task({ path: "/v/casefold.md", vaultId: "v1", list: "OLD" }),
+    ];
+    expect(set.pickerCandidates.value.map((t) => t.path).sort()).toEqual([
+      "/v/a.md",
+      "/v/live.md",
+    ]);
+  });
+
+  it("keeps allTasks archived-INCLUSIVE even as the picker narrows", () => {
+    // Only the OPTIONS narrow. allTasks decides whether a relationship EXISTS,
+    // and an archived (or archived-list) task can still be somebody's parent —
+    // hiding it from resolution is the silent-overwrite bug PR #77 closed.
+    const self = task({ path: "/v/a.md", vaultId: "v1" });
+    const set = useTaskDetailTaskSet(ref(self), ref(["Old"]));
+    set.allTasks.value = [
+      self,
+      task({ path: "/v/arch.md", vaultId: "v1", status: "archived" }),
+      task({ path: "/v/inarchlist.md", vaultId: "v1", list: "Old" }),
+    ];
+    expect(set.allTasks.value).toHaveLength(3);
+    expect(set.pickerCandidates.value).toHaveLength(1);
+  });
+
+  it("reacts when a list is archived after the set was loaded", () => {
+    // archivedLists is a REF loaded asynchronously by TaskDetail's loadLists;
+    // a snapshot taken at call time would leave the picker offering a list
+    // that had since been archived.
+    const self = task({ path: "/v/a.md", vaultId: "v1" });
+    const archived = ref<string[]>([]);
+    const set = useTaskDetailTaskSet(ref(self), archived);
+    set.allTasks.value = [self, task({ path: "/v/x.md", vaultId: "v1", list: "Old" })];
+    expect(set.pickerCandidates.value).toHaveLength(2);
+    archived.value = ["Old"];
+    expect(set.pickerCandidates.value).toHaveLength(1);
   });
 });

@@ -4,6 +4,7 @@ import { computed, type Ref, ref } from "vue";
 import { logWarning } from "../logging";
 import type { AggTask, TaskItem } from "../types";
 import { buildParentIndex, descendantPaths } from "../utils/taskHierarchy";
+import { archivedMatcher } from "../utils/taskSections";
 
 /**
  * Loads the vault's task set that useTaskHierarchy resolves the Parent row
@@ -25,10 +26,23 @@ import { buildParentIndex, descendantPaths } from "../utils/taskHierarchy";
  * `TaskParentPicker`'s options — you should not be able to newly ASSIGN an
  * archived task as a parent, only inherit one that was already set before it
  * was archived.
+ *
+ * "Archived" there means the task's own `status` OR its LIST being archived
+ * (GAP-91): list archiving is meant to hide a whole list and everything filed
+ * under it from every picker, and this was the one archived-list consumer that
+ * never applied the rule. `archivedLists` is a REF, not a snapshot — TaskDetail
+ * loads it asynchronously, so a value captured at call time would leave the
+ * picker offering a list archived moments later.
  */
-export function useTaskDetailTaskSet(task: Ref<AggTask>) {
+export function useTaskDetailTaskSet(task: Ref<AggTask>, archivedLists: Ref<string[]>) {
   const allTasks = ref<AggTask[]>([]);
-  const pickerCandidates = computed(() => allTasks.value.filter((t) => t.status !== "archived"));
+  // Narrows only the OPTIONS. `allTasks` stays archived-INCLUSIVE above: it
+  // decides whether a relationship EXISTS, and an archived (or archived-list)
+  // task can still be somebody's parent.
+  const pickerCandidates = computed(() => {
+    const inArchivedList = archivedMatcher(archivedLists.value);
+    return allTasks.value.filter((t) => t.status !== "archived" && !inArchivedList(t.list));
+  });
 
   async function reload(): Promise<void> {
     try {

@@ -34,12 +34,17 @@ const vaults = useVaultsStore();
 // its cheap two-row patch when a write turns Task IDs on for the vault: the
 // set was loaded id-suppressed, so EVERY cached id is null, not just the two
 // rows that write touched (Codex P2, PR #77).
+// Declared HERE, above its first consumer, rather than beside the sibling
+// list refs below: `pickerCandidates` reads it to drop archived-list tasks
+// from the parent options (GAP-91), and a `const` used before its declaration
+// is a TDZ error, not merely a style question. `loadLists` (below) fills it.
+const archivedLists = ref<string[]>([]);
 const {
   allTasks,
   pickerCandidates,
   reload: reloadTaskSet,
   invalidParentPaths,
-} = useTaskDetailTaskSet(taskRef);
+} = useTaskDetailTaskSet(taskRef, archivedLists);
 const { parent, children, progress, setParent } = useTaskHierarchy(taskRef, allTasks, busy, reloadTaskSet);
 const notifications = useNotificationsStore();
 const subtasksRef = ref<InstanceType<typeof TaskSubtasks> | null>(null);
@@ -67,7 +72,6 @@ const draftList = ref(props.task.list);
 // than silently rendering a blank picker (Codex P2, PR #76).
 const allLists = ref<string[]>([]);
 const listOrder = ref<string[]>([]);
-const archivedLists = ref<string[]>([]);
 async function loadLists(): Promise<void> {
   try {
     const [all, cfg] = await Promise.all([
