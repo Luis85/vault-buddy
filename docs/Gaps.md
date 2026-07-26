@@ -1125,6 +1125,26 @@ loaded elsewhere in `TaskDetail.vue` for the List picker) into
 `!archivedMatcher(archivedLists)(t.list)` in addition to the existing
 status check — the same two-part test `useTaskDisplay.ts` already applies.
 
+**Third facet, same root cause — the open-subtask COUNT.**
+`src/utils/taskHierarchy.ts` (`buildHierarchyInfoByVault`, line 134) counts a
+child from its `status`/`done` fields alone and is never handed
+`archivedLists` at all. So an open child inside a since-archived list keeps
+inflating its parent's subtask badge **even after a reload**, while the
+default Lists view and both the per-vault and All-tasks open counts exclude
+that same child — the badge and the counts beside it disagree about the same
+task. This is the same defect as the picker above (the frontend hierarchy
+code has no notion of list archiving), reached through the main list rather
+than Task Detail, which is why it is recorded here rather than as its own
+entry. **Fix shape:** thread the per-vault `archivedLists` into
+`useTaskListHierarchy`'s computed and apply `archivedMatcher` alongside the
+existing `done` test — note this is a per-VAULT map in the aggregate ("All
+tasks") view, so it must be keyed by vault exactly as the parent index
+already is, not flattened into one set.
+**Whoever picks this up: fix all three facets together.** They are one piece
+of work — "the frontend hierarchy code does not know about archived lists" —
+and fixing any one alone leaves the surfaces disagreeing in a different
+place rather than agreeing.
+
 ### GAP-92 · Low · Add Subtask can create a NEW subtask inside an ARCHIVED list
 `src/components/TaskDetail.vue` (`onAddSubtask`, line 189: `list:
 props.task.list`). The currently-open Task's own List is reachable even when
