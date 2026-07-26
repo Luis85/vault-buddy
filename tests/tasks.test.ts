@@ -2170,6 +2170,44 @@ describe("Tasks", () => {
     expect(store.taskDetailTask?.path).toBe("/v1/p.md");
   });
 
+  it("does not open a busy parent's detail from the chip (Fix 2: gate on the PARENT's own busy state)", async () => {
+    // The parent may have its OWN write in flight elsewhere in the same list
+    // (its own toggle/archive/edit/schedule) — Detail's save/delete replaces
+    // the whole document, and racing that in-flight write is exactly what
+    // onOpenTask already guards against for a title click
+    // (useTaskActions.ts), just keyed on the TARGET (parent) row here, not
+    // the clicked (child) row the chip lives on.
+    const parent = task({ vaultId: "v1", id: "p", path: "/v1/p.md", title: "Big" });
+    const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const { useVaultsStore } = await import("../src/stores/vaults");
+    const store = useVaultsStore();
+    let resolveToggle: (() => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "list_vaults") return [{ id: "v1", name: "V", path: "C:/v", open: false }];
+      if (cmd === "list_tasks") return [parent, child];
+      if (cmd === "set_task_status") {
+        return new Promise<null>((r) => {
+          resolveToggle = () => r(null);
+        });
+      }
+      return undefined;
+    });
+    const wrapper = mount(Tasks, { props: { vaultId: "v1" } });
+    await flushPromises();
+    // Start the PARENT's OWN toggle — its row's write is now in flight.
+    const parentRow = wrapper
+      .findAll('[data-testid="task-row"]')
+      .find((r) => r.text().includes("Big"))!;
+    await parentRow.get('[data-testid="task-checkbox"]').trigger("change");
+    // Click the CHILD's parent chip WHILE the parent's own write is pending.
+    const chip = wrapper.get('[data-testid="task-parent-chip"]');
+    await chip.trigger("click");
+    expect(store.taskDetailTask).toBeNull(); // must NOT have navigated
+    resolveToggle?.();
+    await flushPromises();
+    wrapper.unmount();
+  });
+
   it("still resolves an archived parent's chip (Fix 1: the list shares Task Detail's fix)", async () => {
     // Task Detail's own fix for the identical blind spot: list_tasks (the
     // view) excludes status:archived rows, so a resolver built only from the

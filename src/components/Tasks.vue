@@ -520,7 +520,7 @@ async function add(payload: AddPayload) {
               @archive="archive(task)"
               @edit="startEdit(task, bucket.key)"
               @open="onOpenTask(task, $event)"
-              @open-parent="vaultsStore.openTaskDetail(hierarchyOf(task).parent!)"
+              @open-parent="!isBusy(hierarchyOf(task).parent!.path) && vaultsStore.openTaskDetail(hierarchyOf(task).parent!)"
               @tag-click="tagFilter = $event"
               @schedule="quickSchedule(task, $event)"
               @reorder-pointer-down="onHandlePointerDown($event, bucket.key, i)"
