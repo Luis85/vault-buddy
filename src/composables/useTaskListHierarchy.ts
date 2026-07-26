@@ -42,8 +42,16 @@ const NO_HIERARCHY: HierarchyInfo = { parent: null, openSubtaskCount: 0 };
  */
 export function useTaskListHierarchy() {
   const hierarchyTasks = ref<AggTask[]>([]);
+  // Per-vault archived list names, feeding the open-subtask count's
+  // archived-list exclusion (GAP-91). A MAP, never one flat set: the aggregate
+  // view renders many vaults at once and list names collide across them.
+  // Populated asynchronously — configs load lazily per vault — so it starts
+  // empty and the count simply excludes nothing until the first config lands.
+  const archivedByVault = ref(new Map<string, string[]>());
   const byVault = computed(() => buildParentIndexByVault(hierarchyTasks.value));
-  const infoByVault = computed(() => buildHierarchyInfoByVault(hierarchyTasks.value, byVault.value));
+  const infoByVault = computed(() =>
+    buildHierarchyInfoByVault(hierarchyTasks.value, byVault.value, archivedByVault.value),
+  );
 
   function hierarchyOf(task: AggTask): HierarchyInfo {
     return infoByVault.value.get(task.vaultId)?.get(task.path) ?? NO_HIERARCHY;
@@ -65,5 +73,9 @@ export function useTaskListHierarchy() {
     if (found) found.status = status;
   }
 
-  return { hierarchyOf, setHierarchyTasks, setHierarchyStatus };
+  function setArchivedByVault(next: Map<string, string[]>): void {
+    archivedByVault.value = next;
+  }
+
+  return { hierarchyOf, setHierarchyTasks, setHierarchyStatus, setArchivedByVault };
 }

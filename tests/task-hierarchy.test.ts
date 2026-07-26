@@ -254,7 +254,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const doneKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md", done: true });
     const all = [p, openKid, doneKid];
     const byVault = buildParentIndexByVault(all);
-    const info = buildHierarchyInfoByVault(all, byVault);
+    const info = buildHierarchyInfoByVault(all, byVault, new Map());
     expect(info.get("v1")!.get("/v1/p.md")).toEqual({ parent: null, openSubtaskCount: 1 });
     expect(info.get("v1")!.get("/v1/c1.md")!.parent).toBe(p);
   });
@@ -268,7 +268,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const unrelated = task({ vaultId: "v2", id: "x", path: "/Shared.md" });
     const all = [parent, openKid, unrelated];
     const byVault = buildParentIndexByVault(all);
-    const info = buildHierarchyInfoByVault(all, byVault);
+    const info = buildHierarchyInfoByVault(all, byVault, new Map());
     expect(info.get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(1);
   });
 
@@ -280,7 +280,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
     const all = [wrongVaultParent, parent, child];
     const byVault = buildParentIndexByVault(all);
-    const info = buildHierarchyInfoByVault(all, byVault);
+    const info = buildHierarchyInfoByVault(all, byVault, new Map());
     expect(info.get("v1")!.get("/v1/c.md")!.parent).toBe(parent);
   });
 
@@ -298,7 +298,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
     const all = [parent, wrongVaultParent, child];
     const byVault = buildParentIndexByVault(all);
-    const info = buildHierarchyInfoByVault(all, byVault);
+    const info = buildHierarchyInfoByVault(all, byVault, new Map());
     expect(info.get("v1")!.get("/v1/c.md")!.parent?.title).toBe("Right");
   });
 
@@ -309,7 +309,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const a = task({ vaultId: "v1", path: "/v1/a.md" });
     const b = task({ vaultId: "v1", path: "/v1/b.md" });
     const byVault = buildParentIndexByVault([a, b]);
-    expect(buildHierarchyInfoByVault([a, b], byVault).size).toBe(0);
+    expect(buildHierarchyInfoByVault([a, b], byVault, new Map()).size).toBe(0);
   });
 
   it("never merges open-subtask counts across two vaults whose PARENT rows share a literal path", () => {
@@ -326,7 +326,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const childV2 = task({ vaultId: "v2", id: "c2", parentId: "p", path: "/v2/c2.md" });
     const all = [parentV1, childV1, parentV2, childV2];
     const byVault = buildParentIndexByVault(all);
-    const info = buildHierarchyInfoByVault(all, byVault);
+    const info = buildHierarchyInfoByVault(all, byVault, new Map());
     expect(info.get("v1")!.get("/Shared-Parent.md")!.openSubtaskCount).toBe(1);
     expect(info.get("v2")!.get("/Shared-Parent.md")!.openSubtaskCount).toBe(1);
   });
@@ -343,7 +343,7 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const openKid = task({ vaultId: "v1", id: "c2", parentId: "p", path: "/v1/c2.md" });
     const all = [p, archivedKid, openKid];
     const byVault = buildParentIndexByVault(all);
-    expect(buildHierarchyInfoByVault(all, byVault).get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(1);
+    expect(buildHierarchyInfoByVault(all, byVault, new Map()).get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(1);
   });
 
   it("still resolves an archived task as a parent (only the subtask COUNT excludes archived)", () => {
@@ -353,6 +353,53 @@ describe("buildParentIndexByVault / buildHierarchyInfoByVault", () => {
     const child = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
     const all = [archivedParent, child];
     const byVault = buildParentIndexByVault(all);
-    expect(buildHierarchyInfoByVault(all, byVault).get("v1")!.get("/v1/c.md")!.parent).toBe(archivedParent);
+    expect(buildHierarchyInfoByVault(all, byVault, new Map()).get("v1")!.get("/v1/c.md")!.parent).toBe(archivedParent);
+  });
+
+  it("excludes an open child in an archived LIST from its parent's count", () => {
+    // GAP-91 (count facet): archiving a list hides it from the Lists view and
+    // from count_open_tasks, but the subtask badge kept counting its children —
+    // so the badge and the open counts rendered beside it disagreed about the
+    // same task, even after a full reload.
+    const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const c = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", list: "Old" });
+    const all = [p, c];
+    const info = buildHierarchyInfoByVault(all, buildParentIndexByVault(all), new Map([["v1", ["Old"]]]));
+    expect(info.get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(0);
+  });
+
+  it("keys archived lists PER VAULT so one vault cannot suppress another's count", () => {
+    // Ids AND archived sets are vault-scoped. A flattened set would let "Old"
+    // archived in v1 silently zero an identically-named LIVE list in v2 — the
+    // aggregate ("All tasks") view renders both vaults at once.
+    const p1 = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const c1 = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", list: "Old" });
+    const p2 = task({ vaultId: "v2", id: "p", path: "/v2/p.md" });
+    const c2 = task({ vaultId: "v2", id: "c", parentId: "p", path: "/v2/c.md", list: "Old" });
+    const all = [p1, c1, p2, c2];
+    const info = buildHierarchyInfoByVault(all, buildParentIndexByVault(all), new Map([["v1", ["Old"]]]));
+    expect(info.get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(0);
+    expect(info.get("v2")!.get("/v2/p.md")!.openSubtaskCount).toBe(1);
+  });
+
+  it("matches archived list names case-insensitively, like every other surface", () => {
+    // archivedMatcher is the ONE membership rule (Lists grouping, the pickers,
+    // count_open_tasks); a bespoke comparison here would silently drift from it.
+    const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md" });
+    const c = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md", list: "OLD" });
+    const all = [p, c];
+    const info = buildHierarchyInfoByVault(all, buildParentIndexByVault(all), new Map([["v1", ["old"]]]));
+    expect(info.get("v1")!.get("/v1/p.md")!.openSubtaskCount).toBe(0);
+  });
+
+  it("still resolves a parent that sits in an archived list (only the COUNT is scoped)", () => {
+    // The same one-directional rule the archived-STATUS pair above pins: an
+    // archived-list task must not inflate a count, but hiding it from
+    // resolution would reintroduce the silent-overwrite bug PR #77 closed.
+    const p = task({ vaultId: "v1", id: "p", path: "/v1/p.md", list: "Old", title: "Parent" });
+    const c = task({ vaultId: "v1", id: "c", parentId: "p", path: "/v1/c.md" });
+    const all = [p, c];
+    const info = buildHierarchyInfoByVault(all, buildParentIndexByVault(all), new Map([["v1", ["Old"]]]));
+    expect(info.get("v1")!.get("/v1/c.md")!.parent).toBe(p);
   });
 });

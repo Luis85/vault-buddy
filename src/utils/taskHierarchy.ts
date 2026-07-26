@@ -1,4 +1,5 @@
 import type { AggTask } from "../types";
+import { archivedMatcher } from "./taskSections";
 
 // Mirrors core::tasks::hierarchy exactly (src-tauri/core/src/tasks/hierarchy.rs)
 // so the frontend and core can never disagree about the same vault's Parent
@@ -124,14 +125,41 @@ function taskByPath(tasks: AggTask[]): Map<string, Map<string, AggTask>> {
 }
 
 /** Pass 2 of {@link buildHierarchyInfoByVault}: `(vaultId, parentPath)` ->
- * open (not done, not archived) child count. */
+ * open child count. "Open" means not done, not archived, AND not filed in one
+ * of its OWN vault's archived lists: archiving a list hides it from the Lists
+ * view and from `count_open_tasks`, so a badge that kept counting its children
+ * disagreed with the open counts rendered right beside it, even after a full
+ * reload (GAP-91, count facet).
+ *
+ * `archivedByVault` is keyed PER VAULT, never flattened: ids and archived sets
+ * are both vault-scoped, and the aggregate ("All tasks") view renders many
+ * vaults at once — one flat set would let a list archived in vault A silently
+ * zero an identically-named LIVE list in vault B.
+ *
+ * Only the COUNT is scoped this way. An archived-list task still resolves AS a
+ * parent, exactly like an archived one: hiding a parent from resolution is the
+ * bug PR #77's Fix 1 closed (an invisible parent invited a silent overwrite
+ * through the picker). */
 function openSubtaskCounts(
   tasks: AggTask[],
   byVault: Map<string, Map<string, string>>,
+  archivedByVault: Map<string, string[]>,
 ): Map<string, Map<string, number>> {
   const counts = new Map<string, Map<string, number>>();
+  // One matcher per vault, built lazily and memoized — archivedMatcher
+  // allocates a Set, which must not happen once per task in a large vault.
+  const matchers = new Map<string, (list: string) => boolean>();
+  const inArchivedList = (vaultId: string, list: string) => {
+    let match = matchers.get(vaultId);
+    if (!match) {
+      match = archivedMatcher(archivedByVault.get(vaultId) ?? []);
+      matchers.set(vaultId, match);
+    }
+    return match(list);
+  };
   for (const t of tasks) {
     if (t.done || t.status === "archived") continue;
+    if (inArchivedList(t.vaultId, t.list)) continue;
     const parentPath = byVault.get(t.vaultId)?.get(t.path);
     if (!parentPath) continue;
     const bucket = vaultBucket(counts, t.vaultId);
@@ -164,10 +192,18 @@ function openSubtaskCounts(
  * is exactly the bug Fix 1 closed (an active child's parent going invisible
  * invited a silent overwrite via the picker). `taskByPath`/`openSubtaskCounts`
  * apply that split once, rather than at every call site.
+ *
+ * A task in an ARCHIVED LIST follows the identical one-directional rule
+ * (GAP-91): excluded from the count so the badge agrees with the Lists view
+ * and `count_open_tasks`, but still resolvable as a parent. `archivedByVault`
+ * is REQUIRED rather than defaulted — there is exactly one production caller,
+ * and a silent default would let a future one forget the map and quietly
+ * over-report every count, which is the defect this parameter exists to fix.
  */
 export function buildHierarchyInfoByVault(
   tasks: AggTask[],
   byVault: Map<string, Map<string, string>>,
+  archivedByVault: Map<string, string[]>,
 ): Map<string, Map<string, HierarchyInfo>> {
   const out = new Map<string, Map<string, HierarchyInfo>>();
   // Early-out: no vault has ANY edge (Task IDs off is the default), so every
@@ -177,7 +213,7 @@ export function buildHierarchyInfoByVault(
   if (!hasAnyEdge) return out;
 
   const byPath = taskByPath(tasks);
-  const counts = openSubtaskCounts(tasks, byVault);
+  const counts = openSubtaskCounts(tasks, byVault, archivedByVault);
   for (const t of tasks) {
     const parentPath = byVault.get(t.vaultId)?.get(t.path);
     const parent = parentPath ? (byPath.get(t.vaultId)?.get(parentPath) ?? null) : null;
