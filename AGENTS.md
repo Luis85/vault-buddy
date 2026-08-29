@@ -1816,6 +1816,58 @@ removes the line (or block) entirely, same "absent means gone" semantics as
     children (see docs/Gaps.md for both the orphan and the parent-move
     residuals). Spec:
     `docs/superpowers/specs/2026-07-25-task-subtasks-and-parent-tasks-design.md`.
+  - **Archiving is respected on both sides, with ONE authority each** (the
+    archived-aware-hierarchy increment, closing GAP-90/91/92; spec
+    `docs/superpowers/specs/2026-07-26-archived-aware-task-hierarchy-design.md`).
+    *Write side (core is the authority):* `reject_archived_parent` refuses an
+    ARCHIVED Task as a NEW parent. It is a SHARED phase-1 helper called from
+    BOTH `validate_parent_assignment` AND `add_subtask`'s own phase 1 — those
+    are separate functions sharing per-check helpers (`reject_ambiguous_parent`,
+    `parent_id_unassignable`), NOT one validator, so an inline check at either
+    site silently leaves the other behind; both entry points are tested
+    explicitly for exactly that reason. It governs **assigning** a parent,
+    never **having** one: an existing pair is never re-validated, so a child
+    whose parent was archived later keeps resolving and rendering it (PR #77's
+    Fix 1 — an invisible parent is what invited a silent overwrite through the
+    picker). The refusal is ALSO re-run under the write lock, unconditionally,
+    by `recheck_set_or_update` (shared by `set_task_parent` and `update_task`'s
+    own separate closure) and `recheck_add_subtask` — but that re-check
+    **narrows the window, it does not close it**, and must not be read as a
+    guarantee: `services::set_task_status` takes no `config_write_lock`, so an
+    archive committing between the re-check and phase 3b still lands. That is
+    deliberate. The resulting state — a child whose parent is archived — is
+    byte-identical to the case the rule already permits (archived AFTER the
+    assignment), so there is nothing to prevent; and the only lock that could
+    serialize them is the parent's per-file lock, which would mean holding one
+    file lock while taking another for the child, and this codebase documents
+    exactly one ordering (`config_write_lock` → per-file) and no file→file
+    ordering at all. The re-check earns its place on the far likelier case: a
+    parent already archived before phase 1, where the scan is simply stale.
+    **Both rechecks require CANONICAL paths** — they match `parent` against
+    `list_tasks_structural`'s canonical rows, so a raw registry path silently
+    matches nothing and refuses nothing; every production caller goes through
+    `canonical_task_in_root` first, and tests must too (a Linux tempdir root is
+    already canonical, so a non-canonical test path passes there and fails only
+    on Windows' `\\?\` form — CI caught exactly that).
+    Core deliberately does **not** know about archived LISTS: that
+    would refuse a Task which is itself active and plainly visible under
+    Plan/Tags grouping. *Display side (frontend):* a Task that is archived OR
+    filed in an archived list is neither offered as a new parent
+    (`pickerCandidates`, reading the `archivedLists` REF so a list archived
+    after load stops being offered) nor counted in a parent's open-subtask
+    badge (`openSubtaskCounts`) — both through the shared `archivedMatcher`,
+    never a second membership rule. Only the COUNT and the OPTIONS narrow;
+    resolution stays archived-inclusive on both. The archived set is keyed
+    **per vault** (`archivedByVault`, a Map — the aggregate view renders many
+    vaults at once and list names collide across them), which is why
+    `Tasks.vue`'s aggregate fan-out loads each vault's config alongside its
+    lists: without it `archivedLists` is `[]` in the All-tasks view by
+    construction and the exclusion silently does nothing there. The
+    `buildHierarchyInfoByVault` parameter is REQUIRED, not defaulted — a
+    silent default would let a future caller quietly over-report every count.
+    A new subtask still INHERITS its parent's list; when that list is archived
+    the create path DISCLOSES it rather than rerouting the child away from its
+    parent. The disabled Add-subtask input is a UI hint; core is the authority.
 
 ## The search domain (`core/src/search.rs` + `search_commands.rs` + `Search.vue`)
 

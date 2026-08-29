@@ -19,6 +19,11 @@ defineProps<{
   children: AggTask[];
   progress: { done: number; total: number };
   busy: boolean;
+  /** Non-null when Add subtask must be inert, carrying the reason to show.
+   * A UI HINT ONLY — core's `reject_archived_parent` is the authority and
+   * refuses the write regardless of what this renders. Without the hint the
+   * user meets an error toast on submit instead of an affordance (GAP-90). */
+  disabledReason?: string | null;
 }>();
 const emit = defineEmits<{
   (e: "toggle", task: AggTask): void;
@@ -103,10 +108,16 @@ defineExpose({ reset });
       type="text"
       placeholder="Add subtask"
       aria-label="Add subtask"
-      :disabled="busy"
+      :disabled="busy || Boolean(disabledReason)"
       class="rounded-control border border-white/10 bg-white/5 px-2 py-1 text-xs text-fg placeholder:text-fg-subtle focus:border-focus focus:outline-none disabled:cursor-default disabled:opacity-50"
       @keydown.enter="onEnter"
       @keydown.esc="onEscape"
     >
+    <p
+      v-if="disabledReason"
+      class="text-micro text-fg-subtle"
+    >
+      {{ disabledReason }}
+    </p>
   </div>
 </template>

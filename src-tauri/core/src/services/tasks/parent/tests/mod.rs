@@ -696,3 +696,96 @@ fn clearing_removes_both_keys() {
     assert!(!child.contains("parent-id"));
     assert!(!child.contains("parent:"));
 }
+
+/// An archived task must not become a NEW parent (GAP-90). The Parent picker
+/// already excluded archived tasks from the other direction, but nothing
+/// enforced that policy on the write path: neither phase-1 site inspected
+/// `status`, so an archived task was accepted exactly like any other.
+#[test]
+fn refuses_an_archived_parent_without_enabling_ids_or_stamping() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &["c.md"]);
+    let root = tasks_root(&paths, &vault);
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: archived\ntitle: \"P\"\n---\n",
+    );
+    let before = std::fs::read_to_string(&parent).unwrap();
+    assert!(
+        set_task_parent(&paths, &vault, &root.join("c.md"), Some(&parent)).is_err(),
+        "an archived parent must be refused"
+    );
+    // Phase separation: the refusal precedes EVERY side effect.
+    assert_eq!(std::fs::read_to_string(&parent).unwrap(), before);
+    assert!(!config_for(&paths, &vault).task_id_enabled);
+}
+
+/// The SECOND entry point. `add_subtask` has its OWN phase 1 (it has no child
+/// path to validate yet, so it cannot call `validate_parent_assignment`), so a
+/// test of `set_task_parent` alone could not catch this site losing the check —
+/// the exact "fixed one site, left its sibling" defect this branch keeps
+/// hitting, and the one Codex flagged on this increment's own spec (PR #78).
+#[test]
+fn add_subtask_refuses_an_archived_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_disabled(dir.path(), &[]);
+    let (vault_path, root, cfg) = tasks_root_for(&paths, &vault).unwrap();
+    let parent = write(
+        &root,
+        "p.md",
+        "---\ntype: Task\nstatus: archived\ntitle: \"P\"\n---\n",
+    );
+    let before = std::fs::read_to_string(&parent).unwrap();
+    assert!(
+        add_subtask(
+            &paths,
+            &vault,
+            &vault_path,
+            &root,
+            &cfg,
+            &parent,
+            &root,
+            "Child",
+            "2026-07-26",
+            None,
+            None,
+            &[],
+            None,
+        )
+        .is_err(),
+        "add_subtask must refuse an archived parent too"
+    );
+    assert_eq!(std::fs::read_to_string(&parent).unwrap(), before);
+    assert!(!config_for(&paths, &vault).task_id_enabled);
+}
+
+/// NON-REGRESSION for PR #77's Fix 1: the rule governs ASSIGNING a parent,
+/// never HAVING one. A relationship set while the parent was active must keep
+/// resolving after the parent is archived — hiding an archived parent is
+/// exactly what invited a silent overwrite through the picker.
+#[test]
+fn an_existing_relationship_survives_the_parent_being_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let (paths, vault) = fixture_with_ids_enabled(dir.path(), &["p.md", "c.md"]);
+    let root = tasks_root(&paths, &vault);
+    let parent = root.join("p.md");
+    let child = root.join("c.md");
+    set_task_parent(&paths, &vault, &child, Some(&parent)).unwrap();
+    // Archive the parent AFTER the relationship exists.
+    let archived = std::fs::read_to_string(&parent)
+        .unwrap()
+        .replace("status: new", "status: archived");
+    std::fs::write(&parent, archived).unwrap();
+
+    let prop = config_for(&paths, &vault)
+        .task_id_property_name()
+        .to_string();
+    let all = tasks::list_tasks_structural(&root, Some(&prop)).unwrap();
+    let index = tasks::parent_index(&all);
+    let canon_child = std::fs::canonicalize(&child).unwrap();
+    assert!(
+        index.contains_key(canon_child.as_path()),
+        "an archived parent must still resolve for an existing child"
+    );
+}
