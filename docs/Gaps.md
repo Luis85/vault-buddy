@@ -918,6 +918,53 @@ other anchor-adjacent fallback in this module) or loop `strip_anchor`
 until it stops matching, so a doubly (or N-times) anchored source degrades
 safely instead of leaking a second anchor into the child.
 
+### GAP-100 · Low · `render_extra_frontmatter` re-emits a user-quoted sexagesimal scalar bare
+`src-tauri/core/src/template.rs` (`render_extra_frontmatter`'s
+sentinel-round-trip through `serde_yaml_ng`). A template line quoting its
+own placeholder, e.g. `len: "{{duration}}"`, renders as `len: 3:17` — the
+quotes the author wrote are gone. This is pre-existing shared-helper
+behaviour that the capture-note, document-import, task, and (as of this
+branch) screen-capture template surfaces all inherit equally; it was not
+introduced by Screen Capture, only newly exercised by it
+(`screen_note.rs`'s `template_placeholders_resolve` test pins the exact
+`len: 3:17` output as current behaviour, not a bug it's asserting against).
+**The risk is narrower than "re-quoting is dropped" sounds:**
+`serde_yaml_ng` already re-quotes every implicit int/float/bool/null on
+re-emit (`1.0` → `'1.0'`, `197` → `'197'`, `true` → `'true'`), so the only
+shape that reaches the page unquoted is a **sexagesimal-looking string**
+such as `3:17` or `1:02:03` — precisely `capture_note::format_duration`'s
+output, the one placeholder value with that shape today. Under YAML 1.2 /
+js-yaml 4.x — what Obsidian ships — `3:17` is already a plain string with
+no special sexagesimal handling, so practical impact in Obsidian is nil.
+The exposure is confined to a YAML-1.1 consumer (e.g. a Python
+`yaml.safe_load` on an old PyYAML, or a Dataview-adjacent tool built on an
+older parser), which reads `3:17` as the integer 197, not the string.
+**Severity: Low / informational** — narrow consumer surface, no data loss,
+and the workaround (don't wrap `{{duration}}` in quotes in a template,
+since the renderer already quotes every managed field itself) is already
+available. **Fix shape, if ever taken up:** have the sentinel round-trip
+preserve an explicit source quote style per key rather than only
+re-deriving it from the parsed value's type.
+
+### GAP-101 · Medium · The region-capture geometry path can hand H.264 an odd-dimension frame
+`src-tauri/core/src/screen_geometry.rs` (`to_physical`, `clamp_to_frame`).
+Neither function constrains its output `width`/`height` to be even.
+`to_physical` on a 401-px logical width at a 1.5 DPI scale yields 601;
+`clamp_to_frame` against a 1921-px-wide source frame can hand back a
+121-px-wide clamp. H.264 with NV12/4:2:0 chroma subsampling requires even
+dimensions on both axes — each chroma plane is half resolution on each
+axis, so an odd luma dimension has no integer chroma-plane size. Windows
+Media Foundation's H.264 encoder MFT is documented to reject, or silently
+pad, an odd-dimension input media type, either of which the region-capture
+path (spec §5.2, §8.1) will hit the moment the real encoder replaces
+`screen::engine`'s Phase 1 stub. Neither the design spec nor the current
+implementation mentions the constraint anywhere. **Fix shape:** round the
+output down to the nearest even value in `clamp_to_frame` (in `core`,
+where it is already unit-tested and where every caller — the region
+picker, capture start — already goes through it), not improvised
+ad hoc in the Windows capture arm once it lands. Owner: Phase 2 (the
+capture-engine phase, alongside the fMP4 spike).
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
@@ -1638,6 +1685,35 @@ feature; `check:loc` passes again. The file's standing "splitting it into
 per-domain modules is a separate refactor" note remains open as future work,
 but no longer red-lines CI.
 
+### GAP-102 · Low · `vault_buddy_screen` is Linux-gated only, and outside the coverage floor — correct today, needs a deliberate re-decision once `engine` stops being a stub
+`.github/workflows/ci.yml`: the `windows-app` job's post-build `cargo test`
+line (currently `-p vault_buddy_core -p vault_buddy_capture -p
+vault_buddy_transcribe`) does not include `-p vault_buddy_screen`, and the
+`rust-core` job's `cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture
+-p vault_buddy_transcribe --fail-under-lines 94` line excludes it from the
+line-coverage floor too (the `windows-app`/`rust-core` clippy and non-coverage
+test lines already DO include `-p vault_buddy_screen`, per the CI-gating
+commit that added the crate). **Both omissions are correct as of Phase 1**:
+`screen::timeline`/`screen_geometry`/`screen_capture_config` are pure and
+fully exercised on Linux, and `screen::engine` (`src-tauri/screen/src/
+engine.rs`) is a deliberate, platform-independent Phase-1 stub — one
+unconditional `Err(ScreenError::Unsupported)` body with no Windows-only code
+path yet — so folding it into the 94% floor today would drag the ratchet for
+a function with no real behaviour to cover, and there is nothing
+Windows-specific yet for `windows-app`'s Rust tests to exercise that
+`rust-core` doesn't already. **The gap:** the moment Phase 2's `cfg(windows)`
+split lands real capture logic in `engine.rs` (spec §4.1, §6), Windows
+becomes the *only* place that code can execute at all, and neither CI edit
+will have been revisited automatically — a Windows-only regression in the
+capture engine could land with `windows-app` never having run its tests, and
+`rust-core`'s coverage floor would keep passing while the crate's real logic
+goes uncovered. **Fix shape:** two one-line CI edits, made together, timed to
+land in the same PR as Phase 2's `cfg(windows)` split: add `-p
+vault_buddy_screen` to the `windows-app` test line, and to the `rust-core`
+coverage line once `engine.rs` has tests worth counting (adding it before
+then would just make the floor read a padded, meaningless percentage over a
+one-line stub). Owner: Phase 2.
+
 ## 7. Untested paths
 
 What has no automated coverage today, by area. (The Vitest suite and the
@@ -1912,6 +1988,48 @@ worse in kind than the pre-async behavior:
   "saving" until reload. Requires a webview reload to resync the wedged
   state first; the old bare-`Ok` had the identical hole.
 
+### GAP-103 · Low · `set_screen_capture_config` (Phase 6) inherits three obligations already visible from Phase 1's config work
+Deferred-by-phasing follow-ups the settings command must not land without,
+found while wiring the seven Screen Capture config fields into
+`vault_config.rs`/`config_merge.rs` (spec §12) ahead of the command that
+will own writing them:
+- **Normalize `screen_fps` on write, not only on read.** `vault_entry`
+  parses `screenFps` through `screen_capture_config::normalize_fps`
+  (line ~411), so an in-memory `VaultCaptureConfig` can only ever hold 30 or
+  60 — but `serialize_vault_entry` (line ~521) hardcodes `if v.screen_fps !=
+  30` and writes the raw field verbatim, with no call to `normalize_fps` on
+  the way out. This is unreachable **today** only because every DTO the
+  serializer sees came from a normalizing parse; the moment
+  `set_screen_capture_config` accepts an `fps` straight from the frontend's
+  IPC payload (bypassing `vault_entry`'s parse), an out-of-range value like
+  `45` would serialize as `screenFps: 45` and silently normalize to 30 only
+  on the NEXT read — a save-then-immediately-re-read-without-restart
+  mismatch. The command must normalize its incoming DTO value before it
+  ever reaches `serialize_vault_entry`.
+- **Document the seven keys in `docs/DEVELOPMENT.md`'s `config.json`
+  reference.** This phase deliberately left that doc untouched (Phase 1 is
+  core-only, no settings UI or IPC surface yet) — `screenCaptureFolder`,
+  `screenCaptureDateFolders`, `screenQuality`, `screenFps`,
+  `screenCreateNote`, `screenExtraFrontmatter`, `screenBodyTemplate` are
+  parsed and round-tripped today but appear in no human-facing config
+  reference, mirroring the precedent every other settings command's launch
+  PR follows (`mcp`, `document_import`, `transcription` sections are all
+  documented there).
+- **Take `capture_config::config_write_lock()`.** `set_screen_capture_config`
+  is a seventh settings surface writing into the same `VaultCaptureConfig`
+  struct capture/transcription/documents/tasks/task-id/task-lists/
+  task-template settings already share — precisely the struct GAP-83's
+  single-lock-plus-per-file-lock discipline exists to protect. Landing it
+  under any lock other than the one core lock (or under no lock) would
+  reopen the exact desync GAP-83 closed, just for an eighth writer instead
+  of a seventh.
+
+Owner: Phase 6 (the settings-surface phase). None of these are bugs in
+Phase 1's landed code — `config_merge.rs::merge_capture_owned` already
+carries the `// Screen Capture is owned by set_screen_capture_config
+(phase 6)` comment above the fields it preserves — they are obligations
+the next phase inherits and must not skip.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
@@ -1950,6 +2068,39 @@ Every catalogued reference was corrected:
   increment-1 spec) were repointed to the new path.
 - No CHANGELOG; release bodies are boilerplate. No SECURITY.md (updater
   key rotation/compromise procedure). See GAP-44.
+
+### GAP-104 · Low · The screen-capture spec documents a `{{title}}` template placeholder the renderer never emits
+`docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` §9.1
+(lines ~551-552) documents `screenBodyTemplate`'s placeholders as
+`{{title}}, {{date}}, {{duration}}, {{source}}`. The implemented `vars` map
+in `core::screen_note::render_screen_note` (`src-tauri/core/src/
+screen_note.rs`) is `recordedAt`, `date`, `duration`, `source`,
+`resolution`, `vault` — there is no `title` key at all, and
+`ScreenNoteMeta` carries no title field for one to read from.
+`core::template::substitute` renders an unresolved placeholder as empty
+(the documented behaviour of every other template surface — an unknown
+token must never leak a literal `{{typo}}`), so a vault that follows the
+published spec verbatim and writes `# {{title}}` into its body template
+silently gets a bare `# ` heading with the title dropped — discoverable
+only by opening the note, since nothing errors.
+
+**Recommended resolution: amend the spec, not the implementation.** A
+screen note's title *is* its filename — the renderer only ever receives
+that as the derived `mp4_file_name` parameter it already writes into the
+managed embed line, so adding a duplicate `title` var to `vars` would mean
+carrying the same name under two different keys for no consumer that needs
+it; Obsidian's own file-name-as-title convention already surfaces it for
+free. The spec's placeholder list at §9.1/§12 should drop `{{title}}`.
+
+The spec also under-documents the other direction of the same table: three
+of the six implemented `vars` — `recordedAt`, `resolution`, and `vault` —
+are live, substitutable placeholders today that the spec's placeholder list
+never mentions at all.
+
+Owner: Phase 5 (the phase that ships `screenExtraFrontmatter`/
+`screenBodyTemplate` end-to-end through the settings UI); correct the spec
+text before that phase's PR quotes it as the source of truth for the
+settings card's help copy.
 
 ## 10. Verified sound
 

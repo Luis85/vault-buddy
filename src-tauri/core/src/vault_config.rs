@@ -1239,6 +1239,30 @@ mod tests {
         assert_eq!(v.screen_body_template.as_deref(), Some("## Notes"));
     }
 
+    // `screen_capture_root`'s `.map(str::trim).filter(|s| !s.is_empty())`
+    // pair was previously asserted only at its two endpoints (None → default,
+    // an already-clean "Demos" → "Demos") — never the trim/blank branch in
+    // between. Without this, a refactor that dropped the trim-or-filter step
+    // would pass every existing test while a whitespace-only folder value
+    // silently targeted a literal blank-named folder on disk (this accessor
+    // is the one Phase 2's capture path builder depends on for every write).
+    #[test]
+    fn screen_capture_root_trims_and_treats_blank_as_unset() {
+        let blank = vault_entry(&serde_json::json!({ "screenCaptureFolder": "   " }));
+        assert_eq!(
+            blank.screen_capture_root(),
+            "Screen Captures",
+            "whitespace-only folder falls back to the default"
+        );
+
+        let padded = vault_entry(&serde_json::json!({ "screenCaptureFolder": " Demos " }));
+        assert_eq!(
+            padded.screen_capture_root(),
+            "Demos",
+            "surrounding whitespace is trimmed off a real value"
+        );
+    }
+
     // Per-field defensive parse: one malformed value defaults ONLY itself.
     // A derived deserializer would reject the whole entry and silently reset
     // every other setting in the vault.

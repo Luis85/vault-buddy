@@ -58,10 +58,16 @@ impl Timeline {
     pub fn split_at(&self, output_ms: u64) -> Timeline {
         let mut elapsed = 0u64;
         let mut out = Vec::with_capacity(self.segments.len() + 1);
-        let mut done = false;
+        // No "already split" veto is needed here: segments are disjoint and
+        // `elapsed` strictly increases across the loop, so `output_ms >
+        // elapsed && output_ms < seg_end` can hold for at most one segment.
+        // Once it does, `elapsed` becomes `seg_end`, which is already known
+        // to exceed `output_ms` — so `output_ms > elapsed` is false for
+        // every later segment regardless of a flag. (Same unreachable-guard
+        // class as `screen_geometry::clamp_to_frame`, b4162da.)
         for seg in &self.segments {
             let seg_end = elapsed + seg.duration_ms();
-            if !done && output_ms > elapsed && output_ms < seg_end {
+            if output_ms > elapsed && output_ms < seg_end {
                 let cut = seg.source_start_ms + (output_ms - elapsed);
                 out.push(Segment {
                     source_start_ms: seg.source_start_ms,
@@ -71,7 +77,6 @@ impl Timeline {
                     source_start_ms: cut,
                     source_end_ms: seg.source_end_ms,
                 });
-                done = true;
             } else {
                 out.push(*seg);
             }

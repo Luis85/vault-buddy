@@ -4,7 +4,7 @@
 //! Lives in its own module (the mcp_config / document_import_config
 //! precedent) for LOC headroom; `vault_config` owns the fields themselves.
 
-/// Default per-vault folder for saved screen captures (spec §9).
+/// Default per-vault folder for saved screen captures (spec §7.4, §12).
 pub const DEFAULT_SCREEN_FOLDER: &str = "Screen Captures";
 
 /// Floor so a degenerate resolution can never ask the encoder for 0 bps,

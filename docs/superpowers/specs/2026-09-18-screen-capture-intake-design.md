@@ -531,14 +531,15 @@ machinery, and the file it writes is created, never overwritten.
 
 ```markdown
 ---
-type: Screen Capture
-recorded: 2026-09-18 14:32
-duration: 3m 17s
+type: "Screen Capture"
+recorded: "2026-09-18 14:32"
+duration: "3:17"
 source: "Figma — Design System"
-inputs: ["Microphone (Yeti)", "Speakers (Realtek) — desktop audio"]
-resolution: 1920x1080
+inputs:
+  - "Microphone (Yeti)"
+resolution: "1920x1080"
 vault: "Engineering"
-created-by: vault-buddy
+created-by: Vault Buddy
 ---
 
 ![[2026-09-18 1432 Figma walkthrough.mp4]]
