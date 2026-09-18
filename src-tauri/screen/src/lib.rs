@@ -48,12 +48,36 @@ mod tests {
         assert_eq!(engine::start_capture(), Err(ScreenError::Unsupported));
     }
 
+    // The three FIXED variants carry no caller-supplied data at all — their
+    // Display text is a constant, so it can never leak a value a caller
+    // passed in (there is nothing to interpolate). This must hold for every
+    // fixed variant, not just the one previously asserted, or a future
+    // variant added without a matching test could silently start
+    // interpolating.
     #[test]
-    fn errors_render_without_interpolating_caller_data_into_the_variant() {
+    fn fixed_variants_render_a_constant_message_with_no_caller_data() {
+        assert_eq!(
+            ScreenError::Unsupported.to_string(),
+            "screen capture is not supported here"
+        );
         assert_eq!(
             ScreenError::SourceGone.to_string(),
             "the capture source is no longer available"
         );
+        assert_eq!(
+            ScreenError::EncoderUnavailable.to_string(),
+            "no usable video encoder was found"
+        );
+    }
+
+    // `Io`, unlike the fixed variants above, deliberately DOES carry and
+    // render caller-supplied data (the underlying I/O error text) — this
+    // pins that the two variant kinds behave differently on purpose,
+    // rather than asserting `Io` also renders nothing caller-supplied
+    // (which would be false and was the previous version of this test's
+    // actual, misleadingly-named, assertion).
+    #[test]
+    fn io_variant_interpolates_the_caller_supplied_message() {
         assert!(ScreenError::Io("disk full".into())
             .to_string()
             .contains("disk full"));

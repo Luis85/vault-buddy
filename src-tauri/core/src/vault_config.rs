@@ -408,7 +408,14 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
         screen_fps: entry
             .get("screenFps")
             .and_then(|v| v.as_u64())
-            .map(|v| crate::screen_capture_config::normalize_fps(v as u32))
+            // Validate the u64 BEFORE narrowing to u32, not after: a
+            // hand-edited `"screenFps": 4294967356` truncates to 60 under
+            // `as u32` (4294967356 - 2^32 == 60), which `normalize_fps`
+            // would then read as the legal 60fps value instead of falling
+            // to the 30 default — the narrowing silently aliased an
+            // out-of-range value onto a real one. `u32::try_from` rejects
+            // anything that doesn't fit before `normalize_fps` ever sees it.
+            .map(|v| u32::try_from(v).map_or(30, crate::screen_capture_config::normalize_fps))
             .unwrap_or(defaults.screen_fps),
         screen_create_note: entry
             .get("screenCreateNote")
@@ -1285,6 +1292,21 @@ mod tests {
             v.screen_capture_folder.as_deref(),
             Some("Demos"),
             "the valid sibling survives"
+        );
+    }
+
+    // Regression: `screenFps` validation must run on the raw u64 BEFORE
+    // narrowing to u32, not after. `4294967356 as u32` truncates to 60
+    // (4294967356 - 2^32 == 60), which `normalize_fps` would then read as
+    // the legal 60fps value — an out-of-range hand-edited value silently
+    // aliasing onto a real one instead of falling to the 30 default.
+    #[test]
+    fn an_out_of_range_screen_fps_falls_to_the_default_not_a_truncated_alias() {
+        let entry = serde_json::json!({ "screenFps": 4_294_967_356u64 });
+        let v = vault_entry(&entry);
+        assert_eq!(
+            v.screen_fps, 30,
+            "a u64 that doesn't fit u32 must default, never truncate onto a legal value"
         );
     }
 

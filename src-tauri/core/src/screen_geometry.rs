@@ -6,6 +6,19 @@
 //! region feature's most likely bug, so the conversion is one pure function
 //! tested across the DPI scales Windows actually ships (spec §5.2).
 //!
+//! **Coordinate space: MONITOR-LOCAL, not virtual-desktop.** `to_physical`
+//! applies one `scale` factor to both `x`/`y` and `width`/`height`, which is
+//! only correct when the whole rectangle — including its origin — is
+//! expressed relative to the monitor being captured, at that monitor's own
+//! DPI. On a mixed-DPI multi-monitor desktop, virtual-desktop-global
+//! coordinates (e.g. Windows' own multi-monitor origin, which can be
+//! negative) would need the ORIGIN scaled by the coordinate's own monitor
+//! and the SIZE scaled by the capture target's monitor — two different
+//! factors this single-`scale` function cannot express. Callers (Phase 2)
+//! must convert the overlay's rectangle to be relative to the captured
+//! monitor's origin before calling `to_physical`, not pass virtual-desktop
+//! coordinates through directly.
+//!
 //! Division of labour between the two public functions: `to_physical`
 //! guarantees only that a dimension is at least 1 physical pixel — it has
 //! no frame to clamp against yet, so it cannot know the final encodable
@@ -44,6 +57,11 @@ fn non_negative(v: f64) -> f64 {
 ///
 /// Width and height are floored to at least 1: a sub-pixel selection that
 /// rounded to zero would be an unencodable crop.
+///
+/// `rect` must already be MONITOR-LOCAL (relative to the captured monitor's
+/// own origin) at that monitor's own `scale` — see the module doc. Passing
+/// virtual-desktop-global coordinates here would silently mis-scale `x`/`y`
+/// on a mixed-DPI multi-monitor desktop.
 pub fn to_physical(rect: LogicalRect, scale: f64) -> PhysicalRect {
     // A non-positive or non-finite scale means we failed to read the monitor;
     // 1.0 (no scaling) is the safe reading, not 0.
@@ -319,24 +337,33 @@ mod tests {
         );
     }
 
-    // An already-even clamp must be left untouched by the new rounding step
-    // — this is the pre-existing overflow test's exact shape, re-asserted
-    // here to pin that the even-rounding is a no-op on already-even input.
+    // An already-even clamp must be left untouched by the new rounding step.
+    // Deliberately DIFFERENT rect/frame from `a_rect_overflowing_the_frame_
+    // is_truncated` (150x60 here vs that test's 120x80) so this fails
+    // independently if the rounding logic changes — e.g. a refactor that
+    // always shaves off a pixel instead of only rounding odd values down
+    // would coincidentally still satisfy the 121/81 -> 120/80 odd-rounding
+    // test above (121-1=120, 81-1=80) while visibly breaking this one
+    // (150-1=149, 60-1=59). The earlier version of this test asserted the
+    // exact same rect/frame/expectation as that overflow test and so could
+    // never fail on its own.
     #[test]
     fn an_already_even_clamp_is_untouched_by_rounding() {
         let r = PhysicalRect {
-            x: 1800,
-            y: 1000,
+            x: 1770,
+            y: 1020,
             width: 400,
             height: 400,
         };
+        // min(400, 1920-1770) = 150 (already even), min(400, 1080-1020) = 60
+        // (already even) — neither needs the `& !1` step to change anything.
         assert_eq!(
             clamp_to_frame(r, 1920, 1080),
             Some(PhysicalRect {
-                x: 1800,
-                y: 1000,
-                width: 120,
-                height: 80
+                x: 1770,
+                y: 1020,
+                width: 150,
+                height: 60
             })
         );
     }
