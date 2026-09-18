@@ -49,4 +49,4 @@ winreg = "0.52"
 
 [workspace]
 resolver = "2"
-members = ["core", "capture", "transcribe", "mcp"]
+members = ["core", "capture", "transcribe", "mcp", "screen"]

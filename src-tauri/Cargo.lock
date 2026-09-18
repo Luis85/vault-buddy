@@ -5818,6 +5818,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vault_buddy_screen"
+version = "0.1.0"
+dependencies = [
+ "vault_buddy_core",
+]
+
+[[package]]
 name = "vault_buddy_transcribe"
 version = "0.1.0"
 dependencies = [
