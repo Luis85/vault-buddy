@@ -163,6 +163,23 @@ mod tests {
         );
     }
 
+    // A window title containing a newline is the actual key-injection vector
+    // the module doc comment claims to defend against: a naive emit would let
+    // "a\nmalicious: true" open a second top-level frontmatter line. yaml_quote
+    // flattens \n/\r to spaces, so this must stay a single, safely quoted
+    // scalar rather than injecting a real `malicious:` key.
+    #[test]
+    fn a_newline_in_the_source_title_cannot_inject_a_frontmatter_key() {
+        let mut m = meta();
+        m.source = "a\nmalicious: true".into();
+        let out = render_screen_note(&m, "x.mp4");
+        assert_eq!(out.matches("---\n").count(), 2, "exactly two fence lines");
+        assert!(
+            !out.lines().any(|l| l.trim().starts_with("malicious:")),
+            "no injected key line, got: {out}"
+        );
+    }
+
     #[test]
     fn extra_frontmatter_is_injected_after_created_by() {
         let mut m = meta();
@@ -204,9 +221,18 @@ mod tests {
         m.extra_frontmatter = Some("title: \"{{source}}\"\nlen: \"{{duration}}\"".into());
         m.body_template = Some("Recorded {{date}} from {{source}} ({{duration}}).".into());
         let out = render_screen_note(&m, "x.mp4");
+        // Pins the *rendered* extra-frontmatter lines themselves — the
+        // baseline fixture's managed `source:` line already contains
+        // "Figma — Design System", so a bare `out.contains(...)` check would
+        // stay green even if the {{source}} placeholder were dropped from
+        // the extra-frontmatter template entirely.
         assert!(
-            out.contains("Figma — Design System"),
-            "source placeholder resolved"
+            out.contains("title: Figma — Design System\n"),
+            "title placeholder resolved, got: {out}"
+        );
+        assert!(
+            out.contains("len: 3:17\n"),
+            "duration placeholder resolved, got: {out}"
         );
         assert!(out.contains("Recorded 2026-09-18 from Figma — Design System (3:17)."));
     }
