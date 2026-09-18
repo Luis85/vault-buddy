@@ -113,6 +113,16 @@ pub struct VaultCaptureConfig {
     pub task_body_template: Option<String>,
     pub document_extra_frontmatter: Option<String>,
     pub document_body_template: Option<String>,
+    /// Screen Capture (spec §12). Additive: every field defaults so an
+    /// existing config.json parses and re-serializes unchanged.
+    pub screen_capture_folder: Option<String>,
+    pub screen_capture_date_folders: bool,
+    pub screen_quality: crate::screen_capture_config::ScreenQuality,
+    /// Only 30 or 60; anything else normalizes to 30 at parse time.
+    pub screen_fps: u32,
+    pub screen_create_note: bool,
+    pub screen_extra_frontmatter: Option<String>,
+    pub screen_body_template: Option<String>,
 }
 
 impl Default for VaultCaptureConfig {
@@ -148,6 +158,13 @@ impl Default for VaultCaptureConfig {
             task_body_template: None,
             document_extra_frontmatter: None,
             document_body_template: None,
+            screen_capture_folder: None,
+            screen_capture_date_folders: false,
+            screen_quality: crate::screen_capture_config::ScreenQuality::Balanced,
+            screen_fps: 30,
+            screen_create_note: true,
+            screen_extra_frontmatter: None,
+            screen_body_template: None,
         }
     }
 }
@@ -212,6 +229,16 @@ impl VaultCaptureConfig {
     /// The vault-relative folder holding imported documents. None → "Documents".
     pub fn documents_root(&self) -> &str {
         self.documents_folder.as_deref().unwrap_or("Documents")
+    }
+
+    /// The vault's screen-capture folder, defaulting to "Screen Captures".
+    /// Mirrors `documents_root` / `tasks_root`.
+    pub fn screen_capture_root(&self) -> &str {
+        self.screen_capture_folder
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(crate::screen_capture_config::DEFAULT_SCREEN_FOLDER)
     }
 }
 
@@ -365,6 +392,30 @@ pub fn vault_entry(entry: &serde_json::Value) -> VaultCaptureConfig {
         task_body_template: template_field(entry, "taskBodyTemplate"),
         document_extra_frontmatter: template_field(entry, "documentExtraFrontmatter"),
         document_body_template: template_field(entry, "documentBodyTemplate"),
+        screen_capture_folder: entry
+            .get("screenCaptureFolder")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        screen_capture_date_folders: entry
+            .get("screenCaptureDateFolders")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.screen_capture_date_folders),
+        screen_quality: entry
+            .get("screenQuality")
+            .and_then(|v| v.as_str())
+            .and_then(crate::screen_capture_config::ScreenQuality::from_key)
+            .unwrap_or(defaults.screen_quality),
+        screen_fps: entry
+            .get("screenFps")
+            .and_then(|v| v.as_u64())
+            .map(|v| crate::screen_capture_config::normalize_fps(v as u32))
+            .unwrap_or(defaults.screen_fps),
+        screen_create_note: entry
+            .get("screenCreateNote")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(defaults.screen_create_note),
+        screen_extra_frontmatter: template_field(entry, "screenExtraFrontmatter"),
+        screen_body_template: template_field(entry, "screenBodyTemplate"),
     }
 }
 
@@ -454,6 +505,30 @@ pub fn serialize_vault_entry(v: &VaultCaptureConfig) -> serde_json::Map<String, 
     }
     if let Some(t) = &v.document_body_template {
         entry.insert("documentBodyTemplate".to_string(), json!(t));
+    }
+    if let Some(folder) = &v.screen_capture_folder {
+        entry.insert("screenCaptureFolder".to_string(), json!(folder));
+    }
+    if v.screen_capture_date_folders {
+        entry.insert("screenCaptureDateFolders".to_string(), json!(true));
+    }
+    if v.screen_quality != crate::screen_capture_config::ScreenQuality::default() {
+        entry.insert(
+            "screenQuality".to_string(),
+            json!(v.screen_quality.as_key()),
+        );
+    }
+    if v.screen_fps != 30 {
+        entry.insert("screenFps".to_string(), json!(v.screen_fps));
+    }
+    if !v.screen_create_note {
+        entry.insert("screenCreateNote".to_string(), json!(false));
+    }
+    if let Some(t) = &v.screen_extra_frontmatter {
+        entry.insert("screenExtraFrontmatter".to_string(), json!(t));
+    }
+    if let Some(t) = &v.screen_body_template {
+        entry.insert("screenBodyTemplate".to_string(), json!(t));
     }
     entry
 }
@@ -705,6 +780,13 @@ mod tests {
                 task_body_template: Some("- [ ] {{title}}".to_string()),
                 document_extra_frontmatter: Some("area: Legal".to_string()),
                 document_body_template: Some("{{content}}".to_string()),
+                screen_capture_folder: Some("Inbox/Screens".to_string()),
+                screen_capture_date_folders: true,
+                screen_quality: crate::screen_capture_config::ScreenQuality::High,
+                screen_fps: 60,
+                screen_create_note: false,
+                screen_extra_frontmatter: Some("project: Alpha".to_string()),
+                screen_body_template: Some("## Screen\n{{content}}".to_string()),
             },
         );
         cfg.vaults
@@ -1114,5 +1196,109 @@ mod tests {
         let json2 = serialize_config(&cfg2);
         assert!(!json2.contains("transcriptionVocabulary"), "got: {json2}");
         assert!(!json2.contains("transcriptionVad"), "got: {json2}");
+    }
+
+    #[test]
+    fn screen_capture_defaults_are_flat_balanced_30_with_a_note() {
+        let v = VaultCaptureConfig::default();
+        assert_eq!(v.screen_capture_folder, None);
+        assert_eq!(v.screen_capture_root(), "Screen Captures");
+        assert!(!v.screen_capture_date_folders, "flat is the default layout");
+        assert_eq!(
+            v.screen_quality,
+            crate::screen_capture_config::ScreenQuality::Balanced
+        );
+        assert_eq!(v.screen_fps, 30);
+        assert!(v.screen_create_note);
+        assert_eq!(v.screen_extra_frontmatter, None);
+        assert_eq!(v.screen_body_template, None);
+    }
+
+    #[test]
+    fn screen_capture_fields_parse() {
+        let entry = serde_json::json!({
+            "screenCaptureFolder": "Demos",
+            "screenCaptureDateFolders": true,
+            "screenQuality": "high",
+            "screenFps": 60,
+            "screenCreateNote": false,
+            "screenExtraFrontmatter": "project: acme",
+            "screenBodyTemplate": "## Notes"
+        });
+        let v = vault_entry(&entry);
+        assert_eq!(v.screen_capture_folder.as_deref(), Some("Demos"));
+        assert_eq!(v.screen_capture_root(), "Demos");
+        assert!(v.screen_capture_date_folders);
+        assert_eq!(
+            v.screen_quality,
+            crate::screen_capture_config::ScreenQuality::High
+        );
+        assert_eq!(v.screen_fps, 60);
+        assert!(!v.screen_create_note);
+        assert_eq!(v.screen_extra_frontmatter.as_deref(), Some("project: acme"));
+        assert_eq!(v.screen_body_template.as_deref(), Some("## Notes"));
+    }
+
+    // Per-field defensive parse: one malformed value defaults ONLY itself.
+    // A derived deserializer would reject the whole entry and silently reset
+    // every other setting in the vault.
+    #[test]
+    fn malformed_screen_fields_default_locally_not_globally() {
+        let entry = serde_json::json!({
+            "screenQuality": "ultra",
+            "screenFps": 144,
+            "screenCaptureDateFolders": "yes",
+            "screenCaptureFolder": "Demos"
+        });
+        let v = vault_entry(&entry);
+        assert_eq!(
+            v.screen_quality,
+            crate::screen_capture_config::ScreenQuality::Balanced
+        );
+        assert_eq!(v.screen_fps, 30);
+        assert!(!v.screen_capture_date_folders);
+        assert_eq!(
+            v.screen_capture_folder.as_deref(),
+            Some("Demos"),
+            "the valid sibling survives"
+        );
+    }
+
+    #[test]
+    fn screen_capture_fields_round_trip_through_serialize() {
+        let entry = serde_json::json!({
+            "screenCaptureFolder": "Demos",
+            "screenCaptureDateFolders": true,
+            "screenQuality": "low",
+            "screenFps": 60,
+            "screenCreateNote": false,
+            "screenExtraFrontmatter": "project: acme",
+            "screenBodyTemplate": "## Notes"
+        });
+        let v = vault_entry(&entry);
+        let round_tripped = vault_entry(&serde_json::Value::Object(serialize_vault_entry(&v)));
+        assert_eq!(round_tripped, v);
+    }
+
+    // Regression: an existing config.json must not gain keys just because the
+    // app learned about screen capture. Defaults are omitted, matching how
+    // every other optional field is serialized.
+    #[test]
+    fn default_screen_fields_emit_no_keys() {
+        let entry = serialize_vault_entry(&VaultCaptureConfig::default());
+        for key in [
+            "screenCaptureFolder",
+            "screenCaptureDateFolders",
+            "screenQuality",
+            "screenFps",
+            "screenCreateNote",
+            "screenExtraFrontmatter",
+            "screenBodyTemplate",
+        ] {
+            assert!(
+                !entry.contains_key(key),
+                "{key} should be omitted at its default"
+            );
+        }
     }
 }
