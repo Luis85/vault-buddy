@@ -14,6 +14,7 @@ pub mod mcp_config;
 pub mod panel_config;
 pub mod process;
 pub mod recordings;
+pub mod screen_geometry;
 pub mod search;
 pub mod search_cache;
 pub mod services;
