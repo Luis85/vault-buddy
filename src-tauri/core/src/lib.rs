@@ -16,6 +16,7 @@ pub mod process;
 pub mod recordings;
 pub mod screen_capture_config;
 pub mod screen_geometry;
+pub mod screen_note;
 pub mod search;
 pub mod search_cache;
 pub mod services;
