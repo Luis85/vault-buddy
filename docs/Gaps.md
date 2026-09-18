@@ -2041,6 +2041,83 @@ carries the `// Screen Capture is owned by set_screen_capture_config
 (phase 6)` comment above the fields it preserves — they are obligations
 the next phase inherits and must not skip.
 
+### GAP-104 · Low · `CaptureClock` is the repo's third pause-elapsed accumulator
+`src-tauri/screen/src/clock.rs`'s `CaptureClock` (`started` + `paused_total`
++ `paused_since`, idempotent `pause`/`resume`, `elapsed`) implements the
+exact same "wall clock minus accumulated paused time" rule as two existing,
+independently-written carriers of it:
+- `src-tauri/capture/src/session.rs` (~254-276) — the audio mixer loop's
+  inline `paused` / `paused_total: Duration` / `pause_started: Option<Instant>`
+  locals, folded directly into the `Control::Pause`/`Control::Resume` match
+  arms of the device thread's `loop`.
+- `src-tauri/src/capture_commands.rs` (~756-760) — the shell's UI-facing
+  mirror, `paused_total_ms: u64` / `paused_since_ms: Option<u64>` on the
+  active-recording struct, updated by the `pause_capture`/`resume_capture`
+  commands.
+- `src-tauri/core/src/tasks.rs` and `src-tauri/screen/src/clock.rs` both now
+  carry unit tests pinning "idempotent pause", "idempotent resume", and
+  "accumulate across multiple pause cycles" as three *separately* proven
+  invariants — proof the same rule is worth centralizing once, not proof it
+  already is.
+
+None of the three is a drop-in replacement for either of the others as it
+stands: `session.rs`'s locals are loop-scoped (no struct to extract without
+restructuring the device thread), and `capture_commands.rs`'s pair is a
+millisecond-valued UI mirror the frontend reads directly, not a computation
+site. The spec for this increment mandated `CaptureClock` as a new,
+A/V-sync-driving abstraction (see its module doc: "there is no second time
+base to drift from"), so introducing it was correct — but the underlying
+pause/resume/total rule the repo encodes now exists in three independently
+maintained forms, which is exactly the drift class `vault_walk.rs`'s own
+header already warns about for a different pair of duplicated walks
+(GAP-46). Once Phase 2 wires `screen::clock` in and the session/UI mirror
+pair are touched again, consider whether `CaptureClock` (already the most
+general and best-tested of the three) should become the ONE home for this
+rule, with the audio session and the UI mirror built on it or on a shared
+sibling type, rather than a third independent implementation living
+alongside the other two indefinitely.
+
+### GAP-105 · Low · Units differ at the seams Phase 2 will join: ms, `Duration`, and seconds
+Three time-value representations meet at the boundary Phase 2 wires
+together, with no documented conversion between them:
+- `core::timeline` (`Segment::duration_ms`, `Timeline::output_duration_ms`/
+  `split_at`/`to_source_ms`) and `screen::select` (`PlanSpan::duration_ms`,
+  `plan`) both use `u64` milliseconds.
+- `screen::clock`'s `CaptureClock` uses `std::time::Duration` throughout
+  (`elapsed`, `output_ts`) — deliberately, per its module doc, so pause
+  edges are `Instant`-injected and unit-testable, not because it shares the
+  timeline/select modules' convention.
+- `ScreenNoteMeta::duration_secs` (`core/src/screen_note.rs`) is `u64`
+  seconds — matching the existing `capture_note::NoteMeta::duration_secs`
+  precedent (`core/src/capture_note.rs`) and `transcript::TranscriptMeta`'s
+  same field, so the seconds form is not new, only the screen-capture use
+  of it.
+The ms↔seconds hop already has a precedent to follow (whatever
+`capture_note`'s callers do today to go from a recording's millisecond
+duration to `NoteMeta.duration_secs`); the ms↔`Duration` hop between
+`core::timeline`/`screen::select` and `screen::clock::CaptureClock` is the
+genuinely new seam this feature introduces, and nothing today converts
+between them (Phase 1 has no caller that needs to). Before Phase 2 wires
+the clock's `Duration` output into a `Timeline`/`PlanSpan`'s `u64` ms field
+by hand at each call site, add one small, documented, unit-tested
+conversion helper (e.g. `Duration` → ms via `as_millis` truncation, with a
+comment on which direction is lossy and why truncation — not rounding — is
+the right choice for a monotonically-advancing output timestamp) so every
+call site converts the same way instead of five ad hoc `.as_millis() as
+u64`s drifting apart.
+
+### GAP-106 · Low · Overflow posture is inconsistent between `core::timeline` and `screen::select` (cosmetic)
+`core/src/timeline.rs`'s `split_at` (line ~69) and `to_source_ms` (line
+~116) both compute `elapsed + seg.duration_ms()` with a plain `+`, while
+`screen/src/select.rs`'s `plan` (line ~43) computes the equivalent running
+offset with `output_start_ms.saturating_add(seg.duration_ms())`. Both
+values are milliseconds-since-recording-start on a `u64`, which overflows
+only after roughly 584 million years of continuous accumulated segment
+duration — unreachable in practice, so this is not a correctness bug. It
+is worth a consistent posture (both saturating, or both plain, with a
+comment on why) the next time either module is touched, so a future
+reader does not read the difference as meaningful when it isn't.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
