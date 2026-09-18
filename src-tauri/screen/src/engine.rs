@@ -3,8 +3,10 @@
 //! Phase 1 ships the shape and a stub only: the real implementation
 //! (windows-capture frame acquisition + a Media Foundation SinkWriter)
 //! arrives in phase 2, after the fragmented-MP4 spike settles the staged
-//! container format. The non-Windows arm exists so the Linux compile gate
-//! and every pure test in this crate keep running (spec §4.1).
+//! container format. The stub is platform-independent — one unconditional
+//! body, no cfg split — so the Linux compile gate and every pure test in
+//! this crate keep running (spec §4.1); phase 2 introduces the cfg split
+//! once the Windows arm has something to diverge on.
 
 use crate::ScreenError;
 

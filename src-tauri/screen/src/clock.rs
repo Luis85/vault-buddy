@@ -171,4 +171,14 @@ mod tests {
         let c = CaptureClock::new(base);
         assert_eq!(c.output_ts(Instant::now()), Some(Duration::ZERO));
     }
+
+    // Regression: elapsed() must FREEZE during a pause. output_ts short-circuits
+    // on paused, so this branch has no other caller to catch a break.
+    #[test]
+    fn elapsed_freezes_while_paused() {
+        let base = Instant::now();
+        let mut c = CaptureClock::new(base);
+        c.pause(at(base, 1_000));
+        assert_eq!(c.elapsed(at(base, 4_000)), Duration::from_millis(1_000));
+    }
 }

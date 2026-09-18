@@ -40,7 +40,7 @@ pub fn plan(timeline: &Timeline) -> Vec<PlanSpan> {
             source_end_ms: seg.source_end_ms,
             output_start_ms,
         });
-        output_start_ms += seg.duration_ms();
+        output_start_ms = output_start_ms.saturating_add(seg.duration_ms());
     }
     spans
 }
@@ -140,6 +140,36 @@ mod tests {
                 "empty span {s:?} would break the encoder"
             );
         }
+    }
+
+    // Pins the round-trip Phase 2's seek/scrub path leans on: every output
+    // timestamp inside a planned span must map back through
+    // Timeline::to_source_ms to the matching source timestamp, and the plan
+    // must not claim any output time past the timeline's own duration. Uses
+    // the reorder fixture above, where source and output order genuinely
+    // differ, so a plan/to_source_ms disagreement about ordering would show.
+    #[test]
+    fn plan_spans_round_trip_through_to_source_ms() {
+        let t = Timeline::whole(6_000)
+            .split_at(2_000)
+            .split_at(4_000)
+            .reorder(0, 2);
+        let spans = plan(&t);
+        for span in &spans {
+            let duration = span.duration_ms();
+            for k in [0, 1, duration.saturating_sub(1)] {
+                assert_eq!(
+                    t.to_source_ms(span.output_start_ms + k),
+                    Some(span.source_start_ms + k),
+                    "span {span:?} offset {k} did not round-trip"
+                );
+            }
+        }
+        assert_eq!(
+            t.to_source_ms(t.output_duration_ms()),
+            None,
+            "output duration itself is past the end, exclusive"
+        );
     }
 
     #[test]
