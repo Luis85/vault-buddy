@@ -719,20 +719,12 @@ mod tests {
         session.pause();
         // ~2.8 s of wall time that must NOT appear in the duration; samples
         // arriving while paused are discarded (the gap is skipped, not
-        // recorded as silence).
-        //
-        // The pause span is measured by the WORKER, from when it processes
-        // Control::Pause to when it processes Control::Resume, and
-        // `paused_total.as_secs()` truncates. So the assertion below really
-        // tests `measured_ms >= 2000`, and the margin is whatever wall time
-        // we sleep beyond 2 s. This used to sleep 2_000 ms, for a measured
-        // 2_201 ms — a 201 ms margin. Any run where the worker was still
-        // inside its loop body (drain -> convert -> mix -> LAME encode ->
-        // flush) when Pause arrived timestamped the pause that much late,
-        // dropped under 2_000 ms, truncated to 1, and failed. That is not
-        // hypothetical: it flaked in CI under `cargo llvm-cov`, whose
-        // instrumentation slows exactly that loop body. Sleeping 2_600 ms
-        // puts the margin at ~800 ms, which no plausible body delay reaches.
+        // recorded as silence). The worker timestamps the pause when it
+        // PROCESSES the message and as_secs() truncates, so the assertion
+        // below really tests measured_ms >= 2000 and the margin is whatever
+        // we sleep past 2 s. At 2_000 ms it measured 2_201 — a 201 ms margin
+        // that llvm-cov's slower loop body ate, truncating to 1 (CI flake).
+        // 2_600 ms puts the margin at ~800 ms.
         std::thread::sleep(Duration::from_millis(200));
         for chunk in sine_chunks(44_100, 0.5) {
             tx.send(SourceMsg::Samples(chunk)).unwrap();
