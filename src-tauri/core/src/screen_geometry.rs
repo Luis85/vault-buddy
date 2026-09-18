@@ -5,6 +5,14 @@
 //! These are two different coordinate spaces and confusing them is the
 //! region feature's most likely bug, so the conversion is one pure function
 //! tested across the DPI scales Windows actually ships (spec §5.2).
+//!
+//! Division of labour between the two public functions: `to_physical`
+//! guarantees only that a dimension is at least 1 physical pixel — it has
+//! no frame to clamp against yet, so it cannot know the final encodable
+//! size. `clamp_to_frame` runs later, once the real frame is known, and is
+//! the last pure gate before the encoder — it is what enforces both
+//! "at least 2" and "even", because H.264 with NV12 4:2:0 chroma requires
+//! even width and height on both axes (GAP-101).
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogicalRect {
@@ -65,12 +73,23 @@ pub fn clamp_to_frame(rect: PhysicalRect, frame_w: u32, frame_h: u32) -> Option<
     if rect.x >= frame_w || rect.y >= frame_h {
         return None;
     }
-    // Both guards above make this subtraction and the result non-zero:
-    // rect.width/height are >= 1, and rect.x < frame_w (rect.y < frame_h), so
-    // each min() takes the smaller of two values that are both >= 1. A third
-    // `width == 0` check here would be unreachable.
-    let width = rect.width.min(frame_w - rect.x);
-    let height = rect.height.min(frame_h - rect.y);
+    // Both guards above make this subtraction non-zero and each min() result
+    // >= 1: rect.width/height are >= 1, and rect.x < frame_w (rect.y <
+    // frame_h), so each min() takes the smaller of two values that are both
+    // >= 1. But H.264 with NV12 4:2:0 chroma subsampling requires EVEN width
+    // and height on both axes — each chroma plane is half resolution per
+    // axis, so an odd luma dimension has no integer chroma-plane size, and
+    // Windows Media Foundation's H.264 encoder MFT rejects or silently pads
+    // an odd-dimension input media type. Rounding each dimension down to
+    // even is exactly what can take a >= 1 result down to 0 (a clamped 1
+    // rounds to 0), which is why the zero check below is reachable now, not
+    // dead code: a sub-2-pixel crop is not encodable, the same reasoning
+    // already applied to a zero-width crop above.
+    let width = (rect.width.min(frame_w - rect.x)) & !1;
+    let height = (rect.height.min(frame_h - rect.y)) & !1;
+    if width == 0 || height == 0 {
+        return None;
+    }
     Some(PhysicalRect {
         x: rect.x,
         y: rect.y,
@@ -273,6 +292,91 @@ mod tests {
             clamp_to_frame(physical, 2560, 1440),
             Some(physical),
             "fits the real frame"
+        );
+    }
+
+    // GAP-101: H.264 with NV12 4:2:0 chroma requires even width/height, but
+    // the plain min()-clamp can land on an odd value — the real review case:
+    // a 400x400 rect at x=1800,y=1000 against a 1921x1081 frame clamps to
+    // 121x81 (odd/odd), which must round DOWN to 120x80, not up (rounding up
+    // would grow the crop past the selection the user drew).
+    #[test]
+    fn an_odd_clamped_dimension_rounds_down_to_even() {
+        let r = PhysicalRect {
+            x: 1800,
+            y: 1000,
+            width: 400,
+            height: 400,
+        };
+        assert_eq!(
+            clamp_to_frame(r, 1921, 1081),
+            Some(PhysicalRect {
+                x: 1800,
+                y: 1000,
+                width: 120,
+                height: 80
+            })
+        );
+    }
+
+    // An already-even clamp must be left untouched by the new rounding step
+    // — this is the pre-existing overflow test's exact shape, re-asserted
+    // here to pin that the even-rounding is a no-op on already-even input.
+    #[test]
+    fn an_already_even_clamp_is_untouched_by_rounding() {
+        let r = PhysicalRect {
+            x: 1800,
+            y: 1000,
+            width: 400,
+            height: 400,
+        };
+        assert_eq!(
+            clamp_to_frame(r, 1920, 1080),
+            Some(PhysicalRect {
+                x: 1800,
+                y: 1000,
+                width: 120,
+                height: 80
+            })
+        );
+    }
+
+    // GAP-101: a clamped dimension of exactly 1 rounds down to 0, which is
+    // not encodable — this must return None, the same as a zero-width rect,
+    // not a silently-empty Some(PhysicalRect { width: 0, .. }).
+    #[test]
+    fn a_clamped_dimension_of_exactly_one_is_none() {
+        // A 1-px-wide rect at the origin: min(1, frame_w) = 1, rounds to 0.
+        let one_px_wide = PhysicalRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 100,
+        };
+        assert_eq!(clamp_to_frame(one_px_wide, 1920, 1080), None);
+
+        // A rect starting at frame_w - 1: min(width, frame_w - x) = 1.
+        let starting_at_edge_minus_one = PhysicalRect {
+            x: 1919,
+            y: 0,
+            width: 100,
+            height: 100,
+        };
+        assert_eq!(clamp_to_frame(starting_at_edge_minus_one, 1920, 1080), None);
+    }
+
+    // GAP-101 round-trip: to_physical alone can still hand back an odd
+    // dimension (it only floors to >= 1, it never rounds to even — that is
+    // clamp_to_frame's job, per the module doc's division of labour). A
+    // 401-px logical width at 1.5 scale gives 601 physical; clamp_to_frame
+    // against a frame with plenty of room is what makes it encodable (600).
+    #[test]
+    fn to_physical_can_be_odd_and_clamp_to_frame_makes_it_even() {
+        let physical = to_physical(logical(0.0, 0.0, 401.0, 300.0), 1.5);
+        assert_eq!(physical.width, 601, "to_physical does not round to even");
+        assert_eq!(
+            clamp_to_frame(physical, 1920, 1080).map(|r| r.width),
+            Some(600)
         );
     }
 }

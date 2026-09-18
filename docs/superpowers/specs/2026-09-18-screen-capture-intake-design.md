@@ -549,10 +549,12 @@ created-by: Vault Buddy
 managed keys above are **always emitted and never user-removable**; the
 vault's `screenExtraFrontmatter` is rendered through
 `core::template::render_extra_frontmatter` with those keys reserved, injected
-after `created-by`; `screenBodyTemplate` (placeholders `{{title}}`,
-`{{date}}`, `{{duration}}`, `{{source}}`) replaces the body below the embed.
-An empty/unset template reproduces the exact output above byte-for-byte —
-regression-tested, the rule every other template surface follows.
+after `created-by`; `screenBodyTemplate` (placeholders `{{recordedAt}}`,
+`{{date}}`, `{{duration}}`, `{{source}}`, `{{resolution}}`, `{{vault}}` — the
+same six `vars` `screenExtraFrontmatter` resolves against) replaces the body
+below the embed. An empty/unset template reproduces the exact output above
+byte-for-byte — regression-tested, the rule every other template surface
+follows.
 
 Every string is emitted through `yaml_quote`; a window title can contain a
 colon, a quote, or a backslash, any of which would otherwise produce malformed

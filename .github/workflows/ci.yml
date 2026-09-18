@@ -102,8 +102,8 @@ jobs:
       # vite.config.ts: when coverage rises, raise the floor in the same PR;
       # lowering it is a reviewed decision. Floored from the 2026-07-10
       # adoption run (see docs/DEVELOPMENT.md § Quality pipeline).
-      - name: coverage floor (core + capture + transcribe, cargo-llvm-cov)
-        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+      - name: coverage floor (core + capture + transcribe + screen, cargo-llvm-cov)
+        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen --fail-under-lines 94
         working-directory: src-tauri
       # RustSec advisories + license/source policy (src-tauri/deny.toml).
       # Runs from src-tauri so the config is found by the same path as the

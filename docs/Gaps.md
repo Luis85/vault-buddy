@@ -946,24 +946,39 @@ available. **Fix shape, if ever taken up:** have the sentinel round-trip
 preserve an explicit source quote style per key rather than only
 re-deriving it from the parsed value's type.
 
-### GAP-101 · Medium · The region-capture geometry path can hand H.264 an odd-dimension frame
-`src-tauri/core/src/screen_geometry.rs` (`to_physical`, `clamp_to_frame`).
-Neither function constrains its output `width`/`height` to be even.
-`to_physical` on a 401-px logical width at a 1.5 DPI scale yields 601;
-`clamp_to_frame` against a 1921-px-wide source frame can hand back a
-121-px-wide clamp. H.264 with NV12/4:2:0 chroma subsampling requires even
-dimensions on both axes — each chroma plane is half resolution on each
-axis, so an odd luma dimension has no integer chroma-plane size. Windows
-Media Foundation's H.264 encoder MFT is documented to reject, or silently
-pad, an odd-dimension input media type, either of which the region-capture
-path (spec §5.2, §8.1) will hit the moment the real encoder replaces
-`screen::engine`'s Phase 1 stub. Neither the design spec nor the current
-implementation mentions the constraint anywhere. **Fix shape:** round the
-output down to the nearest even value in `clamp_to_frame` (in `core`,
-where it is already unit-tested and where every caller — the region
-picker, capture start — already goes through it), not improvised
-ad hoc in the Windows capture arm once it lands. Owner: Phase 2 (the
-capture-engine phase, alongside the fMP4 spike).
+### GAP-101 · Low · Region-capture geometry: even-dimension enforcement is done, chroma-plane offset parity and `to_physical`'s floor are not
+`src-tauri/core/src/screen_geometry.rs`. **Resolved as of this branch:**
+`clamp_to_frame` now rounds each of `width`/`height` down to the nearest
+even value (returning `None` if either rounds to 0), closing the H.264/NV12
+"odd luma dimension" failure this entry originally tracked — see the
+function's own doc comment for the reasoning, and its test module for the
+review case (`1921x1081` frame, `400x400` rect at `x=1800,y=1000` → `120x80`,
+not `121x81`).
+
+**What remains, narrower than the original entry:**
+1. **x/y offset parity.** NV12's chroma plane is half-resolution on each
+   axis, so cropping at an ODD `x` or `y` cannot land the chroma plane on an
+   integer boundary either — `clamp_to_frame` does not touch `rect.x`/
+   `rect.y` at all today, only `width`/`height`. Whether this matters depends
+   on which layer performs the actual pixel crop: if Phase 2 crops via Media
+   Foundation's video-processor MFT using a source rectangle, the VP handles
+   arbitrary offsets internally; if it instead slices the NV12 buffer
+   in-process before handing it to the encoder, an odd offset is a real bug.
+   Undecided until the fragmented-MP4 spike determines which approach Phase 2
+   takes.
+2. **`to_physical`'s floor stays `.max(1)`, not `.max(2)`.** This was a
+   deliberate, narrower-scope choice (not an oversight) when the even-
+   dimension fix landed: `clamp_to_frame` is documented as the last pure
+   gate before the encoder, and is where the even-and-at-least-2 enforcement
+   lives; `to_physical` only guarantees "not zero" for a value that has not
+   yet been clamped against a real frame. Whether `to_physical` should also
+   floor at 2 for consistency (so a caller who used `to_physical`'s output
+   directly, without going through `clamp_to_frame`, couldn't observe an odd
+   1-px dimension) is an open question — no such caller exists today, but
+   one could be added without necessarily going through `clamp_to_frame`.
+
+Owner: Phase 2 (the capture-engine phase, alongside the fMP4 spike) for (1);
+either Phase 2 or a follow-up hardening pass for (2).
 
 ## 2. Main-thread responsiveness (shell)
 
@@ -1685,34 +1700,30 @@ feature; `check:loc` passes again. The file's standing "splitting it into
 per-domain modules is a separate refactor" note remains open as future work,
 but no longer red-lines CI.
 
-### GAP-102 · Low · `vault_buddy_screen` is Linux-gated only, and outside the coverage floor — correct today, needs a deliberate re-decision once `engine` stops being a stub
-`.github/workflows/ci.yml`: the `windows-app` job's post-build `cargo test`
-line (currently `-p vault_buddy_core -p vault_buddy_capture -p
-vault_buddy_transcribe`) does not include `-p vault_buddy_screen`, and the
-`rust-core` job's `cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture
--p vault_buddy_transcribe --fail-under-lines 94` line excludes it from the
-line-coverage floor too (the `windows-app`/`rust-core` clippy and non-coverage
-test lines already DO include `-p vault_buddy_screen`, per the CI-gating
-commit that added the crate). **Both omissions are correct as of Phase 1**:
-`screen::timeline`/`screen_geometry`/`screen_capture_config` are pure and
-fully exercised on Linux, and `screen::engine` (`src-tauri/screen/src/
+### GAP-102 · Low · `vault_buddy_screen` still does not run its tests in `windows-app` — correct today, needs a deliberate re-decision once `engine` stops being a stub
+`.github/workflows/ci.yml`. **Resolved as of this branch, for the coverage
+half:** the `rust-core` job's `cargo llvm-cov` line now includes `-p
+vault_buddy_screen` in its `--fail-under-lines 94` floor (verified locally:
+95.58% lines with the crate included — `clock.rs`/`select.rs`/`engine.rs`
+all 100%, `lib.rs` 82.61%). **What remains:** the `windows-app` job's
+post-build `cargo test` line (`-p vault_buddy_core -p vault_buddy_capture -p
+vault_buddy_transcribe`) still does not include `-p vault_buddy_screen`
+(the `windows-app`/`rust-core` clippy and non-coverage test lines already DO
+include it, per the CI-gating commit that added the crate). **This omission
+is correct as of Phase 1**: `screen::engine` (`src-tauri/screen/src/
 engine.rs`) is a deliberate, platform-independent Phase-1 stub — one
 unconditional `Err(ScreenError::Unsupported)` body with no Windows-only code
-path yet — so folding it into the 94% floor today would drag the ratchet for
-a function with no real behaviour to cover, and there is nothing
-Windows-specific yet for `windows-app`'s Rust tests to exercise that
-`rust-core` doesn't already. **The gap:** the moment Phase 2's `cfg(windows)`
-split lands real capture logic in `engine.rs` (spec §4.1, §6), Windows
-becomes the *only* place that code can execute at all, and neither CI edit
-will have been revisited automatically — a Windows-only regression in the
-capture engine could land with `windows-app` never having run its tests, and
-`rust-core`'s coverage floor would keep passing while the crate's real logic
-goes uncovered. **Fix shape:** two one-line CI edits, made together, timed to
-land in the same PR as Phase 2's `cfg(windows)` split: add `-p
-vault_buddy_screen` to the `windows-app` test line, and to the `rust-core`
-coverage line once `engine.rs` has tests worth counting (adding it before
-then would just make the floor read a padded, meaningless percentage over a
-one-line stub). Owner: Phase 2.
+path yet — so there is nothing Windows-specific yet for `windows-app`'s Rust
+tests to exercise that `rust-core` doesn't already. **The gap:** the moment
+Phase 2's `cfg(windows)` split lands real capture logic in `engine.rs` (spec
+§4.1, §6), Windows becomes the *only* place that code can execute at all,
+and this CI edit will not have been revisited automatically — a
+Windows-only regression in the capture engine could land with `windows-app`
+never having run its tests, even though `rust-core`'s coverage floor now
+covers the crate's Linux-testable surface. **Fix shape:** add `-p
+vault_buddy_screen` to the `windows-app` test line in the same PR as Phase
+2's `cfg(windows)` split — not before, since there would be nothing
+Windows-specific yet to exercise. Owner: Phase 2.
 
 ## 7. Untested paths
 
@@ -2068,39 +2079,6 @@ Every catalogued reference was corrected:
   increment-1 spec) were repointed to the new path.
 - No CHANGELOG; release bodies are boilerplate. No SECURITY.md (updater
   key rotation/compromise procedure). See GAP-44.
-
-### GAP-104 · Low · The screen-capture spec documents a `{{title}}` template placeholder the renderer never emits
-`docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` §9.1
-(lines ~551-552) documents `screenBodyTemplate`'s placeholders as
-`{{title}}, {{date}}, {{duration}}, {{source}}`. The implemented `vars` map
-in `core::screen_note::render_screen_note` (`src-tauri/core/src/
-screen_note.rs`) is `recordedAt`, `date`, `duration`, `source`,
-`resolution`, `vault` — there is no `title` key at all, and
-`ScreenNoteMeta` carries no title field for one to read from.
-`core::template::substitute` renders an unresolved placeholder as empty
-(the documented behaviour of every other template surface — an unknown
-token must never leak a literal `{{typo}}`), so a vault that follows the
-published spec verbatim and writes `# {{title}}` into its body template
-silently gets a bare `# ` heading with the title dropped — discoverable
-only by opening the note, since nothing errors.
-
-**Recommended resolution: amend the spec, not the implementation.** A
-screen note's title *is* its filename — the renderer only ever receives
-that as the derived `mp4_file_name` parameter it already writes into the
-managed embed line, so adding a duplicate `title` var to `vars` would mean
-carrying the same name under two different keys for no consumer that needs
-it; Obsidian's own file-name-as-title convention already surfaces it for
-free. The spec's placeholder list at §9.1/§12 should drop `{{title}}`.
-
-The spec also under-documents the other direction of the same table: three
-of the six implemented `vars` — `recordedAt`, `resolution`, and `vault` —
-are live, substitutable placeholders today that the spec's placeholder list
-never mentions at all.
-
-Owner: Phase 5 (the phase that ships `screenExtraFrontmatter`/
-`screenBodyTemplate` end-to-end through the settings UI); correct the spec
-text before that phase's PR quotes it as the source of truth for the
-settings card's help copy.
 
 ## 10. Verified sound
 
