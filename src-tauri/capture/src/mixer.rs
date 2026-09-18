@@ -196,16 +196,24 @@ mod tests {
 
     #[test]
     fn mix_n_soft_clips_a_summed_overload_instead_of_wrapping() {
-        // Five hot sources sum to 4.0; without soft_clip this wraps to a
-        // negative i16 and the audio is destroyed.
+        // Five hot sources sum to 4.0. Rust's f32->i16 cast has saturated
+        // (not wrapped) since 1.45, so without soft_clip the sum still lands
+        // at i16::MAX — a hard clip, audibly harsher than the intended soft
+        // clip, and one that would otherwise ship silently. `< i16::MAX` is
+        // what actually discriminates the two: soft_clip bounds the sum
+        // below the ceiling (32745), while an unclipped sum saturates AT it
+        // (32767). `out[0] <= i16::MAX` was dropped here because it's always
+        // true for an i16 and clippy::absurd_extreme_comparisons (deny by
+        // default) fails the -D warnings gate; the strict `<` is not always
+        // true and is not linted.
         let hot = [0.8f32];
         let sources: Vec<&[f32]> = vec![&hot; 5];
         let out = mix_n_to_stereo_i16(&sources);
         assert_eq!(out.len(), 2);
         assert!(out[0] > 0, "stays positive");
-        // No `out[0] <= i16::MAX` assert: out[0] IS an i16, so that comparison
-        // is always true and clippy::absurd_extreme_comparisons (deny by
-        // default) fails the -D warnings gate. soft_clip bounding the sum is
-        // what the positive assert above actually proves.
+        assert!(
+            out[0] < i16::MAX,
+            "soft_clip bounded the sum rather than the cast saturating"
+        );
     }
 }
