@@ -21,6 +21,7 @@ pub mod sync_util;
 pub mod tasks;
 pub mod template;
 pub mod throttle;
+pub mod timeline;
 pub mod transcript;
 pub mod transcription_config;
 pub mod uri;
