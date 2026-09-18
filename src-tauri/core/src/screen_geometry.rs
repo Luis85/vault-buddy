@@ -65,11 +65,12 @@ pub fn clamp_to_frame(rect: PhysicalRect, frame_w: u32, frame_h: u32) -> Option<
     if rect.x >= frame_w || rect.y >= frame_h {
         return None;
     }
+    // Both guards above make this subtraction and the result non-zero:
+    // rect.width/height are >= 1, and rect.x < frame_w (rect.y < frame_h), so
+    // each min() takes the smaller of two values that are both >= 1. A third
+    // `width == 0` check here would be unreachable.
     let width = rect.width.min(frame_w - rect.x);
     let height = rect.height.min(frame_h - rect.y);
-    if width == 0 || height == 0 {
-        return None;
-    }
     Some(PhysicalRect {
         x: rect.x,
         y: rect.y,

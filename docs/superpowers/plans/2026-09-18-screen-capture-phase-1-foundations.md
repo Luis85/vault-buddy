@@ -1329,10 +1329,10 @@ pub fn render_screen_note(meta: &ScreenNoteMeta, mp4_file_name: &str) -> String 
     if let Some(template) = &meta.extra_frontmatter {
         let extra = render_extra_frontmatter(template, &vars, RESERVED_SCREEN_NOTE_KEYS);
         if !extra.is_empty() {
+            // render_extra_frontmatter returns either "" or a string whose
+            // last emitted mapping line is newline-terminated, so no
+            // `if !out.ends_with('\n')` fixup is reachable here.
             out.push_str(&extra);
-            if !out.ends_with('\n') {
-                out.push('\n');
-            }
         }
     }
 
@@ -1424,20 +1424,27 @@ Append INSIDE the existing `#[cfg(test)] mod tests` block in `src-tauri/capture/
     // Regression: the two-source path is the existing meeting-recording
     // behaviour and must stay byte-identical, or every meeting recording's
     // levels change the day multi-select lands.
+    //
+    // The expected values are a HARDCODED ORACLE, captured from the
+    // two-source mix_to_stereo_i16 as it behaved BEFORE this change.
+    // Comparing mix_n_to_stereo_i16(&[&a,&b]) against mix_to_stereo_i16(&a,&b)
+    // would be a tautology once the latter becomes a wrapper over the former
+    // (Step 3) — it would compare f(x) to f(x) and could never fail.
     #[test]
     fn mix_n_matches_the_two_source_mixer_exactly() {
-        let cases: Vec<(Vec<f32>, Vec<f32>)> = vec![
-            (vec![0.5, 0.5], vec![0.25]),
-            (vec![], vec![0.1, 0.2, 0.3]),
-            (vec![0.9, -0.9, 0.4], vec![0.9, -0.9, 0.4]),
-            (vec![], vec![]),
+        let cases: Vec<(Vec<f32>, Vec<f32>, Vec<i16>)> = vec![
+            (vec![0.5, 0.5], vec![0.25], vec![20811, 20811, 15142, 15142]),
+            (vec![], vec![0.1, 0.2, 0.3], vec![3265, 3265, 6467, 6467, 9545, 9545]),
+            (
+                vec![0.9, -0.9, 0.4],
+                vec![0.9, -0.9, 0.4],
+                vec![31023, 31023, -31023, -31023, 21758, 21758],
+            ),
+            (vec![], vec![], vec![]),
         ];
-        for (a, b) in cases {
-            assert_eq!(
-                mix_n_to_stereo_i16(&[&a, &b]),
-                mix_to_stereo_i16(&a, &b),
-                "a={a:?} b={b:?}"
-            );
+        for (a, b, expected) in cases {
+            assert_eq!(mix_n_to_stereo_i16(&[&a, &b]), expected, "n-source: a={a:?} b={b:?}");
+            assert_eq!(mix_to_stereo_i16(&a, &b), expected, "wrapper: a={a:?} b={b:?}");
         }
     }
 
@@ -1458,7 +1465,10 @@ Append INSIDE the existing `#[cfg(test)] mod tests` block in `src-tauri/capture/
         let out = mix_n_to_stereo_i16(&sources);
         assert_eq!(out.len(), 2);
         assert!(out[0] > 0, "stays positive");
-        assert!(out[0] <= i16::MAX);
+        // No `out[0] <= i16::MAX` assert: out[0] IS an i16, so that comparison
+        // is always true and clippy::absurd_extreme_comparisons (deny by
+        // default) fails the -D warnings gate. soft_clip bounding the sum is
+        // what the positive assert above actually proves.
     }
 ```
 
@@ -1557,10 +1567,13 @@ edition = "2021"
 publish = false
 
 [dependencies]
-log = "0.4"
 vault_buddy_core = { path = "../core" }
 
-# NOTE: windows-capture and the `windows` crate are deliberately NOT here
+# NOTE: no `log` dependency yet. Nothing in this crate logs during phase 1,
+# and `cargo machete` (a rust-core CI gate) fails on a declared-but-unused
+# dependency. Phase 2's engine adds it back when it has something to log.
+#
+# windows-capture and the `windows` crate are deliberately NOT here
 # yet. They arrive in phase 2, after the fragmented-MP4 spike decides the
 # staged container format. Everything in this crate today is pure and
 # compiles on any platform.
@@ -1904,12 +1917,11 @@ use crate::ScreenError;
 
 /// Begin capturing. Phase 2 replaces this signature with the real parameter
 /// set; until then it exists so callers and the stub agree on the shape.
-#[cfg(windows)]
-pub fn start_capture() -> Result<(), ScreenError> {
-    Err(ScreenError::Unsupported)
-}
-
-#[cfg(not(windows))]
+///
+/// One unconditional body, NOT a #[cfg(windows)] / #[cfg(not(windows))] pair:
+/// phase 1 has nothing platform-specific to say, and two arms with identical
+/// bodies is dead weight that reads as though they differ. Phase 2 introduces
+/// the cfg split when the Windows arm actually diverges.
 pub fn start_capture() -> Result<(), ScreenError> {
     Err(ScreenError::Unsupported)
 }
