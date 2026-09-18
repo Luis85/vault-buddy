@@ -2041,7 +2041,7 @@ carries the `// Screen Capture is owned by set_screen_capture_config
 (phase 6)` comment above the fields it preserves — they are obligations
 the next phase inherits and must not skip.
 
-### GAP-104 · Low · `CaptureClock` is the repo's third pause-elapsed accumulator
+### GAP-105 · Low · `CaptureClock` is the repo's third pause-elapsed accumulator
 `src-tauri/screen/src/clock.rs`'s `CaptureClock` (`started` + `paused_total`
 + `paused_since`, idempotent `pause`/`resume`, `elapsed`) implements the
 exact same "wall clock minus accumulated paused time" rule as two existing,
@@ -2077,7 +2077,7 @@ rule, with the audio session and the UI mirror built on it or on a shared
 sibling type, rather than a third independent implementation living
 alongside the other two indefinitely.
 
-### GAP-105 · Low · Units differ at the seams Phase 2 will join: ms, `Duration`, and seconds
+### GAP-106 · Low · Units differ at the seams Phase 2 will join: ms, `Duration`, and seconds
 Three time-value representations meet at the boundary Phase 2 wires
 together, with no documented conversion between them:
 - `core::timeline` (`Segment::duration_ms`, `Timeline::output_duration_ms`/
@@ -2106,7 +2106,7 @@ the right choice for a monotonically-advancing output timestamp) so every
 call site converts the same way instead of five ad hoc `.as_millis() as
 u64`s drifting apart.
 
-### GAP-106 · Low · Overflow posture is inconsistent between `core::timeline` and `screen::select` (cosmetic)
+### GAP-107 · Low · Overflow posture is inconsistent between `core::timeline` and `screen::select` (cosmetic)
 `core/src/timeline.rs`'s `split_at` (line ~69) and `to_source_ms` (line
 ~116) both compute `elapsed + seg.duration_ms()` with a plain `+`, while
 `screen/src/select.rs`'s `plan` (line ~43) computes the equivalent running
