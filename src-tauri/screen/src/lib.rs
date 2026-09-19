@@ -16,6 +16,11 @@ pub mod diagnose;
 #[cfg(windows)]
 pub(crate) mod frames;
 pub mod mp4_boxes;
+// The region source's id encoding and the display-number parse that joins
+// Tauri's monitor names to windows-capture's indices. PURE: phase 3's
+// correctness lives here, because its cfg(windows) consumer is testable
+// nowhere (docs/Gaps.md GAP-117).
+pub mod region;
 pub mod select;
 pub mod session;
 pub mod sink;

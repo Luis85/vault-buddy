@@ -21,6 +21,7 @@ use crate::ScreenError;
 pub enum SourceKind {
     Screen,
     Window,
+    Region,
 }
 
 /// A capture target, in the form that crosses the IPC boundary.
@@ -31,6 +32,10 @@ pub enum SourceId {
     /// `HWND` widened to `isize`. Signed on purpose: an HWND is a pointer,
     /// and on a 64-bit process its high bit can be set.
     Window(isize),
+    /// A rectangle on one monitor (phase 3). Carrying the rectangle IN the
+    /// id is what lets `start_screen_capture` stay a four-parameter
+    /// command: the picker holds one opaque string for every source kind.
+    Region(crate::region::RegionSource),
 }
 
 impl SourceId {
@@ -42,8 +47,9 @@ impl SourceId {
         match kind {
             "screen" => rest.parse::<usize>().ok().map(SourceId::Screen),
             "window" => rest.parse::<isize>().ok().map(SourceId::Window),
-            // "region" deliberately absent: region capture is phase 3, and
-            // accepting an id we cannot honour would start the wrong capture.
+            // Strictness is delegated whole to region::parse_payload, so
+            // there is exactly one definition of a legal region id.
+            "region" => crate::region::parse_payload(rest).map(SourceId::Region),
             _ => None,
         }
     }
@@ -52,6 +58,7 @@ impl SourceId {
         match self {
             SourceId::Screen(_) => SourceKind::Screen,
             SourceId::Window(_) => SourceKind::Window,
+            SourceId::Region(_) => SourceKind::Region,
         }
     }
 }
@@ -61,6 +68,7 @@ impl std::fmt::Display for SourceId {
         match self {
             SourceId::Screen(i) => write!(f, "screen:{i}"),
             SourceId::Window(h) => write!(f, "window:{h}"),
+            SourceId::Region(r) => write!(f, "region:{}", crate::region::encode_payload(*r)),
         }
     }
 }
@@ -367,6 +375,10 @@ mod imp {
                     title,
                 })
             }
+            // Task 3 replaces this: resolving a region needs the monitor
+            // lookup this match already does for `Screen`, then clamping
+            // the rectangle to that monitor's frame.
+            SourceId::Region(_) => Err(ScreenError::Unsupported),
         }
     }
 }
@@ -460,7 +472,7 @@ mod tests {
         assert_eq!(
             SourceId::parse("region:0"),
             None,
-            "region arrives in phase 3"
+            "a region payload needs all five fields, not just a monitor"
         );
         assert_eq!(SourceId::parse(""), None);
         assert_eq!(SourceId::parse("window:1:2"), None);
@@ -534,6 +546,46 @@ mod tests {
                 info.id
             );
         }
+    }
+
+    // Phase 3: a region is a first-class source id, so the same untrusted
+    // string the webview hands back carries the whole rectangle and
+    // `start_screen_capture` needs no new parameter.
+    #[test]
+    fn a_region_source_id_round_trips() {
+        let id = SourceId::Region(crate::region::RegionSource {
+            monitor: 2,
+            rect: vault_buddy_core::screen_geometry::PhysicalRect {
+                x: 320,
+                y: 180,
+                width: 1280,
+                height: 720,
+            },
+        });
+        assert_eq!(id.to_string(), "region:2,320,180,1280,720");
+        assert_eq!(SourceId::parse("region:2,320,180,1280,720"), Some(id));
+        assert_eq!(id.kind(), SourceKind::Region);
+    }
+
+    #[test]
+    fn a_malformed_region_source_id_is_refused() {
+        // Delegated strictness: whatever region::parse_payload refuses,
+        // SourceId::parse must refuse too, rather than falling back to a
+        // screen or a default.
+        assert_eq!(SourceId::parse("region:"), None);
+        assert_eq!(SourceId::parse("region:2,320,180,1280"), None);
+        assert_eq!(SourceId::parse("region:2,320,180,1280,0"), None);
+    }
+
+    // The existing kinds must be untouched by the new arm.
+    #[test]
+    fn screen_and_window_ids_still_round_trip_unchanged() {
+        assert_eq!(SourceId::parse("screen:3"), Some(SourceId::Screen(3)));
+        assert_eq!(SourceId::Screen(3).to_string(), "screen:3");
+        assert_eq!(SourceId::parse("window:-42"), Some(SourceId::Window(-42)));
+        assert_eq!(SourceId::Window(-42).to_string(), "window:-42");
+        assert_eq!(SourceId::parse("region"), None, "no separator");
+        assert_eq!(SourceId::parse("nonsense:1"), None);
     }
 
     #[cfg(windows)]
