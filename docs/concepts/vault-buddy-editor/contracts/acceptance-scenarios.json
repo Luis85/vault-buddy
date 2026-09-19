@@ -1,0 +1,242 @@
+[
+  {
+    "id": "A01",
+    "title": "Correct native capture destination",
+    "given": "a finished capture is staged for vault A and the panel currently selects vault B",
+    "when": "the editor opens the staged capture",
+    "then": "the native sidecar resolves vault A and no file is written to either vault before explicit save",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A02",
+    "title": "Stop still finalizing",
+    "given": "stop returns stillSaving and no terminal capture event has arrived",
+    "when": "the UI reconciles capture status",
+    "then": "it remains in finalizing state and does not open an incomplete source as a completed recording",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A03",
+    "title": "Non-destructive cut and reopen",
+    "given": "a source file and an editable timeline with source-linked annotations exist",
+    "when": "the user splits trims deletes saves and reopens the project",
+    "then": "source bytes are unchanged and retained clip/cue source intervals match the saved edit",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A04",
+    "title": "Atomic group movement",
+    "given": "selected clips on multiple tracks have relative offsets and one track is locked",
+    "when": "the user moves the group",
+    "then": "the entire command is rejected or leaves all offsets unchanged without partially moving clips",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A05",
+    "title": "Global intro insertion",
+    "given": "a multi-track edit includes aligned screen webcam and narration",
+    "when": "the user inserts an intro before everything",
+    "then": "all affected tracks shift by the same duration or the operation is refused atomically for locked content",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A06",
+    "title": "Monitoring is not export mute",
+    "given": "two audible tracks are included in the export mix",
+    "when": "the user mutes monitoring and renders a short range",
+    "then": "decoded output still contains both source contributions",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A07",
+    "title": "Fades and crossfades",
+    "given": "compatible adjacent clips have an explicit transition and configured edge fades",
+    "when": "the user plays renders saves and reopens",
+    "then": "the selected envelopes and transition timing are preserved and decoded output matches them",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A08",
+    "title": "Independent webcam source",
+    "given": "camera permission has not been granted and an existing project has unsaved work",
+    "when": "the user opens webcam setup then declines permission",
+    "then": "no camera starts and the project remains unchanged and usable",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A09",
+    "title": "Webcam take retained",
+    "given": "the user recorded a webcam take but has not added or discarded it",
+    "when": "the editor is closed or a new project is requested",
+    "then": "the pending take is included in the save/keep/discard decision and no media is silently lost",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A10",
+    "title": "Resizing survives serialization",
+    "given": "a circular presenter is placed over a screen recording",
+    "when": "the user resizes and repositions it saves and reopens",
+    "then": "normalized layout and crop survive and the circle remains circular in output pixels",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A11",
+    "title": "Source-linked teaching cues",
+    "given": "an arrow text highlight zoom and step cue belong to a clip",
+    "when": "the clip is moved split trimmed or changed in speed",
+    "then": "each cue follows the retained source interval and no dangling cue or duplicate boundary frame is introduced",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A12",
+    "title": "Caption timing and correction",
+    "given": "imported captions contain a timing overlap and a wrong word",
+    "when": "the user corrects text and timing then exports",
+    "then": "the corrected synchronized cues are used and the overlap warning disappears only when resolved",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A13",
+    "title": "Output-range timestamps",
+    "given": "a project contains captions and chapters before and within a chosen nonzero range",
+    "when": "the range is rendered",
+    "then": "caption/chapter timestamps are clipped and rebased to output zero while the project remains untrimmed",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A14",
+    "title": "Context target precision",
+    "given": "the playhead and pointer are at different valid times on a clip",
+    "when": "the user invokes Split from that clip right-click context",
+    "then": "the command acts at the explicitly displayed context time rather than silently using stale selection or playhead",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A15",
+    "title": "Save without render",
+    "given": "the project contains imported originals but has no rendered products",
+    "when": "the user saves a portable project and reopens it on a fresh session",
+    "then": "the composition is editable and available source media is restored without rendering first",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A16",
+    "title": "Immutable product lineage",
+    "given": "a product has been rendered from revision R",
+    "when": "the user changes layout/color and renders another product",
+    "then": "the first encoded binary snapshot and source revision remain unchanged",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A17",
+    "title": "Historical source dependency",
+    "given": "a retained product snapshot uses a source removed from the current edit",
+    "when": "the user saves a portable project",
+    "then": "that source remains included or is explicitly reported unavailable rather than silently pruned",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A18",
+    "title": "Matching durable receipt",
+    "given": "a save request targets revision R and a later current revision exists",
+    "when": "the save receipt for R arrives",
+    "then": "the later revision remains dirty and no wrong-session receipt is applied",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A19",
+    "title": "Safe missing-media reconnection",
+    "given": "an original is unavailable and two selected candidates share its name",
+    "when": "batch reconnect attempts to resolve media",
+    "then": "the UI reports ambiguity and preserves the edit until an explicit valid match is chosen",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A20",
+    "title": "Save fault recovery",
+    "given": "a valid project file exists",
+    "when": "disk full or process interruption occurs during a replacement save",
+    "then": "the last good project and originals remain available and recovery reports the incomplete owned operation",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A21",
+    "title": "Partial output publication",
+    "given": "a rendered output is published but companion-note or product-record commit fails",
+    "when": "the application restarts recovery",
+    "then": "the operation is resolved idempotently without overwriting unrelated files or falsely reporting full completion",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A22",
+    "title": "Malicious project rejection",
+    "given": "a project archive contains traversal duplicate IDs cyclic sources or unsafe expanded size",
+    "when": "the user opens it",
+    "then": "validation rejects before installing state or granting filesystem access and current work remains untouched",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A23",
+    "title": "Read-only walkthrough",
+    "given": "a project has known composition and Undo state",
+    "when": "the user reads all 22 lessons without choosing edit actions",
+    "then": "composition and Undo are unchanged and no camera download render or save action starts",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A24",
+    "title": "Exact guide resume",
+    "given": "the guide is paused or dismissed on a known stable step",
+    "when": "the user reopens Help and resumes after native reload",
+    "then": "the same lesson and reviewed status are restored independently of the editing project",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A25",
+    "title": "Guide suspension",
+    "given": "the guide highlights a control that opens a modal dialog",
+    "when": "the user opens and closes the dialog",
+    "then": "the coach suspends while modal and returns to the same step with logical keyboard focus",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A26",
+    "title": "No guide in render",
+    "given": "a guide highlight is visible over an editor control",
+    "when": "a permitted rendering workflow is executed",
+    "then": "decoded video contains only authored composition and never guide outlines selection handles or UI",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A27",
+    "title": "Startup error clarity",
+    "given": "editor initialization fails before ready",
+    "when": "the failure is displayed",
+    "then": "safe actionable recovery explains that saved project files were not changed without injecting exception text as markup",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A28",
+    "title": "No repeated toolbar work",
+    "given": "canvas dimensions remain unchanged across playback frames",
+    "when": "the renderer checks canvas size repeatedly",
+    "then": "the aspect-ratio toolbar DOM is not rebuilt while real canvas changes update its label once",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A29",
+    "title": "Native temporal output",
+    "given": "moving numbered footage and synchronized audio pulses are rendered on supported hardware",
+    "when": "the complete file is decoded",
+    "then": "frame coverage duration cadence and A/V offset satisfy recorded product tolerances rather than only file-existence checks",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  },
+  {
+    "id": "A30",
+    "title": "Privacy boundary",
+    "given": "a static privacy cover hides sensitive output pixels",
+    "when": "the user prepares to share an editable portable project",
+    "then": "the UI explains that uncensored originals can be included and does not claim secure source redaction",
+    "level": "Native product acceptance; browser evidence is recorded separately"
+  }
+]

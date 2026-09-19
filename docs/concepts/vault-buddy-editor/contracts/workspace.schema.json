@@ -1,0 +1,906 @@
+{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "vault-buddy-workspace/1"
+    },
+    "project": {
+      "$ref": "#/$defs/project"
+    },
+    "workspace": {
+      "type": "object",
+      "description": "View preferences are sanitized separately and cannot grant source access."
+    },
+    "record": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "products": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/product"
+          },
+          "maxItems": 40
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "created_at",
+        "updated_at",
+        "products"
+      ],
+      "additionalProperties": true
+    },
+    "saved_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "schema",
+    "project",
+    "workspace",
+    "record",
+    "saved_at"
+  ],
+  "additionalProperties": true,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vault-buddy:editor:workspace-schema",
+  "title": "Vault Buddy reference workspace \u2014 structural validation",
+  "description": "Structure only. Run semantic validation for unique IDs, ranges, paths, cross-references, transitions, linked-asset cycles and snapshot ownership. Additional fields are not permission to drop unknown edit semantics.",
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "kind": {
+          "enum": [
+            "video",
+            "audio"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 16384
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 16384
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "builtin": {
+          "enum": [
+            "presenter",
+            "screen",
+            "detail",
+            "cues",
+            "ambient",
+            "card"
+          ]
+        },
+        "media_type": {
+          "const": "image"
+        },
+        "linked_asset": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "original_name": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "duration_ms"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "url"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "src"
+            ]
+          }
+        }
+      ]
+    },
+    "track": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "kind": {
+          "enum": [
+            "audio",
+            "video"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "solo": {
+          "type": "boolean"
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "visible",
+        "locked",
+        "muted",
+        "solo",
+        "volume"
+      ],
+      "additionalProperties": true
+    },
+    "clip": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "asset_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "track_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "in_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "out_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "fade_in_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "fade_out_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "fade_curve": {
+          "enum": [
+            "linear",
+            "smooth",
+            "equal-power"
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "w": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1
+        },
+        "h": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1
+        },
+        "speed": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4
+        },
+        "rotation": {
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ]
+        },
+        "frame_shape": {
+          "enum": [
+            "circle",
+            "rounded",
+            "rectangle"
+          ]
+        },
+        "fit": {
+          "enum": [
+            "cover",
+            "contain"
+          ]
+        },
+        "mirror": {
+          "type": "boolean"
+        },
+        "flip_y": {
+          "type": "boolean"
+        },
+        "preserve_pitch": {
+          "type": "boolean"
+        },
+        "group_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "crop_zoom": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "crop_x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "crop_y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "adjustments": {
+          "type": "object",
+          "properties": {
+            "brightness": {
+              "type": "number",
+              "minimum": 0.25,
+              "maximum": 2
+            },
+            "contrast": {
+              "type": "number",
+              "minimum": 0.25,
+              "maximum": 2
+            },
+            "saturation": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "sepia": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "grayscale": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "brightness",
+            "contrast",
+            "saturation",
+            "sepia",
+            "grayscale"
+          ],
+          "additionalProperties": true
+        },
+        "card": {
+          "type": "object",
+          "properties": {
+            "preset": {
+              "enum": [
+                "intro",
+                "chapter",
+                "outro",
+                "blank"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "subtitle": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "background": {
+              "$ref": "#/$defs/color"
+            },
+            "foreground": {
+              "$ref": "#/$defs/color"
+            },
+            "accent": {
+              "$ref": "#/$defs/color"
+            }
+          },
+          "required": [
+            "preset",
+            "title",
+            "subtitle",
+            "background",
+            "foreground",
+            "accent"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "asset_id",
+        "track_id",
+        "name",
+        "start_ms",
+        "in_ms",
+        "out_ms",
+        "fade_in_ms",
+        "fade_out_ms",
+        "fade_curve",
+        "opacity",
+        "volume",
+        "muted",
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "additionalProperties": true
+    },
+    "effect": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "clip_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "arrow",
+            "highlight",
+            "spotlight",
+            "zoom",
+            "step",
+            "mask"
+          ]
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "w": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 1
+        },
+        "h": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 1
+        },
+        "x2": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y2": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "factor": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "fontSize": {
+          "type": "number",
+          "minimum": 12,
+          "maximum": 100
+        },
+        "stroke": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "dim": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "easing": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "number": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 99
+        },
+        "background": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "clip_id",
+        "kind",
+        "start_ms",
+        "end_ms",
+        "x",
+        "y",
+        "color"
+      ],
+      "additionalProperties": true
+    },
+    "caption": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "clip_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "id",
+        "clip_id",
+        "start_ms",
+        "end_ms",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "vault-buddy-video-project/3"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "canvas": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "enum": [
+                1280,
+                720,
+                960
+              ]
+            },
+            "height": {
+              "enum": [
+                720,
+                1280
+              ]
+            },
+            "fps": {
+              "const": 30
+            }
+          },
+          "required": [
+            "width",
+            "height",
+            "fps"
+          ],
+          "additionalProperties": true
+        },
+        "master_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset"
+          },
+          "maxItems": 200
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/track"
+          },
+          "maxItems": 32
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/clip"
+          },
+          "maxItems": 600
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/effect"
+          },
+          "maxItems": 1200
+        },
+        "markers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/marker"
+          },
+          "maxItems": 300
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/transition"
+          },
+          "maxItems": 300
+        },
+        "destination": {
+          "type": "object",
+          "properties": {
+            "vault": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "folder": {
+              "type": "string",
+              "maxLength": 250
+            },
+            "dated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "vault",
+            "folder",
+            "dated"
+          ],
+          "additionalProperties": true
+        },
+        "captions": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "burn_in": {
+              "type": "boolean"
+            },
+            "font_size": {
+              "type": "number",
+              "minimum": 18,
+              "maximum": 56
+            },
+            "position": {
+              "enum": [
+                "top",
+                "bottom"
+              ]
+            },
+            "background": {
+              "type": "boolean"
+            },
+            "cues": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/caption"
+              },
+              "maxItems": 2000
+            }
+          },
+          "required": [
+            "enabled",
+            "burn_in",
+            "font_size",
+            "position",
+            "background",
+            "cues"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "title",
+        "canvas",
+        "master_gain",
+        "assets",
+        "tracks",
+        "clips",
+        "effects",
+        "markers",
+        "transitions",
+        "destination"
+      ],
+      "additionalProperties": true
+    },
+    "product": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "project_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "filename": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "mime": {
+          "type": "string",
+          "pattern": "^video/(webm|mp4)"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "edit_fingerprint": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "snapshot": {
+          "$ref": "#/$defs/project"
+        },
+        "render_range": {
+          "type": "object",
+          "properties": {
+            "start_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7200000
+            },
+            "end_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7200000
+            }
+          },
+          "required": [
+            "start_ms",
+            "end_ms"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "name",
+        "filename",
+        "mime",
+        "revision",
+        "duration_ms",
+        "created_at",
+        "edit_fingerprint"
+      ],
+      "additionalProperties": true
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+    "marker": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "clip_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "source_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "id",
+        "clip_id",
+        "source_ms",
+        "title"
+      ],
+      "additionalProperties": true
+    },
+    "transition": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7200000
+        },
+        "kind": {
+          "enum": [
+            "dissolve",
+            "equal-power"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "to",
+        "duration_ms",
+        "kind"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

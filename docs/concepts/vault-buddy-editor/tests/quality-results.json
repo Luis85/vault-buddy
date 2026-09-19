@@ -1,0 +1,312 @@
+{
+  "html_sha256": "576ecde17da0d1d62d852151097eb7335e21b138bfb6206f4f7d34e658f9e62f",
+  "summary": {
+    "PASS": 38,
+    "FAIL": 0
+  },
+  "results": [
+    {
+      "name": "Repeated clip nudges retain keyboard focus and never become playhead seeks",
+      "status": "PASS",
+      "detail": {
+        "clip_delta_ms": 33,
+        "playhead_unchanged": true
+      }
+    },
+    {
+      "name": "Track toggle keyboard focus and aria-pressed survive rerendering",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Timeline slider supports Page and vertical-arrow keyboard alternatives",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Split explains locked-track and boundary prerequisites before activation",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Project format radios have native-size targets inside full clickable labels",
+      "status": "PASS",
+      "detail": {
+        "x": 556,
+        "y": 400.203125,
+        "width": 18,
+        "height": 18
+      }
+    },
+    {
+      "name": "Save dialogs keep their footer in view across four window sizes",
+      "status": "PASS",
+      "detail": [
+        {
+          "width": 1600,
+          "footer_bottom": 882.359375
+        },
+        {
+          "width": 960,
+          "footer_bottom": 613.390625
+        },
+        {
+          "width": 720,
+          "footer_bottom": 613.390625
+        },
+        {
+          "width": 390,
+          "footer_bottom": 809.234375
+        }
+      ]
+    },
+    {
+      "name": "Compact workspace enlarges the preview without removing contextual commands",
+      "status": "PASS",
+      "detail": {
+        "x": 433.328125,
+        "y": 106,
+        "width": 325.328125,
+        "height": 183
+      }
+    },
+    {
+      "name": "Track targets are at least 24 pixels and forced-colors focus is visible",
+      "status": "PASS",
+      "detail": {
+        "track_controls": 18,
+        "minimum_width": 26,
+        "minimum_height": 26
+      }
+    },
+    {
+      "name": "Keyboard-accessible project status explains files and restores focus without an edit",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Project validation rejects cyclic, self, missing, builtin and chained audio aliases",
+      "status": "PASS",
+      "detail": [
+        {
+          "kind": "cycle",
+          "rejected": true,
+          "message": "Invalid linked audio source. Reconnect a direct original; cyclic or missing links are not supported."
+        },
+        {
+          "kind": "self",
+          "rejected": true,
+          "message": "Invalid linked audio source. Reconnect a direct original; cyclic or missing links are not supported."
+        },
+        {
+          "kind": "missing",
+          "rejected": true,
+          "message": "Invalid linked audio source. Reconnect a direct original; cyclic or missing links are not supported."
+        },
+        {
+          "kind": "builtin",
+          "rejected": true,
+          "message": "Invalid linked audio source. Reconnect a direct original; cyclic or missing links are not supported."
+        },
+        {
+          "kind": "chain",
+          "rejected": true,
+          "message": "Invalid linked audio source. Reconnect a direct original; cyclic or missing links are not supported."
+        }
+      ]
+    },
+    {
+      "name": "Valid direct detached-audio aliases remain compatible with saved projects",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Source dimension, byte-size and timestamp metadata reject invalid numeric values",
+      "status": "PASS",
+      "detail": 7
+    },
+    {
+      "name": "Source URLs are released only after confirmed workspace replacement",
+      "status": "PASS",
+      "detail": "Cancelled replacement retains media; confirmed replacement releases it."
+    },
+    {
+      "name": "Ordinary editing and undo do not evict source media",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Close guard includes recording/countdown and uncommitted takes (synthetic event)",
+      "status": "PASS",
+      "detail": [
+        {
+          "phase": "idle",
+          "prevented": false
+        },
+        {
+          "phase": "countdown",
+          "prevented": true
+        },
+        {
+          "phase": "recording",
+          "prevented": true
+        },
+        {
+          "phase": "stopping",
+          "prevented": true
+        },
+        {
+          "phase": "review",
+          "prevented": true
+        }
+      ]
+    },
+    {
+      "name": "Checks cache reuses unchanged results and invalidates on graph changes",
+      "status": "PASS",
+      "detail": {
+        "cache_hits_added": 12
+      }
+    },
+    {
+      "name": "Uncommitted camera warning appears and clears without requiring a project edit",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Transparent footage is warned about without blocking intentional overlay-only output",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Caption exclusion is actionable but does not falsely prohibit an intentional render",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Cancel project preparation produces no download and does not mark edits saved",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Escape while preparing a project cancels rather than triggering a later download",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Actual portable project ZIP downloads with a valid edit graph and honest status",
+      "status": "PASS",
+      "detail": {
+        "size": 9858,
+        "entries": 3
+      }
+    },
+    {
+      "name": "A rejected download stays dirty and offers retry without losing the workspace",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Mixed successful and unsupported imports retain an actionable result for each file",
+      "status": "PASS",
+      "detail": [
+        {
+          "name": "notes.txt",
+          "status": "skipped",
+          "message": "Choose a supported video, audio or image file."
+        },
+        {
+          "name": "local-still.png",
+          "status": "added",
+          "message": "Available in Media. Use + or drag it onto a compatible track."
+        }
+      ]
+    },
+    {
+      "name": "Stopping a media batch retains successful files and reports unprocessed items",
+      "status": "PASS",
+      "detail": [
+        "added",
+        "cancelled",
+        "cancelled"
+      ]
+    },
+    {
+      "name": "New, reset and project-open operations cannot race an active media import",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Source-cap errors report the limit without retaining a rejected media object",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Dialog interruption resumes the current onboarding lesson after native dismissal",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "New session dialog participates in onboarding suspension without altering edits",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Observed audio-peak feedback is accessible and never modifies the mix",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Diagnostics identify the product and omit project names, media paths and content",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Fit shows the full long edit instead of clamping to a 24,000-pixel timeline",
+      "status": "PASS",
+      "detail": {
+        "lane": 1418,
+        "visible": 1404,
+        "labels": 11,
+        "scale": 0.4593333333333333
+      }
+    },
+    {
+      "name": "Session cleanup also releases shared thumbnail CSS references",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Replacing a session releases old rendered-package and pending-render references",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Project replacement cannot race an active source reconnection",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Compact guide highlights the visible More alternative and opens its real menu",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Neutral color settings skip filter work without changing reference pixels",
+      "status": "PASS",
+      "detail": {
+        "maximum_delta": 0
+      }
+    },
+    {
+      "name": "Reviewed quality flows have no uncaught JavaScript errors or runtime network requests",
+      "status": "PASS",
+      "detail": [
+        null,
+        null
+      ]
+    }
+  ],
+  "errors": [],
+  "requests": []
+}

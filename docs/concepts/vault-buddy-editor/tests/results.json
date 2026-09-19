@@ -1,0 +1,275 @@
+[
+  {
+    "name": "Sample graph, multiple tracks and camera-off initial state",
+    "result": "PASS",
+    "detail": {
+      "valid": true,
+      "tracks": 5,
+      "clips": 7,
+      "ms": 33500,
+      "camera": "idle"
+    }
+  },
+  {
+    "name": "Playback, pause and output-to-source mapping",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Add video/audio tracks and undo",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Split preserves intersecting annotations and undo/redo",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Reorder carries callouts without moving other tracks",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Gap delete versus explicitly track-local ripple delete",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Locked tracks reject movement, deletion and layout changes",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Numeric fades, fade envelopes and duration limits",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Cross dissolve and removal preserve other tracks",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Equal-power audio crossfade envelope",
+    "result": "PASS",
+    "detail": [
+      0.4949747468305833,
+      0.4949747468305832
+    ]
+  },
+  {
+    "name": "Track mute/solo, master mix and independent monitoring mute",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Resizable circle/PiP, corner presets, crop and mirror",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Pointer corner resize preserves circle and is one undo",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Pointer webcam repositioning and bounds",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Gold timeline handle changes fade and supports undo",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Pointer trim preserves source and reversible edit",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Teaching tools, clip-linked markers and generated note",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Keyboard seek, snapping, project save and timeline resize",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Light/dark themes and resized workspace screenshots",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Real local video/audio import, metadata and peaks",
+    "result": "PASS",
+    "detail": [
+      {
+        "id": "asset-mu8gj5il-g",
+        "kind": "video",
+        "duration": 6000,
+        "width": 640
+      },
+      {
+        "id": "asset-mu8gj5nz-h",
+        "kind": "audio",
+        "duration": 6000,
+        "width": 0
+      }
+    ]
+  },
+  {
+    "name": "Independent real video layers and simultaneous audio playback",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Save portable workspace without rendering: sources, layout, CRC",
+    "result": "PASS",
+    "detail": [
+      "project.vbproject.json",
+      "manifest.json",
+      "Sources/asset-mu8gj5il-g-capture-with-audio.mp4",
+      "Sources/asset-mu8gj5nz-h-narration-tone.wav",
+      "READ-ME.txt"
+    ]
+  },
+  {
+    "name": "Reopen portable project in a fresh context with playable sources",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Real multi-track render creates an immutable product and editable snapshot",
+    "result": "PASS",
+    "detail": {
+      "files": [
+        "Intake/Screen/Workspace roundtrip test-r1-jfqo-i.webm",
+        "Intake/Screen/Workspace roundtrip test-r1-jfqo-i.md",
+        "Intake/Screen/Workspace roundtrip test-r1-jfqo-i.png",
+        "Render/edit-snapshot.json",
+        "Render/product.json",
+        "READ-ME.txt"
+      ],
+      "product_id": "product-mu8gjfqo-i"
+    }
+  },
+  {
+    "name": "Rendered streams decode with both mixed audio frequencies",
+    "result": "PASS",
+    "detail": {
+      "streams": [
+        {
+          "codec_name": "vp9",
+          "codec_type": "video",
+          "width": 1280,
+          "height": 720
+        },
+        {
+          "codec_name": "opus",
+          "codec_type": "audio"
+        }
+      ],
+      "audio_rms": 0.0974949449300766,
+      "tone_magnitudes": {
+        "440": 6809.5947265625,
+        "880": 2083.56005859375
+      }
+    }
+  },
+  {
+    "name": "Edit after rendering, restore its revision and undo without mutating output",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Project package includes render history, sources and product video",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Project with prior renders reopens in another fresh context",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Portable project retains source files needed only by a prior rendered revision",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Lightweight project missing-media state allows saving but blocks rendering",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Reject malformed graphs, unsafe paths, remote media and invalid crop",
+    "result": "PASS",
+    "detail": 7
+  },
+  {
+    "name": "Corrupt ZIP integrity rejection leaves workspace untouched",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Camera secure-context/denial UI, optional mic, countdown cancel and release (simulated devices)",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Late camera grant after close releases all tracks (simulated permission)",
+    "result": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Responsive containment at five viewport sizes",
+    "result": "PASS",
+    "detail": [
+      [
+        1600,
+        1000
+      ],
+      [
+        1280,
+        800
+      ],
+      [
+        960,
+        640
+      ],
+      [
+        720,
+        480
+      ],
+      [
+        390,
+        844
+      ]
+    ]
+  },
+  {
+    "name": "100-clip timeline rendering smoke measurement",
+    "result": "PASS",
+    "detail": {
+      "clips": 100,
+      "render_ms": 110.10000000009313
+    }
+  },
+  {
+    "name": "No uncaught JavaScript errors or network requests",
+    "result": "PASS",
+    "detail": [
+      null,
+      null
+    ]
+  },
+  {
+    "name": "Annotated PNG export",
+    "result": "PASS",
+    "detail": 293621
+  }
+]

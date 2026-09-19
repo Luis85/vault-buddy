@@ -1,0 +1,43 @@
+PASS First-use invitation does not open a modal or steal focus (None, None, None)
+PASS Not now dismisses; permanent Help still opens all seven chapters 
+PASS All 22 read-only lessons complete without editing project or history {'steps': 22, 'project_unchanged': True}
+PASS Pause and Help → Resume retain the exact step and restore focus 
+PASS Close and Escape both dismiss overlays and remove stale highlights 
+PASS Start-over confirmation resets guide progress only; cancel preserves it 
+PASS Guide keys do not trigger editor edits; Tab cycles guide controls 
+PASS F6 switches to the target and back; F1 / ? open Help; native Escape closes it 
+PASS Highlight stays interactive; Play marks an attempt but never auto-advances 
+PASS User-performed Split and Undo work normally through the overlay 
+PASS Context menu Escape closes menu first, then guide on next Escape 
+PASS Mixer, Checks, Save and Render suspend and resume the same guide step 
+PASS Webcam lesson opens setup without requesting camera/microphone permission 
+PASS Pause guide inside an editor dialog leaves that dialog intact 
+PASS Minimize keeps the step; Expand and close work without editing 
+PASS Learning center jumps to chapter starts and individual lessons 
+PASS Quick-answer search, no-results feedback and contextual Show me links work 
+PASS Shortcut reference and learning center remain accessible both directions 
+PASS Unavailable Undo and empty projects explain prerequisites without blocking Next 
+PASS Guide never unlocks tracks or bypasses existing editing safeguards 
+PASS Highlights reconnect after property rerenders; no duplicate descriptions 
+PASS Coach remains contained across 25 desktop/compact layout combinations [{'width': 1600, 'height': 1000, 'step': 'media', 'contained': True}, {'width': 1600, 'height': 1000, 'step': 'select', 'contained': True}, {'width': 1600, 'height': 1000, 'step': 'fades', 'contained': True}, {'width': 1600, 'height': 1000, 'step': 'captions', 'contained': True}, {'width': 1600, 'height': 1000, 'step': 'save', 'contained': True}, {'width': 1280, 'height': 800, 'step': 'media', 'contained': True}, {'width': 1280, 'height': 800, 'step': 'select', 'contained': True}, {'width': 1280, 'height': 800, 'step': 'fades', 'contained': True}, {'width': 1280, 'height': 800, 'step': 'captions', 'contained': True}, {'width': 1280, 'height': 800, 'step': 'save', 'contained': True}, {'width': 960, 'height': 640, 'step': 'media', 'contained': True}, {'width': 960, 'height': 640, 'step': 'select', 'contained': True}, {'width': 960, 'height': 640, 'step': 'fades', 'contained': True}, {'width': 960, 'height': 640, 'step': 'captions', 'contained': True}, {'width': 960, 'height': 640, 'step': 'save', 'contained': True}, {'width': 720, 'height': 640, 'step': 'media', 'contained': True}, {'width': 720, 'height': 640, 'step': 'select', 'contained': True}, {'width': 720, 'height': 640, 'step': 'fades', 'contained': True}, {'width': 720, 'height': 640, 'step': 'captions', 'contained': True}, {'width': 720, 'height': 640, 'step': 'save', 'contained': True}, {'width': 390, 'height': 844, 'step': 'media', 'contained': True}, {'width': 390, 'height': 844, 'step': 'select', 'contained': True}, {'width': 390, 'height': 844, 'step': 'fades', 'contained': True}, {'width': 390, 'height': 844, 'step': 'captions', 'contained': True}, {'width': 390, 'height': 844, 'step': 'save', 'contained': True}]
+PASS Light-theme tokens and reduced-motion preference apply to walkthrough 
+PASS Help remains visible, reachable and functional at compact and phone widths 
+PASS Compact guidance keeps the explained Import control uncovered and Next visible 
+PASS Resuming clears only the obsolete guide-pause notification 
+PASS Onboarding overlays do not enter composed video pixels or undo history 
+PASS Leaving a highlight restores any pre-existing accessibility description 
+PASS Normal keyboard editing works after the guide is dismissed 
+PASS Changing to another project pauses rather than using stale clip targets 
+PASS Dimming preference can be disabled while keeping the control outline 
+PASS Progress-only file download and reload preserve an exact resume position {'bytes': 385, 'contains_project_or_media': False}
+PASS Actual downloaded progress file resumes in a fresh browser context without storage 
+PASS Malformed, oversized, future-version files are refused; unknown lesson IDs normalize safely 
+PASS Denied storage is explicit and leaves session resume usable 
+PASS Serialized guide resumes in a fresh page with a storage adapter Simulated adapter across fresh pages; not native origin persistence
+PASS Completed learners are not prompted again; lessons remain available 
+PASS Storage failure mid-tour degrades to session mode without losing the current step 
+PASS No uncaught browser errors and no runtime network requests (None, None)
+BLOCKED origin-backed reload Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://127.0.0.1:35583/vault-buddy-editor.html
+Call log:
+  - navigating to "http://127.0.0.1:35583/vau
+SUMMARY {'PASS': 39, 'FAIL': 0, 'BLOCKED': 1}

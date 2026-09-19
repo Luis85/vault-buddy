@@ -1,0 +1,25 @@
+PASS Editor becomes ready with optional nonmodal onboarding
+PASS Product title identifies the current tutorial
+PASS Document title follows rename and Undo without stale metadata
+PASS Primary navigation has product labels, not iteration badges
+PASS Unchanged frame sizing does not rebuild the aspect-ratio toolbar
+PASS A real canvas change refreshes ratio and geometry
+PASS Machine-readable onboarding matches all runtime lesson IDs
+PASS Learning center uses current navigation guidance
+PASS Current workspace has one preview toolbar row
+PASS Direct editing context is visible on the target clip
+PASS Fade presets and numeric editing remain available
+PASS Webcam setup opens without requesting a live stream
+PASS Caption controls have a current standalone screen
+PASS Pre-render findings remain actionable in their own dialog
+PASS Saving editable work remains separate from rendering
+PASS Render dialog states the actual browser execution boundary
+PASS Contextual guide highlights without modifying composition
+PASS Compact layout and light theme retain visible Help
+PASS Forced colors preserve keyboard focus without recoloring media
+PASS Reference loads with no external network calls or browser exceptions
+PASS Injected startup failure has safe actionable recovery copy
+PASS Interchange schema accepts the example and rejects invalid basic fields
+PASS All 50 feature IDs have ownership and acceptance criteria
+PASS Reference rebuild is byte-identical to the delivered HTML
+TOTAL 24 FAIL 0

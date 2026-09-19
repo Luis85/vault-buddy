@@ -1,0 +1,35 @@
+PASS Teaching toolbar is inside one 48px preview header; preview keeps its aspect ratio {'.preview-header': {'x': 244, 'y': 56, 'w': 1080, 'h': 48}, '.toolstrip': {'x': 584.203125, 'y': 61.5, 'w': 401.21875, 'h': 36}, '#canvasWrap': {'x': 438.21875, 'y': 118, 'w': 691.546875, 'h': 389}}
+PASS Save, webcam, text, arrow and selection actions each have one persistent entry {'[data-action="downloadProject"]': 1, '[data-action="webcam"]': 1, '[data-effect="text"]': 1, '[data-effect="arrow"]': 1, '[data-editor="more"]': 1}
+PASS Four distinct library destinations occupy one row [{'text': 'Media', 'y': 63.5}, {'text': 'Titles', 'y': 63.5}, {'text': 'Captions', 'y': 63.5}, {'text': 'Chapters', 'y': 63.5}]
+PASS Inline project title still renames and participates in Undo 
+PASS Project menu supports arrow entry, End, Escape and focus restoration 
+PASS Clicking the same menu trigger twice closes it 
+PASS Project and view navigation never create a project edit or revision 
+PASS Spotlight, numbered step and privacy cover dispatch real undoable commands 
+PASS At five viewport sizes the header remains one row and overflowed tools stay reachable [{'viewport': 1600, 'height': 48, 'commands_fit': True, 'overflow_reachable': True}, {'viewport': 1280, 'height': 48, 'commands_fit': True, 'overflow_reachable': True}, {'viewport': 960, 'height': 44, 'commands_fit': True, 'overflow_reachable': True}, {'viewport': 720, 'height': 44, 'commands_fit': True, 'overflow_reachable': True}, {'viewport': 390, 'height': 48, 'commands_fit': True, 'overflow_reachable': True}]
+PASS Zoom works through the overflow menu in a narrow viewport 
+PASS Webcam has one Media entry and opening it does not start capture 
+PASS Relocated Import opens the real picker and imports a real audio file 
+PASS Advanced framing is disclosed explicitly and stays open while editing 
+PASS Edit actions and right-click retain the same object-specific command family 
+PASS All six property categories remain available; fades still change the real clip 
+PASS Preview tools have a single tab stop and arrow navigation without moving the playhead 
+PASS Library and property toggles work in docked and compact layouts 
+PASS Focus preview and Reset layout change workspace visibility only 
+PASS Saving the editable project stays distinct from rendering the video product 
+PASS Relocated guide lessons highlight the actual live controls 
+PASS Onboarding suspends for webcam setup and resumes the same lesson 
+PASS More tools remains compatible with tutorial suspension and resume 
+PASS New view preferences validate and round-trip in the editable workspace envelope 
+PASS All four output formats preserve correct display proportions after the toolbar move [{'w': 691.546875, 'h': 389, 'expected': 1.7777777777777777}, {'w': 218.8125, 'h': 389, 'expected': 0.5625}, {'w': 389, 'h': 389, 'expected': 1}, {'w': 518.65625, 'h': 389, 'expected': 1.3333333333333333}]
+PASS Review retains a visible Back to edit action in the same header 
+PASS New project keeps its confirmation and leads directly to import or webcam 
+PASS Command menus stay within narrow and short viewports 
+PASS Compact global commands keep visible labels or icons; resizing never duplicates More text 
+PASS Focus mode reveals panels in one click and narrow drawers are mutually exclusive 
+PASS Clear selection remains pointer-accessible without a permanent Select button 
+PASS No JavaScript errors and no network requests during these workflows (None, None)
+{
+  "passed": 31,
+  "failed": 0
+}

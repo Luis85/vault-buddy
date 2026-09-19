@@ -1,0 +1,25 @@
+{
+  "schema": "vault-buddy-onboarding/1",
+  "step": "callouts",
+  "status": "paused",
+  "reviewed": [
+    "split",
+    "layout",
+    "fades"
+  ],
+  "tried": [
+    "preview",
+    "split",
+    "undo",
+    "context",
+    "audio",
+    "checks",
+    "save",
+    "render",
+    "webcam",
+    "fades"
+  ],
+  "welcomeDismissed": true,
+  "dim": false,
+  "updatedAt": "2026-09-19T14:01:16.709Z"
+}

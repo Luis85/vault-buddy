@@ -1,0 +1,14 @@
+PASS Build two-speed video/audio, portrait framing, still layer and captions {'source_ms': 6000, 'edited_ms': 3000, 'size': [720, 1280]}
+PASS Burn-in switch changes composed pixels, not merely metadata {'changed_pixels': 30157}
+PASS Non-zero review range rebases captions and leaves project untrimmed {'range_ms': [1000, 2600], 'bytes': 201388}
+PASS Encoded video and audio decode at the intended size and duration {'programs': [], 'stream_groups': [], 'streams': [{'codec_name': 'vp9', 'codec_type': 'video', 'width': 720, 'height': 1280}, {'codec_name': 'opus', 'codec_type': 'audio'}], 'format': {'duration': '1.600000'}}
+PASS Decoded motion covers the beginning, middle and end of the requested range {'decoded_frames': 4, 'timestamps_s': [0.0, 0.469, 0.844, 1.221], 'first_to_last_changed_pixels': 195635, 'meaning': 'Temporal/pixel coverage for this fixture, not a 30 fps or frame-accuracy certificate.'}
+PASS Encoded range contains audible mixed audio {'audio_rms': 0.09087789740892518, 'samples': 41760}
+PASS Watch rendered file uses the encoded product and releases its media URL {'verified': 'Actual encoded Blob played, with finite duration; URL released on close.'}
+PASS Later framing and color edits preserve the earlier product snapshot 
+BLOCKED Origin-backed cache reload (requires permitted origin navigation) Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at https://vault-buddy.test/editor
+Call log:
+  - navigating to "https://vault-buddy.test/editor", waiting until "load"
+
+PASS No unhandled browser errors in the output review lifecycle 
+TOTAL 10 PASS 9 BLOCKED 1 FAIL 0

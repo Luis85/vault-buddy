@@ -1,0 +1,158 @@
+[
+  {
+    "id": "P00",
+    "title": "Reconcile the existing application",
+    "dependencies": [],
+    "roles": "Solution architect + Rust/TypeScript developers",
+    "scope": "Inventory actual capture/root/window/config types, tested timeline primitives, asset permissions and quality gates. Map every F-ID to an owning module. Compare the checked source revision with the target branch.",
+    "acceptance": "A recorded integration ADR, ownership map and approved contracts. No duplicate capture engine or assumed editor IPC."
+  },
+  {
+    "id": "P01",
+    "title": "Introduce validated edit and workspace contracts",
+    "dependencies": [
+      "P00"
+    ],
+    "roles": "Rust domain developer + TypeScript developer",
+    "scope": "Define multi-track aggregate, half-open timing, source identity, linked cues, revision/product lineage and explicit migrations. Generate or parity-test Rust/TS DTOs. Add structural and semantic fixtures.",
+    "acceptance": "Valid example round-trips; invalid IDs/cycles/ranges/unknown edit semantics reject before state replacement; sequential timeline behavior remains covered."
+  },
+  {
+    "id": "P02",
+    "title": "Open staged work in a real editor window",
+    "dependencies": [
+      "P01"
+    ],
+    "roles": "Tauri/Rust developer + Vue developer",
+    "scope": "Add editor root/window, command permissions, session ownership, staged-base resolution and exact sidecar vault handoff. Wire capture stopped/resync without double-opening. Preserve companion-window behavior.",
+    "acceptance": "A real native capture opens its correct editable session; late/stale capture messages cannot resurrect state or select the wrong vault. No arbitrary source reads."
+  },
+  {
+    "id": "P03",
+    "title": "Implement shell, stores and action registry",
+    "dependencies": [
+      "P02"
+    ],
+    "roles": "Vue/Pinia developer + UX designer",
+    "scope": "Build header, single preview toolbar, library, timeline shell, inspector, dialogs, theme/compact layouts. Separate project/workspace/jobs/onboarding stores; use generation/revision guards and stable keyed focus.",
+    "acceptance": "One persistent home per primary action, functional keyboard/menu/focus behavior, six property categories and compact screenshots matching the reference."
+  },
+  {
+    "id": "P04",
+    "title": "Edit and arrange a single source end to end",
+    "dependencies": [
+      "P01",
+      "P03"
+    ],
+    "roles": "Rust domain developer + Vue developer",
+    "scope": "Implement insert/select/scrub/split/trim/delete/undo/redo via native acknowledged commands, transient drag previews and numeric alternatives. Keep file bytes immutable.",
+    "acceptance": "Capture \u2192 cut \u2192 save editable project \u2192 reopen succeeds with the same source mapping and no data loss."
+  },
+  {
+    "id": "P05",
+    "title": "Manage independent layers and audio",
+    "dependencies": [
+      "P04"
+    ],
+    "roles": "Media developer + Vue developer",
+    "scope": "Add multi-track composition, movement/grouping/copy/paste, track controls, stills, audio detach/mixer, shared offset/locks and explicit track-local ripple. Add waveform/thumbnail caches.",
+    "acceptance": "Layer stacking and audio mix match fixtures; group/intro operations preserve sync or reject atomically; monitor mute does not alter output."
+  },
+  {
+    "id": "P06",
+    "title": "Add fades, transformations and generated cards",
+    "dependencies": [
+      "P05"
+    ],
+    "roles": "Media developer + TypeScript developer",
+    "scope": "Implement edge envelopes and paired transitions, speed and preserve-pitch policy, crop/frame/rotation/flip, color treatments and editable title cards. Validate geometry on canvas changes.",
+    "acceptance": "Golden frames/audio samples confirm the documented operation order and timing; transitions cannot dangle or create unexplained overlaps."
+  },
+  {
+    "id": "P07",
+    "title": "Capture and place webcam material",
+    "dependencies": [
+      "P02",
+      "P05"
+    ],
+    "roles": "Native capture developer + Vue developer",
+    "scope": "Implement explicit permission/device flow, countdown, record/review/retake/add, resource cleanup and unsaved-take handling. Implement synchronized multi-input capture only through the shared native session clock/guard.",
+    "acceptance": "Physical camera/mic denial and unplug cases pass. Presenter stays an editable independent source with resize/corner/frame/crop/fade controls."
+  },
+  {
+    "id": "P08",
+    "title": "Implement instructional overlays, captions and chapters",
+    "dependencies": [
+      "P05",
+      "P06"
+    ],
+    "roles": "Vue developer + media developer + requirements engineer",
+    "scope": "Implement all seven teaching cue kinds, source-linked timing, manual subtitle import/editing, burn-in, density/overlap warnings, chapters and companion-note preview. No pretend automatic transcription.",
+    "acceptance": "Move/trim/split/speed/reopen preserve cues and chapters; arrows/zoom render correctly; privacy warning remains explicit."
+  },
+  {
+    "id": "P09",
+    "title": "Persist and recover projects durably",
+    "dependencies": [
+      "P01",
+      "P04"
+    ],
+    "roles": "Rust storage developer + test engineer",
+    "scope": "Build project transaction service, portable/lightweight interchange, historical dependency retention, missing-media reconnect, safe names, journals and conflict-safe saves. Guide/workspace persistence is separate.",
+    "acceptance": "Kill/disk-full/collision/stale receipt/ambiguous reconnect tests preserve last good project and source media. Save never requires render."
+  },
+  {
+    "id": "P10",
+    "title": "Render immutable video products",
+    "dependencies": [
+      "P05",
+      "P06",
+      "P08",
+      "P09"
+    ],
+    "roles": "Native media developer + test engineer",
+    "scope": "Implement bounded deterministic decode/compose/mix/encode jobs, range output, progress/query/cancel, no-clobber video/note publication and immutable product snapshot history.",
+    "acceptance": "Actual decoded Windows output meets frame/duration/audio/sync acceptance on named hardware; output review plays the product file; later edits cannot mutate it."
+  },
+  {
+    "id": "P11",
+    "title": "Deliver the full learning experience",
+    "dependencies": [
+      "P03",
+      "P04",
+      "P05",
+      "P06",
+      "P07",
+      "P08",
+      "P09",
+      "P10"
+    ],
+    "roles": "Vue developer + UX designer",
+    "scope": "Implement all 22 supplied lessons/7 chapters with stable target refs, invitation, pause/resume/collapse, F1/F6, context prep, modal suspension, progress/preferences and quick answers.",
+    "acceptance": "Passive walkthrough changes no composition; every target resolves at compact sizes; native reload resumes exact step; permissions/downloads never start automatically."
+  },
+  {
+    "id": "P12",
+    "title": "Integrate checks, failure recovery and quality controls",
+    "dependencies": [
+      "P07",
+      "P08",
+      "P09",
+      "P10",
+      "P11"
+    ],
+    "roles": "Whole team + accessibility/test specialist",
+    "scope": "Centralize actionable checks, pending-job/save/take state, import report, keyboard ownership, forced colors/reduced motion, virtualized timeline, resource disposal, safe diagnostics and crash handling.",
+    "acceptance": "Every warning has a relevant recovery route. No startup/close path strands work. Accessibility/performance/privacy matrix is executed, not inferred from screenshots."
+  },
+  {
+    "id": "P13",
+    "title": "Accept and package the native release",
+    "dependencies": [
+      "P12"
+    ],
+    "roles": "Delivery manager + product owner + test engineer",
+    "scope": "Run full catalog acceptance, actual repository build/type/lint/coverage/quality gates, native device/render/durability tests and beginner task walkthroughs. Freeze supported formats/hardware/limits and documentation.",
+    "acceptance": "Signed release checklist with known residuals and explicit acceptance; no skipped tests counted as passes, no native capability described as done without evidence."
+  }
+]

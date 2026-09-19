@@ -1,0 +1,202 @@
+{
+  "scenarios": [
+    {
+      "name": "v3 initializes with five tracks, four persistent library tabs and two advisory checks",
+      "result": "PASS",
+      "detail": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "name": "Right-click edits the clicked clip at pointer time",
+      "result": "PASS",
+      "detail": {
+        "split_ms": 11937
+      }
+    },
+    {
+      "name": "Shift+F10, typeahead, arrows, submenu return and restored focus",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Object-specific menus plus visible More and outside dismissal",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Locked commands expose disabled state and preserve footage",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Menus stay in viewport; native text menus remain native",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Shift multi-selection survives a right-click",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Grouped copy/paste remaps attachments and is one undo",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Group drag keeps relative timing and original tracks",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Group nudge at time zero clamps the group, not individual members",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Grouping and ungrouping preserve transitions and alignment",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Batch fade and explicit mute/unmute controls work",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Speed retimes source-linked annotations, split and following clips",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Speed guard rejects overlaps, grouped retiming and active crossfades",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Color controls, look paste, rotation and flips preserve source timing",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Aspect ratio changes real output size and keeps circular webcam geometry",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Safe intro insertion shifts every track atomically and respects locks",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Local cards provide editable text and duration",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Real still image import and media search",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "SRT/VTT parsing preserves text and maps source-linked caption speed",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Caption dialog validates timing and preserves open appearance controls",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Caption text split and clip split conserve timing",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Actionable checks flag video gaps, audio solo and hard-to-read captions",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Caption/callout collision has a working corrective action",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Opaque privacy cover is undoable and warns about originals in project packages",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Save status distinguishes download request from dirty edits and cache",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Gap cleanup does not silently break cross-track groups",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Go to and fit selection connect the timeline with its preview",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Strict extended schema and v2 migration",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Workspace reopens with speed, color, captions, group selection and format",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Batch source reconnection restores media without changing the edit",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Ambiguous reconnect candidates are not chosen automatically",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Portable image project includes real bytes and reopens them",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Review-range controls reject invalid bounds and allow a short range",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Support diagnostics omit names, paths, captions, frames and audio",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Five desktop/compact layouts retain preview and avoid page overflow",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "No unhandled browser exceptions",
+      "result": "PASS",
+      "detail": null
+    },
+    {
+      "name": "No external media, font or API requests",
+      "result": "PASS",
+      "detail": null
+    }
+  ],
+  "browser_errors": [],
+  "network_requests": []
+}

@@ -1,0 +1,41 @@
+[
+  {
+    "name": "Explicit acquisition and microphone opt-in (simulated devices)",
+    "result": "PASS"
+  },
+  {
+    "name": "Real recorded WebM decodes with video/audio; own tracks released",
+    "result": "PASS",
+    "detail": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "vp8",
+          "codec_type": "video",
+          "width": 1280,
+          "height": 720
+        },
+        {
+          "codec_name": "opus",
+          "codec_type": "audio"
+        }
+      ],
+      "format": {
+        "duration": "1.963000"
+      }
+    }
+  },
+  {
+    "name": "Add take as independent layer and adjust circular overlay",
+    "result": "PASS"
+  },
+  {
+    "name": "Portable project reopens with playable camera take, layout and no render",
+    "result": "PASS"
+  },
+  {
+    "name": "No uncaught JavaScript errors during webcam end-to-end flow",
+    "result": "PASS"
+  }
+]

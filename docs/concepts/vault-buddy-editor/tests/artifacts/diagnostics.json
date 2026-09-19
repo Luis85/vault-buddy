@@ -1,0 +1,34 @@
+{
+  "product": "vault-buddy-tutorial-editor",
+  "build": "implementation-reference",
+  "generated_at": "2026-09-19T14:02:22.246Z",
+  "canvas": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30
+  },
+  "counts": {
+    "tracks": 5,
+    "clips": 7,
+    "media": 5,
+    "missing": 0,
+    "captions": 0,
+    "products": 0
+  },
+  "capabilities": {
+    "media_recorder": true,
+    "canvas_capture": true,
+    "web_audio": true
+  },
+  "issues": [
+    {
+      "category": "save",
+      "severity": "note"
+    },
+    {
+      "category": "captions",
+      "severity": "note"
+    }
+  ],
+  "privacy": "Contains no filenames, paths, project title, caption text, frames or audio."
+}
