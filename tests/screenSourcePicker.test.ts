@@ -39,6 +39,22 @@ const SOURCES = [
 
 const NO_DEVICES = { inputs: [], outputs: [] };
 
+/** `ScreenStatusPayload` for a capture that really started. */
+const STARTED = {
+  capturing: true,
+  vaultId: "v1",
+  startedAtMs: 10,
+  paused: false,
+  pausedTotalMs: 0,
+  pausedSinceMs: null,
+  sourceTitle: "Screen 1",
+};
+
+const DEVICES = {
+  inputs: [{ name: "Microphone (Yeti)", isDefault: true }],
+  outputs: [{ name: "Speakers (Realtek)", isDefault: false }],
+};
+
 function mockSources(sources: unknown[] = SOURCES, devices: unknown = NO_DEVICES) {
   mockIPC((cmd) => {
     if (cmd === "list_capture_sources") return sources;
@@ -160,6 +176,47 @@ describe("ScreenSourcePicker", () => {
     ]);
     // The capture bar lives on the list view, like the audio domain's.
     expect(useVaultsStore().view).toBe("list");
+  });
+
+  it("does not send a device the user ticked and then unticked", async () => {
+    // Recompute-from-enumeration exists so an untick really removes the
+    // device: a selection that only ever grows would record a microphone the
+    // user explicitly turned off, with nothing on screen saying so.
+    const args: unknown[] = [];
+    mockIPC((cmd, a) => {
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return DEVICES;
+      if (cmd === "start_screen_capture") {
+        args.push(a);
+        return STARTED;
+      }
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="audio-input-0"]').setValue(true);
+    await w.get('[data-testid="audio-output-0"]').setValue(true);
+    await w.get('[data-testid="audio-input-0"]').setValue(false);
+    // The tick box is the user's only readback of what is armed, so it has to
+    // follow the untick as well as the list that reaches Rust.
+    const mic = w.get('[data-testid="audio-input-0"]').element as HTMLInputElement;
+    expect(mic.checked).toBe(false);
+    await w.get('[data-testid="source-screen:1"]').trigger("click");
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    expect(args).toEqual([
+      { id: "v1", sourceId: "screen:1", inputs: [], outputs: ["Speakers (Realtek)"] },
+    ]);
+  });
+
+  it("drops the no-audio note for a system-audio-only selection", async () => {
+    // "No audio will be recorded" must read the whole selection: a loopback
+    // capture with no microphone records audio, so claiming silence there
+    // would be a lie about what is on tape.
+    mockSources(SOURCES, DEVICES);
+    const w = await mountPicker();
+    expect(w.text()).toContain("No audio will be recorded");
+    await w.get('[data-testid="audio-output-0"]').setValue(true);
+    expect(w.text()).not.toContain("No audio will be recorded");
   });
 
   it("refuses a start whose source vanished, and refreshes the list", async () => {

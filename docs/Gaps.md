@@ -2302,3 +2302,33 @@ from Phase 5, which fixes (1) but not (2). Residual (2) is the one that
 argues for the first option. For the plan owner to decide; until then the
 timeout arm's comment states the real behaviour rather than the invariant it
 does not have.
+
+### GAP-111 · Low · Three Phase-2 screen-capture surfaces deliberately fall short of the approved spec
+`src/components/ScreenAudioPicker.vue`, `src/components/ScreenSourcePicker.vue`,
+`src/components/RecordMode.vue`. The phase-2 source picker ships three
+knowing deviations from the screen-capture spec. Each is right for phase 2
+and each is recorded here so phase 3 restores it deliberately rather than by
+accident — and so a reader diffing the shipped picker against the spec finds
+the reasoning instead of assuming an oversight.
+
+1. **§7.2's per-device audio level bars are omitted** (`ScreenAudioPicker`).
+   Nothing could feed them: `capture:level` is emitted from exactly one place,
+   `src-tauri/src/capture_commands.rs`'s audio path, and only *while an audio
+   recording runs* — so it could not drive a meter on a pre-start picker even
+   if the screen domain listened for it. `screen_capture_worker.rs` forwards
+   `screen:warning` and `screen:frames` only, and `src-tauri/screen/src/**`
+   has no level plumbing at all. A meter fed by nothing is a permanently dead
+   indicator, which is worse than none (the VAD stats-row lesson: never render
+   intent as engagement). **Restoring it is a Rust change first** — a
+   per-device level emit that runs during enumeration/preview, not a frontend
+   one — so phase 3 should not "add the bars" against the current event set.
+2. **There is no Region tab** (`ScreenSourcePicker`'s `TABS`). Region capture
+   is phase 3; a disabled third tab is dead UI inviting a click with nothing
+   behind it. Pinned in both directions by a test ("offers Screen and Window
+   tabs, and no Region tab in this phase"), which phase 3 must update in the
+   same commit that adds the tab.
+3. **The chooser hint reads "Screen or window" where §7.1 says "Screen,
+   window, or region"** (`RecordMode`'s `OPTIONS`). Same reason as (2):
+   advertising region from the chooser while the picker cannot do it is the
+   same dead promise. **This string must change back when the Region tab
+   lands**, or the app will under-advertise a capability it has.

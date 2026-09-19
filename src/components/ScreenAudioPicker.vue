@@ -27,9 +27,12 @@ const silent = computed(() => props.inputs.length + props.outputs.length === 0);
 /**
  * Recompute the selection in ENUMERATION order rather than click order, so
  * the names Rust receives are stable regardless of how the user ticked them.
- * They travel verbatim: `selection_from` builds the cpal device selection
- * from these strings unchanged, so any reordering or normalisation here is
- * the difference between recording and silently recording nothing.
+ * The STRINGS are what is load-bearing: `selection_from` builds the cpal
+ * device selection from them unchanged and each endpoint is opened BY NAME,
+ * so any normalisation here is the difference between recording and silently
+ * recording nothing. Order is merely stable, not load-bearing. Recomputing
+ * from the list also means an untick really REMOVES a device — an
+ * append-only selection would record a microphone the user turned off.
  */
 function pick(list: { name: string }[], selected: string[], name: string, on: boolean) {
   return list

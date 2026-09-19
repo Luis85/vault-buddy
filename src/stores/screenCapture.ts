@@ -76,6 +76,16 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
     applyStatus(s: ScreenCaptureStatus) {
       this.seq++;
       this.status = statusFrom(s);
+      // Frame stats belong to a capture; a status that reports none leaves
+      // them describing nothing. `reset()` clears them, but a capture can
+      // also end through this path (the refused-start reconcile and the
+      // pause/resume/stop failure resyncs all land here), and the counters
+      // surviving that would open the NEXT capture's bar already reporting
+      // the previous capture's dropped frames.
+      if (this.status === "idle") {
+        this.fps = 0;
+        this.dropped = 0;
+      }
       this.vaultId = s.vaultId;
       this.sourceTitle = s.sourceTitle;
       this.startedAtMs = s.startedAtMs;
@@ -127,11 +137,19 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
     async init() {
       await listen("screen:started", () => void this.resync());
       await listen<{ atMs: number }>("screen:paused", (event) => {
+        // Only a live capture can be paused. `status` is one tri-state here
+        // rather than Rust's two booleans, so — unlike the audio store, where
+        // a stale `capture:paused` can only set a flag — an ungated pause
+        // would raise a paused bar out of idle with no startedAtMs behind it.
+        if (this.status === "idle") return;
         this.seq++;
         this.status = "paused";
         this.pausedSinceMs = event.payload.atMs;
       });
       await listen<{ pausedTotalMs: number }>("screen:resumed", (event) => {
+        // Same reasoning as the pause handler: a resume that outlived its
+        // capture would report a capture running.
+        if (this.status === "idle") return;
         this.seq++;
         this.status = "capturing";
         this.pausedTotalMs = event.payload.pausedTotalMs ?? 0;
@@ -189,6 +207,7 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       // A retained path belongs to the capture that produced it; carrying it
       // into the next one would offer a stale file as this capture's own.
       this.retainedPath = null;
+      const seq = this.seq;
       try {
         const s = await invoke<ScreenCaptureStatus>("start_screen_capture", {
           id: vaultId,
@@ -196,6 +215,15 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
           inputs,
           outputs,
         });
+        // The third route into the started-after-stopped race, and the only
+        // one that writes state without consulting the generation: the
+        // monitor thread is live before this command's tail returns, so a
+        // source closing in that window emits `screen:stopped` FIRST and this
+        // reply is already stale. Applying it would raise a bar over a
+        // finished capture — and `lastStaged = null` below would discard the
+        // staged .mp4 that `screen:stopped` had just delivered, losing the
+        // only handle anything has on the footage.
+        if (seq !== this.seq) return;
         this.applyStatus(s);
         this.lastStaged = null;
       } catch (e) {

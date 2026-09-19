@@ -415,6 +415,80 @@ describe("screenCapture store events", () => {
     expect(vi.mocked(logWarning).mock.calls.flat().join(" ")).toContain("status exploded");
   });
 
+  it("does not resurrect a capture that stopped while start's reply was in flight", async () => {
+    // The third route into the documented started-after-stopped race
+    // (screen_commands.rs names it): the monitor thread is live BEFORE
+    // start_screen_capture's tail returns, so a source closing in that window
+    // emits `screen:stopped` first and the command's own `capturing: true`
+    // reply arrives stale. Applying it would raise a bar over a finished
+    // capture AND — worse — the `lastStaged = null` beside it would discard
+    // the staged .mp4 that `screen:stopped` had just delivered, which is the
+    // only handle anything has on the footage.
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    let answer!: (v: unknown) => void;
+    mockIPC((cmd) =>
+      cmd === "start_screen_capture"
+        ? new Promise((resolve) => {
+            answer = resolve;
+          })
+        : undefined,
+    );
+    const inFlight = store.start("v1", "screen:1", [], []);
+    emit("screen:stopped", {
+      base: "b",
+      path: "C:/staging/b.mp4",
+      durationMs: 1,
+      sourceTitle: "Screen 1",
+      width: 8,
+      height: 8,
+    });
+    answer(RUNNING);
+    await inFlight;
+    expect(store.status).toBe("idle");
+    expect(store.vaultId).toBeNull();
+    expect(store.lastStaged?.path).toBe("C:/staging/b.mp4");
+  });
+
+  it("ignores pause and resume events that outlive their capture", async () => {
+    // This store collapses Rust's two booleans into one tri-state, so unlike
+    // the audio store (where `paused` is a separate flag that cannot fake a
+    // recording) a stale `screen:paused` would set status="paused" from idle
+    // and raise a paused bar with no startedAtMs behind it.
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    expect(store.status).toBe("idle");
+    emit("screen:paused", { atMs: 4000 });
+    expect(store.status).toBe("idle");
+    expect(store.pausedSinceMs).toBeNull();
+    emit("screen:resumed", { pausedTotalMs: 1500 });
+    expect(store.status).toBe("idle");
+    expect(store.pausedTotalMs).toBe(0);
+  });
+
+  it("clears the frame counters on the way to idle, so the next bar starts at zero", async () => {
+    // reset() clears fps/dropped, but a capture can also end through
+    // applyStatus(idle) — the refused-start reconcile and the pause/resume/
+    // stop failure resyncs all land there. Leaving the counters live means
+    // the NEXT capture's bar opens already reporting the previous capture's
+    // dropped frames.
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.$patch({ status: "capturing", vaultId: "v1", startedAtMs: 0 });
+    emit("screen:frames", { fps: 29.5, dropped: 12 });
+    mockIPC((cmd) => {
+      if (cmd === "screen_capture_status") return IDLE;
+      throw new Error("No screen capture is running.");
+    });
+    await store.pause();
+    expect(store.status).toBe("idle");
+    expect(store.fps).toBe(0);
+    expect(store.dropped).toBe(0);
+  });
+
   it("records advisory frame stats without touching capture state", async () => {
     mockIPC(() => undefined);
     const store = useScreenCaptureStore();
