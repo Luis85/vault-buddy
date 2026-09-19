@@ -2669,3 +2669,12 @@ finalizes having written zero video samples fails with
 the HRESULT, with the retained `.part` described as holding no usable video
 rather than "the recording". All of that decision and wording is pure and
 Linux-tested in `src-tauri/screen/src/diagnose.rs`.
+
+**Update 2026-09-19:** the prediction now has empirical support — a real
+Windows 11 window capture, which produced zero frames before the fix,
+records correctly after it, with pause/resume working. That confirms the
+DWM-extended-frame-bounds size matches what WGC delivers *on this
+machine and this build*. It does not make the equality a contract:
+Microsoft still documents none, so the diagnosis path added alongside the
+fix (a zero-video capture explains itself and names both sizes) remains
+the thing that keeps a future drift loud instead of silent.
