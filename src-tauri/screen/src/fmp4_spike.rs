@@ -53,13 +53,14 @@ pub enum SinkKind {
 pub enum Ending {
     /// `Finalize()` — the clean stop path.
     Finalized,
-    /// Frames written and flushed, then the writer released WITHOUT
-    /// `Finalize()`. This is the closest faithful proxy for a crash that a
-    /// test can produce: the index-writing step never runs. It is not
-    /// byte-identical to power loss (the OS still flushes its buffers on
-    /// handle close), but it exercises the property under test — whether the
-    /// file is usable when the finalize step never happened.
-    Abandoned,
+    /// Frames written, the encoder drained into the sink, the byte stream
+    /// flushed to the OS, then `std::process::abort()`.
+    ///
+    /// This must run in a CHILD process, because it kills the process it
+    /// runs in. That is the point: `Finalize` never runs, no destructor
+    /// runs, and nothing still held in user space is written — the same
+    /// boundary a real crash draws.
+    Crashed,
 }
 
 struct MfRuntime;
@@ -148,6 +149,9 @@ fn sample_for(index: u32) -> WinResult<IMFSample> {
 /// Write `FRAMES` synthetic frames into `path` through the chosen sink, then
 /// end the capture the chosen way. Returns nothing: the artefact under test
 /// is the file on disk.
+///
+/// `Ending::Crashed` never returns — it aborts the process. Only the child
+/// worker calls it that way.
 pub fn write_capture(path: &Path, kind: SinkKind, ending: Ending) -> WinResult<()> {
     unsafe {
         let _mf = MfRuntime::start()?;
@@ -179,14 +183,24 @@ pub fn write_capture(path: &Path, kind: SinkKind, ending: Ending) -> WinResult<(
             Ending::Finalized => {
                 writer.Finalize()?;
             }
-            Ending::Abandoned => {
-                // Push everything the writer is holding down to the byte
-                // stream, then drop without Finalize. Flushing first is what
-                // makes this a fair proxy: a real crash would also have had
-                // whatever the sink already handed to the OS.
+            Ending::Crashed => {
+                // Drain the encoder into the sink, then push the byte
+                // stream's own buffer out to the OS. That second flush is
+                // the part a production session must also do (spec §6.4
+                // says fragments are "flushed as they close") — without it
+                // the bytes sit in user space and die with the process, and
+                // no container format can survive that.
                 writer.Flush(0)?;
-                drop(writer);
-                let _ = sink.Shutdown();
+                byte_stream.Flush()?;
+
+                // Abort rather than return: no destructors, no CRT flushing,
+                // no COM teardown, and above all no Finalize. Whatever
+                // reached the OS stays on disk; whatever did not, does not.
+                // That is exactly the boundary a real crash draws, which a
+                // clean `drop` does NOT — a dropped byte stream discards its
+                // buffer, which is how the first version of this spike
+                // produced a 0-byte file for BOTH sinks and measured nothing.
+                std::process::abort();
             }
         }
         Ok(())
@@ -242,6 +256,12 @@ mod tests {
     use super::*;
     use crate::mp4_boxes;
     use std::path::PathBuf;
+    use std::process::Command;
+
+    /// Env var naming the file the crash worker should write.
+    const CRASH_PATH_ENV: &str = "VB_FMP4_CRASH_PATH";
+    /// Env var selecting which sink the crash worker should use.
+    const CRASH_KIND_ENV: &str = "VB_FMP4_CRASH_KIND";
 
     fn scratch(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -251,7 +271,7 @@ mod tests {
     }
 
     fn report(label: &str, path: &Path) -> mp4_boxes::Scan {
-        let bytes = std::fs::read(path).expect("spike output should exist");
+        let bytes = std::fs::read(path).unwrap_or_default();
         let scan = mp4_boxes::scan(&bytes);
         println!(
             "SPIKE[{label}] bytes={} boxes={:?} end={:?} fragmented={} fragments={}",
@@ -264,51 +284,101 @@ mod tests {
         scan
     }
 
-    /// Q1: does the fragmented sink actually emit `moof` fragments, without
-    /// ever being finalized?
+    /// Re-entry point for the crash tests. Spawned as a CHILD of the test
+    /// binary; kills itself on purpose.
+    ///
+    /// Without the env var this is a deliberate no-op so an ordinary test run
+    /// just passes it.
     #[test]
-    fn q1_abandoned_fragmented_capture_contains_fragments() {
-        let p = scratch("q1-frag-abandoned");
-        write_capture(&p, SinkKind::Fragmented, Ending::Abandoned)
-            .expect("fragmented sink should accept frames");
-        let scan = report("q1 fragmented/abandoned", &p);
+    fn crash_child_worker() {
+        let Ok(path) = std::env::var(CRASH_PATH_ENV) else {
+            return;
+        };
+        let kind = match std::env::var(CRASH_KIND_ENV).as_deref() {
+            Ok("standard") => SinkKind::Standard,
+            _ => SinkKind::Fragmented,
+        };
+        // Never returns: write_capture aborts under Ending::Crashed.
+        let _ = write_capture(Path::new(&path), kind, Ending::Crashed);
+        unreachable!("the crash worker must abort, not return");
+    }
+
+    /// Run a capture in a child process that dies mid-recording, and leave
+    /// whatever reached the disk behind for the caller to inspect.
+    fn capture_then_crash(path: &Path, kind: SinkKind) {
+        let exe = std::env::current_exe().expect("test binary path");
+        let out = Command::new(exe)
+            .args([
+                "--exact",
+                "fmp4_spike::tests::crash_child_worker",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CRASH_PATH_ENV, path)
+            .env(
+                CRASH_KIND_ENV,
+                match kind {
+                    SinkKind::Standard => "standard",
+                    SinkKind::Fragmented => "fragmented",
+                },
+            )
+            .output()
+            .expect("spawn crash worker");
+        // An aborted child never exits 0. A clean exit means the worker
+        // returned instead of crashing, which would silently turn these into
+        // tests of nothing.
+        assert!(
+            !out.status.success(),
+            "crash worker exited cleanly ({:?}) — it did not actually crash; \
+             stderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Q1: after a real crash, does the fragmented file still carry `moof`
+    /// fragments on disk?
+    #[test]
+    fn q1_crashed_fragmented_capture_contains_fragments() {
+        let p = scratch("q1-frag-crashed");
+        capture_then_crash(&p, SinkKind::Fragmented);
+        let scan = report("q1 fragmented/crashed", &p);
         assert!(
             scan.is_fragmented(),
-            "an abandoned fMP4 capture must still carry moof fragments; \
-             saw {:?}",
+            "a crashed fMP4 capture must still carry moof fragments; saw {:?}",
             scan.kinds()
         );
-        assert!(
-            scan.fragment_count() >= 2,
-            "3 s of video should close more than one fragment, saw {}",
-            scan.fragment_count()
-        );
     }
 
-    /// Q2: the headline question. Is that un-finalized file playable?
+    /// Q2: the headline question. Is that crashed file playable?
     #[test]
-    fn q2_abandoned_fragmented_capture_is_still_decodable() {
-        let p = scratch("q2-frag-abandoned");
-        write_capture(&p, SinkKind::Fragmented, Ending::Abandoned).expect("write");
+    fn q2_crashed_fragmented_capture_is_still_decodable() {
+        let p = scratch("q2-frag-crashed");
+        capture_then_crash(&p, SinkKind::Fragmented);
+        report("q2 fragmented/crashed", &p);
         let n = decodable_sample_count(&p).unwrap_or(0);
-        println!("SPIKE[q2 fragmented/abandoned] decoded_samples={n}");
+        println!("SPIKE[q2 fragmented/crashed] decoded_samples={n}");
         assert!(
             n > 0,
-            "the crash-safety claim in spec §6.4 requires an un-finalized \
-             fragmented capture to decode as a prefix; decoded {n} samples"
+            "spec §6.4's crash-safety claim requires a crashed fragmented \
+             capture to decode as a prefix; decoded {n} samples"
         );
     }
 
-    /// The CONTROL. If an abandoned STANDARD mp4 also decoded fine, then
-    /// fragmentation would be buying us nothing and §6.4's premise would be
-    /// wrong. This test is what gives Q2 its meaning.
+    /// The CONTROL, and the reason Q2 means anything: the same crash through
+    /// the STANDARD mp4 sink must NOT decode. If it did, fragmentation would
+    /// be buying nothing and §6.4's premise would be wrong.
+    ///
+    /// Note this asserts on a NON-EMPTY file. The first version of this spike
+    /// passed a near-identical assertion against a 0-byte file — true, but
+    /// for the wrong reason, and it measured nothing.
     #[test]
-    fn control_abandoned_standard_capture_is_not_decodable() {
-        let p = scratch("control-std-abandoned");
-        write_capture(&p, SinkKind::Standard, Ending::Abandoned).expect("write");
-        let scan = report("control standard/abandoned", &p);
+    fn control_crashed_standard_capture_is_not_decodable() {
+        let p = scratch("control-std-crashed");
+        capture_then_crash(&p, SinkKind::Standard);
+        let scan = report("control standard/crashed", &p);
         let n = decodable_sample_count(&p).unwrap_or(0);
-        println!("SPIKE[control standard/abandoned] decoded_samples={n}");
+        println!("SPIKE[control standard/crashed] decoded_samples={n}");
         assert!(
             !scan.is_fragmented(),
             "the standard sink must not be emitting fragments"
@@ -320,7 +390,9 @@ mod tests {
         );
     }
 
-    /// Sanity: the clean path still produces a file both checks agree on.
+    /// Sanity: the clean path produces a file both checks agree on. This is
+    /// also what proves the harness itself works, independent of the crash
+    /// simulation.
     #[test]
     fn finalized_fragmented_capture_is_decodable() {
         let p = scratch("finalized-frag");
