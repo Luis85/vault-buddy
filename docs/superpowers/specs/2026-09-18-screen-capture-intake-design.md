@@ -342,13 +342,46 @@ into video therefore requires a different container strategy.
 recording. The staged file is named `<base>.mp4.part` and is hidden
 (dot-prefixed) in the staging dir, mirroring `.mp3.part`.
 
-**Verification risk.** Producing fragmented output from `IMFSinkWriter` is the
-single API detail that could not be confirmed from documentation. It is
-therefore **phase 2's first task, as an explicit spike**. If fragmented output
-proves unavailable, the fallback is to roll the sink every N seconds into
-sequential chunk files (`<base>.000.mp4`, `.001.mp4`, …) which the editor and
-export treat as one logical source — more bookkeeping, same crash guarantee.
-The plan must not proceed past the spike on an assumption.
+**Verification — RESOLVED 2026-09-19. The spike ran; §6.4 holds as written.**
+Measured on a `windows-latest` runner (`vault_buddy_screen`, `fmp4-spike`
+feature, commit `d8c05a3`), writing 300 synthetic frames and killing the
+process mid-capture with `std::process::abort()` — no `Finalize`, no
+destructors, no COM teardown:
+
+| Run | On disk | Fragments | Frames decoded back |
+| --- | --- | --- | --- |
+| fMP4, finalized | 63 479 B | 30 | 300 / 300 |
+| **fMP4, crashed** | **59 399 B** | **28** | **280 / 300** |
+| Standard MP4, crashed (control) | 50 074 B | 0 | **0** |
+
+The control is what makes this conclusive: both crashed files hold a
+comparable amount of data, so the difference is not "one wrote and one did
+not" — it is the container. The crashed standard MP4 is `[ftyp, uuid, mdat]`:
+every byte of video present, no index, unopenable. The crashed fMP4 is
+self-describing per fragment and plays as a prefix, losing ~0.7 s.
+
+`MFCreateFMPEG4MediaSink` (Windows 8+, `mfidl.h`) feeds
+`MFCreateSinkWriterFromMediaSink` to give exactly the `IMFSinkWriter` this
+design assumed, via the `windows` crate 0.62 already in the lockfile.
+
+**The chunked-rolling fallback is therefore NOT adopted.** It stays documented
+here only as the contingency that was not needed: roll the sink every N seconds
+into sequential chunk files (`<base>.000.mp4`, `.001.mp4`, …) treated as one
+logical source.
+
+Two caveats worth carrying into phase 2:
+
+- **Process crash, not power loss.** `abort()` kills the process; the kernel
+  still flushes its own write cache. A power cut is a strictly harder case and
+  was not tested. It only shortens the recoverable prefix — it cannot make a
+  fragmented file behave like an unindexed one — so the design decision is
+  unaffected.
+- **Do not infer the sink's write cadence from file size during capture.** A
+  per-frame `std::fs::metadata` probe reported 0 bytes for the entire capture
+  and then 63 KB after `Finalize`, because Windows updates the directory
+  entry's size lazily for a file with an open handle. The crashed run proves
+  data reaches the OS regardless. An earlier reading of that probe wrongly
+  concluded a per-fragment byte-stream flush was required; it is not.
 
 Because the staged file is fMP4, the untouched-timeline fast path (§8.2)
 **remuxes** rather than plain-copies, so what lands in the vault is always a

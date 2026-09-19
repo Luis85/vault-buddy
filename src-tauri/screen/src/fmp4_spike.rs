@@ -183,11 +183,20 @@ pub fn write_capture(path: &Path, kind: SinkKind, ending: Ending) -> WinResult<(
         for i in 0..FRAMES {
             writer.WriteSample(0, &sample_for(i)?)?;
 
-            // Does the sink write to disk DURING the capture, or does it
-            // hold everything until Finalize? That is the real question
-            // behind crash-safety, and one size probe per second answers it
-            // without needing a crash at all. std::fs::metadata is a
-            // metadata query, so it does not disturb MF's open handle.
+            // Kept only as a record of a probe that DOES NOT WORK, so nobody
+            // re-adds it believing it measures something.
+            //
+            // The intent was to see whether the sink writes during the
+            // capture rather than at Finalize. It reported 0 bytes for all
+            // 300 frames and then 63 KB after Finalize — yet the crashed
+            // child left 59 KB on disk having never reached Finalize. So the
+            // reading was false: Windows updates a file's directory-entry
+            // size lazily while a handle is open, and this observes that
+            // stale size, not the sink.
+            //
+            // Reading it literally led to a wrong conclusion once already (an
+            // invented "must flush the byte stream per fragment" requirement).
+            // The crashed-vs-control comparison is the measurement that works.
             if PROBE_EVERY > 0 && i % PROBE_EVERY == PROBE_EVERY - 1 {
                 let on_disk = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 println!("SPIKE-PROBE frame={} on_disk_bytes={}", i + 1, on_disk);
