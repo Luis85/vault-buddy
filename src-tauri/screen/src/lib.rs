@@ -11,6 +11,7 @@ pub mod engine;
 pub mod mp4_boxes;
 pub mod select;
 pub mod sink;
+pub mod source;
 pub mod staging;
 
 // Phase 2's gating spike (spec 6.4). Windows-only and feature-gated, so it

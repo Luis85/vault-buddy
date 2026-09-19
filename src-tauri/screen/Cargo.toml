@@ -35,6 +35,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
 ] }
 
-# windows-capture is deliberately NOT here yet. It arrives when the actual
-# frame-acquisition engine (Task 5+) lands; this task only needs the
-# fragmented-MP4 sink, which uses `windows` directly.
+# MIT, crates.io (verified against the registry: 2.0.1, not yanked), and it
+# requires `windows` ^0.62.2 -- the exact version already in the workspace
+# lockfile, so it pins nothing new. deny.toml's licence allow-list already
+# permits MIT and `[sources] unknown-git = "deny"` is satisfied, so no
+# deny.toml entry is needed.
+windows-capture = "2.0.1"
