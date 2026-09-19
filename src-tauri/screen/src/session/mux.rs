@@ -5,15 +5,16 @@
 //! the channel carries plain byte vectors instead of `IMFSample`s.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::diagnose;
 use crate::sink::{AudioFormat, FragmentedSink, VideoFormat};
 use crate::ScreenError;
 
-use super::{output_ts, pacing, FrameStats, MuxMsg, SharedClock, Warnings, HEARTBEAT};
+use super::{output_ts, pacing, Counters, FrameStats, MuxMsg, SharedClock, Warnings, HEARTBEAT};
 
 /// How often the advisory `FrameStats` go out (~2 Hz, spec 11).
 const STATS_EVERY: Duration = Duration::from_millis(500);
@@ -68,7 +69,7 @@ pub(super) fn run_mux(
     clock: SharedClock,
     stopping: Arc<AtomicBool>,
     fps: u32,
-    dropped: Arc<AtomicU64>,
+    counters: Arc<Counters>,
     stats_tx: Option<Sender<FrameStats>>,
     warnings: Arc<Warnings>,
 ) -> Result<Duration, ScreenError> {
@@ -78,6 +79,10 @@ pub(super) fn run_mux(
     // keeps `MFStartup`/`MFShutdown` paired on one thread. `start` waits
     // on `ready_tx` for this result, so a creation failure is still
     // reported synchronously from `ScreenSession::start`.
+    //
+    // `declared` is read BEFORE `sink` is consumed: the size the file was
+    // opened at is half of what a zero-video capture has to tell the user.
+    let declared = (sink.video.width, sink.video.height);
     let mut sink = match FragmentedSink::create(&sink.part, sink.video, sink.audio) {
         Ok(s) => {
             if ready_tx.send(Ok(())).is_err() {
@@ -121,6 +126,7 @@ pub(super) fn run_mux(
                     break Err(e);
                 }
                 written_until = written_until.max(ts + dur);
+                counters.video_written.fetch_add(1, Ordering::Relaxed);
                 last_frame = Some(nv12);
                 stats_frames += 1;
             }
@@ -157,6 +163,7 @@ pub(super) fn run_mux(
                     break Err(e);
                 }
                 written_until = written_until.max(ts + dur);
+                counters.video_written.fetch_add(1, Ordering::Relaxed);
                 // Counted like any other frame: the stat describes what
                 // the FILE contains, and a repeat is in the file. The
                 // alternative — reporting 0 fps while fragments are
@@ -172,7 +179,7 @@ pub(super) fn run_mux(
                 // fail the capture path.
                 let _ = tx.send(FrameStats {
                     fps: pacing::observed_fps(stats_frames, elapsed),
-                    dropped: dropped.load(Ordering::Relaxed),
+                    dropped: counters.dropped.load(Ordering::Relaxed),
                 });
                 stats_at = Instant::now();
                 stats_frames = 0;
@@ -188,11 +195,30 @@ pub(super) fn run_mux(
     }
     log::info!(
         "screen capture: finalizing after {} dropped frame(s)",
-        dropped.load(Ordering::Relaxed)
+        counters.dropped.load(Ordering::Relaxed)
     );
     // Finalize is the ONLY drain. Never call Flush here — it DISCARDS
     // pending samples (see sink.rs's module docs).
     let finalized = sink.finalize();
+
+    // A capture that handed the sink NO video sample cannot be described
+    // by whatever HRESULT finalize happens to raise — Media Foundation's
+    // own answer is `MF_E_SINK_NO_SAMPLES_PROCESSED`, which reaches the
+    // user as a raw, untranslatable OS string. The real cause is knowable
+    // here: the frames were the wrong size for the file, and both sizes
+    // are in hand. Replacing the HRESULT is deliberate, not hiding it —
+    // the raw text goes to the log for a bug report.
+    if let Some(msg) = diagnose::zero_video_diagnosis(
+        counters.video_written.load(Ordering::Relaxed),
+        declared,
+        diagnose::unpack_dims(counters.undersized.load(Ordering::Relaxed)),
+    ) {
+        match &finalized {
+            Ok(()) => log::error!("screen capture: {msg}"),
+            Err(e) => log::error!("screen capture: {msg}; finalize also failed: {e}"),
+        }
+        return Err(ScreenError::Sink(msg));
+    }
     // A write failure that still finalized is a warning, not a failure:
     // the file plays. Only a finalize failure is fatal. On success the
     // caller gets `written_until` — what was actually written — never

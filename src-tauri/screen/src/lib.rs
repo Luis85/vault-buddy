@@ -9,6 +9,7 @@
 
 pub mod clock;
 pub mod convert;
+pub mod diagnose;
 // The WGC frame callback. Windows-only: it exists solely to feed
 // `session`'s mux, and everything it decides is decided by a pure function
 // in `session::pacing`.
@@ -63,6 +64,13 @@ pub enum ScreenError {
     /// location.
     Retained {
         path: std::path::PathBuf,
+        /// Whether that file actually contains video. A stop that failed
+        /// after real frames were written leaves a playable prefix (the
+        /// whole reason the container is fragmented); a capture that wrote
+        /// NO frame at all leaves a file with nothing in it. Telling a user
+        /// their footage was kept when it was not is the failure this field
+        /// exists to make impossible — see `diagnose::zero_video_diagnosis`.
+        holds_footage: bool,
         cause: Box<ScreenError>,
     },
 }
@@ -76,9 +84,22 @@ impl std::fmt::Display for ScreenError {
             ScreenError::Io(e) => write!(f, "screen capture I/O error: {e}"),
             ScreenError::Sink(e) => write!(f, "screen capture could not be written: {e}"),
             ScreenError::AlreadyCapturing => write!(f, "a capture is already running"),
-            ScreenError::Retained { path, cause } => write!(
+            ScreenError::Retained {
+                path,
+                holds_footage: true,
+                cause,
+            } => write!(
                 f,
                 "screen capture could not finish, but {} still holds the recording: {cause}",
+                path.display()
+            ),
+            ScreenError::Retained {
+                path,
+                holds_footage: false,
+                cause,
+            } => write!(
+                f,
+                "screen capture could not finish, and {} holds no usable video: {cause}",
                 path.display()
             ),
         }
@@ -155,6 +176,7 @@ mod tests {
     fn retained_carries_the_part_path_as_typed_data_and_renders_the_cause() {
         let err = ScreenError::Retained {
             path: std::path::PathBuf::from("/vault/Screen Recordings/.foo.mp4.part"),
+            holds_footage: true,
             cause: Box::new(ScreenError::Io("disk full".into())),
         };
         // The path must be readable back as a PATH, not re-parsed out of
@@ -175,10 +197,39 @@ mod tests {
     }
 
     #[test]
+    fn a_retained_file_with_no_footage_does_not_claim_to_hold_the_recording() {
+        // The failure this pins: a window capture whose frames were all
+        // dropped for a size mismatch finalized with a raw
+        // MF_E_SINK_NO_SAMPLES_PROCESSED, and the app told the user the
+        // retained `.part` "still holds the recording" — of a file with no
+        // video in it at all. Keeping a file and keeping footage are two
+        // different claims and must read differently.
+        let err = ScreenError::Retained {
+            path: std::path::PathBuf::from("/tmp/empty.mp4.part"),
+            holds_footage: false,
+            cause: Box::new(ScreenError::Sink("the capture recorded no video".into())),
+        };
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("still holds the recording"),
+            "an empty file must not be described as holding the recording: {rendered}"
+        );
+        assert!(
+            rendered.contains("/tmp/empty.mp4.part"),
+            "the path is still named so the file is not an invisible orphan: {rendered}"
+        );
+        assert!(
+            rendered.contains("no video"),
+            "the cause must still surface: {rendered}"
+        );
+    }
+
+    #[test]
     fn retained_exposes_its_cause_through_the_error_trait() {
         use std::error::Error as _;
         let err = ScreenError::Retained {
             path: std::path::PathBuf::from("/tmp/x.mp4.part"),
+            holds_footage: true,
             cause: Box::new(ScreenError::Sink("MF_E_INVALIDMEDIATYPE".into())),
         };
         let source = err.source().expect("Retained always carries a cause");

@@ -2620,3 +2620,52 @@ really does precede the file; or delete the `.part` on the failure arm.
 Either is a small, local change — deferred only because it is untestable
 outside Windows and this phase's Windows path is entirely unverified
 (GAP-117).
+
+### GAP-122 · Medium · The sink's frame size is still PREDICTED before the first frame arrives
+`src-tauri/screen/src/session/windows_session.rs` (`ScreenSession::start`),
+`src-tauri/screen/src/session/mux.rs` (`run_mux`) and
+`src-tauri/screen/src/source.rs` (`window_capture_dims`). The H.264 sink's
+frame size is frozen when `FragmentedSink::create` runs, which happens on the
+mux thread **before any frame has been delivered** — `start` deliberately
+waits on a ready handshake so a capture that cannot be written fails
+synchronously, with a real message, instead of looking like it started and
+producing nothing. So the declared size is a *prediction* derived from the
+source, and `pacing::usable_frame` rejects every frame that comes in smaller
+(reading the declared height out of a shorter mapped texture would run past
+its end). **The failure this already caused, now fixed:** for a WINDOW the
+prediction came from `windows-capture`'s `Window::width()/height()`, i.e.
+`GetWindowRect`, which on Windows 10/11 includes DWM's invisible resize
+border (~7-8 px left, right and bottom) — but WGC sizes its frame pool from
+the capture item's own (DWM-composed, smaller) size. Every frame was
+therefore undersized, every frame was dropped, and finalize failed with a raw
+`MF_E_SINK_NO_SAMPLES_PROCESSED` (0xC00D4A44) over a zero-frame file, in the
+user's OS language. Monitors were unaffected (`dmPelsWidth` matches WGC
+exactly). The fix declares `DWMWA_EXTENDED_FRAME_BOUNDS` instead, which MSDN
+names as the visible window bounds and which OBS's own WGC backend treats as
+the capture texture's rect (`libobs-winrt/winrt-capture.cpp`'s
+`get_client_box` offsets into the texture from exactly this rect), and which
+the vendored crate's `Window::title_bar_height` also assumes. **Why this is
+still a gap:** Microsoft documents no equality between the extended frame
+bounds and `GraphicsCaptureItem::Size`, so the new value is a
+better-evidenced prediction, not a contract. Anything that moves the two
+apart again — a future Windows compositor change, an unusual window style, a
+DWM call that answers with stale bounds mid-resize — reopens the same class
+of failure. **Fix shape (the robust one, deliberately NOT taken here):** stop
+predicting. Create the sink from the FIRST DELIVERED FRAME's dimensions, so
+the declared size is correct by construction for every source kind, forever.
+That inverts the ready handshake: `start` would have to report "the capture
+is writable" only after a frame has arrived, which means either a bounded
+wait for the first frame on the start path (a still window may not deliver
+one promptly — the very reason the heartbeat exists) or moving the
+unwritable-capture failure from a synchronous start error to an asynchronous
+`screen:failed`, losing the property that a broken encoder is refused while
+the user is still looking at the Start button. It is a significant refactor
+in code that executes in no automated test anywhere (GAP-117), which is why
+it is recorded rather than attempted on a bug-fix branch. **What now stands
+in for it:** a size mismatch is no longer silent or opaque — the drop log
+names both the actual and the declared dimensions, and a capture that
+finalizes having written zero video samples fails with
+`diagnose::zero_video_diagnosis`'s explanation (naming both sizes) instead of
+the HRESULT, with the retained `.part` described as holding no usable video
+rather than "the recording". All of that decision and wording is pure and
+Linux-tested in `src-tauri/screen/src/diagnose.rs`.

@@ -449,6 +449,7 @@ mod tests {
         // that silently drops `retainedPath` from the emitted payload.
         let err = ScreenError::Retained {
             path: PathBuf::from("/staging/.2026-01-02 0915 Demo.mp4.part"),
+            holds_footage: true,
             cause: Box::new(ScreenError::Sink("disk full".into())),
         };
         let (message, retained) = describe_screen_error(&err);
@@ -459,6 +460,30 @@ mod tests {
         // The message must still name the cause, so a listener that only
         // renders `message` does not regress to "something went wrong".
         assert!(message.contains("disk full"), "got {message}");
+    }
+
+    #[test]
+    fn a_retained_file_with_no_footage_is_still_surfaced_but_not_called_a_recording() {
+        // A capture whose frames were all the wrong size leaves a `.part`
+        // with no video in it. The path is still handed back — suppressing
+        // it would leave a permanent invisible orphan, since nothing sweeps
+        // staging (docs/Gaps.md GAP-115) — but the MESSAGE must not tell the
+        // user their footage was kept.
+        let err = ScreenError::Retained {
+            path: PathBuf::from("/staging/.2026-01-02 0915 Demo.mp4.part"),
+            holds_footage: false,
+            cause: Box::new(ScreenError::Sink("the capture recorded no video".into())),
+        };
+        let (message, retained) = describe_screen_error(&err);
+        assert_eq!(
+            retained.as_deref(),
+            Some(Path::new("/staging/.2026-01-02 0915 Demo.mp4.part"))
+        );
+        assert!(
+            !message.contains("still holds the recording"),
+            "got {message}"
+        );
+        assert!(message.contains("no video"), "got {message}");
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! error return (an error return also ends the capture — see
 //! `graphics_capture_api.rs`, which halts the session on `result.is_err()`).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::Arc;
 
@@ -22,9 +22,9 @@ use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
 
-use crate::convert;
-use crate::session::{output_ts, pacing, MuxMsg, SharedClock, Warnings};
+use crate::session::{output_ts, pacing, Counters, MuxMsg, SharedClock, Warnings};
 use crate::ScreenError;
+use crate::{convert, diagnose};
 
 /// Everything the callback needs, handed in through `Settings`.
 pub(crate) struct FrameFlags {
@@ -35,7 +35,7 @@ pub(crate) struct FrameFlags {
     /// this, never the other way round: the output format is fixed at start.
     pub width: u32,
     pub height: u32,
-    pub dropped: Arc<AtomicU64>,
+    pub counters: Arc<Counters>,
     pub stopping: Arc<AtomicBool>,
     pub warnings: Arc<Warnings>,
 }
@@ -52,7 +52,7 @@ impl FrameHandler {
         // fetch_add returns the PREVIOUS value, so +1 is this drop's ordinal
         // and the first drop of a run is 1 — which is what should_log_drop
         // keys on.
-        let n = self.flags.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+        let n = self.flags.counters.dropped.fetch_add(1, Ordering::Relaxed) + 1;
         if pacing::should_log_drop(n) {
             log::warn!("screen capture: dropped a frame ({reason}); {n} so far");
         }
@@ -93,7 +93,24 @@ impl GraphicsCaptureApiHandler for FrameHandler {
             self.flags.width,
             self.flags.height,
         ) {
-            self.drop_frame("the source shrank below the recorded size");
+            // RECORDED, not just logged: if every frame lands here the file
+            // ends up with no video at all, and `mux` needs the observed
+            // size to tell the user WHY rather than surfacing a bare
+            // MF_E_SINK_NO_SAMPLES_PROCESSED. Latest-wins is enough — the
+            // sizes in a run are all the same one.
+            self.flags.counters.undersized.store(
+                diagnose::pack_dims(frame.width(), frame.height()),
+                Ordering::Relaxed,
+            );
+            // Both sizes in the line, never just "the source shrank": a
+            // wrongly DECLARED size and a user resizing the window produce
+            // the same drop, and only the numbers tell them apart.
+            self.drop_frame(&diagnose::undersized_drop_reason(
+                frame.width(),
+                frame.height(),
+                self.flags.width,
+                self.flags.height,
+            ));
             return Ok(());
         }
 

@@ -2,7 +2,7 @@
 //! and finalize before renaming.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -30,8 +30,8 @@ use crate::ScreenError;
 use super::audio::run_audio;
 use super::mux::{run_mux, SinkPlan};
 use super::{
-    apply_control, pacing, Control, MuxMsg, ScreenOutcome, ScreenSessionParams, SharedClock,
-    Warnings, AUDIO_BITRATE_BPS, AUDIO_CHANNELS, AUDIO_RATE, CHANNEL_DEPTH,
+    apply_control, pacing, Control, Counters, MuxMsg, ScreenOutcome, ScreenSessionParams,
+    SharedClock, Warnings, AUDIO_BITRATE_BPS, AUDIO_CHANNELS, AUDIO_RATE, CHANNEL_DEPTH,
 };
 
 /// A live screen capture. Task 8's `screen_commands.rs` is the only
@@ -39,7 +39,7 @@ use super::{
 pub struct ScreenSession {
     clock: SharedClock,
     stopping: Arc<AtomicBool>,
-    dropped: Arc<AtomicU64>,
+    counters: Arc<Counters>,
     warnings: Arc<Warnings>,
     control: Option<CaptureControl<FrameHandler, ScreenError>>,
     audio: Option<JoinHandle<()>>,
@@ -105,7 +105,7 @@ impl ScreenSession {
         let started = Instant::now();
         let clock: SharedClock = Arc::new(Mutex::new(CaptureClock::new(started)));
         let stopping = Arc::new(AtomicBool::new(false));
-        let dropped = Arc::new(AtomicU64::new(0));
+        let counters = Arc::new(Counters::default());
         let warnings = Arc::new(Warnings::new(warn_tx));
         let (tx, rx) = mpsc::sync_channel::<MuxMsg>(CHANNEL_DEPTH);
 
@@ -113,15 +113,15 @@ impl ScreenSession {
         let mux = std::thread::Builder::new()
             .name("screen-mux".into())
             .spawn({
-                let (clock, stopping, dropped, warnings) = (
+                let (clock, stopping, counters, warnings) = (
                     Arc::clone(&clock),
                     Arc::clone(&stopping),
-                    Arc::clone(&dropped),
+                    Arc::clone(&counters),
                     Arc::clone(&warnings),
                 );
                 move || {
                     run_mux(
-                        plan, ready_tx, rx, clock, stopping, fps, dropped, stats_tx, warnings,
+                        plan, ready_tx, rx, clock, stopping, fps, counters, stats_tx, warnings,
                     )
                 }
             })
@@ -153,7 +153,7 @@ impl ScreenSession {
         let session = ScreenSession {
             clock,
             stopping,
-            dropped,
+            counters,
             warnings,
             control: None,
             audio: None,
@@ -214,7 +214,7 @@ impl ScreenSession {
             tx: frame_tx,
             width,
             height,
-            dropped: Arc::clone(&self.dropped),
+            counters: Arc::clone(&self.counters),
             stopping: Arc::clone(&self.stopping),
             warnings: Arc::clone(&self.warnings),
         };
@@ -328,12 +328,19 @@ impl ScreenSession {
         // unopenable file — so both are reported as `Retained` with that
         // path, not a bare Sink error, so a caller can offer it to the
         // user instead of only logging where it went.
+        // Whether the retained `.part` is worth anything is NOT a guess:
+        // the mux counts every video sample it hands the sink, in a shared
+        // atomic that survives even the mux PANICKING. Saying "the file
+        // still holds the recording" over a file with no video in it is the
+        // untrue message this counter exists to make impossible.
+        let holds_footage = || self.counters.video_written.load(Ordering::Relaxed) > 0;
         let written_until = match self.mux.take() {
             Some(h) => match h.join() {
                 Ok(Ok(written_until)) => written_until,
                 Ok(Err(e)) => {
                     return Err(ScreenError::Retained {
                         path: self.part.clone(),
+                        holds_footage: holds_footage(),
                         cause: Box::new(e),
                     })
                 }
@@ -341,6 +348,7 @@ impl ScreenSession {
                     log::error!("screen capture: the mux thread panicked");
                     return Err(ScreenError::Retained {
                         path: self.part.clone(),
+                        holds_footage: holds_footage(),
                         cause: Box::new(ScreenError::Sink(
                             "the capture writer stopped unexpectedly".into(),
                         )),
@@ -364,6 +372,7 @@ impl ScreenSession {
             );
             ScreenError::Retained {
                 path: self.part.clone(),
+                holds_footage: holds_footage(),
                 cause: Box::new(ScreenError::Io(format!(
                     "could not finish the capture file: {e}"
                 ))),
@@ -381,7 +390,7 @@ impl ScreenSession {
             paused_ms: paused.as_millis() as u64,
             width: self.width,
             height: self.height,
-            dropped: self.dropped.load(Ordering::Relaxed),
+            dropped: self.counters.dropped.load(Ordering::Relaxed),
             warning: self.warnings.take(),
         })
     }

@@ -81,6 +81,30 @@ pub struct CaptureSourceInfo {
     pub is_primary: bool,
 }
 
+/// A window's capture size, derived from a DWM extended-frame-bounds rect.
+///
+/// PURE and on both platforms deliberately: the `cfg(windows)` arm below
+/// executes in no automated test anywhere (docs/Gaps.md GAP-117), so the
+/// arithmetic that decides how big a recording is opened has to live where
+/// Linux can pin it.
+///
+/// `i64` throughout: an extended-frame-bounds rect is in screen
+/// coordinates, a minimized window reports a far-off-screen one, and
+/// `right - left` in `i32` would overflow rather than answer.
+pub fn capture_size_from_bounds(
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) -> Option<(u32, u32)> {
+    let width = i64::from(right) - i64::from(left);
+    let height = i64::from(bottom) - i64::from(top);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some((width as u32, height as u32))
+}
+
 /// A source re-checked at START time and ready to capture.
 pub struct ResolvedSource {
     pub handle: SourceHandle,
@@ -109,8 +133,75 @@ mod imp {
 #[cfg(windows)]
 mod imp {
     use super::*;
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
     use windows_capture::monitor::Monitor;
     use windows_capture::window::Window;
+
+    /// The size to OPEN a window recording at: what WGC will actually
+    /// deliver, not what `GetWindowRect` reports.
+    ///
+    /// THE BUG THIS EXISTS FOR. `Window::width()/height()`
+    /// (windows-capture 2.0.1, `window.rs`) are `GetWindowRect`, which on
+    /// Windows 10/11 "may include invisible resize borders" (its own MSDN
+    /// Remarks) — roughly 7-8 px left, right and bottom of a normal
+    /// top-level window. WGC sizes its frame pool from the capture item
+    /// (`graphics_capture_api.rs` creates it at `item.Size()` and recreates
+    /// it at `frame.ContentSize()`), which is the DWM-COMPOSED size and so
+    /// is SMALLER. `pacing::usable_frame` then rejected every single frame
+    /// as undersized, the sink was handed nothing, and finalize failed with
+    /// a bare `MF_E_SINK_NO_SAMPLES_PROCESSED` (0xC00D4A44) over a
+    /// zero-frame file. Monitors were never affected: `Monitor::width()` is
+    /// `dmPelsWidth`, which matches WGC exactly.
+    ///
+    /// `DWMWA_EXTENDED_FRAME_BOUNDS` is what MSDN names as the way to get
+    /// "the visible window bounds, not including the invisible resize
+    /// borders", and it is the rect the WGC texture corresponds to:
+    /// OBS's own WGC backend computes its client-area crop box INSIDE the
+    /// capture texture as offsets from this rect
+    /// (`libobs-winrt/winrt-capture.cpp`, `get_client_box`), and the
+    /// vendored crate's `Window::title_bar_height` crops the captured frame
+    /// by this rect's height minus the client height. Neither would be
+    /// correct if the frame were any other size.
+    ///
+    /// STILL A PREDICTION, though — Microsoft documents no equality between
+    /// the two, which is why a residual mismatch now diagnoses itself
+    /// (`crate::diagnose`) instead of producing an opaque zero-frame file;
+    /// docs/Gaps.md GAP-122 records the alternative that would end the
+    /// guessing.
+    fn window_capture_dims(window: &Window) -> Option<(u32, u32)> {
+        let mut rect = RECT::default();
+        let bounds = unsafe {
+            DwmGetWindowAttribute(
+                HWND(window.as_raw_hwnd()),
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                std::ptr::from_mut(&mut rect).cast(),
+                std::mem::size_of::<RECT>() as u32,
+            )
+        };
+        match bounds {
+            Ok(()) => {
+                if let Some(dims) =
+                    super::capture_size_from_bounds(rect.left, rect.top, rect.right, rect.bottom)
+                {
+                    return Some(dims);
+                }
+                log::debug!("screen source: a window reported an empty extended frame bounds");
+            }
+            Err(e) => log::warn!("screen source: could not read a window's frame bounds: {e}"),
+        }
+        // DEGRADE rather than drop the window: GetWindowRect is all that is
+        // left, and a source missing from the picker is worse than one
+        // whose declared size may be a few pixels generous. A capture that
+        // then delivers nothing explains itself at finalize (Fix B) instead
+        // of failing opaquely.
+        let (Ok(w), Ok(h)) = (window.width(), window.height()) else {
+            return None;
+        };
+        // Through the SAME pure conversion, so the non-positive and
+        // overflow rules have exactly one definition.
+        super::capture_size_from_bounds(0, 0, w, h)
+    }
 
     pub enum SourceHandle {
         Screen(Monitor),
@@ -163,19 +254,14 @@ mod imp {
                     if exclude_titles.iter().any(|t| t == &title) {
                         continue;
                     }
-                    let (Ok(width), Ok(height)) = (w.width(), w.height()) else {
-                        continue;
-                    };
                     // A zero-sized or negative-sized window cannot be
                     // captured; offering it would produce a start that fails
-                    // for a reason the user cannot see.
-                    let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height))
-                    else {
+                    // for a reason the user cannot see. The picker must also
+                    // show the size the RECORDING will have, so this is the
+                    // same DWM-composed measurement `resolve` declares.
+                    let Some((width, height)) = window_capture_dims(&w) else {
                         continue;
                     };
-                    if width == 0 || height == 0 {
-                        continue;
-                    }
                     let detail = w.process_name().unwrap_or_default();
                     out.push(CaptureSourceInfo {
                         id: SourceId::Window(w.as_raw_hwnd() as isize).to_string(),
@@ -268,15 +354,11 @@ mod imp {
                     log::warn!("screen source: window {hwnd} is gone");
                     return Err(ScreenError::SourceGone);
                 }
-                let (Ok(width), Ok(height)) = (window.width(), window.height()) else {
+                // The size the sink is OPENED at, so it must be what WGC
+                // will deliver — see `window_capture_dims`.
+                let Some((width, height)) = window_capture_dims(&window) else {
                     return Err(ScreenError::SourceGone);
                 };
-                let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
-                    return Err(ScreenError::SourceGone);
-                };
-                if width == 0 || height == 0 {
-                    return Err(ScreenError::SourceGone);
-                }
                 let title = window.title().unwrap_or_else(|_| "Window".to_string());
                 Ok(ResolvedSource {
                     handle: SourceHandle::Window(window),
@@ -294,6 +376,49 @@ pub use imp::{list_sources, resolve, SourceHandle};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_rect_becomes_its_capture_size() {
+        // The size a window capture is OPENED at. Getting this wrong by a
+        // few pixels is the whole bug this function exists for: every
+        // delivered frame is then judged against a size WGC never sends.
+        assert_eq!(
+            capture_size_from_bounds(100, 100, 1620, 942),
+            Some((1520, 842))
+        );
+    }
+
+    #[test]
+    fn a_rect_on_a_negative_origin_monitor_still_measures_correctly() {
+        // A secondary monitor left of the primary has negative screen
+        // coordinates. Treating the corners as unsigned would give a
+        // nonsense size and open the recording at it.
+        assert_eq!(
+            capture_size_from_bounds(-1920, -100, -400, 742),
+            Some((1520, 842))
+        );
+    }
+
+    #[test]
+    fn a_degenerate_rect_yields_no_size_rather_than_a_wrong_one() {
+        // A minimized or not-yet-shown window reports an empty or inverted
+        // rect. Returning 0 (or a wrapped huge number) would open a sink
+        // that can never be fed.
+        assert_eq!(capture_size_from_bounds(0, 0, 0, 0), None);
+        assert_eq!(capture_size_from_bounds(10, 10, 10, 400), None);
+        assert_eq!(capture_size_from_bounds(10, 10, 400, 10), None);
+        assert_eq!(capture_size_from_bounds(400, 400, 10, 10), None);
+    }
+
+    #[test]
+    fn an_extreme_rect_measures_without_overflowing() {
+        // `right - left` across the full i32 range overflows i32 — which in
+        // a debug build PANICS, and this runs on the capture start path.
+        assert_eq!(
+            capture_size_from_bounds(i32::MIN, i32::MIN, i32::MAX, i32::MAX),
+            Some((u32::MAX, u32::MAX))
+        );
+    }
 
     #[test]
     fn a_screen_id_round_trips() {

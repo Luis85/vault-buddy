@@ -36,6 +36,11 @@ tempfile = "3"
 # pins no new version. windows-capture 2.0.1 requires ^0.62.2, the same one.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    # DwmGetWindowAttribute/DWMWA_EXTENDED_FRAME_BOUNDS: the DWM-composed
+    # size WGC actually delivers for a window, which GetWindowRect (what
+    # windows-capture's Window::width/height use) over-reports by the
+    # invisible resize border. See source.rs's window_capture_dims.
+    "Win32_Graphics_Dwm",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
 ] }

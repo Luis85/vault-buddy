@@ -25,7 +25,7 @@
 //! it is stranded where nothing can reach it.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -114,6 +114,27 @@ impl Warnings {
             .first
             .clone()
     }
+}
+
+/// The three numbers the frame callback, the mux and `stop()` all need to
+/// see, in one shared allocation.
+///
+/// Atomics rather than a lock because the writer is the WGC frame callback,
+/// which runs across the WinRT/COM boundary where a panic aborts the
+/// process with no crash record — it must never be able to block or unwind.
+#[derive(Debug, Default)]
+pub struct Counters {
+    /// Frames the callback could not forward, for the advisory
+    /// `screen:frames` stat.
+    pub dropped: AtomicU64,
+    /// Video samples the mux actually handed to the sink, repeats included.
+    /// ZERO is the "this file has no video in it" case that must never be
+    /// reported as a kept recording.
+    pub video_written: AtomicU64,
+    /// The size of the most recent frame rejected for being SMALLER than
+    /// the size the sink was opened with, packed by `diagnose::pack_dims`.
+    /// Zero means no such frame — see `diagnose::unpack_dims`.
+    pub undersized: AtomicU64,
 }
 
 /// Advisory, ~2 Hz, lossy by design (spec 11). A gone receiver must never
