@@ -68,8 +68,8 @@ jobs:
       # it (the shell depends on it) but never run its TESTS — including the
       # real-socket round-trip suite that proves the guarded endpoint and the
       # shutdown property. Without this line those tests wouldn't run anywhere.
-      - name: clippy (core + capture + transcribe + mcp crates)
-        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp --all-targets -- -D warnings
+      - name: clippy (core + capture + transcribe + mcp + screen crates)
+        run: cargo clippy -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp -p vault_buddy_screen --all-targets -- -D warnings
         working-directory: src-tauri
       # `whisper` isn't a default feature (the real engine only builds where
       # whisper.cpp does), so the plain invocation above never compiles
@@ -84,8 +84,8 @@ jobs:
       - name: clippy (transcribe crate, whisper feature)
         run: cargo clippy -p vault_buddy_transcribe --all-targets --features whisper -- -D warnings
         working-directory: src-tauri
-      - name: tests (core + capture + transcribe + mcp crates)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp
+      - name: tests (core + capture + transcribe + mcp + screen crates)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp -p vault_buddy_screen
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature)
         run: cargo test -p vault_buddy_transcribe --features whisper
@@ -102,8 +102,8 @@ jobs:
       # vite.config.ts: when coverage rises, raise the floor in the same PR;
       # lowering it is a reviewed decision. Floored from the 2026-07-10
       # adoption run (see docs/DEVELOPMENT.md § Quality pipeline).
-      - name: coverage floor (core + capture + transcribe, cargo-llvm-cov)
-        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe --fail-under-lines 94
+      - name: coverage floor (core + capture + transcribe + screen, cargo-llvm-cov)
+        run: cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen --fail-under-lines 94
         working-directory: src-tauri
       # RustSec advisories + license/source policy (src-tauri/deny.toml).
       # Runs from src-tauri so the config is found by the same path as the
@@ -193,8 +193,15 @@ jobs:
       # different target/ subtree), so whisper.cpp rebuilds once for tests
       # — an accepted wall-clock cost, same trade the Linux rust-core job
       # makes for its own whisper-feature step.
-      - name: tests (core + capture + transcribe crates, Windows)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
+      # vault_buddy_screen joined this line with phase 2's cfg(windows)
+      # split (docs/Gaps.md GAP-102, closed here on the terms it set):
+      # sink.rs, source.rs and session/ now hold real capture logic that
+      # Windows is the ONLY place able to execute. Before that split there
+      # was nothing Windows-specific to exercise, which is why the gap asked
+      # for this edit in the phase-2 PR and not earlier. rust-core still runs
+      # the same crate on Linux; this is the arm that job cannot reach.
+      - name: tests (core + capture + transcribe + screen crates, Windows)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper

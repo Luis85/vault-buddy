@@ -918,6 +918,68 @@ other anchor-adjacent fallback in this module) or loop `strip_anchor`
 until it stops matching, so a doubly (or N-times) anchored source degrades
 safely instead of leaking a second anchor into the child.
 
+### GAP-100 · Low · `render_extra_frontmatter` re-emits a user-quoted sexagesimal scalar bare
+`src-tauri/core/src/template.rs` (`render_extra_frontmatter`'s
+sentinel-round-trip through `serde_yaml_ng`). A template line quoting its
+own placeholder, e.g. `len: "{{duration}}"`, renders as `len: 3:17` — the
+quotes the author wrote are gone. This is pre-existing shared-helper
+behaviour that the capture-note, document-import, task, and (as of this
+branch) screen-capture template surfaces all inherit equally; it was not
+introduced by Screen Capture, only newly exercised by it
+(`screen_note.rs`'s `template_placeholders_resolve` test pins the exact
+`len: 3:17` output as current behaviour, not a bug it's asserting against).
+**The risk is narrower than "re-quoting is dropped" sounds:**
+`serde_yaml_ng` already re-quotes every implicit int/float/bool/null on
+re-emit (`1.0` → `'1.0'`, `197` → `'197'`, `true` → `'true'`), so the only
+shape that reaches the page unquoted is a **sexagesimal-looking string**
+such as `3:17` or `1:02:03` — precisely `capture_note::format_duration`'s
+output, the one placeholder value with that shape today. Under YAML 1.2 /
+js-yaml 4.x — what Obsidian ships — `3:17` is already a plain string with
+no special sexagesimal handling, so practical impact in Obsidian is nil.
+The exposure is confined to a YAML-1.1 consumer (e.g. a Python
+`yaml.safe_load` on an old PyYAML, or a Dataview-adjacent tool built on an
+older parser), which reads `3:17` as the integer 197, not the string.
+**Severity: Low / informational** — narrow consumer surface, no data loss,
+and the workaround (don't wrap `{{duration}}` in quotes in a template,
+since the renderer already quotes every managed field itself) is already
+available. **Fix shape, if ever taken up:** have the sentinel round-trip
+preserve an explicit source quote style per key rather than only
+re-deriving it from the parsed value's type.
+
+### GAP-101 · Low · Region-capture geometry: even-dimension enforcement is done, chroma-plane offset parity and `to_physical`'s floor are not
+`src-tauri/core/src/screen_geometry.rs`. **Resolved as of this branch:**
+`clamp_to_frame` now rounds each of `width`/`height` down to the nearest
+even value (returning `None` if either rounds to 0), closing the H.264/NV12
+"odd luma dimension" failure this entry originally tracked — see the
+function's own doc comment for the reasoning, and its test module for the
+review case (`1921x1081` frame, `400x400` rect at `x=1800,y=1000` → `120x80`,
+not `121x81`).
+
+**What remains, narrower than the original entry:**
+1. **x/y offset parity.** NV12's chroma plane is half-resolution on each
+   axis, so cropping at an ODD `x` or `y` cannot land the chroma plane on an
+   integer boundary either — `clamp_to_frame` does not touch `rect.x`/
+   `rect.y` at all today, only `width`/`height`. Whether this matters depends
+   on which layer performs the actual pixel crop: if Phase 2 crops via Media
+   Foundation's video-processor MFT using a source rectangle, the VP handles
+   arbitrary offsets internally; if it instead slices the NV12 buffer
+   in-process before handing it to the encoder, an odd offset is a real bug.
+   Undecided until the fragmented-MP4 spike determines which approach Phase 2
+   takes.
+2. **`to_physical`'s floor stays `.max(1)`, not `.max(2)`.** This was a
+   deliberate, narrower-scope choice (not an oversight) when the even-
+   dimension fix landed: `clamp_to_frame` is documented as the last pure
+   gate before the encoder, and is where the even-and-at-least-2 enforcement
+   lives; `to_physical` only guarantees "not zero" for a value that has not
+   yet been clamped against a real frame. Whether `to_physical` should also
+   floor at 2 for consistency (so a caller who used `to_physical`'s output
+   directly, without going through `clamp_to_frame`, couldn't observe an odd
+   1-px dimension) is an open question — no such caller exists today, but
+   one could be added without necessarily going through `clamp_to_frame`.
+
+Owner: Phase 2 (the capture-engine phase, alongside the fMP4 spike) for (1);
+either Phase 2 or a follow-up hardening pass for (2).
+
 ## 2. Main-thread responsiveness (shell)
 
 Sync commands run on the main thread (an AGENTS.md invariant — window APIs
@@ -1638,6 +1700,45 @@ feature; `check:loc` passes again. The file's standing "splitting it into
 per-domain modules is a separate refactor" note remains open as future work,
 but no longer red-lines CI.
 
+### GAP-102 · ~~Low~~ FIXED 2026-09-19 · `vault_buddy_screen` did not run its tests in `windows-app`
+`.github/workflows/ci.yml`. **Resolved as of this branch, for the coverage
+half:** the `rust-core` job's `cargo llvm-cov` line now includes `-p
+vault_buddy_screen` in its `--fail-under-lines 94` floor (verified locally:
+95.58% lines with the crate included — `clock.rs`/`select.rs`/`engine.rs`
+all 100%, `lib.rs` 82.61%). **What remains:** the `windows-app` job's
+post-build `cargo test` line (`-p vault_buddy_core -p vault_buddy_capture -p
+vault_buddy_transcribe`) still does not include `-p vault_buddy_screen`
+(the `windows-app`/`rust-core` clippy and non-coverage test lines already DO
+include it, per the CI-gating commit that added the crate). **This omission
+is correct as of Phase 1**: `screen::engine` (`src-tauri/screen/src/
+engine.rs`) is a deliberate, platform-independent Phase-1 stub — one
+unconditional `Err(ScreenError::Unsupported)` body with no Windows-only code
+path yet — so there is nothing Windows-specific yet for `windows-app`'s Rust
+tests to exercise that `rust-core` doesn't already. **The gap:** the moment
+Phase 2's `cfg(windows)` split lands real capture logic in `engine.rs` (spec
+§4.1, §6), Windows becomes the *only* place that code can execute at all,
+and this CI edit will not have been revisited automatically — a
+Windows-only regression in the capture engine could land with `windows-app`
+never having run its tests, even though `rust-core`'s coverage floor now
+covers the crate's Linux-testable surface. **Fix shape:** add `-p
+vault_buddy_screen` to the `windows-app` test line in the same PR as Phase
+2's `cfg(windows)` split — not before, since there would be nothing
+Windows-specific yet to exercise. Owner: Phase 2.
+
+**FIXED 2026-09-19, on exactly those terms.** Phase 2's `cfg(windows)` split
+landed (`sink.rs`, `source.rs`, `session/windows_session.rs`; the Phase-1
+`engine.rs` stub this entry was written against is gone, replaced by
+`session`), so Windows is now the only place that code can execute — and the
+`windows-app` job's post-build test line became `cargo test -p
+vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p
+vault_buddy_screen` in the same PR. The comment above that step in
+`.github/workflows/ci.yml` records why the crate was absent until now, so a
+future reader does not "clean up" the list back. **What this does NOT close**
+is the coverage of those Windows arms themselves — the crate's tests are the
+pure modules', and the `cfg(windows)` bodies still execute nowhere automated;
+that honest statement is GAP-117, and manual Windows verification is the only
+thing that exercises them.
+
 ## 7. Untested paths
 
 What has no automated coverage today, by area. (The Vitest suite and the
@@ -1912,6 +2013,125 @@ worse in kind than the pre-async behavior:
   "saving" until reload. Requires a webview reload to resync the wedged
   state first; the old bare-`Ok` had the identical hole.
 
+### GAP-103 · Low · `set_screen_capture_config` (Phase 6) inherits three obligations already visible from Phase 1's config work
+Deferred-by-phasing follow-ups the settings command must not land without,
+found while wiring the seven Screen Capture config fields into
+`vault_config.rs`/`config_merge.rs` (spec §12) ahead of the command that
+will own writing them:
+- **Normalize `screen_fps` on write, not only on read.** `vault_entry`
+  parses `screenFps` through `screen_capture_config::normalize_fps`
+  (line ~411), so an in-memory `VaultCaptureConfig` can only ever hold 30 or
+  60 — but `serialize_vault_entry` (line ~521) hardcodes `if v.screen_fps !=
+  30` and writes the raw field verbatim, with no call to `normalize_fps` on
+  the way out. This is unreachable **today** only because every DTO the
+  serializer sees came from a normalizing parse; the moment
+  `set_screen_capture_config` accepts an `fps` straight from the frontend's
+  IPC payload (bypassing `vault_entry`'s parse), an out-of-range value like
+  `45` would serialize as `screenFps: 45` and silently normalize to 30 only
+  on the NEXT read — a save-then-immediately-re-read-without-restart
+  mismatch. The command must normalize its incoming DTO value before it
+  ever reaches `serialize_vault_entry`.
+- **Document the seven keys in `docs/DEVELOPMENT.md`'s `config.json`
+  reference.** This phase deliberately left that doc untouched (Phase 1 is
+  core-only, no settings UI or IPC surface yet) — `screenCaptureFolder`,
+  `screenCaptureDateFolders`, `screenQuality`, `screenFps`,
+  `screenCreateNote`, `screenExtraFrontmatter`, `screenBodyTemplate` are
+  parsed and round-tripped today but appear in no human-facing config
+  reference, mirroring the precedent every other settings command's launch
+  PR follows (`mcp`, `document_import`, `transcription` sections are all
+  documented there).
+- **Take `capture_config::config_write_lock()`.** `set_screen_capture_config`
+  is a seventh settings surface writing into the same `VaultCaptureConfig`
+  struct capture/transcription/documents/tasks/task-id/task-lists/
+  task-template settings already share — precisely the struct GAP-83's
+  single-lock-plus-per-file-lock discipline exists to protect. Landing it
+  under any lock other than the one core lock (or under no lock) would
+  reopen the exact desync GAP-83 closed, just for an eighth writer instead
+  of a seventh.
+
+Owner: Phase 6 (the settings-surface phase). None of these are bugs in
+Phase 1's landed code — `config_merge.rs::merge_capture_owned` already
+carries the `// Screen Capture is owned by set_screen_capture_config
+(phase 6)` comment above the fields it preserves — they are obligations
+the next phase inherits and must not skip.
+
+### GAP-105 · Low · `CaptureClock` is the repo's third pause-elapsed accumulator
+`src-tauri/screen/src/clock.rs`'s `CaptureClock` (`started` + `paused_total`
++ `paused_since`, idempotent `pause`/`resume`, `elapsed`) implements the
+exact same "wall clock minus accumulated paused time" rule as two existing,
+independently-written carriers of it:
+- `src-tauri/capture/src/session.rs` (~254-276) — the audio mixer loop's
+  inline `paused` / `paused_total: Duration` / `pause_started: Option<Instant>`
+  locals, folded directly into the `Control::Pause`/`Control::Resume` match
+  arms of the device thread's `loop`.
+- `src-tauri/src/capture_commands.rs` (~756-760) — the shell's UI-facing
+  mirror, `paused_total_ms: u64` / `paused_since_ms: Option<u64>` on the
+  active-recording struct, updated by the `pause_capture`/`resume_capture`
+  commands.
+- `src-tauri/core/src/tasks.rs` and `src-tauri/screen/src/clock.rs` both now
+  carry unit tests pinning "idempotent pause", "idempotent resume", and
+  "accumulate across multiple pause cycles" as three *separately* proven
+  invariants — proof the same rule is worth centralizing once, not proof it
+  already is.
+
+None of the three is a drop-in replacement for either of the others as it
+stands: `session.rs`'s locals are loop-scoped (no struct to extract without
+restructuring the device thread), and `capture_commands.rs`'s pair is a
+millisecond-valued UI mirror the frontend reads directly, not a computation
+site. The spec for this increment mandated `CaptureClock` as a new,
+A/V-sync-driving abstraction (see its module doc: "there is no second time
+base to drift from"), so introducing it was correct — but the underlying
+pause/resume/total rule the repo encodes now exists in three independently
+maintained forms, which is exactly the drift class `vault_walk.rs`'s own
+header already warns about for a different pair of duplicated walks
+(GAP-46). Once Phase 2 wires `screen::clock` in and the session/UI mirror
+pair are touched again, consider whether `CaptureClock` (already the most
+general and best-tested of the three) should become the ONE home for this
+rule, with the audio session and the UI mirror built on it or on a shared
+sibling type, rather than a third independent implementation living
+alongside the other two indefinitely.
+
+### GAP-106 · Low · Units differ at the seams Phase 2 will join: ms, `Duration`, and seconds
+Three time-value representations meet at the boundary Phase 2 wires
+together, with no documented conversion between them:
+- `core::timeline` (`Segment::duration_ms`, `Timeline::output_duration_ms`/
+  `split_at`/`to_source_ms`) and `screen::select` (`PlanSpan::duration_ms`,
+  `plan`) both use `u64` milliseconds.
+- `screen::clock`'s `CaptureClock` uses `std::time::Duration` throughout
+  (`elapsed`, `output_ts`) — deliberately, per its module doc, so pause
+  edges are `Instant`-injected and unit-testable, not because it shares the
+  timeline/select modules' convention.
+- `ScreenNoteMeta::duration_secs` (`core/src/screen_note.rs`) is `u64`
+  seconds — matching the existing `capture_note::NoteMeta::duration_secs`
+  precedent (`core/src/capture_note.rs`) and `transcript::TranscriptMeta`'s
+  same field, so the seconds form is not new, only the screen-capture use
+  of it.
+The ms↔seconds hop already has a precedent to follow (whatever
+`capture_note`'s callers do today to go from a recording's millisecond
+duration to `NoteMeta.duration_secs`); the ms↔`Duration` hop between
+`core::timeline`/`screen::select` and `screen::clock::CaptureClock` is the
+genuinely new seam this feature introduces, and nothing today converts
+between them (Phase 1 has no caller that needs to). Before Phase 2 wires
+the clock's `Duration` output into a `Timeline`/`PlanSpan`'s `u64` ms field
+by hand at each call site, add one small, documented, unit-tested
+conversion helper (e.g. `Duration` → ms via `as_millis` truncation, with a
+comment on which direction is lossy and why truncation — not rounding — is
+the right choice for a monotonically-advancing output timestamp) so every
+call site converts the same way instead of five ad hoc `.as_millis() as
+u64`s drifting apart.
+
+### GAP-107 · Low · Overflow posture is inconsistent between `core::timeline` and `screen::select` (cosmetic)
+`core/src/timeline.rs`'s `split_at` (line ~69) and `to_source_ms` (line
+~116) both compute `elapsed + seg.duration_ms()` with a plain `+`, while
+`screen/src/select.rs`'s `plan` (line ~43) computes the equivalent running
+offset with `output_start_ms.saturating_add(seg.duration_ms())`. Both
+values are milliseconds-since-recording-start on a `u64`, which overflows
+only after roughly 584 million years of continuous accumulated segment
+duration — unreachable in practice, so this is not a correctness bug. It
+is worth a consistent posture (both saturating, or both plain, with a
+comment on why) the next time either module is touched, so a future
+reader does not read the difference as meaningful when it isn't.
+
 ## 9. Documentation & repo hygiene
 
 The 2026-07-10 AGENTS.md overhaul fixed the drift that lived in AGENTS.md
@@ -1990,3 +2210,413 @@ not regress:
   ticket/debounce logic correct incl. short-query invalidation; Tasks'
   per-row busy set serializes writes; the transcription job map is bounded
   with terminal-only eviction — all covered by tests.
+
+### GAP-108 · Medium · `sanitize_title` does not neutralize Windows reserved device names
+`src-tauri/screen/src/staging.rs` `sanitize_title` maps reserved *characters*
+(`: \ / ? * " < > |`) and collapses separator runs, but leaves the reserved
+*device names* untouched: `sanitize_title("CON")` returns `"CON"`.
+
+Win32 reserves `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9` and `LPT1`–`LPT9`
+**with or without an extension** — `CON.mp4` is as unopenable as `CON`. Vault
+Buddy ships only on Windows, so a user who titles a screen capture "CON" (or
+"nul", the match is case-insensitive) gets a capture that cannot create its
+own staged file. The failure surfaces at `File::create` inside the capture
+session, i.e. after the user has already started recording.
+
+Found by the Task 2 review (phase 2). Not the implementer's error: the case is
+absent from the plan's own Step 2 test list, so it is a plan omission rather
+than a deviation.
+
+Two related path-safety items belong with it:
+
+- `reserve_base` and `write_sidecar` do not re-assert that `base` contains no
+  path separators; they trust the caller sanitized first. The rest of this
+  codebase re-asserts containment at the actual write site (the tasks and
+  capture domains both do), so this is a defence-in-depth gap rather than a
+  live bug while the only caller is the sanitizing one.
+- Two distinct titles can collide onto one sanitized base (`"a:b"` and
+  `"a/b"` both become `"a-b"`). That one IS handled, by `reserve_base`'s
+  ` (N)` suffix retry — recorded here only so a future reader does not
+  re-discover it as a bug.
+
+Fix alongside the write-site hardening in the task that owns the capture
+session's filesystem writes, where both checks land at the same chokepoint.
+
+### GAP-109 · Medium · A reused HWND can resolve to a different live window than the one picked
+`src-tauri/screen/src/source.rs`, `resolve`'s `SourceId::Window` arm validates
+the stored handle with `Window::is_valid()` only — visible, not a tool window,
+not a child (windows-capture 2.0.1, `window.rs`). Windows reuses HWND values
+after a window closes, so between the user picking a window and pressing Start
+the same handle can belong to a DIFFERENT live window. The capture then records
+the wrong window with no error at all.
+
+**The obvious remedy is rejected deliberately.** Re-checking the title at
+resolve time would throw `SourceGone` on windows that merely renamed
+themselves — browsers on a tab change, editors on a file switch, anything
+showing a document name. That is a frequent, everyday false failure traded
+against a rare silent one, and it is the worse bargain. A process-id re-check
+is the more promising direction (it catches the cross-process reuse case
+without punishing a rename) but needs the pid captured at list time, which the
+current `CaptureSourceInfo` does not carry.
+
+Sibling bug, already FIXED in the same review (723abfd): the SCREEN arm had a
+worse version of this — `list_sources` minted ids from `Monitor::index()` (the
+OS display number in `\\.\DISPLAYn`) while `resolve` looked them up with
+`Monitor::from_index()` (positional into `enumerate()`). Those are different
+numbering schemes, so a multi-monitor machine could resolve to the wrong screen
+on the very first call, with no staleness required. Now resolved by scanning
+for a matching `.index()`.
+
+Both belong on the Windows verification checklist: pick screen 2 and confirm
+screen 2 is what recorded; pick a window, close it, and confirm the capture
+refuses rather than recording something else.
+
+### GAP-110 · Medium · The 15 s screen-capture ready timeout frees the guard while the capture may still be starting
+`src-tauri/src/screen_capture_worker.rs`, the `Err(_)` arm of
+`ready_rx.recv_timeout(READY_TIMEOUT)`. The behaviour is brief-mandated
+("release the guard and fail cleanly"), so this is a design gap, not a
+deviation — but the design has two residuals worth naming before Phase 5.
+
+The timeout was justified in-code by the claim that no file can exist yet.
+**That claim was false and is now corrected** (same commit): `run_mux`
+creates the sink — which opens the `.part` — and only THEN sends on
+`ready_tx`, and `ScreenSession::start` blocks on that handshake
+(`src-tauri/screen/src/session/windows_session.rs`, the `ready_rx.recv()`
+before `spawn_producers`). So the sink exists strictly BEFORE `start`
+returns success, and the 15 s timeout can fire with an open `.part` on disk.
+
+Two residuals follow:
+
+1. **An orphan with no recovery path.** The commonest shape is a device
+   thread still inside `open_selected_sources` (a wedged audio driver — the
+   documented premise for the audio domain's own timeout) when the 15 s
+   expires. The start path releases the reservation and returns an error.
+   The device thread later succeeds, creates the sink, records briefly, sees
+   the pre-emptively-sent `Control::Stop`, finalizes, and RENAMES to a staged
+   `.mp4`. Its `done_tx.send` lands in a dropped receiver (the monitor is
+   spawned only on the success path), so no sidecar is written and no
+   `screen:stopped` is emitted. Nothing sweeps it: there is no
+   `run_screen_recovery` anywhere, and `capture/src/recovery.rs` sweeps vault
+   recording roots, not `%LOCALAPPDATA%\…\screen-captures`. Spec §10's
+   staging recovery is Phase 5. No user data is lost (the file is near-empty
+   and un-resumable without its sidecar), but staging grows silently.
+2. **A mutual-exclusion window.** Between the timeout and that old device
+   thread finishing, `CaptureGuard` is FREE. The user sees "Screen capture
+   did not start in time.", retries, and the second capture opens the same
+   audio endpoint while the first is still opening or recording it — the
+   exact reliability hazard spec §7.3 says the guard exists to prevent. The
+   pre-emptive `Stop` narrows this window but cannot close it: the first
+   thread is by definition not yet reading its control channel.
+
+**Two candidate fixes, both bigger than a comment.** Either hold the claim
+until the device thread reports terminally — return the error to the user
+without freeing the guard and let the monitor free it, which costs a monitor
+spawned on the timeout path too — or bring a minimal staging janitor forward
+from Phase 5, which fixes (1) but not (2). Residual (2) is the one that
+argues for the first option. For the plan owner to decide; until then the
+timeout arm's comment states the real behaviour rather than the invariant it
+does not have.
+
+### GAP-111 · Low · Three Phase-2 screen-capture surfaces deliberately fall short of the approved spec
+`src/components/ScreenAudioPicker.vue`, `src/components/ScreenSourcePicker.vue`,
+`src/components/RecordMode.vue`. The phase-2 source picker ships three
+knowing deviations from the screen-capture spec. Each is right for phase 2
+and each is recorded here so phase 3 restores it deliberately rather than by
+accident — and so a reader diffing the shipped picker against the spec finds
+the reasoning instead of assuming an oversight.
+
+1. **§7.2's per-device audio level bars are omitted** (`ScreenAudioPicker`).
+   Nothing could feed them: `capture:level` is emitted from exactly one place,
+   `src-tauri/src/capture_commands.rs`'s audio path, and only *while an audio
+   recording runs* — so it could not drive a meter on a pre-start picker even
+   if the screen domain listened for it. `screen_capture_worker.rs` forwards
+   `screen:warning` and `screen:frames` only, and `src-tauri/screen/src/**`
+   has no level plumbing at all. A meter fed by nothing is a permanently dead
+   indicator, which is worse than none (the VAD stats-row lesson: never render
+   intent as engagement). **Restoring it is a Rust change first** — a
+   per-device level emit that runs during enumeration/preview, not a frontend
+   one — so phase 3 should not "add the bars" against the current event set.
+2. **There is no Region tab** (`ScreenSourcePicker`'s `TABS`). Region capture
+   is phase 3; a disabled third tab is dead UI inviting a click with nothing
+   behind it. Pinned in both directions by a test ("offers Screen and Window
+   tabs, and no Region tab in this phase"), which phase 3 must update in the
+   same commit that adds the tab.
+3. **The chooser hint reads "Screen or window" where §7.1 says "Screen,
+   window, or region"** (`RecordMode`'s `OPTIONS`). Same reason as (2):
+   advertising region from the chooser while the picker cannot do it is the
+   same dead promise. **This string must change back when the Region tab
+   lands**, or the app will under-advertise a capability it has.
+
+### GAP-112 · Low · The static-screen heartbeat repeats at a fixed 500 ms rather than adapting
+`src-tauri/screen/src/session/mod.rs` (`HEARTBEAT: Duration =
+Duration::from_millis(500)`) and `session/pacing.rs`
+(`VideoPacer::on_idle` / `should_repeat`). When no new frame arrives — a
+completely still screen — the mux repeats the last frame every 500 ms so the
+output timeline keeps advancing and fragments keep closing (without it a
+still screen recorded alongside a microphone closes no fragments at all,
+which is the regression `the_wait_shrinks_so_the_heartbeat_fires_even_while_
+audio_keeps_arriving` pins). The interval is a constant: it does not widen
+when the screen has been still for a long time. **Failure scenario:** a
+one-hour screencast of a mostly-static slide costs ~7 200 repeated frames of
+bitrate it did not need; every one is a P-frame of a scene identical to its
+predecessor, so the cost is small per frame but entirely avoidable.
+**Not a correctness bug** — the repeats are what make a still stretch play
+through at a steady rate at all (checklist item 9) — and the fixed interval
+is also what makes the pacer unit-testable on Linux with an injected
+`Instant`. **Fix shape:** back off the interval while the screen stays still
+(500 ms → 1 s → 2 s, resetting on the first real frame), keeping the cap
+below whatever fragment duration the editor's seek granularity needs; the
+change belongs in `pacing::VideoPacer` where it stays pure and testable, not
+in the Windows arm. Defer until Phase 4/5 knows what fragment cadence the
+editor actually wants.
+
+### GAP-113 · Low · Audio and video derive their timestamps from different sources; no drift measurement exists
+`src-tauri/screen/src/session/pacing.rs`. Video timestamps come from the
+wall clock — `CaptureClock::output_ts`, stamped by `VideoPacer::on_frame` /
+`on_idle` — while audio timestamps come from the **emitted sample count**
+(`AudioPacer::take` → `audio_ts(self.emitted, self.rate)`, a running total
+divided by the nominal `AUDIO_RATE`). Each is individually right: the video
+side must track real time or a pause would not be excisable, and the audio
+side must be contiguous or the sink would see a gap. **Failure scenario:** if
+a device's *actual* sample rate differs from its nominal one (a cheap USB
+interface clocking 47 980 Hz while reporting 48 000, a resampler with a
+systematic bias), the two time bases diverge linearly — roughly 0.04 % is
+~1.5 s over an hour. Short captures are unaffected; a long one would drift
+audio out of sync with video, progressively, with nothing in the pipeline
+noticing. **There is no measurement yet.** Item 10 of the Windows
+verification checklist
+(`docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md`)
+is where the first real number comes from; deciding a fix before that number
+exists would be guessing. **Fix shape, if a real drift is measured:** stamp
+audio from the shared `CaptureClock` too and let the sample count only fill
+gaps, or resample against the observed rather than nominal rate. Both are
+bigger than this phase and neither is justified by evidence yet.
+
+### GAP-114 · Low · A full mux channel drops frames rather than blocking; a sustained encoder stall silently degrades the frame rate
+`src-tauri/screen/src/frames.rs` (`try_send` → `TrySendError::Full` →
+`drop_frame("the muxer is behind")`). The WGC frame callback hands frames to
+the `screen-mux` thread over a bounded `SyncSender` and uses `try_send`, so
+when the mux is behind — a software H.264 fallback on a 4K/60 source, a
+stalled disk — the frame is **dropped and counted**, never queued. This is
+deliberate: blocking the WGC callback thread back-pressures the compositor
+itself, and an unbounded queue turns an encoder stall into unbounded memory
+growth on 4K BGRA frames. **Failure scenario:** the recording silently runs
+at, say, 22 fps instead of 60 with no failure anywhere — the file is valid
+and plays, it is simply choppier than the user asked for. **The mitigation,
+which is not a fix:** the drop is counted and surfaced three ways — a
+`log::warn!` on the first drop and one in every 300
+(`pacing::should_log_drop`), the running total in the `screen:frames` event
+(~2 Hz), and `screen capture: finalizing after N dropped frame(s)` at
+teardown. Spec §17.3 deliberately leaves the RESPONSE (drop to 30 fps? warn
+the user?) to be decided from real measurements rather than guessed, which is
+what checklist item 10 produces. The running total is visible in the UI as of
+2026-09-19 (`ScreenCaptureBar.vue`'s dropped chip, GAP-118); the per-drop
+log lines and the teardown total remain the fuller record.
+
+### GAP-115 · Medium · Phase 2 never sweeps, surfaces or bounds its staging directory — for CRASHED and for cleanly finished captures alike
+`src-tauri/src/lib.rs` (`setup` wires `capture_commands::run_recovery` and
+`document_commands::run_import_recovery`, and nothing for the screen domain)
+plus `src-tauri/screen/src/staging.rs`. A screen capture writes into
+`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\.<base>.mp4.part` and
+publishes it to `<base>.mp4` on a clean stop. If the process dies
+mid-capture — the exact case §6.4's fragmented container exists to survive —
+the `.part` survives with playable footage in it and **nothing ever looks at
+it again**: no sweep offers it to the user, no janitor removes a stale one.
+**Failure scenario:** a user whose machine crashes mid-capture loses nothing
+(the bytes are there and decode as a prefix) but is never told so, and the
+staging directory accumulates orphans across crashes with no size bound and
+no clear action. **Why it is not fixed here:** the resume-or-discard UI and
+`run_screen_recovery` are Phase 5's row in spec §13, and a sweeper with
+nowhere to offer its findings would only delete evidence the crash-safe
+container was designed to preserve — strictly worse than leaving it. Until
+Phase 5, the orphan is recoverable by hand (rename `.part` → `.mp4`), which
+the Windows verification checklist documents as item 8's method. **Fix
+shape:** Phase 5's `run_screen_recovery` — sweep the staging dir, pair each
+`.part` with its sidecar, offer resume-or-discard, and only then apply a
+staleness rule.
+
+**The happy path leaks too, and it is the far more common case.** Everything
+above is about the crash. But EVERY cleanly stopped capture also leaves a
+`<base>.mp4` plus its `<base>.json` sidecar in the same directory, and in
+Phase 2 nothing surfaces them, nothing deletes them and nothing bounds their
+total size: there is no editor (Phase 4), no vault write (Phase 5), no entry
+in the Recordings browser (out of scope, spec §1), no staged-capture list and
+no "Clear staged captures" action (spec §10 puts it in Phase 6). The store's
+`lastStaged` is rendered by nothing. **Failure scenario:** a user tries the
+new Record Screen button a dozen times over a week at 1080p; several
+gigabytes of MP4 accumulate under `%LOCALAPPDATA%` with no in-app way to see
+or remove them, and no UI ever mentions that the directory exists. Spec §10
+names disk pressure as something the design cares about; the Phase-2 slice
+inherits none of it. The stop notification at least no longer calls this
+"saved" (it reads "Screen capture ready … editing and saving into a vault
+arrive in a later update", `screen_commands.rs::stopped_toast_copy`), so the
+user is not sent hunting through their vault — but they are still not told
+where the file went. **Fix shape:** Phase 6's "Clear staged captures" action
+plus a size readout, and Phase 5's editor/export giving a finished capture
+somewhere to GO; until then the honest statement is that Phase 2 stages
+without ever collecting.
+
+### GAP-116 · Low · Vault Buddy's own windows appear in a Phase 2 recording
+`src-tauri/src/screen_commands.rs` (`our_window_titles`, used only to filter
+`list_capture_sources`). Spec §7.2's rule — never offer ourselves as a
+capture *source* — is implemented, though **by TITLE rather than by HWND**,
+which is a fourth unrecorded deviation from that section: `our_window_titles`
+collects `WebviewWindow::title()` strings and `source.rs` drops any
+enumerated window whose title matches one exactly. It is inert today — all
+three windows are `skipTaskbar: true`, which tao implements as
+`WS_EX_TOOLWINDOW`, and `windows-capture`'s `Window::is_valid()` already
+rejects those, so the filter never fires — but it becomes load-bearing in
+**Phase 4**, whose spec'd `editor` window is `skipTaskbar: false` and will
+therefore enumerate. A title match is also, in principle, capable of hiding a
+USER's window that happens to carry the exact same string. Phase 4 must not
+assume an HWND filter exists. Spec §5.3's rule — never appear *in* a
+recording — is not implemented at all, because `WDA_EXCLUDEFROMCAPTURE` is
+Phase 3's row in §13. **Failure scenario:** a user recording their whole monitor gets the
+buddy, the panel, and any bubble baked into the footage, including whatever
+vault names the panel was showing. It is cosmetic rather than a data leak in
+the ordinary case (the user can see what is on their own screen), but it is
+surprising enough that it is called out explicitly in the Phase 2 Windows
+verification checklist so a verifier does not file it as a bug. **Fix
+shape:** Phase 3 sets `SetWindowDisplayAffinity(hwnd,
+WDA_EXCLUDEFROMCAPTURE)` on the buddy, panel, bubble and overlay windows —
+note it must be re-applied per window creation, and that the call fails on
+Windows builds older than 2004, which needs its own degrade path.
+
+### GAP-117 · Medium · The `cfg(windows)` arms of `sink`/`source`/`session` execute in no automated test anywhere
+`src-tauri/screen/src/sink.rs`, `source.rs`, `session/windows_session.rs`,
+`session/audio.rs`, `session/mux.rs`, `frames.rs`. This is the honest
+coverage statement for Phase 2, recorded so nobody reads the green CI badge
+as covering it. `rust-core` runs the crate on Linux, where those modules are
+either absent or reduce to an `Unsupported` arm; `windows-app` now runs the
+crate's tests on Windows too (GAP-102, closed in this PR), but **those tests
+are the pure modules' tests** — `clock`, `select`, `convert`, `staging`,
+`session::pacing`, `mp4_boxes`, `source`'s id encoding. Nothing in CI opens a
+Media Foundation sink, resolves a real HWND, or runs the three-thread
+session. **Failure scenario:** a Windows-only regression — a wrong media-type
+attribute, a stride assumption, a thread-join ordering change — compiles
+clean, passes every gate, and is caught only by a human recording their
+screen. **This is a deliberate limit, not an oversight:** no CI runner can
+record a screen, which is precisely why the architecture pushes every
+decision it can into pure modules (`session/mod.rs`'s "WHAT IS PURE AND WHAT
+IS NOT" header states the rule) and why the manual checklist
+(`docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md`)
+is Phase 2's gate. **Fix shape, partial:** the `fmp4-spike` feature is the
+precedent for a Windows-only test that drives real Media Foundation with
+synthetic input; a sink-level smoke test in that shape could run on
+`windows-app` and would cover sink creation and finalize without needing a
+screen. Frame acquisition and the WGC callback remain out of reach.
+
+### GAP-118 · ~~Medium~~ FIXED 2026-09-19 · The screen capture store's live state had no renderer: Phase 2 shipped no capture bar
+`src/stores/screenCapture.ts` (holds `status`, `startedAtMs`,
+`pausedTotalMs`, `pausedSinceMs`, `fps`, `dropped`, `warning`) with no
+component consuming any of it — `ScreenCaptureBar.vue`, the plan's Task 10
+and spec §7.3's during-capture surface, **did not land in Phase 2**
+(verified: no such file, no `tests/screenCaptureBar.test.ts`, and
+`ActionPanel.vue`'s list view renders `RecordingBar` for the audio domain
+only). `ScreenSourcePicker.vue`'s `onStart` already calls `store.showList()`
+with a comment saying "the capture bar lives on the list view beside
+RecordingBar" — it navigates to a view that shows nothing.
+**Failure scenario:** after starting a screen capture the panel returns to
+the vault list with no visible sign a capture is running. Elapsed time,
+paused state, the dropped-frame indicator and any `screen:warning` are
+invisible **while the capture is live** — a terminal warning still reaches
+the user, through `emit_screen_stopped`'s `"Recorded {base} with a warning:
+{w}"` toast (`screen_commands.rs::stopped_toast_copy`); it is the live window that has no surface; the only controls are the tray / buddy right-click menu items
+(`tray.rs` does route Stop/Pause/Resume to the screen domain, so the capture
+is controllable and never strandable — this is a missing surface, not a
+missing capability), and the only place the dropped-frame count can be read
+is `vault-buddy.log`. It also blunts GAP-114's stated mitigation, which
+assumes the count is surfaced. **Fix shape:** land plan Task 10 as written —
+`ScreenCaptureBar.vue` rendered on the list view beside `RecordingBar`,
+reading the existing store (elapsed excluding paused time, Pause/Resume,
+Stop with an in-flight guard, and the dropped-frame badge shown only once
+`dropped > 0`), plus `tests/screenCaptureBar.test.ts`. The store side is
+done and tested; this is a presentational component and its wiring.
+
+**FIXED 2026-09-19, on exactly those terms.** Plan Task 10 landed — it had
+been skipped by the dispatcher (Task 8 → 9 → 11) and is filled in here, which
+is why it sits out of order in the history. `src/components/
+ScreenCaptureBar.vue` reads the store and renders on the list view beside
+`RecordingBar` (`ActionPanel.vue`, gated `view === 'list' &&
+screenCapture.status !== 'idle'`), so `ScreenSourcePicker.vue`'s
+`store.showList()` now lands on the surface its comment always claimed:
+elapsed via `store.elapsedMs(now)` (paused time excluded — the Rust clock
+excludes it by construction, and the bar delegates rather than re-deriving
+it), Pause/Resume, Stop, the source title, an inline `screen:warning` line —
+the store deliberately withholds that toast while a capture is live *because*
+this line now exists — and a `dropped` chip shown only once `dropped > 0`.
+`tests/screenCaptureBar.test.ts` covers all six. Stop's in-flight guard is a
+new `stopping` flag on the store (Task 9 left it out because nothing consumed
+it yet): set when `stop()` is asked for, cleared only when the capture really
+ends (every route to idle) or when the stop was REJECTED, since Stop must be
+offered again after a rejection that changed nothing — `stop_screen_capture`
+can answer `stillSaving` while the session is still tearing down, so clearing
+on the command's own reply would re-arm Stop against a live finalize. (The
+rejection is *usually* `is_capturing` saying no, where nothing is indeed
+finalizing; the command's `JoinError` arm can reject after `Control::Stop`
+already went out, where re-arming costs at worst a duplicate fire-and-forget
+send.) **One residual, deliberate:** `fps` is still rendered nowhere. It is
+a rate, not an anomaly; §17.3's signal is the drop COUNT, and the Windows
+verification checklist's item 10 already reads the fps values from
+`vault-buddy.log` by design. GAP-114's mitigation is no longer blunted — the
+dropped count is now visible in the UI as that entry assumed.
+
+### GAP-119 · Low · "Every spawned thread is named" has one unnameable exception: the WGC frame worker
+`src-tauri/screen/src/session/windows_session.rs` (the `start_free_threaded`
+call) against AGENTS.md's Diagnostics-invariants rule. Vault Buddy names
+every thread it spawns with `std::thread::Builder` so a crash record
+identifies the dying thread — `screen-mux`, `screen-audio`, `screen-warn`,
+`screen-stats`, `screen-capture-device`, `screen-capture-monitor` and the
+rest all comply. `windows-capture`'s `start_free_threaded`, however, spawns
+the WGC frame worker itself with a bare `thread::spawn`, and that thread is
+where the frame callback (`frames.rs`) runs. **Failure scenario:** a native
+fault inside frame acquisition produces a crash record naming an unnamed
+thread, and the first reader of that record wastes time deciding whether the
+invariant was violated by our own code. **Why it is not fixed:** the thread
+is created inside a third-party crate, so naming it would need an upstream
+change; the blocking alternative (`start` rather than `start_free_threaded`)
+is strictly worse and the call site says why — it offers no way to stop a
+session that is receiving no frames, so a still screen would hang Stop.
+**Fix shape:** none locally beyond keeping the exception written down in both
+places (the call site and AGENTS.md's invariant, both done) — or, upstream,
+a PR giving `windows-capture` a named worker.
+
+### GAP-120 · Low · `fmp4_spike` and `mp4_boxes` are compiled by no CI job
+`src-tauri/screen/src/fmp4_spike.rs` (behind the non-default `fmp4-spike`
+feature) and `src-tauri/screen/src/mp4_boxes.rs` (its only consumer). The
+per-build `fmp4-spike` CI step was added with the spike and retired once the
+question it answered was settled — correctly, since re-running a 300-frame
+Media Foundation measurement on every push buys nothing. The consequence is
+that the module now builds nowhere in CI: `cargo clippy --workspace
+--all-targets` does not enable non-default features, and neither does either
+`tauri build`. AGENTS.md describes the spike as "kept re-runnable", which is
+true today and untested tomorrow. **Failure scenario:** a refactor of
+`ScreenSession`, `staging` or `sink` breaks the spike's call sites; nothing
+notices; the next person who needs to re-measure the container decision
+(Phase 4's editor work is the likely trigger) finds it does not compile and
+must repair it before they can measure anything. **Fix shape:** one cheap
+`cargo check -p vault_buddy_screen --features fmp4-spike` line on the
+`windows-app` job — no link, no run — or accept the rot and re-check by hand
+before any re-run. Verified 2026-09-19 that it still cross-compiles clean
+against `x86_64-pc-windows-msvc`.
+
+### GAP-121 · Low · An `encoderUnavailable` start leaves a zero-byte `.part` in staging
+`src-tauri/screen/src/sink.rs` (`create`) against spec §14, which says an
+encoder-init failure is "refused before anything is written". `create` calls
+`MFCreateFile` (with `MF_OPENMODE_DELETE_IF_EXIST`) **before** it builds the
+media types and the sink writer, so a machine with no usable H.264 encoder
+refuses the capture only after the `.part` file exists. Nothing is *written*,
+so §14's letter holds; the deviation is that a zero-byte orphan is left
+behind. Combined with GAP-115 (no staging sweep of any kind in Phase 2) that
+orphan is permanent. **What is NOT a problem here, checked rather than
+assumed:** `DELETE_IF_EXIST` cannot clobber a previous crashed capture's
+retained `.part`, because `staging::reserve_base` tests all three names
+(`.mp4`, `.json`, `.mp4.part`) for freeness before a base is handed out.
+**Failure scenario:** a user on a machine whose encoder is missing or held by
+another application presses Record Screen repeatedly and accumulates one
+zero-byte file per attempt, invisible to them. **Fix shape:** build the media
+types and the sink writer first and call `MFCreateFile` last, so the refusal
+really does precede the file; or delete the `.part` on the failure arm.
+Either is a small, local change — deferred only because it is untestable
+outside Windows and this phase's Windows path is entirely unverified
+(GAP-117).

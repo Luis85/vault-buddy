@@ -5,6 +5,7 @@ import { computed, onMounted, onUnmounted, watch } from "vue";
 import { useVaultFilter } from "../composables/useVaultFilter";
 import { useCaptureStore } from "../stores/capture";
 import { useDocumentImportsStore } from "../stores/documentImports";
+import { useScreenCaptureStore } from "../stores/screenCapture";
 import { useSettingsStatusStore } from "../stores/settingsStatus";
 import { useVaultsStore } from "../stores/vaults";
 import AppIcon from "./AppIcon.vue";
@@ -18,6 +19,8 @@ import RecordingBar from "./RecordingBar.vue";
 import Recordings from "./Recordings.vue";
 import RecordMode from "./RecordMode.vue";
 import RenamePrompt from "./RenamePrompt.vue";
+import ScreenCaptureBar from "./ScreenCaptureBar.vue";
+import ScreenSourcePicker from "./ScreenSourcePicker.vue";
 import Search from "./Search.vue";
 import TaskDetail from "./TaskDetail.vue";
 import Tasks from "./Tasks.vue";
@@ -35,6 +38,7 @@ import VaultList from "./VaultList.vue";
 const store = useVaultsStore();
 const capture = useCaptureStore();
 const documentImports = useDocumentImportsStore();
+const screenCapture = useScreenCaptureStore();
 
 // store-backed so a failed update install can reopen the (destroyed)
 // panel directly on the settings view
@@ -64,6 +68,7 @@ const VIEW_TITLES: Record<string, string> = {
   captureSettings: "Vault settings",
   recordings: "Recordings",
   recordMode: "Capture knowledge",
+  screenCapture: "Record screen",
   transcriptions: "Transcriptions",
   tasks: "Tasks",
   search: "Search",
@@ -264,6 +269,15 @@ watch(
       @pause="capture.pause()"
       @resume="capture.resume()"
     />
+    <!-- The screen domain's own live bar, beside the audio one. The two
+         cannot run at once (the shared CaptureKind guard), so this is a
+         sibling, never a stack. Without it ScreenSourcePicker's start
+         navigates to a view that shows nothing about the capture it just
+         began (docs/Gaps.md GAP-118). -->
+    <ScreenCaptureBar
+      v-if="view === 'list' && screenCapture.status !== 'idle'"
+      class="mb-2"
+    />
     <TranscriptionSummary
       v-if="view === 'list'"
       class="mb-2"
@@ -323,6 +337,16 @@ watch(
         <RecordMode
           :key="store.recordModeVaultId"
           :vault-id="store.recordModeVaultId"
+        />
+      </div>
+      <div
+        v-else-if="view === 'screenCapture' && store.screenCaptureVaultId"
+        key="screenCapture"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <ScreenSourcePicker
+          :key="store.screenCaptureVaultId"
+          :vault-id="store.screenCaptureVaultId"
         />
       </div>
       <div
@@ -396,7 +420,7 @@ watch(
           :busy-vault-id="store.busyVaultId"
           :busy-command="store.busyCommand"
           :capture-disabled="capture.status !== 'idle'"
-          :recording-vault-id="capture.vaultId"
+          :recording-vault-id="capture.vaultId ?? screenCapture.vaultId"
           :transcribing-vault-id="capture.transcribingVaultId"
           :task-counts="store.taskCounts"
           @open-vault="store.runAction('open_vault', $event)"

@@ -344,3 +344,43 @@ export interface Recording {
   /** Sidecar state — drives the row indicator + re-transcribe confirm. */
   transcriptStatus: "none" | "pending" | "failed" | "complete" | "cancelled";
 }
+
+/** One capturable source from `list_capture_sources`
+ * (`vault_buddy_screen::source::CaptureSourceInfo`, camelCase on the wire).
+ * `detail` is the ready-made secondary line Rust composes — resolution +
+ * primary flag for a monitor, the owning process for a window — so the
+ * picker never re-derives it and the two can never disagree. */
+export interface CaptureSourceInfo {
+  id: string;
+  kind: "screen" | "window";
+  title: string;
+  detail: string;
+  width: number;
+  height: number;
+  isPrimary: boolean;
+}
+
+/** `screen_capture_status`' reply and the `screen:started` payload
+ * (`ScreenStatusPayload`). `capturing` is a BOOLEAN here; the store maps it
+ * onto its own three-valued `status` string — see `statusFrom`. */
+export interface ScreenCaptureStatus {
+  capturing: boolean;
+  vaultId: string | null;
+  startedAtMs: number | null;
+  paused: boolean;
+  pausedTotalMs: number;
+  pausedSinceMs: number | null;
+  sourceTitle: string | null;
+}
+
+/** The `screen:stopped` payload (`StagedCaptureDto`). `path` is the staged
+ * `.mp4` in the app's own staging directory — nothing here is in a vault
+ * yet. */
+export interface StagedCapture {
+  base: string;
+  path: string;
+  durationMs: number;
+  sourceTitle: string;
+  width: number;
+  height: number;
+}

@@ -1,5 +1,6 @@
 mod capture_commands;
 mod capture_config_commands;
+mod capture_guard;
 mod commands;
 // Test-only structural pin (Task 6b, fix 2): no production code depends on
 // it, so it's excluded from non-test builds entirely rather than adding to
@@ -11,6 +12,8 @@ mod document_commands;
 mod mcp_commands;
 mod model_commands;
 mod pandoc;
+mod screen_capture_worker;
+mod screen_commands;
 mod search_commands;
 mod task_commands;
 mod task_config_commands;
@@ -334,6 +337,8 @@ pub fn run() {
             None,
         ))
         .manage(capture_commands::CaptureState::default())
+        .manage(capture_guard::CaptureGuard::default())
+        .manage(screen_commands::ScreenCaptureState::default())
         .manage(transcription::TranscriptionState::default())
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
@@ -362,7 +367,9 @@ pub fn run() {
             }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle();
-                if capture_commands::recording_blocks_shutdown(app) {
+                if capture_commands::recording_blocks_shutdown(app)
+                    || screen_commands::capture_blocks_shutdown(app)
+                {
                     // Alt+F4 / session shutdown bypass tray::quit — the
                     // recording must still finalize, but that wait is
                     // unbounded and this callback runs on the event loop:
@@ -375,10 +382,12 @@ pub fn run() {
                         .name("close-finalize".into())
                         .spawn(move || {
                             capture_commands::finalize_if_recording(&app);
-                            // The recording is finalized, so is_recording is
-                            // now false and the re-triggered CloseRequested
-                            // takes the else branch below (pass through to
-                            // destruction) — no loop.
+                            screen_commands::finalize_if_capturing(&app);
+                            // Both domains are finalized, so
+                            // recording_blocks_shutdown/capture_blocks_shutdown
+                            // are now false and the re-triggered
+                            // CloseRequested takes the else branch below
+                            // (pass through to destruction) — no loop.
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.close();
                             }
@@ -482,6 +491,12 @@ pub fn run() {
             document_commands::open_imported_document,
             model_commands::list_transcription_models,
             model_commands::delete_transcription_model,
+            screen_commands::list_capture_sources,
+            screen_commands::start_screen_capture,
+            screen_commands::stop_screen_capture,
+            screen_commands::pause_screen_capture,
+            screen_commands::resume_screen_capture,
+            screen_commands::screen_capture_status,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

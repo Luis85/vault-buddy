@@ -9,6 +9,7 @@ use vault_buddy_core::services::{self, RecordingDto, ServicePaths};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_core::{capture_config, capture_paths, discovery, transcript, uri};
 
+use crate::capture_guard::{CaptureGuard, CaptureKind};
 use crate::transcription::{enqueue_transcription, TranscriptionJob};
 
 pub struct ActiveCapture {
@@ -83,6 +84,12 @@ fn emit_failed(app: &AppHandle, message: &str) {
 fn clear_active(app: &AppHandle) {
     let state = app.state::<CaptureState>();
     *lock_ignoring_poison(&state.0) = None;
+    // Release the cross-domain claim from the SAME chokepoint that clears
+    // the reservation, so a path that forgets one cannot forget the other.
+    // Keyed on Audio: this function also runs on paths where audio never
+    // claimed, and an unkeyed release there would free a live screen
+    // capture's claim (see capture_guard's tests).
+    app.state::<CaptureGuard>().release(CaptureKind::Audio);
     state.1.notify_all();
 }
 
@@ -238,6 +245,14 @@ fn start_capture_blocking(
     // which file the live session owns.
     let (ready_tx, ready_rx) = mpsc::channel::<Result<PathBuf, String>>();
 
+    // Mutual exclusion across BOTH capture domains (spec 7.3). Claimed
+    // before the per-domain reservation below, and released by
+    // `clear_active` — the single chokepoint every failure path already
+    // funnels through, so no start path can leak the claim.
+    if let Err(held) = app.state::<CaptureGuard>().try_claim(CaptureKind::Audio) {
+        return Err(held.busy_message());
+    }
+
     // Reserve the state up front: the lock is held only for the is-running
     // check plus the insert, which closes the double-start window without
     // serializing device setup (or any I/O) under the mutex.
@@ -245,6 +260,8 @@ fn start_capture_blocking(
     {
         let mut guard = lock_ignoring_poison(&state.0);
         if guard.is_some() {
+            drop(guard);
+            app.state::<CaptureGuard>().release(CaptureKind::Audio);
             return Err("A recording is already running.".to_string());
         }
         *guard = Some(ActiveCapture {

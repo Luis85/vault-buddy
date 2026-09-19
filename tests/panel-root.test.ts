@@ -50,6 +50,16 @@ describe("PanelRoot", () => {
     expect(calls).toContain("capture_status");
   });
 
+  it("initializes the screen-capture store on mount, like the buddy window does", async () => {
+    // Each window is its own webview with its own Pinia instance. A store
+    // that mirrors Rust state and is initialised in only ONE of them leaves
+    // the other with a dead indicator — the documented failure that put
+    // capture.init() in both roots. screen_capture_status is init()'s resync.
+    mount(PanelRoot);
+    await flushPromises();
+    expect(calls).toContain("screen_capture_status");
+  });
+
   it("runs discovery each time the panel is shown, not on mount", async () => {
     mount(PanelRoot);
     await flushPromises();
