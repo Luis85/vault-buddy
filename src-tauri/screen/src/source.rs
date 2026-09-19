@@ -113,11 +113,32 @@ pub fn capture_size_from_bounds(
     Some((width as u32, height as u32))
 }
 
+/// The `(crop_x, crop_y, width, height)` a WHOLE source contributes: the
+/// full frame, cropped at the origin.
+///
+/// Trivial, and pinned by a test anyway, because the rest of the pipeline
+/// depends on the zero: `pacing::usable_frame` measures from
+/// `crop + want`, so a non-zero origin here would reject every frame of
+/// every non-region capture with nothing but a rising drop counter to say
+/// why. PURE and on both platforms for the same reason
+/// `capture_size_from_bounds` is — the `cfg(windows)` arm that calls it
+/// executes in no automated test anywhere (docs/Gaps.md GAP-117).
+pub fn uncropped_dims(width: u32, height: u32) -> (u32, u32, u32, u32) {
+    (0, 0, width, height)
+}
+
 /// A source re-checked at START time and ready to capture.
 pub struct ResolvedSource {
     pub handle: SourceHandle,
+    /// The OUTPUT size. For a region this is the region's size, NOT the
+    /// monitor's — the monitor is what WGC delivers, the region is what
+    /// gets encoded.
     pub width: u32,
     pub height: u32,
+    /// Where in each delivered frame the output starts. `(0, 0)` for a
+    /// whole screen or window (`uncropped_dims`).
+    pub crop_x: u32,
+    pub crop_y: u32,
     pub title: String,
 }
 
@@ -330,10 +351,13 @@ mod imp {
                     return Err(ScreenError::SourceGone);
                 };
                 let title = monitor.name().unwrap_or_else(|_| format!("Screen {index}"));
+                let (crop_x, crop_y, width, height) = uncropped_dims(width, height);
                 Ok(ResolvedSource {
                     handle: SourceHandle::Screen(monitor),
                     width,
                     height,
+                    crop_x,
+                    crop_y,
                     title,
                 })
             }
@@ -368,17 +392,77 @@ mod imp {
                     return Err(ScreenError::SourceGone);
                 };
                 let title = window.title().unwrap_or_else(|_| "Window".to_string());
+                let (crop_x, crop_y, width, height) = uncropped_dims(width, height);
                 Ok(ResolvedSource {
                     handle: SourceHandle::Window(window),
                     width,
                     height,
+                    crop_x,
+                    crop_y,
                     title,
                 })
             }
-            // Task 3 replaces this: resolving a region needs the monitor
-            // lookup this match already does for `Screen`, then clamping
-            // the rectangle to that monitor's frame.
-            SourceId::Region(_) => Err(ScreenError::Unsupported),
+            // REGION (spec 5.2): the same monitor lookup as `Screen`
+            // above — scanning for the monitor whose `.index()` matches,
+            // never `Monitor::from_index`, which is POSITIONAL and
+            // silently resolves to a different live screen (the phase-2
+            // wrong-screen bug) — and then one clamp.
+            //
+            // `clamp_to_frame` runs HERE, at start, and not only when the
+            // user drew the rectangle, because the monitor's resolution
+            // can change in between (spec 5.2). An unclamped stale
+            // rectangle indexes outside the frame buffer. `None` means the
+            // region no longer intersects the monitor at all, which is
+            // exactly `SourceGone`: the thing the user picked is not there
+            // any more.
+            //
+            // Nothing else happens in this arm on purpose — the id parse,
+            // the clamp, the even-rounding and the crop are each tested in
+            // a pure module, and logic added here would be logic nothing
+            // can reach (docs/Gaps.md GAP-117).
+            SourceId::Region(region) => {
+                let monitors = Monitor::enumerate().map_err(|e| {
+                    log::warn!("screen source: monitor enumeration failed: {e}");
+                    ScreenError::SourceGone
+                })?;
+                let monitor = monitors
+                    .into_iter()
+                    .find(|m| match m.index() {
+                        Ok(i) => i == region.monitor,
+                        Err(_) => false,
+                    })
+                    .ok_or_else(|| {
+                        log::warn!("screen source: monitor {} is gone", region.monitor);
+                        ScreenError::SourceGone
+                    })?;
+                let (Ok(mon_w), Ok(mon_h)) = (monitor.width(), monitor.height()) else {
+                    return Err(ScreenError::SourceGone);
+                };
+                let Some(rect) =
+                    vault_buddy_core::screen_geometry::clamp_to_frame(region.rect, mon_w, mon_h)
+                else {
+                    log::warn!(
+                        "screen source: the selected region no longer fits monitor {} ({mon_w}x{mon_h})",
+                        region.monitor
+                    );
+                    return Err(ScreenError::SourceGone);
+                };
+                let label = monitor
+                    .name()
+                    .unwrap_or_else(|_| format!("Screen {}", region.monitor));
+                Ok(ResolvedSource {
+                    handle: SourceHandle::Screen(monitor),
+                    width: rect.width,
+                    height: rect.height,
+                    crop_x: rect.x,
+                    crop_y: rect.y,
+                    // Must read the same as the picker's own row, which
+                    // `src/utils/regionLabel.ts` composes (Task 7). Two
+                    // spellings of the same source is a support problem,
+                    // not a cosmetic one.
+                    title: format!("Region on {label}"),
+                })
+            }
         }
     }
 }
@@ -586,6 +670,17 @@ mod tests {
         assert_eq!(SourceId::Window(-42).to_string(), "window:-42");
         assert_eq!(SourceId::parse("region"), None, "no separator");
         assert_eq!(SourceId::parse("nonsense:1"), None);
+    }
+
+    // A whole screen or window is the (0, 0) case of a region, and the
+    // rest of the pipeline relies on that: `pacing::usable_frame` measures
+    // from `crop + want`, so a non-zero default here would reject every
+    // frame of every non-region capture. Constructible off Windows on
+    // purpose, so the contract is pinned somewhere CI runs.
+    #[test]
+    fn a_whole_source_crops_at_the_origin() {
+        let whole = uncropped_dims(1920, 1080);
+        assert_eq!(whole, (0, 0, 1920, 1080));
     }
 
     #[cfg(windows)]

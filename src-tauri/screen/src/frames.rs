@@ -30,6 +30,10 @@ use crate::{convert, diagnose};
 pub(crate) struct FrameFlags {
     pub clock: SharedClock,
     pub tx: SyncSender<MuxMsg>,
+    /// Where in each delivered frame the output starts. `(0, 0)` for a
+    /// whole screen or window; a region's origin inside its monitor.
+    pub crop_x: u32,
+    pub crop_y: u32,
     /// The size the sink was opened with — already rounded to even by
     /// `convert::even_dims`. A resized window's frames are judged against
     /// this, never the other way round: the output format is fixed at start.
@@ -90,9 +94,8 @@ impl GraphicsCaptureApiHandler for FrameHandler {
         if !pacing::usable_frame(
             frame.width(),
             frame.height(),
-            // Task 3 replaces these with the session's crop origin
-            0,
-            0,
+            self.flags.crop_x,
+            self.flags.crop_y,
             self.flags.width,
             self.flags.height,
         ) {
@@ -131,10 +134,13 @@ impl GraphicsCaptureApiHandler for FrameHandler {
         // padding that `convert::bgra_to_nv12` already skips. That stride
         // parameter exists precisely so this copy is unnecessary.
         let stride = buffer.row_pitch() as usize;
+        let (crop_x, crop_y) = (self.flags.crop_x, self.flags.crop_y);
         let (width, height) = (self.flags.width, self.flags.height);
         let bytes = buffer.as_raw_buffer();
 
-        if let Err(e) = convert::bgra_to_nv12(bytes, stride, width, height, &mut self.nv12) {
+        if let Err(e) =
+            convert::bgra_crop_to_nv12(bytes, stride, crop_x, crop_y, width, height, &mut self.nv12)
+        {
             self.drop_frame(&e.to_string());
             return Ok(());
         }

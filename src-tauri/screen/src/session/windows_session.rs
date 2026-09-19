@@ -49,6 +49,8 @@ pub struct ScreenSession {
     staged: PathBuf,
     width: u32,
     height: u32,
+    crop_x: u32,
+    crop_y: u32,
 }
 
 impl ScreenSession {
@@ -72,6 +74,13 @@ impl ScreenSession {
             log::warn!("screen capture: the source is too small to capture ({width}x{height})");
             return Err(ScreenError::SourceGone);
         }
+        // The crop origin is NOT rounded — `even_dims` shrinks a size to
+        // something NV12 can express, which is about the output, while the
+        // origin is about where in the source that output starts.
+        // `clamp_to_frame` has already made a region's size even, so this
+        // is a no-op for regions and only ever trims a whole screen or
+        // window (whose origin is 0 either way).
+        let (crop_x, crop_y) = (source.crop_x, source.crop_y);
 
         let video = VideoFormat {
             width,
@@ -163,6 +172,8 @@ impl ScreenSession {
             staged,
             width,
             height,
+            crop_x,
+            crop_y,
         };
         session.spawn_producers(source.handle, audio, tx, fps, width, height)
     }
@@ -212,6 +223,8 @@ impl ScreenSession {
         let flags = FrameFlags {
             clock: Arc::clone(&self.clock),
             tx: frame_tx,
+            crop_x: self.crop_x,
+            crop_y: self.crop_y,
             width,
             height,
             counters: Arc::clone(&self.counters),
