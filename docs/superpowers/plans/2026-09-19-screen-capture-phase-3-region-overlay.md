@@ -6,7 +6,7 @@
 
 **Architecture:** A fifth window (`overlay`, transparent, always-on-top, one monitor) is positioned while hidden over the chosen monitor and then shown; `RegionRoot.vue` paints a scrim and a rubber band and reports the drag as a **logical** (CSS pixel) rectangle, monitor-local because the overlay's own origin is the monitor's origin. Rust multiplies by that monitor's `scale_factor` through the Phase-1 `core::screen_geometry::to_physical`, clamps with `clamp_to_frame`, and encodes the result into the existing source-id string as `region:<display>,<x>,<y>,<w>,<h>` — so `start_screen_capture` needs no new parameter. At capture time the region is re-clamped against the monitor's *current* size and the session crops each delivered frame at an offset, through a new pure `convert::bgra_crop_to_nv12`. Separately, `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` is applied to every app window for the duration of a capture, from one chokepoint, and cleared from one.
 
-**Tech Stack:** Rust 2021 (`vault_buddy_screen`, the Tauri shell crate), `windows-sys` 0.61 (already a shell dependency — one added feature, no new crate), Tauri v2 window/monitor APIs, Vue 3 + Pinia + Tailwind 4.
+**Tech Stack:** Rust 2021 (`vault_buddy_screen`, the Tauri shell crate), the `windows` crate 0.62 (already a `cfg(windows)` dependency of the screen crate — one added feature, no new crate), Tauri v2 window/monitor APIs, Vue 3 + Pinia + Tailwind 4.
 
 **Spec:** `docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` — §5.2 (the `overlay` window and coordinate spaces), §5.3 (`WDA_EXCLUDEFROMCAPTURE`), §7.1 (entry-point copy), §7.2 (the Region tab), §11 (`select_capture_region`), §13 (the Phase 3 row and its gate: *"Region capture works across DPI scales"*), §14 (`sourceGone`), §15 (testing).
 
@@ -46,18 +46,20 @@ Every task's requirements implicitly include this section.
     "alwaysOnTop": true, "resizable": false, "skipTaskbar": true,
     "focus": true }
   ```
-- `WDA_EXCLUDEFROMCAPTURE = 17u32`, `WDA_NONE = 0u32`, and
-  `SetWindowDisplayAffinity(hwnd: HWND, dwaffinity: WINDOW_DISPLAY_AFFINITY) -> BOOL`
-  all live in `windows_sys::Win32::UI::WindowsAndMessaging`, behind the
-  `Win32_UI_WindowsAndMessaging` feature. **Verified in the vendored crate**
-  (`windows-sys-0.61.2/src/Windows/Win32/UI/WindowsAndMessaging/mod.rs:411`,
-  `:3522`, `:3524`) — no new dependency, one added feature on the
-  `[target."cfg(windows)".dependencies] windows-sys` entry the shell already
-  has for `GetKeyState`.
-- `windows_sys::Win32::Foundation::HWND` is `*mut core::ffi::c_void`
-  (verified, same crate, `Foundation/mod.rs:5274`). Tauri's
-  `WebviewWindow::hwnd()` returns `windows::Win32::Foundation::HWND`, a tuple
-  struct — so the bridge is `handle.0 as windows_sys::Win32::Foundation::HWND`.
+- `SetWindowDisplayAffinity(hwnd: HWND, dwaffinity: WINDOW_DISPLAY_AFFINITY) -> windows_core::Result<()>`,
+  `WDA_EXCLUDEFROMCAPTURE = WINDOW_DISPLAY_AFFINITY(17u32)` and
+  `WDA_NONE = WINDOW_DISPLAY_AFFINITY(0u32)` live in the **`windows` crate
+  0.62.2** at `Win32/UI/WindowsAndMessaging/mod.rs:2243`, `:6692` and `:6694`,
+  behind the `Win32_UI_WindowsAndMessaging` feature. **Verified in the
+  vendored crate.** It returns a `Result`, so there is no `BOOL` /
+  `GetLastError` dance. The `screen` crate already depends on `windows` 0.62
+  under `cfg(windows)`, so this is one added feature and no new crate.
+- `windows::Win32::Foundation::HWND` is a tuple struct wrapping
+  `*mut c_void`, and Tauri's `WebviewWindow::hwnd()` returns that same type —
+  so the shell bridges with `h.0 as isize` and the screen crate rebuilds
+  `HWND(hwnd as *mut c_void)`. The handle crosses as `isize` (signed, like
+  `SourceId::Window`) precisely so the screen crate needs no Tauri
+  dependency.
 - **The two monitor numbering schemes, and the one identity that joins them.**
   This is the trap that shipped a wrong-screen bug in Phase 2 (Task 5), so it
   is written out with its verification:
@@ -98,17 +100,29 @@ For any task touching `#[cfg(windows)]` code, **additionally and mandatorily**:
 
 ```bash
 cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings
-cargo clippy -p vault-buddy --lib --target x86_64-pc-windows-msvc -- -D warnings
 ```
 
-That target is installed and type-checks real `windows`/`windows-sys`
-bindings on Linux. **It is the only local check of the `cfg(windows)` arms,
-which execute in no automated test anywhere (docs/Gaps.md GAP-117)**, so it
-is not optional. Note the crate-scoped flags: `vault_buddy_capture` needs
-`--lib` (its `minimp3-sys` dev-dependency needs MSVC's `lib.exe`, which a
-Linux box has not got — see the SDD ledger), and the shell crate needs
-`--lib` for the same class of reason. `vault_buddy_screen` takes
-`--all-targets`.
+That target is installed and type-checks real `windows`-crate bindings on
+Linux. **It is the only local check of the `cfg(windows)` arms, which
+execute in no automated test anywhere (docs/Gaps.md GAP-117)**, so it is not
+optional for the `screen` crate.
+
+**Which crates can be cross-checked, VERIFIED on this container — do not
+re-derive, and do not report a failure here as a code defect:**
+
+| Crate | Windows-target clippy | Why |
+| --- | --- | --- |
+| `vault_buddy_screen` | **`--all-targets`, works** | no C build-script dependency |
+| `vault_buddy_core`, `vault_buddy_transcribe`, `vault_buddy_mcp` | works | same |
+| `vault_buddy_capture` | **`--lib` only** | its `minimp3-sys` dev-dependency's build script needs MSVC's `lib.exe` |
+| `vault-buddy` (the shell) | **IMPOSSIBLE, at any scope** | `ring v0.17.14` (pulled in by `tauri-plugin-updater` → `rustls`) fails in `cc-rs` with `failed to find tool "lib.exe"`. Pre-existing and unrelated to this phase. |
+
+**Consequence this phase must design around:** a `cfg(windows)` FFI call
+placed in the SHELL crate has NO local verification of any kind — not a
+test, not even a type-check — and would be first compiled by CI's
+`windows-app` job. So put Windows FFI in `vault_buddy_screen`, where the
+cross-check works, and leave the shell only the Tauri-side glue. Task 6 is
+written that way for exactly this reason.
 
 For any task touching the frontend or a baseline, from the repo root, **in
 this exact order**, with no `coverage/` directory present when
@@ -244,7 +258,8 @@ of these has misread the plan.
 | `src-tauri/src/screen_commands.rs` | Screen IPC | Modify: clear the capture exclusion from `clear_active_screen` |
 | `src-tauri/src/screen_capture_worker.rs` | Start path | Modify: apply the capture exclusion once the start is committed |
 | `src-tauri/src/lib.rs` | Builder, state, handler registration | Modify: `mod region_commands; mod capture_exclusion;`, manage `RegionSelectionState`, register 2 commands |
-| `src-tauri/Cargo.toml` | Shell manifest | Modify: one added `windows-sys` feature |
+| `src-tauri/screen/src/exclusion.rs` | The `SetWindowDisplayAffinity` call and its constants — in this crate because the shell cannot be cross-compiled to Windows | **Create** |
+| `src-tauri/screen/Cargo.toml` | Screen manifest | Modify: one added `windows` feature |
 | `src-tauri/tauri.conf.json` | Window definitions | Modify: the `overlay` window |
 | `src-tauri/capabilities/default.json` | Capability scope | Modify: `"overlay"` in `windows` |
 | `src/roots/RegionRoot.vue` | The rubber-band selection surface | **Create** |
@@ -1454,11 +1469,15 @@ plumbing — if it is not green, nothing else in this task is verified.
 shell does consume `source::resolve`. Confirm:
 
 ```bash
-cd src-tauri && cargo clippy -p vault-buddy --lib -- -D warnings; echo "shell exit=$?"
-cd src-tauri && cargo clippy -p vault-buddy --lib --target x86_64-pc-windows-msvc -- -D warnings; echo "shell win exit=$?"
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings; echo "workspace exit=$?"
 cd src-tauri && cargo test -p vault-buddy --lib; echo "shell test exit=$?"
 ```
-Expected: every `exit=0`.
+Expected: every `exit=0`. **Run the WORKSPACE clippy, not just the screen
+crate's** — widening a public type breaks downstream consumers, and that is
+exactly how Task 1 left the tree: adding `SourceKind::Region` made the
+shell's exhaustive `match` in `screen_capture_worker.rs` non-exhaustive, and
+a screen-crate-only gate run reported all green. There is no Windows-target
+clippy for the shell crate; see the Global Constraints table.
 
 - [ ] **Step 8: Mutation-verify what can be verified, and say what cannot**
 
@@ -2581,12 +2600,13 @@ the test goes red, and restore byte-identically (`md5sum` before and after).
 
 ```bash
 cd src-tauri && cargo fmt --check; echo "fmt exit=$?"
-cd src-tauri && cargo clippy -p vault-buddy --all-targets -- -D warnings; echo "clippy exit=$?"
-cd src-tauri && cargo clippy -p vault-buddy --lib --target x86_64-pc-windows-msvc -- -D warnings; echo "win clippy exit=$?"
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings; echo "clippy exit=$?"
 cd src-tauri && cargo test -p vault-buddy --lib; echo "test exit=$?"
 cd /home/user/vault-buddy && npm run check:loc; echo "loc exit=$?"
 ```
-Expected: every `exit=0`. `region_commands.rs` is a NEW Rust file and the
+Expected: every `exit=0`. There is no Windows-target clippy for the shell
+crate — see the Global Constraints table; do not report its absence as a
+skipped gate. `region_commands.rs` is a NEW Rust file and the
 LOC guard **rejects a new file above the 800 cap outright** — it cannot be
 allowlisted into existence. If it lands over, split the pure core
 (`region_from_pick`, `matches_display`, `target_display` and their tests)
@@ -2652,57 +2672,186 @@ screen share — with no error, no log line and no way to guess the cause. So
 it gets the `CaptureGuard` treatment: one apply site, one clear site, both
 pinned structurally.
 
+**Why the FFI lives in `vault_buddy_screen` and not in the shell.** The shell
+crate **cannot be cross-compiled to Windows on this container at all** —
+`ring` (via `tauri-plugin-updater` → `rustls`) dies in `cc-rs` with
+`failed to find tool "lib.exe"` (verified; see the Global Constraints table).
+A `cfg(windows)` FFI call written in the shell would therefore have no test,
+no type-check, and no local verification of any kind: its first compile would
+be CI's `windows-app` job. `vault_buddy_screen` cross-checks cleanly, so the
+one `unsafe` call goes there and the shell keeps only the Tauri glue it
+cannot avoid (`WebviewWindow::hwnd()`).
+
 **Files:**
-- Create: `src-tauri/src/capture_exclusion.rs`
-- Modify: `src-tauri/Cargo.toml` (one added `windows-sys` feature)
+- Create: `src-tauri/screen/src/exclusion.rs` — the Win32 call and the affinity constants
+- Modify: `src-tauri/screen/src/lib.rs` (`pub mod exclusion;`)
+- Modify: `src-tauri/screen/Cargo.toml` (one added `windows` feature)
+- Create: `src-tauri/src/capture_exclusion.rs` — the label list, the chokepoints, the main-thread marshal
 - Modify: `src-tauri/src/screen_capture_worker.rs` (the one apply site)
 - Modify: `src-tauri/src/screen_commands.rs` (the one clear site, inside `clear_active_screen`)
 - Modify: `src-tauri/src/lib.rs` (`mod capture_exclusion;`)
-- Test: inline `#[cfg(test)]` in `capture_exclusion.rs`
+- Test: inline `#[cfg(test)]` in both new files
 
 **Interfaces:**
-- Consumes: nothing from other tasks. **Independent of Tasks 1–5 and 7** —
-  it can be implemented and reviewed on its own.
-- Produces: `capture_exclusion::apply(&AppHandle)` and
-  `capture_exclusion::clear(&AppHandle)`.
+- Consumes: nothing from other tasks. **Independent of Tasks 1–5 and 7** — it
+  can be implemented and reviewed on its own.
+- Produces:
+  - `vault_buddy_screen::exclusion::affinity_value(excluded: bool) -> u32`
+  - `vault_buddy_screen::exclusion::set_display_affinity(hwnd: isize, excluded: bool) -> Result<(), ScreenError>`
+  - `crate::capture_exclusion::apply(&AppHandle)` / `clear(&AppHandle)`
 
-- [ ] **Step 1: Add the Windows API feature**
+**Verified API facts — do not re-derive:** in the `windows` crate 0.62.2,
+`SetWindowDisplayAffinity(hwnd: HWND, dwaffinity: WINDOW_DISPLAY_AFFINITY) -> windows_core::Result<()>`
+lives at `Win32/UI/WindowsAndMessaging/mod.rs:2243`, with
+`WDA_EXCLUDEFROMCAPTURE = WINDOW_DISPLAY_AFFINITY(17u32)` (`:6692`) and
+`WDA_NONE = WINDOW_DISPLAY_AFFINITY(0u32)` (`:6694`), behind the
+`Win32_UI_WindowsAndMessaging` feature. It returns a `Result`, so there is no
+`BOOL`/`GetLastError` dance. `windows::Win32::Foundation::HWND` is a tuple
+struct wrapping `*mut c_void`; Tauri's `WebviewWindow::hwnd()` returns that
+same type.
 
-`src-tauri/Cargo.toml`, in the existing `[target."cfg(windows)".dependencies]`
-block — extend the `windows-sys` entry and its comment:
+- [ ] **Step 1: Add the Windows feature to the screen crate**
+
+`src-tauri/screen/Cargo.toml`, in the existing
+`[target.'cfg(windows)'.dependencies] windows` feature list, after
+`"Win32_Graphics_Dwm",`:
 
 ```toml
-# GetKeyState for the start_buddy_drag stale-request guard, and
-# SetWindowDisplayAffinity for spec 5.3's WDA_EXCLUDEFROMCAPTURE (keeping
-# our own windows out of a screen recording). windows-sys is already in the
-# dependency tree via tauri, so neither feature adds a crate to the build.
-windows-sys = { version = "0.61", features = [
-    "Win32_UI_Input_KeyboardAndMouse",
+    # SetWindowDisplayAffinity + WDA_EXCLUDEFROMCAPTURE (spec 5.3): keeping
+    # our own windows out of a screen recording. The shell cannot host this
+    # call -- it cannot be cross-compiled to Windows on Linux at all (ring
+    # needs MSVC's lib.exe), so a cfg(windows) FFI written there would have
+    # no local type-check whatsoever.
     "Win32_UI_WindowsAndMessaging",
-] }
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 2: Write the failing test for the pure part**
+
+Create `src-tauri/screen/src/exclusion.rs` with the module doc, a `todo!()`
+body, and:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // WDA_EXCLUDEFROMCAPTURE is 17 and WDA_NONE is 0 (windows 0.62.2,
+    // Win32/UI/WindowsAndMessaging/mod.rs:6692 and :6694). Written as bare
+    // literals on purpose: this test is a cross-check ON the constant, so
+    // importing the constant to compare against itself would assert
+    // nothing -- and off Windows the constant is not even in scope, which
+    // is precisely where this test runs.
+    #[test]
+    fn the_affinity_values_are_the_documented_windows_constants() {
+        assert_eq!(affinity_value(true), 17);
+        assert_eq!(affinity_value(false), 0);
+    }
+}
+```
+
+```bash
+cd src-tauri && cargo test -p vault_buddy_screen exclusion 2>&1 | tail -10
+```
+Expected: FAIL.
+
+- [ ] **Step 3: Implement the screen-crate half**
+
+```rust
+//! Spec 5.3: keep Vault Buddy's own windows out of a screen recording.
+//!
+//! `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` (Windows 10
+//! 2004+) makes a window invisible to screen capture while it stays fully
+//! visible to the user -- exactly what the buddy needs, since it is the
+//! recording indicator and must not also be in every recording.
+//!
+//! **Why this call lives in this crate rather than in the shell, where its
+//! only caller is.** The shell crate cannot be cross-compiled to Windows on
+//! a Linux box at any scope: `ring`, pulled in by the updater plugin's
+//! rustls, fails in `cc-rs` looking for MSVC's `lib.exe`. A `cfg(windows)`
+//! FFI call written there would be checked by nothing until CI's Windows
+//! job built it. This crate cross-checks cleanly, so the one `unsafe` call
+//! sits here and the shell keeps only the Tauri-side glue.
+//!
+//! **A failure is never an error.** On a pre-2004 build the call fails, the
+//! capture proceeds with the buddy in frame, and that is the documented
+//! degraded behaviour (spec 5.3), not a reason to refuse a start.
+
+use crate::ScreenError;
+
+/// The `WINDOW_DISPLAY_AFFINITY` value for each state: 17
+/// (`WDA_EXCLUDEFROMCAPTURE`) or 0 (`WDA_NONE`).
+///
+/// Pure, and on both platforms, so the constants are pinned somewhere that
+/// runs. `WDA_MONITOR` (1) is deliberately not offered -- it hides a window
+/// from capture AND from remote desktop sessions, which is not what spec
+/// 5.3 asks for.
+pub fn affinity_value(excluded: bool) -> u32 {
+    if excluded {
+        17
+    } else {
+        0
+    }
+}
+
+/// Set one window's display affinity. `hwnd` is a raw window handle widened
+/// to `isize` -- signed, like `SourceId::Window`, because an HWND is a
+/// pointer whose high bit can be set in a 64-bit process.
+///
+/// Taking a raw handle rather than a Tauri window type is what keeps this
+/// crate free of a Tauri dependency, and is why the call can be type-checked
+/// for the Windows target at all.
+#[cfg(windows)]
+pub fn set_display_affinity(hwnd: isize, excluded: bool) -> Result<(), ScreenError> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowDisplayAffinity, WINDOW_DISPLAY_AFFINITY,
+    };
+    // SAFETY: `hwnd` is a live top-level window handle owned by this
+    // process, obtained from Tauri on the thread that owns it, and the
+    // affinity is one of the two documented WINDOW_DISPLAY_AFFINITY values.
+    unsafe {
+        SetWindowDisplayAffinity(
+            HWND(hwnd as *mut std::ffi::c_void),
+            WINDOW_DISPLAY_AFFINITY(affinity_value(excluded)),
+        )
+    }
+    .map_err(|e| ScreenError::Io(e.to_string()))
+}
+
+#[cfg(not(windows))]
+pub fn set_display_affinity(_hwnd: isize, _excluded: bool) -> Result<(), ScreenError> {
+    Err(ScreenError::Unsupported)
+}
+```
+
+Register it in `src-tauri/screen/src/lib.rs` beside the other `pub mod`s:
+
+```rust
+// Spec 5.3's WDA_EXCLUDEFROMCAPTURE. Here rather than in the shell because
+// the shell cannot be cross-compiled to Windows on Linux, so an FFI call
+// written there would be type-checked by nothing until CI.
+pub mod exclusion;
+```
+
+```bash
+cd src-tauri && cargo test -p vault_buddy_screen exclusion; echo "exit=$?"
+cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings; echo "win exit=$?"
+```
+Expected: both `exit=0`. **The second command is the whole reason the code
+is in this crate** — it is what type-checks the `unsafe` block, the `HWND`
+construction and the `WINDOW_DISPLAY_AFFINITY` wrapper. If it does not pass,
+nothing about the FFI is verified.
+
+- [ ] **Step 4: Write the failing tests for the shell half**
 
 Create `src-tauri/src/capture_exclusion.rs` with the module doc, the label
-list, `todo!()`-bodied functions, and:
+list, `todo!()` bodies, and this test module:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
-
-    // WDA_EXCLUDEFROMCAPTURE is 17 and WDA_NONE is 0 (verified in
-    // windows-sys 0.61.2, Win32/UI/WindowsAndMessaging/mod.rs:3522 and
-    // :3524). Written out as literals here on purpose: this test is a
-    // cross-check on the constant, so importing the constant to compare
-    // against itself would assert nothing.
-    #[test]
-    fn the_affinity_values_are_the_documented_windows_constants() {
-        assert_eq!(affinity_for(true), 17);
-        assert_eq!(affinity_for(false), 0);
-    }
 
     /// Every window label declared in `tauri.conf.json`.
     fn declared_window_labels() -> Vec<String> {
@@ -2722,11 +2871,10 @@ mod tests {
     }
 
     // THE point of this test, and why it reads the config rather than
-    // repeating a list: phase 4 adds the `editor` window and phase 5
-    // may add more. A window that exists but is not excluded appears in
-    // every screen recording the user makes, which is a bug nobody will
-    // attribute to the window having been added. This fails the moment a
-    // window is declared without being listed here.
+    // repeating a list: phase 4 adds the `editor` window and phase 5 may
+    // add more. A window that exists but is not excluded appears in every
+    // screen recording the user makes, which is a bug nobody will
+    // attribute to the window having been added.
     #[test]
     fn every_declared_window_is_excluded_from_capture() {
         let declared = declared_window_labels();
@@ -2744,8 +2892,7 @@ mod tests {
     }
 
     // And the other direction: a label left behind after a window is
-    // removed is a silent no-op that makes the list stop describing the
-    // app.
+    // removed is a silent no-op that makes the list stop describing the app.
     #[test]
     fn no_excluded_label_names_a_window_that_does_not_exist() {
         let declared = declared_window_labels();
@@ -2758,7 +2905,7 @@ mod tests {
     }
 
     /// Recursively collect every `.rs` file under `dir`, skipping this
-    /// test's OWN file — which necessarily names the functions being
+    /// test's OWN file -- which necessarily names the functions being
     /// searched for. The `config_lock_guard.rs` precedent, including its
     /// `CARGO_MANIFEST_DIR` root (not the CWD) and its vacuity self-check.
     fn rust_files(dir: &Path, self_name: &std::ffi::OsStr, out: &mut Vec<PathBuf>) {
@@ -2789,7 +2936,7 @@ mod tests {
         // would make every assertion below vacuously true.
         assert!(
             files.len() > 5,
-            "scan under {shell_src:?} found only {} file(s) — the walk is broken, not the \
+            "scan under {shell_src:?} found only {} file(s) -- the walk is broken, not the \
              invariant",
             files.len()
         );
@@ -2816,7 +2963,7 @@ mod tests {
         hits
     }
 
-    // A LEAKED exclusion does not break Vault Buddy — it makes the user's
+    // A LEAKED exclusion does not break Vault Buddy -- it makes the user's
     // windows invisible in OTHER applications' recordings (Teams, OBS, a
     // colleague's screen share) with no error and no log line. Pairing it
     // to exactly one apply and one clear is the only thing that makes that
@@ -2842,8 +2989,8 @@ mod tests {
         );
         assert!(
             clears[0].ends_with("screen_commands.rs"),
-            "the clear must live in clear_active_screen — the single chokepoint every \
-             screen-capture teardown already funnels through — but it is in {}",
+            "the clear must live in clear_active_screen -- the single chokepoint every \
+             screen-capture teardown already funnels through -- but it is in {}",
             clears[0]
         );
     }
@@ -2851,52 +2998,32 @@ mod tests {
 ```
 
 ```bash
-cd src-tauri && cargo test -p vault-buddy --lib capture_exclusion 2>&1 | tail -20
+cd src-tauri && cargo test -p vault-buddy --lib capture_exclusion 2>&1 | tail -15
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 5: Implement the shell half**
 
 ```rust
-//! Spec 5.3: keep Vault Buddy's own windows out of a screen recording.
-//!
-//! `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` (Windows 10
-//! 2004+) makes a window invisible to screen capture while it stays fully
-//! visible to the user — which is exactly what the buddy needs, since it
-//! is the recording indicator and must not also be in every recording.
+//! Spec 5.3's capture exclusion, Tauri side: which windows, when, and on
+//! which thread. The Win32 call itself is
+//! `vault_buddy_screen::exclusion::set_display_affinity` -- see that
+//! module's doc for why it is over there and not here.
 //!
 //! **Why this is paired state with a single site each way.** A leaked
-//! exclusion is invisible from inside this app: the buddy still shows,
-//! the panel still works, nothing logs. What breaks is the user's NEXT
-//! Teams call or OBS recording, where their Vault Buddy windows are
-//! simply gone. There is no plausible bug report for that, so the code
-//! shape has to make it impossible — one apply, one clear, both pinned by
-//! a structural test over the whole shell source tree.
-//!
-//! **A failure here is never an error.** On a pre-2004 build the call
-//! fails, the capture proceeds with the buddy in frame, and that is the
-//! documented degraded behaviour (spec 5.3), not a reason to refuse a
-//! start.
+//! exclusion is invisible from inside this app: the buddy still shows, the
+//! panel still works, nothing logs. What breaks is the user's NEXT Teams
+//! call or OBS recording, where their Vault Buddy windows are simply gone.
+//! There is no plausible bug report for that, so the code shape has to make
+//! it impossible -- one apply, one clear, both pinned by a structural test
+//! over the whole shell source tree.
 
 use tauri::{AppHandle, Manager};
 
-/// Every window the app owns. Kept in step with `tauri.conf.json` by a
-/// test that reads the config — phase 4's `editor` window will fail that
-/// test until it is added here, which is the point.
+/// Every window the app owns. Kept in step with `tauri.conf.json` by a test
+/// that reads the config -- phase 4's `editor` window will fail that test
+/// until it is added here, which is the point.
 pub(crate) const EXCLUDED_LABELS: &[&str] = &["main", "panel", "bubble", "overlay"];
-
-/// `WDA_EXCLUDEFROMCAPTURE` (17) or `WDA_NONE` (0), the two
-/// `WINDOW_DISPLAY_AFFINITY` values this app uses. Pure so the constants
-/// are pinned somewhere that runs; `WDA_MONITOR` is deliberately not
-/// offered — it hides a window from capture AND from remote sessions,
-/// which is not what spec 5.3 asks for.
-fn affinity_for(excluded: bool) -> u32 {
-    if excluded {
-        17
-    } else {
-        0
-    }
-}
 
 /// Hide every app window from screen capture, for the duration of a
 /// capture. THE ONE APPLY SITE is `screen_capture_worker`'s start path.
@@ -2906,26 +3033,34 @@ pub(crate) fn apply(app: &AppHandle) {
 
 /// Put every app window back in view of other applications' captures. THE
 /// ONE CLEAR SITE is `screen_commands::clear_active_screen`, the chokepoint
-/// every screen-capture teardown — clean stop, self-finalize, and all ten
-/// of the start path's early returns — already funnels through.
+/// every screen-capture teardown -- clean stop, self-finalize, and all of
+/// the start path's early returns -- already funnels through.
 pub(crate) fn clear(app: &AppHandle) {
     set_affinity(app, false);
 }
 
 fn set_affinity(app: &AppHandle, excluded: bool) {
-    let affinity = affinity_for(excluded);
     let handle = app.clone();
     // Window handles are read on the main thread like every other window
     // API in this app, and the call is fire-and-forget: the caller is a
-    // worker thread that must not wait on the event loop, and an
-    // exclusion that lands a few milliseconds late costs at most a frame
-    // or two of buddy in the recording.
+    // worker thread that must not wait on the event loop, and an exclusion
+    // that lands a few milliseconds late costs at most a frame or two of
+    // buddy in the recording (docs/Gaps.md, recorded in task 8).
     if let Err(e) = app.run_on_main_thread(move || {
         for label in EXCLUDED_LABELS {
             let Some(window) = handle.get_webview_window(label) else {
                 continue;
             };
-            apply_to_window(&window, affinity, label);
+            let Some(hwnd) = window_handle(&window, label) else {
+                continue;
+            };
+            if let Err(e) = vault_buddy_screen::exclusion::set_display_affinity(hwnd, excluded) {
+                // Windows 10 before 2004 has no WDA_EXCLUDEFROMCAPTURE.
+                // Spec 5.3: log and carry on with the buddy visible in
+                // frame; this must never be the reason a capture cannot
+                // start.
+                log::warn!("capture exclusion: could not set affinity for {label}: {e}");
+            }
         }
     }) {
         log::warn!("capture exclusion: could not reach the main thread: {e}");
@@ -2933,36 +3068,20 @@ fn set_affinity(app: &AppHandle, excluded: bool) {
 }
 
 #[cfg(windows)]
-fn apply_to_window(window: &tauri::WebviewWindow, affinity: u32, label: &str) {
-    let hwnd = match window.hwnd() {
-        Ok(h) => h,
+fn window_handle(window: &tauri::WebviewWindow, label: &str) -> Option<isize> {
+    match window.hwnd() {
+        Ok(h) => Some(h.0 as isize),
         Err(e) => {
             log::warn!("capture exclusion: no window handle for {label}: {e}");
-            return;
+            None
         }
-    };
-    // tauri hands back the `windows` crate's HWND newtype; windows-sys
-    // wants the bare pointer it wraps.
-    let raw = hwnd.0 as windows_sys::Win32::Foundation::HWND;
-    // SAFETY: `raw` is a live top-level window handle owned by this
-    // process, obtained from tauri on the thread that owns it, and
-    // `affinity` is one of the two documented WINDOW_DISPLAY_AFFINITY
-    // values.
-    let ok = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity(raw, affinity) };
-    if ok == 0 {
-        // Windows 10 before 2004 has no WDA_EXCLUDEFROMCAPTURE. Spec 5.3:
-        // log and carry on with the buddy visible in frame; this must
-        // never be the reason a capture cannot start.
-        log::warn!(
-            "capture exclusion: SetWindowDisplayAffinity({affinity}) failed for {label}: {}",
-            std::io::Error::last_os_error()
-        );
     }
 }
 
 #[cfg(not(windows))]
-fn apply_to_window(_window: &tauri::WebviewWindow, affinity: u32, label: &str) {
-    log::debug!("capture exclusion: no-op off Windows ({label}, affinity {affinity})");
+fn window_handle(_window: &tauri::WebviewWindow, label: &str) -> Option<isize> {
+    log::debug!("capture exclusion: no-op off Windows ({label})");
+    None
 }
 ```
 
@@ -2972,17 +3091,16 @@ Declare it in `src-tauri/src/lib.rs` beside the other modules:
 mod capture_exclusion;
 ```
 
-- [ ] **Step 4: Wire the one apply site**
+- [ ] **Step 6: Wire the one apply site**
 
-`src-tauri/src/screen_capture_worker.rs`, in
-`start_screen_capture_blocking`, immediately **after** the reservation is
-installed and **before** the device thread is spawned — i.e. right after the
-closing brace of the `{ let mut guard = … *guard = Some(ActiveScreenCapture { … }); }`
-block:
+`src-tauri/src/screen_capture_worker.rs`, in `start_screen_capture_blocking`,
+immediately **after** the reservation is installed and **before** the device
+thread is spawned — i.e. right after the closing brace of the
+`{ let mut guard = ...; *guard = Some(ActiveScreenCapture { ... }); }` block:
 
 ```rust
-    // Spec 5.3: from here on the capture is committed, and every exit —
-    // including every failure below — goes through `clear_active_screen`,
+    // Spec 5.3: from here on the capture is committed, and every exit --
+    // including every failure below -- goes through `clear_active_screen`,
     // which is the one place the exclusion is lifted. Applying it before
     // the session opens means the first frames are already clean; it is
     // fire-and-forget on the main thread, so a busy event loop can still
@@ -2991,7 +3109,7 @@ block:
     crate::capture_exclusion::apply(app);
 ```
 
-- [ ] **Step 5: Wire the one clear site**
+- [ ] **Step 7: Wire the one clear site**
 
 `src-tauri/src/screen_commands.rs`, inside `clear_active_screen`, which
 already frees the reservation and the `CaptureGuard` together:
@@ -3005,68 +3123,79 @@ pub(crate) fn clear_active_screen(app: &AppHandle) {
     // reason the guard is: this is the one function every teardown path
     // funnels through. Clearing an exclusion that was never applied (a
     // start that failed before the commit point) sets WDA_NONE on windows
-    // that already had it, which is a no-op — strictly safer than a
-    // conditional that could be wrong in the other direction and leave
-    // the user's windows hidden from every other app's recordings.
+    // that already had it, which is a no-op -- strictly safer than a
+    // conditional that could be wrong in the other direction and leave the
+    // user's windows hidden from every other app's recordings.
     crate::capture_exclusion::clear(app);
     state.1.notify_all();
 }
 ```
 
-- [ ] **Step 6: Run the tests and both clippy targets**
+- [ ] **Step 8: Run the gates**
 
 ```bash
-cd src-tauri && cargo test -p vault-buddy --lib; echo "test exit=$?"
-cd src-tauri && cargo clippy -p vault-buddy --all-targets -- -D warnings; echo "linux clippy exit=$?"
-cd src-tauri && cargo clippy -p vault-buddy --lib --target x86_64-pc-windows-msvc -- -D warnings; echo "win clippy exit=$?"
 cd src-tauri && cargo fmt --check; echo "fmt exit=$?"
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings; echo "workspace exit=$?"
+cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings; echo "screen win exit=$?"
+cd src-tauri && cargo test -p vault_buddy_screen; echo "screen test exit=$?"
+cd src-tauri && cargo test -p vault-buddy --lib; echo "shell test exit=$?"
+cd src-tauri && cargo machete .; echo "machete exit=$?"
+cd /home/user/vault-buddy && npm run check:loc; echo "loc exit=$?"
 ```
-Expected: every `exit=0`. The Windows run is the only check that
-`hwnd.0 as windows_sys::…::HWND` and the `SetWindowDisplayAffinity`
-signature are right — on Linux that whole function is `cfg`-ed away.
+Expected: every `exit=0`. Run the WORKSPACE clippy, not a single crate's —
+this task touches three crates. There is no Windows-target clippy for the
+shell; see the Global Constraints table, and do not report its absence as a
+skipped gate.
 
-Note: `cargo machete` may now flag `windows-sys` if the Linux build no
-longer references it — it will not, because `commands.rs`'s `GetKeyState`
-already uses it under the same `cfg`. Confirm with
-`cd src-tauri && cargo machete .; echo "exit=$?"`.
-
-- [ ] **Step 7: Mutation-verify**
+- [ ] **Step 9: Mutation-verify**
 
 | Mutation | Must fail |
 | --- | --- |
-| `affinity_for(true)` returns `1` (`WDA_MONITOR`) | `the_affinity_values_are_the_documented_windows_constants` |
+| `affinity_value(true)` returns `1` (`WDA_MONITOR`) | `the_affinity_values_are_the_documented_windows_constants` |
 | Drop `"overlay"` from `EXCLUDED_LABELS` | `every_declared_window_is_excluded_from_capture` |
 | Add `"editor"` to `EXCLUDED_LABELS` | `no_excluded_label_names_a_window_that_does_not_exist` |
 | Add a second `capture_exclusion::clear(app)` in `screen_capture_worker.rs` | `the_capture_exclusion_is_applied_and_cleared_from_exactly_one_place_each` |
 | Move the clear from `screen_commands.rs` to `screen_capture_worker.rs` | same test, on the `ends_with` assertion |
 | Delete the apply call entirely | same test, on `applies.len() == 1` |
 
-The `"editor"` mutation is the one to run carefully: it is the exact shape
-of Phase 4's change, and confirming the test catches a label with no window
-behind it is what makes it catch the reverse (a window with no label) when
-Phase 4 arrives.
+After each: restore byte-identically (confirm with `md5sum`) and re-run to
+green. The `"editor"` mutation is the one to run carefully — it is the exact
+shape of Phase 4's change, and confirming the test catches a label with no
+window behind it is what makes it catch the reverse when Phase 4 arrives.
 
-- [ ] **Step 8: Commit**
+Report honestly that `set_display_affinity`'s `cfg(windows)` body is pinned
+by no test on any platform; the Windows-target clippy proves only that it
+type-checks.
+
+- [ ] **Step 10: Commit**
 
 ```bash
 cd /home/user/vault-buddy
 cat > /tmp/msg-t6.txt <<'MSG'
-feat(shell): keep our own windows out of a screen recording
+feat(screen): keep our own windows out of a screen recording
 
 Spec 5.3: SetWindowDisplayAffinity with WDA_EXCLUDEFROMCAPTURE makes a
 window invisible to screen capture while it stays fully visible to the
 user. That is what lets the buddy go on being the recording indicator
 without also being in every recording the user makes.
 
+The Win32 call lives in the screen crate rather than beside its only caller
+in the shell, because the shell cannot be cross-compiled to Windows on a
+Linux box at all -- ring, via the updater plugin's rustls, fails in cc-rs
+looking for MSVC's lib.exe. An FFI call written in the shell would be
+checked by nothing until CI built it on Windows; in the screen crate the
+cross-target clippy type-checks the unsafe block, the HWND construction and
+the affinity wrapper. The shell keeps only the Tauri glue it cannot avoid.
+
 Treated as paired state with one apply and one clear, pinned by a
 structural test, because a leaked exclusion is invisible from inside this
 app: the buddy still shows, nothing logs, and what breaks is the user's
 NEXT Teams call or OBS recording, where their Vault Buddy windows are
 simply gone. There is no plausible bug report for that. The clear lives in
-clear_active_screen, the chokepoint every screen-capture teardown already
-funnels through, and clearing an exclusion that was never applied is a
-harmless no-op -- strictly safer than a conditional that can be wrong in
-the direction that hides the user's windows.
+clear_active_screen, the chokepoint every teardown already funnels through,
+and clearing an exclusion that was never applied is a harmless no-op --
+strictly safer than a conditional that can be wrong in the direction that
+hides the user's windows.
 
 The label list is checked against tauri.conf.json rather than repeated by
 hand, so phase 4's editor window fails the test until it is excluded too.
@@ -3082,7 +3211,7 @@ half-blind the moment that lifecycle was split across two files.
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Ud2Yq3jSXMKVdZaMSTeRco
 MSG
-git add src-tauri/src/capture_exclusion.rs src-tauri/src/lib.rs src-tauri/src/screen_commands.rs src-tauri/src/screen_capture_worker.rs src-tauri/Cargo.toml
+git add src-tauri/screen/src/exclusion.rs src-tauri/screen/src/lib.rs src-tauri/screen/Cargo.toml src-tauri/src/capture_exclusion.rs src-tauri/src/lib.rs src-tauri/src/screen_commands.rs src-tauri/src/screen_capture_worker.rs
 git commit -F /tmp/msg-t6.txt
 ```
 
@@ -3864,7 +3993,6 @@ cd /home/user/vault-buddy/src-tauri
 cargo fmt --check; echo "fmt exit=$?"
 cargo clippy --workspace --all-targets -- -D warnings; echo "clippy exit=$?"
 cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings; echo "screen win exit=$?"
-cargo clippy -p vault-buddy --lib --target x86_64-pc-windows-msvc -- -D warnings; echo "shell win exit=$?"
 cargo clippy -p vault_buddy_capture --lib --target x86_64-pc-windows-msvc -- -D warnings; echo "capture win exit=$?"
 cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_mcp -p vault_buddy_screen; echo "crates exit=$?"
 cargo test -p vault-buddy --lib; echo "shell exit=$?"
@@ -3941,10 +4069,12 @@ command, not by reading a report:
 - [ ] `cargo fmt --check` clean.
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [ ] `cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings`
-      clean, and the same for `-p vault-buddy --lib` and `-p vault_buddy_capture --lib`.
+      clean, and `-p vault_buddy_capture --lib` likewise. The shell crate has
+      NO Windows-target clippy — `ring` cannot cross-compile here (Global
+      Constraints table); CI's `windows-app` job is its only compile gate.
 - [ ] All five member crates' tests pass, plus `cargo test -p vault-buddy --lib`.
 - [ ] `cargo machete .`, `cargo deny check` clean; **no new dependency**
-      (the one `windows-sys` feature adds no crate).
+      (the one `windows` feature on an existing dependency adds no crate).
 - [ ] `cargo llvm-cov … --fail-under-lines 94` passes.
 - [ ] `rm -rf coverage && npm run lint && npm run check:loc && npm run check:quality && npm run test:coverage && npm run build`
       passes in that order, with exactly one pre-existing lint warning in
