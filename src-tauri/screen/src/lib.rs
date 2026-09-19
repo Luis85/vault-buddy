@@ -2,8 +2,9 @@
 //!
 //! What compiles where: `clock` and `select` are pure and build and test on
 //! ANY platform — they carry this feature's correctness precisely because no
-//! CI runner can record a screen. `engine` is the Windows-only surface, a
-//! stub until phase 2.
+//! CI runner can record a screen. `engine` (frame acquisition) and `sink`
+//! (the fragmented-MP4 Media Foundation writer) are the two Windows-only
+//! surfaces; `engine` remains a stub until frame acquisition lands.
 
 pub mod clock;
 pub mod engine;

@@ -42,12 +42,96 @@ pub struct VideoFormat {
     pub bitrate_bps: u32,
 }
 
+impl VideoFormat {
+    /// Validate at the boundary rather than let a bad value surface as a
+    /// bare Media Foundation HRESULT from deep inside COM. `fps: 0` would
+    /// otherwise silently produce `MF_MT_FRAME_RATE = 0/1` and
+    /// `MF_MT_MAX_KEYFRAME_SPACING = 0` (both accepted by `SetUINT64`/
+    /// `SetUINT32` - the failure, if any, only surfaces later and
+    /// unhelpfully out of `SetInputMediaType`).
+    pub fn validate(&self) -> Result<(), crate::ScreenError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(crate::ScreenError::Sink(format!(
+                "video frame size must be non-zero (got {}x{})",
+                self.width, self.height
+            )));
+        }
+        if self.fps == 0 {
+            return Err(crate::ScreenError::Sink(
+                "video fps must be non-zero".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// AAC output parameters. Input is always 16-bit interleaved PCM.
 #[derive(Debug, Clone, Copy)]
 pub struct AudioFormat {
     pub sample_rate: u32,
     pub channels: u16,
     pub bitrate_bps: u32,
+}
+
+impl AudioFormat {
+    /// Reject a value the AAC Encoder MFT's output media type cannot
+    /// express, at the boundary, rather than let it surface as a bare
+    /// `E_INVALIDARG` from deep inside COM. These are hard requirements
+    /// MSDN documents for the AAC Encoder MFT's output type (bits/sample
+    /// fixed at 16 - not a caller-supplied field here, so nothing to check;
+    /// sample rate 44100 or 48000, matching the input type; 1, 2 or 6
+    /// channels) - they are fixed by the encoder, not chosen by us.
+    pub fn validate(&self) -> Result<(), crate::ScreenError> {
+        if !matches!(self.sample_rate, 44_100 | 48_000) {
+            return Err(crate::ScreenError::Sink(format!(
+                "AAC sample rate must be 44100 or 48000 (got {})",
+                self.sample_rate
+            )));
+        }
+        if !matches!(self.channels, 1 | 2 | 6) {
+            return Err(crate::ScreenError::Sink(format!(
+                "AAC channel count must be 1, 2 or 6 (got {})",
+                self.channels
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// The AAC Encoder MFT accepts EXACTLY these average byte rates for
+/// `MF_MT_AUDIO_AVG_BYTES_PER_SECOND` at stereo/mono channel counts - this
+/// set is fixed by the encoder (verified against MSDN's AAC Encoder page),
+/// not a choice made here. An unvalidated `bitrate_bps / 8` produces an
+/// illegal value for almost any requested bitrate and fails with
+/// `E_INVALIDARG`.
+#[allow(dead_code)] // used only by the Windows arm (and by the tests below)
+const AAC_BASE_BYTES_PER_SEC: [u32; 4] = [12_000, 16_000, 20_000, 24_000];
+
+/// The legal `MF_MT_AUDIO_AVG_BYTES_PER_SECOND` set for a given channel
+/// count. For 6-channel (5.1) audio the encoder scales the whole set by 6;
+/// mono and stereo share the base set.
+#[allow(dead_code)] // used only by the Windows arm (and by the tests below)
+fn legal_aac_bytes_per_sec(channels: u16) -> [u32; 4] {
+    if channels == 6 {
+        AAC_BASE_BYTES_PER_SEC.map(|b| b * 6)
+    } else {
+        AAC_BASE_BYTES_PER_SEC
+    }
+}
+
+/// Snap a requested bitrate (bits/sec) to the nearest
+/// `MF_MT_AUDIO_AVG_BYTES_PER_SECOND` value the AAC Encoder MFT will
+/// actually accept for this channel count, rather than passing an
+/// unvalidated `bitrate_bps / 8` through and letting COM reject it.
+#[allow(dead_code)] // used only by the Windows arm (and by the tests below)
+fn snap_aac_bytes_per_sec(bitrate_bps: u32, channels: u16) -> u32 {
+    let requested = bitrate_bps / 8;
+    let legal = legal_aac_bytes_per_sec(channels);
+    // legal is a fixed non-empty array, so min_by_key always yields Some.
+    legal
+        .into_iter()
+        .min_by_key(|&v| requested.abs_diff(v))
+        .unwrap_or(legal[0])
 }
 
 /// Convert to Media Foundation's time base (100-nanosecond units).
@@ -188,8 +272,19 @@ mod imp {
             t.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
             t.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, a.sample_rate)?;
             t.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, a.channels as u32)?;
-            // The AAC encoder MFT takes BYTES per second, not bits.
-            t.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, a.bitrate_bps / 8)?;
+            // MF_MT_AUDIO_BLOCK_ALIGNMENT is OPTIONAL for the AAC output
+            // type (MSDN lists it in the optional column, not required) -
+            // setting it to 1 is harmless, not a fix for a missing
+            // requirement.
+            t.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 1)?;
+            // The AAC encoder MFT takes BYTES per second, not bits, and
+            // only accepts a small fixed set of values - see
+            // snap_aac_bytes_per_sec's doc comment for the legal set and
+            // where it comes from.
+            t.SetUINT32(
+                &MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                snap_aac_bytes_per_sec(a.bitrate_bps, a.channels),
+            )?;
             Ok(t)
         }
     }
@@ -213,6 +308,24 @@ mod imp {
         }
     }
 
+    /// Deliberately does NOT hold an `IMFMediaSink`: `create()` builds one
+    /// (`MFCreateFMPEG4MediaSink`) to pass into
+    /// `MFCreateSinkWriterFromMediaSink`, then lets it drop.
+    /// `IMFMediaSink::Shutdown` is therefore never called by this module -
+    /// `MFCreateSinkWriterFromMediaSink` does not shut down an
+    /// application-created sink on the writer's behalf, and once the local
+    /// binding is gone there is nothing left here to call `Shutdown` on;
+    /// release relies entirely on COM refcounting through the writer (the
+    /// sink stays alive because the writer holds its own reference).
+    /// DELIBERATE DECISION: this is left as-is rather than restructured to
+    /// retain and explicitly shut down the sink. `fmp4_spike.rs` (the proven
+    /// spike this module mirrors) does the exact same thing, and its
+    /// finalized capture played back immediately afterward - but that was
+    /// observed on Windows, and altering COM teardown ordering is precisely
+    /// the kind of change that cannot be verified from a Linux container
+    /// that only type-checks this module. Treat "the staged file is
+    /// renameable/openable the instant `finalize()` returns" as a
+    /// Windows-verification item, not a proven property of this code.
     pub struct FragmentedSink {
         writer: IMFSinkWriter,
         has_audio: bool,
@@ -227,6 +340,14 @@ mod imp {
             video: VideoFormat,
             audio: Option<AudioFormat>,
         ) -> Result<FragmentedSink, ScreenError> {
+            // Validate at the boundary: a bad VideoFormat/AudioFormat value
+            // (fps: 0, a channel count the AAC encoder can't express, ...)
+            // must surface as a named, typed error here, not as a bare COM
+            // HRESULT from deep inside SetInputMediaType.
+            video.validate()?;
+            if let Some(a) = audio {
+                a.validate()?;
+            }
             unsafe {
                 let mf = MfRuntime::start().map_err(|e| sink_err("MFStartup", e))?;
 
@@ -263,9 +384,24 @@ mod imp {
                         &video_input_type(video).map_err(|e| sink_err("build the NV12 type", e))?,
                         None,
                     )
-                    // The one failure a user can act on: no usable H.264
-                    // encoder on this machine.
-                    .map_err(|_| ScreenError::EncoderUnavailable)?;
+                    .map_err(|e| {
+                        // Log the real HRESULT like every sibling call -
+                        // a swallowed `.map_err(|_| ...)` here once hid the
+                        // actual failure entirely.
+                        log::error!("screen sink: configure the video stream: {e}");
+                        // MF_E_TOPO_CODEC_NOT_FOUND is the ONE failure a
+                        // user can act on: no usable H.264 encoder MFT is
+                        // registered on this machine. Any other HRESULT
+                        // (e.g. a bad frame size, or `fps: 0` producing an
+                        // invalid MF_MT_FRAME_RATE) is a bug in the caller's
+                        // VideoFormat, not a missing encoder, and must not
+                        // be misreported as one - see VideoFormat::validate.
+                        if e.code() == MF_E_TOPO_CODEC_NOT_FOUND {
+                            ScreenError::EncoderUnavailable
+                        } else {
+                            ScreenError::Sink(format!("configure the video stream: {e}"))
+                        }
+                    })?;
 
                 if let Some(a) = audio {
                     writer
@@ -323,6 +459,12 @@ mod imp {
             ts: Duration,
             duration: Duration,
         ) -> Result<(), ScreenError> {
+            if bytes.is_empty() {
+                // MFCreateMemoryBuffer(0) followed by copy_nonoverlapping
+                // from/to a possibly-null pointer is undefined behaviour;
+                // a zero-length sample carries nothing worth writing.
+                return Ok(());
+            }
             unsafe {
                 let len = u32::try_from(bytes.len())
                     .map_err(|_| ScreenError::Sink("sample larger than 4 GiB".into()))?;
@@ -398,6 +540,109 @@ mod tests {
         assert!(matches!(r, Err(crate::ScreenError::Unsupported)));
     }
 
+    // --- VideoFormat::validate --------------------------------------------
+    // Pure logic (no cfg(windows) gate), so it must be exercised here where
+    // the Linux compile gate and CI can actually reach it - a check that
+    // only lived inside `mod imp`'s Windows arm would never run in CI.
+
+    #[test]
+    fn a_zero_fps_video_format_is_rejected() {
+        let v = VideoFormat {
+            width: 1920,
+            height: 1080,
+            fps: 0,
+            bitrate_bps: 8_000_000,
+        };
+        assert!(v.validate().is_err());
+    }
+
+    #[test]
+    fn a_zero_width_or_height_video_format_is_rejected() {
+        let zero_width = VideoFormat {
+            width: 0,
+            height: 1080,
+            fps: 30,
+            bitrate_bps: 8_000_000,
+        };
+        assert!(zero_width.validate().is_err());
+        let zero_height = VideoFormat {
+            width: 1920,
+            height: 0,
+            fps: 30,
+            bitrate_bps: 8_000_000,
+        };
+        assert!(zero_height.validate().is_err());
+    }
+
+    #[test]
+    fn a_well_formed_video_format_validates() {
+        let v = VideoFormat {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            bitrate_bps: 8_000_000,
+        };
+        assert!(v.validate().is_ok());
+    }
+
+    // --- AudioFormat::validate ----------------------------------------
+
+    #[test]
+    fn an_unsupported_aac_sample_rate_is_rejected() {
+        let a = AudioFormat {
+            sample_rate: 44_099, // neither of the two MSDN-mandated rates
+            channels: 2,
+            bitrate_bps: 128_000,
+        };
+        assert!(a.validate().is_err());
+    }
+
+    #[test]
+    fn an_unsupported_aac_channel_count_is_rejected() {
+        let a = AudioFormat {
+            sample_rate: 48_000,
+            channels: 3, // AAC output type only allows 1, 2 or 6
+            bitrate_bps: 128_000,
+        };
+        assert!(a.validate().is_err());
+    }
+
+    #[test]
+    fn every_legal_aac_channel_count_validates() {
+        for channels in [1u16, 2, 6] {
+            let a = AudioFormat {
+                sample_rate: 48_000,
+                channels,
+                bitrate_bps: 128_000,
+            };
+            assert!(a.validate().is_ok(), "channels={channels} should be legal");
+        }
+    }
+
+    // --- snap_aac_bytes_per_sec -----------------------------------------
+
+    #[test]
+    fn a_bitrate_already_on_a_legal_aac_value_is_unchanged() {
+        // 128 kbit/s = 16 000 bytes/s, one of the four legal stereo values.
+        assert_eq!(snap_aac_bytes_per_sec(128_000, 2), 16_000);
+    }
+
+    #[test]
+    fn an_illegal_bitrate_snaps_to_the_nearest_legal_aac_value() {
+        // 100 kbit/s = 12 500 bytes/s: nearer to 12 000 than to 16 000.
+        assert_eq!(snap_aac_bytes_per_sec(100_000, 2), 12_000);
+        // 190 kbit/s = 23 750 bytes/s: nearer to 24 000 than to 20 000.
+        assert_eq!(snap_aac_bytes_per_sec(190_000, 1), 24_000);
+    }
+
+    #[test]
+    fn six_channel_aac_bitrates_snap_against_the_scaled_set() {
+        // The legal set for 6 channels is the base set times 6:
+        // [72 000, 96 000, 120 000, 144 000] bytes/s. 700 kbit/s =
+        // 87 500 bytes/s: nearer to 96 000 than to 72 000.
+        assert_eq!(snap_aac_bytes_per_sec(700_000, 6), 96_000);
+    }
+
     #[test]
     fn a_video_format_is_plain_data_both_platforms_agree_on() {
         // The format structs are shared by both arms, so a field added to
@@ -427,6 +672,21 @@ mod tests {
     // self-reference problem for its own structural scan and fixed it by
     // excluding the scanning file; trimming to the non-test prefix is the
     // same fix applied to one file instead of two.
+    //
+    // KNOWN LIMITS, stated honestly rather than silently:
+    // - This scans only the prefix up to the FIRST literal `#[cfg(test)]`.
+    //   Production code added AFTER this test module, or an earlier
+    //   `#[cfg(test)]` appearing inside a comment or string, would silently
+    //   stop being scanned - there is no structural parse here, just a
+    //   string split.
+    // - The two substring checks below are trivially evadable: fully
+    //   qualified syntax (`IMFSinkWriter::Flush(&w, 0)`), inserted
+    //   whitespace (`Flush (`), or an alternate spelling/import alias would
+    //   all pass a production build while defeating the exact substring
+    //   this scans for. Broadening `.Flush(` to a bare `Flush` would false-
+    //   positive on this very module's own doc comments (which discuss
+    //   `Flush` by name above), so that check is left as a substring match,
+    //   documented rather than "fixed" into a false alarm.
     fn production_src() -> &'static str {
         let src = include_str!("sink.rs");
         src.split("#[cfg(test)]").next().unwrap_or(src)
@@ -454,8 +714,13 @@ mod tests {
     // "flush every fragment" requirement.
     #[test]
     fn the_sink_never_probes_the_file_size_while_writing() {
+        // "metadata(" (rather than the narrower "fs::metadata") also
+        // catches Path::metadata(), File::metadata(), and
+        // fs::symlink_metadata( - every one of those is a substring match
+        // for "metadata(" even though "fs::metadata" alone would miss all
+        // three.
         assert!(
-            !production_src().contains("fs::metadata"),
+            !production_src().contains("metadata("),
             "sink.rs must not probe file size during capture - it measures \
              a stale directory entry, not the sink."
         );
