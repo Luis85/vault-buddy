@@ -2227,3 +2227,32 @@ Two related path-safety items belong with it:
 
 Fix alongside the write-site hardening in the task that owns the capture
 session's filesystem writes, where both checks land at the same chokepoint.
+
+### GAP-109 · Medium · A reused HWND can resolve to a different live window than the one picked
+`src-tauri/screen/src/source.rs`, `resolve`'s `SourceId::Window` arm validates
+the stored handle with `Window::is_valid()` only — visible, not a tool window,
+not a child (windows-capture 2.0.1, `window.rs`). Windows reuses HWND values
+after a window closes, so between the user picking a window and pressing Start
+the same handle can belong to a DIFFERENT live window. The capture then records
+the wrong window with no error at all.
+
+**The obvious remedy is rejected deliberately.** Re-checking the title at
+resolve time would throw `SourceGone` on windows that merely renamed
+themselves — browsers on a tab change, editors on a file switch, anything
+showing a document name. That is a frequent, everyday false failure traded
+against a rare silent one, and it is the worse bargain. A process-id re-check
+is the more promising direction (it catches the cross-process reuse case
+without punishing a rename) but needs the pid captured at list time, which the
+current `CaptureSourceInfo` does not carry.
+
+Sibling bug, already FIXED in the same review (723abfd): the SCREEN arm had a
+worse version of this — `list_sources` minted ids from `Monitor::index()` (the
+OS display number in `\\.\DISPLAYn`) while `resolve` looked them up with
+`Monitor::from_index()` (positional into `enumerate()`). Those are different
+numbering schemes, so a multi-monitor machine could resolve to the wrong screen
+on the very first call, with no staleness required. Now resolved by scanning
+for a matching `.index()`.
+
+Both belong on the Windows verification checklist: pick screen 2 and confirm
+screen 2 is what recorded; pick a window, close it, and confirm the capture
+refuses rather than recording something else.
