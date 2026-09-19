@@ -90,6 +90,20 @@ pub fn bgra_to_nv12(
     if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(ConvertError::OddDimensions);
     }
+    // A stride narrower than one packed row of pixels does not overrun until
+    // the LAST row: every earlier row's furthest read (row * stride +
+    // width*4 - 1) still lands inside the following row's bytes, so the
+    // buffer-length check below stays satisfied right up to the final row,
+    // where the read pushes past the end of `bgra` and panics instead of
+    // returning a typed error. Invisible to any test that doesn't probe the
+    // last row.
+    let row_bytes = width as usize * 4;
+    if stride < row_bytes {
+        return Err(ConvertError::ShortInput {
+            needed: row_bytes,
+            got: stride,
+        });
+    }
     let needed = stride * height as usize;
     if bgra.len() < needed {
         return Err(ConvertError::ShortInput {
@@ -260,6 +274,53 @@ mod tests {
     }
 
     #[test]
+    fn chroma_averaging_is_distinguishable_from_point_sampling_at_any_corner() {
+        // The sibling test above (three of four pixels black) only rules out
+        // point-sampling the TOP-LEFT corner -- any implementation that
+        // instead point-sampled one of the other three corners would also
+        // read as neutral there and still pass. Four distinct, asymmetric
+        // colours make the true per-channel average land somewhere none of
+        // the four corners' own chroma sits, so sampling ANY single corner
+        // is distinguishable from averaging.
+        //
+        // Pixels (R,G,B): top-left (180,20,20), top-right (20,180,60),
+        // bottom-left (60,20,180), bottom-right (90,90,40).
+        //
+        // Hand-computed (not run through the implementation):
+        //   R avg = (180+20+60+90)/4 = 87.5
+        //   G avg = (20+180+20+90)/4 = 77.5
+        //   B avg = (20+60+180+40)/4 = 75.0
+        //   Y avg = 0.2126*87.5 + 0.7152*77.5 + 0.0722*75.0
+        //         = 18.6025 + 55.428 + 5.415 = 79.4455
+        //   U avg = 128 + ((75.0 - 79.4455)/1.8556)*(224/255)
+        //         = 128 + (-2.3957)*0.878431 = 128 - 2.1045 = 125.8955 -> 126
+        //   V avg = 128 + ((87.5 - 79.4455)/1.5748)*(224/255)
+        //         = 128 + (5.1146)*0.878431 = 128 + 4.4928 = 132.4928 -> 132
+        //
+        // Each corner's OWN chroma (computed the same way, single pixel):
+        //   top-left     (180,20,20)  -> Y=54.016  -> (U,V) ~= (112,198)
+        //   top-right    (20,180,60)  -> Y=137.32  -> (U,V) ~= (91,63)
+        //   bottom-left  (60,20,180)  -> Y=40.056  -> (U,V) ~= (194,139)
+        //   bottom-right (90,90,40)   -> Y=86.39   -> (U,V) ~= (106,130)
+        // None of the four equals the averaged (126,132), so point-sampling
+        // any single corner would fail this assertion.
+        #[rustfmt::skip]
+        let src: [u8; 16] = [
+            // row 0: top-left (b,g,r,a), top-right (b,g,r,a)
+            20, 20, 180, 255,   60, 180, 20, 255,
+            // row 1: bottom-left (b,g,r,a), bottom-right (b,g,r,a)
+            180, 20, 60, 255,   40, 90, 90, 255,
+        ];
+        let mut out = Vec::new();
+        bgra_to_nv12(&src, 8, 2, 2, &mut out).unwrap();
+        assert_eq!(
+            (out[4], out[5]),
+            (126, 132),
+            "chroma must be the true 2x2 average"
+        );
+    }
+
+    #[test]
     fn a_short_input_is_refused_rather_than_read_past_the_end() {
         // A truncated frame is a real possibility (a texture map that
         // partially failed). Reading past the end is an out-of-bounds read
@@ -268,6 +329,31 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             bgra_to_nv12(&src, 8, 2, 2, &mut out),
+            Err(ConvertError::ShortInput { .. })
+        ));
+    }
+
+    #[test]
+    fn a_narrow_stride_is_refused_rather_than_panicking_on_the_last_row() {
+        // A stride short of one packed row only overruns on the LAST row --
+        // every earlier row's furthest read still lands inside the next
+        // row's bytes, so the plain `bgra.len() < stride * height` check
+        // stays satisfied right up to the end. Without the dedicated stride
+        // check this panics with an out-of-bounds index on the final row's
+        // red-channel read instead of returning `ShortInput`; two reviewers
+        // re-derived this failure by hand before it got a test.
+        let width = 2u32;
+        let height = 2u32;
+        // Two bytes short: the alpha byte of the last pixel is never read, so
+        // a stride only one byte short of `width * 4` still has enough slack
+        // in the last row's own colour reads to stay in bounds -- it takes a
+        // second missing byte to push the last row's furthest read (its
+        // red-channel byte) past the end of the buffer.
+        let stride = (width as usize * 4) - 2;
+        let src = vec![0xAAu8; stride * height as usize]; // satisfies the length-only check
+        let mut out = Vec::new();
+        assert!(matches!(
+            bgra_to_nv12(&src, stride, width, height, &mut out),
             Err(ConvertError::ShortInput { .. })
         ));
     }
