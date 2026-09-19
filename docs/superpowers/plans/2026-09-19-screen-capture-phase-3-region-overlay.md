@@ -528,7 +528,7 @@ re-run to confirm green. Record the outcome in your report.
 | Swap `r.rect.x` and `r.rect.y` in `encode_payload` | `a_region_payload_round_trips` |
 | Delete the `if width == 0 \|\| height == 0` guard | `a_malformed_region_payload_is_refused` |
 | Replace the canonical round-trip check with `Some(parsed)` | `a_malformed_region_payload_is_refused` |
-| Replace `!digits.bytes().all(..)` with `digits.bytes().next().is_none_or(\|b\| !b.is_ascii_digit())` (i.e. check only the FIRST byte) | `a_non_display_device_name_is_refused` |
+| ~~Replace `!digits.bytes().all(..)` with a check of only the FIRST byte~~ **EQUIVALENT MUTANT — do not attempt.** Verified after the fact by running it: `"1\\Monitor0".parse::<usize>()` is already `Err(InvalidDigit)`, so `parse` subsumes the all-digits guard for every first-byte-is-a-digit input and no test can distinguish the two. Use this instead: **delete the guard entirely** — `"+1".parse::<usize>()` is `Ok(1)` (Rust accepts a leading `+`), so the guard's one observable effect is rejecting `\\.\DISPLAY+1`, and a test must pin that. | `a_non_display_device_name_is_refused` |
 
 If any mutation leaves the suite green, the test is not pinning what it
 claims and must be strengthened before you continue.
