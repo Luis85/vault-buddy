@@ -1,16 +1,22 @@
 //! Screen Capture engine.
 //!
-//! What compiles where: `clock` and `select` are pure and build and test on
-//! ANY platform — they carry this feature's correctness precisely because no
-//! CI runner can record a screen. `engine` (frame acquisition) and `sink`
-//! (the fragmented-MP4 Media Foundation writer) are the two Windows-only
-//! surfaces; `engine` remains a stub until frame acquisition lands.
+//! What compiles where: `clock`, `convert`, `select` and `session::pacing`
+//! are pure and build and test on ANY platform — they carry this feature's
+//! correctness precisely because no CI runner can record a screen.
+//! `frames` (the WGC callback) and `sink` (the fragmented-MP4 Media
+//! Foundation writer) are the Windows-only surfaces, and `session` is the
+//! thin arm that joins them.
 
 pub mod clock;
 pub mod convert;
-pub mod engine;
+// The WGC frame callback. Windows-only: it exists solely to feed
+// `session`'s mux, and everything it decides is decided by a pure function
+// in `session::pacing`.
+#[cfg(windows)]
+pub(crate) mod frames;
 pub mod mp4_boxes;
 pub mod select;
+pub mod session;
 pub mod sink;
 pub mod source;
 pub mod staging;
@@ -58,13 +64,6 @@ impl std::error::Error for ScreenError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_engine_stub_reports_unsupported_rather_than_panicking() {
-        // The Linux compile gate builds this crate; the stub must degrade,
-        // never abort, or CI dies instead of reporting.
-        assert_eq!(engine::start_capture(), Err(ScreenError::Unsupported));
-    }
 
     // The three FIXED variants carry no caller-supplied data at all — their
     // Display text is a constant, so it can never leak a value a caller

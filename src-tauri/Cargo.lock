@@ -5864,6 +5864,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "vault_buddy_capture",
  "vault_buddy_core",
  "windows 0.62.2",
  "windows-capture",
