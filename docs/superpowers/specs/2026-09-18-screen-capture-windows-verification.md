@@ -60,11 +60,17 @@ return for each capture (the stop wait is bounded at 30 s and reports
 
 - **No live `fps` readout.** `ScreenCaptureBar.vue` (plan Task 10) landed —
   it renders elapsed, paused state, the source title, warnings and the
-  **dropped-frame count**, so item 10's drop figure can be read off the bar
-  as well as the log. The `fps` value the `screen:frames` event carries is
-  deliberately **not** shown: a rate is not an anomaly, and spec §17.3's
-  signal is the drop count. For item 10, take the fps readings from
-  `vault-buddy.log` as the table says.
+  **dropped-frame count**. Read that count off the bar only under two
+  conditions: the capture is still **live** and the panel is open on the
+  **list view**. The bar unmounts and `reset()` zeroes `dropped` the instant
+  `screen:stopped` lands, so the teardown total (`screen capture: finalizing
+  after N dropped frame(s)`) stays **log-only** — and item 10's own scenario
+  (a 4K video playing for two minutes) takes foreground focus, which
+  auto-hides the panel (`schedule_focus_out_check`). **The log remains the
+  record for item 10's numbers**, as the table says; the bar is a live
+  glance, not the measurement. The `fps` value the `screen:frames` event
+  carries is deliberately **not** shown at all: a rate is not an anomaly,
+  and spec §17.3's signal is the drop count.
 - **Three deliberate picker deviations from the spec** — no per-device audio
   level bars (§7.2), no Region tab, and the "Screen or window" chooser hint
   where §7.1 says "Screen, window, or region". Each is recorded and reasoned

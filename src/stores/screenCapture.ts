@@ -45,7 +45,20 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
      * is unbounded — `stop_screen_capture` can answer `stillSaving` while the
      * session is still tearing down — so this cannot clear on the command's
      * reply; it clears when the capture is actually gone (every route to
-     * idle) or when the stop was refused, which means nothing is finalizing.
+     * idle) or when the stop was rejected (see `stop()`'s catch).
+     *
+     * Documented residual, deliberately not defended against: `resync()` /
+     * `applyStatus` re-derive every other live-capture field from Rust, but
+     * not this one — a status payload cannot tell a capture whose stop is in
+     * flight from one whose is not, which is exactly why the flag is local.
+     * So a terminal event that never arrived would latch it for that
+     * capture's life, Pause and Stop both disabled until the webview
+     * reloads (the tray still stops the capture, so nothing is strandable).
+     * No path reaches that: the `screen-capture-monitor` thread is the sole
+     * `done_rx` consumer, covers the explicit stop AND self-finalization,
+     * and BOTH of its match arms emit — stopped or failed. Clearing the flag
+     * speculatively on a `capturing` status would instead re-arm Stop
+     * mid-finalize, the very thing it exists to prevent.
      */
     stopping: false,
     /**
@@ -270,9 +283,17 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       } catch (e) {
         logWarning(`stop_screen_capture failed: ${String(e)}`);
         useNotificationsStore().error(String(e));
-        // A refusal means nothing is finalizing, so Stop must be offered
-        // again — cleared BEFORE the resync, which may itself land on idle
-        // and clear it anyway, and must not be able to re-set it.
+        // Re-arm Stop. The rejection this sees most — `is_capturing` saying
+        // no (screen_commands.rs) — really does mean nothing is finalizing,
+        // but the command's `JoinError` arm ("Stop failed — see the logs for
+        // details.") can reject AFTER `Control::Stop` was already sent, so
+        // what this catch actually knows is "the stop did not report
+        // success", not "nothing is finalizing". Re-arming there costs at
+        // worst a duplicate Stop — a fire-and-forget send on a channel the
+        // session is already draining — while latching the flag would
+        // dead-end both controls on a rejection that changed nothing.
+        // Cleared BEFORE the resync, which may itself land on idle and clear
+        // it anyway, and must not be able to re-set it.
         this.stopping = false;
         await this.resync();
       }

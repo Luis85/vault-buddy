@@ -853,11 +853,23 @@ companion note. Do not add one here.
   `elapsedMs` so the paused-time arithmetic has ONE implementation, the
   source title, an inline `screen:warning` (which is why the store withholds
   that toast while a capture is live), a `dropped` chip only once frames
-  have actually dropped, and Pause/Resume/Stop. Stop and Pause are both
+  have actually dropped, and Pause/Resume/Stop. Its label has THREE arms,
+  like `RecordingBar`'s: `status` stays `capturing` until `screen:stopped`
+  lands and the ticker keeps ticking, so a bar without the `stopping`-keyed
+  `Saving…` arm counts on through the whole finalize window (bounded at 30 s
+  by `STOP_TIMEOUT`) and claims seconds the file does not contain — the same
+  falsehood the paused-time arithmetic exists to prevent. The status dot is
+  a bespoke `h-2.5 w-2.5` span that turns amber while paused, matching
+  `RecordingBar`'s exactly rather than the `StatusDot` primitive (h-1.5, no
+  amber tone), for the same reason the dense buttons are bespoke: two live
+  bars on one view must not drift. Stop and Pause are both
   disabled while the store's `stopping` flag is set: a stop can answer
   `stillSaving` while finalize is still running, so the flag clears when the
-  capture really ends — or when the stop was refused, which means nothing is
-  finalizing — never on the command's own reply. The tray and buddy menus
+  capture really ends — or when the stop was REJECTED, which *usually* means
+  nothing is finalizing (the `is_capturing` refusal) but not always: the
+  command's `JoinError` arm can reject after `Control::Stop` already went
+  out, so a re-armed Stop there costs at worst a duplicate fire-and-forget
+  send — never on the command's own reply. The tray and buddy menus
   drive the same three verbs (`tray.rs` routes them by `CaptureGuard::
   active()`), so the bar is a surface, not the only way to control a
   capture.

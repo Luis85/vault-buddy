@@ -12,6 +12,7 @@ import UpdateView from "../src/components/UpdateView.vue";
 import { useCaptureStore } from "../src/stores/capture";
 import { useDocumentImportsStore } from "../src/stores/documentImports";
 import { useNotificationsStore } from "../src/stores/notifications";
+import { useScreenCaptureStore } from "../src/stores/screenCapture";
 import { useSettingsStatusStore } from "../src/stores/settingsStatus";
 import { useVaultsStore } from "../src/stores/vaults";
 
@@ -755,5 +756,32 @@ describe("ActionPanel save indicator", () => {
     expect(wrapper.get('[data-testid="import-progress"]').text()).toContain(
       "Report.docx",
     );
+  });
+
+  it("shows the screen capture bar on the list view while a capture runs", async () => {
+    // docs/Gaps.md GAP-118: the screen store's live state had no renderer,
+    // and ScreenSourcePicker's onStart navigates HERE. Every bar test mounts
+    // ScreenCaptureBar directly, so none of them sees this wiring — deleting
+    // the panel's block reinstates the gap with the whole suite still green.
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="screen-elapsed"]').exists()).toBe(false);
+    useScreenCaptureStore().$patch({
+      status: "capturing",
+      sourceTitle: "Screen 1",
+      startedAtMs: Date.now(),
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="screen-elapsed"]').text()).toContain(
+      "Recording",
+    );
+    expect(wrapper.get('[data-testid="screen-source"]').text()).toBe("Screen 1");
+    // ...and only on the list view: a live capture must not drag the bar
+    // into every other view the panel can be sitting on.
+    store.openSearch();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-elapsed"]').exists()).toBe(false);
   });
 });

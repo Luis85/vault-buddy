@@ -2487,8 +2487,10 @@ with a comment saying "the capture bar lives on the list view beside
 RecordingBar" — it navigates to a view that shows nothing.
 **Failure scenario:** after starting a screen capture the panel returns to
 the vault list with no visible sign a capture is running. Elapsed time,
-paused state, the dropped-frame indicator and any `screen:warning` are all
-invisible; the only controls are the tray / buddy right-click menu items
+paused state, the dropped-frame indicator and any `screen:warning` are
+invisible **while the capture is live** — a terminal warning still reaches
+the user, through `emit_screen_stopped`'s `"Saved with a warning: {w}"`
+toast (`screen_commands.rs`); it is the live window that has no surface; the only controls are the tray / buddy right-click menu items
 (`tray.rs` does route Stop/Pause/Resume to the screen domain, so the capture
 is controllable and never strandable — this is a missing surface, not a
 missing capability), and the only place the dropped-frame count can be read
@@ -2515,11 +2517,14 @@ this line now exists — and a `dropped` chip shown only once `dropped > 0`.
 `tests/screenCaptureBar.test.ts` covers all six. Stop's in-flight guard is a
 new `stopping` flag on the store (Task 9 left it out because nothing consumed
 it yet): set when `stop()` is asked for, cleared only when the capture really
-ends (every route to idle) or when the stop was REFUSED, since a refusal
-means nothing is finalizing and Stop must be offered again — `stop_screen_
-capture` can answer `stillSaving` while the session is still tearing down, so
-clearing on the command's own reply would re-arm Stop against a live
-finalize. **One residual, deliberate:** `fps` is still rendered nowhere. It is
+ends (every route to idle) or when the stop was REJECTED, since Stop must be
+offered again after a rejection that changed nothing — `stop_screen_capture`
+can answer `stillSaving` while the session is still tearing down, so clearing
+on the command's own reply would re-arm Stop against a live finalize. (The
+rejection is *usually* `is_capturing` saying no, where nothing is indeed
+finalizing; the command's `JoinError` arm can reject after `Control::Stop`
+already went out, where re-arming costs at worst a duplicate fire-and-forget
+send.) **One residual, deliberate:** `fps` is still rendered nowhere. It is
 a rate, not an anomaly; §17.3's signal is the drop COUNT, and the Windows
 verification checklist's item 10 already reads the fps values from
 `vault-buddy.log` by design. GAP-114's mitigation is no longer blunted — the

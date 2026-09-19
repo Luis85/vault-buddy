@@ -105,7 +105,10 @@ describe("ScreenCaptureBar", () => {
     // Spec 14: a vanished source or device warns and the capture finalizes
     // cleanly. The store deliberately withholds the toast while a capture is
     // live (its own comment says the bar shows it inline) — so if the bar
-    // does not render it, the warning is visible nowhere at all.
+    // does not render it, the warning is invisible for the whole live
+    // capture. (A TERMINAL warning still reaches the user either way, via
+    // Rust's "Saved with a warning: {w}" stop toast; it is the live window
+    // this line is the only surface for.)
     const store = useScreenCaptureStore();
     store.$patch({ status: "capturing", sourceTitle: "S", startedAtMs: 0 });
     const w = mount(ScreenCaptureBar);
@@ -118,6 +121,72 @@ describe("ScreenCaptureBar", () => {
     // ...and the bar is still the live capture bar, not a torn-down husk.
     expect(w.find('[data-testid="screen-elapsed"]').exists()).toBe(true);
     expect(w.find('[data-testid="screen-stop"]').exists()).toBe(true);
+  });
+
+  it("keeps the elapsed reading live while the capture runs", async () => {
+    // The reading must be LIVE. A bar wired to a clock sampled once at setup
+    // renders a correct first frame and then freezes, and no assertion on a
+    // single static value can tell the two apart — so the tick itself is
+    // what this pins (tests/import-progress.test.ts:45 is the precedent).
+    //
+    // Hand-computed from the store's arithmetic, not from a run:
+    //   now 0 - startedAt 0 - pausedTotal 0 = 0 ms -> "Recording 0:00";
+    //   five ticks later the clock reads 5_000 -> 5_000 ms -> "Recording 0:05".
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const store = useScreenCaptureStore();
+    store.$patch({ status: "capturing", sourceTitle: "S", startedAtMs: 0 });
+    const w = mount(ScreenCaptureBar);
+    expect(w.get('[data-testid="screen-elapsed"]').text()).toBe("Recording 0:00");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(w.get('[data-testid="screen-elapsed"]').text()).toBe("Recording 0:05");
+  });
+
+  it("reads Saving… instead of counting on while the stop finalizes", async () => {
+    // `status` stays `capturing` until `screen:stopped` lands and the ticker
+    // keeps ticking, so a label with only Recording/Paused arms goes on
+    // COUNTING for the whole finalize window — bounded at 30 s by
+    // `STOP_TIMEOUT` (screen_commands.rs), which answers `stillSaving` on
+    // expiry. Those seconds are not in the file: the same falsehood the
+    // paused-time arithmetic exists to prevent. The sibling audio bar reads
+    // "Saving…" here (RecordingBar.vue's `saving` arm).
+    //
+    // Hand-computed: startedAt 0, clock 60_000 -> 60_000 ms -> "Recording
+    // 1:00" before the stop; 25 s of finalize later a counting bar reads
+    // "Recording 1:25" while the file still ends at 1:00.
+    vi.useFakeTimers();
+    vi.setSystemTime(60_000);
+    mockIPC((cmd) =>
+      cmd === "stop_screen_capture" ? new Promise(() => {}) : undefined,
+    );
+    const store = useScreenCaptureStore();
+    store.$patch({ status: "capturing", sourceTitle: "S", startedAtMs: 0 });
+    const w = mount(ScreenCaptureBar);
+    expect(w.get('[data-testid="screen-elapsed"]').text()).toBe("Recording 1:00");
+    await w.get('[data-testid="screen-stop"]').trigger("click");
+    await w.vm.$nextTick();
+    expect(w.get('[data-testid="screen-elapsed"]').text()).toBe("Saving…");
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(w.get('[data-testid="screen-elapsed"]').text()).toBe("Saving…");
+  });
+
+  it("wears the same status dot as the audio bar it sits beside", async () => {
+    // Two live-capture bars render side by side on the list view, so a
+    // visibly different indicator on one of them is drift, not a detail:
+    // RecordingBar's dot is h-2.5 w-2.5 and turns amber while paused, where
+    // the StatusDot primitive is h-1.5 w-1.5 with no amber tone — not the
+    // clean drop-in it looks like at this one call site.
+    const store = useScreenCaptureStore();
+    store.$patch({ status: "capturing", sourceTitle: "S", startedAtMs: 0 });
+    const w = mount(ScreenCaptureBar);
+    expect(w.get('[data-testid="screen-dot"]').classes()).toEqual(
+      expect.arrayContaining(["h-2.5", "w-2.5", "animate-pulse", "bg-recording"]),
+    );
+    store.$patch({ status: "paused", pausedSinceMs: 1 });
+    await w.vm.$nextTick();
+    const paused = w.get('[data-testid="screen-dot"]').classes();
+    expect(paused).toEqual(expect.arrayContaining(["h-2.5", "w-2.5", "bg-amber-400"]));
+    expect(paused).not.toContain("animate-pulse");
   });
 
   it("disables Stop while a stop is already in flight", async () => {
