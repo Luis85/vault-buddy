@@ -74,8 +74,11 @@ pub fn parse_payload(rest: &str) -> Option<RegionSource> {
 /// `\\.\DISPLAY2` -> `2`.
 pub fn display_number_from_device_name(name: &str) -> Option<usize> {
     let digits = name.strip_prefix(r"\\.\DISPLAY")?;
-    // ALL of the remainder must be digits: `\\.\DISPLAY1\Monitor0` is a
-    // different device and must not collapse onto display 1.
+    // Reject anything that is not purely digits. `.parse()` below already
+    // rejects most of it -- including `\\.\DISPLAY1\Monitor0`, a real
+    // Windows device string for the MONITOR under a display -- but NOT a
+    // leading `+`, which usize::from_str accepts: without this guard
+    // `\\.\DISPLAY+1` would resolve to display 1.
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -168,5 +171,11 @@ mod tests {
         assert_eq!(display_number_from_device_name(r"\\.\DISPLAYx"), None);
         assert_eq!(display_number_from_device_name("DISPLAY1"), None);
         assert_eq!(display_number_from_device_name(""), None);
+        // The `all(is_ascii_digit)` guard's ONE observable effect: Rust's
+        // usize::from_str accepts a leading `+`, so without the guard
+        // `\\.\DISPLAY+1` parses as display 1. Every other case in this
+        // test is already rejected by `.parse()` alone, so this is the
+        // only assertion here that fails when the guard is deleted.
+        assert_eq!(display_number_from_device_name(r"\\.\DISPLAY+1"), None);
     }
 }
