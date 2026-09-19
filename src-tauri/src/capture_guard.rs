@@ -24,9 +24,14 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 pub enum CaptureKind {
     Audio,
     // Only this task's own tests construct this variant so far — Task 7
-    // wires the screen-capture commands to claim it in production. The
-    // shell crate's mixed staticlib/cdylib/rlib crate-type means clippy
-    // can't see that future caller and would otherwise flag it dead.
+    // wires the screen-capture commands to claim it in production.
+    //
+    // The allow is needed because `capture_guard` is a PRIVATE `mod` in
+    // lib.rs: a `pub` item inside a private module is not reachable from
+    // outside the crate, so rustc treats it as private for dead-code
+    // purposes and flags it. (This is not a crate-type effect — the mixed
+    // staticlib/cdylib/rlib setting makes no difference here; that was
+    // checked against a minimal repro rather than assumed.)
     #[allow(dead_code)]
     Screen,
 }
