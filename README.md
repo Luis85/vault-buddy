@@ -8,7 +8,7 @@ A small animated character lives on your desktop, always within reach. Click
 it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
-- **Platform:** Windows (MVP)
+- **Platform:** Windows 11 (MVP)
 - **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · local offline transcription · local MCP server for AI clients
 
 See the [Product Requirements Document](docs/PRD.md) for the full vision,

@@ -11,8 +11,9 @@ where it's going, see the [PRD](PRD.md).
 1. [Node.js 22+](https://nodejs.org)
 2. [Rust stable](https://rustup.rs) — the default MSVC toolchain; rustup will
    prompt you to install the Visual Studio C++ Build Tools if missing
-3. WebView2 runtime — preinstalled on Windows 11; on Windows 10 see the
-   [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+3. WebView2 runtime — preinstalled on Windows 11, which is what this app
+   targets (see [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+   if you are on an older build; nothing here is tested against one)
 4. **LLVM (libclang) and CMake** — the app statically links whisper.cpp for
    local speech-to-text, so the `whisper` feature is always on for the shell
    and *every* app build compiles `whisper-rs-sys`, whose build runs `bindgen`

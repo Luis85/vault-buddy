@@ -465,13 +465,18 @@ fn settings<T: TryInto<GraphicsCaptureItemType>>(
 /// `MinimumUpdateIntervalUnsupported` whenever this setting is anything
 /// but `Default` and `is_minimum_update_interval_supported()` does not
 /// return `Ok(true)`. That probe queries a Windows 11-era WinRT property
-/// (`GraphicsCaptureSession.MinUpdateInterval`) a Windows 10 build does
-/// not have — and this app still documents Windows 10 as supported. So
-/// unlike every other OS-policy knob above (deliberately left at
-/// `Default`), this one is checked first: `Custom` only when the probe
-/// says `Ok(true)`, and `Default` for `Ok(false)` OR a probe error — an
-/// optional throttling knob must never be the reason a capture cannot
-/// start at all.
+/// (`GraphicsCaptureSession.MinUpdateInterval`).
+///
+/// The app targets Windows 11, where the probe returns `Ok(true)` and
+/// `Custom` is what actually gets used — so the fallback arms below are
+/// not the expected path. They stay anyway, and deliberately: this is a
+/// CAPABILITY query, not a version check. A Windows 11 build that has
+/// not yet shipped the property, a future runtime that moves it, or a
+/// probe that simply errors would otherwise take the WHOLE session down
+/// with `MinimumUpdateIntervalUnsupported` — an optional throttling knob
+/// must never be the reason a capture cannot start at all. Deleting the
+/// fallback to "simplify" re-opens exactly that failure, which is why it
+/// is called out here rather than left to look like dead code.
 fn minimum_update_interval_settings(fps: u32) -> MinimumUpdateIntervalSettings {
     match GraphicsCaptureApi::is_minimum_update_interval_supported() {
         Ok(true) => {
