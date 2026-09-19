@@ -193,8 +193,15 @@ jobs:
       # different target/ subtree), so whisper.cpp rebuilds once for tests
       # — an accepted wall-clock cost, same trade the Linux rust-core job
       # makes for its own whisper-feature step.
-      - name: tests (core + capture + transcribe crates, Windows)
-        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe
+      # vault_buddy_screen joined this line with phase 2's cfg(windows)
+      # split (docs/Gaps.md GAP-102, closed here on the terms it set):
+      # sink.rs, source.rs and session/ now hold real capture logic that
+      # Windows is the ONLY place able to execute. Before that split there
+      # was nothing Windows-specific to exercise, which is why the gap asked
+      # for this edit in the phase-2 PR and not earlier. rust-core still runs
+      # the same crate on Linux; this is the arm that job cannot reach.
+      - name: tests (core + capture + transcribe + screen crates, Windows)
+        run: cargo test -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen
         working-directory: src-tauri
       - name: tests (transcribe crate, whisper feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper
@@ -210,17 +217,6 @@ jobs:
       # accepted trade as the step above.
       - name: tests (transcribe crate, whisper-vulkan feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper-vulkan
-        working-directory: src-tauri
-      # Phase 2's gating spike (spec 6.4): does Media Foundation's
-      # IMFSinkWriter produce fragmented MP4, and is a capture that never
-      # reached Finalize still playable? Media Foundation is Windows-only,
-      # so this runner is the only place the question can be answered
-      # empirically. --nocapture because the SPIKE[...] lines ARE the
-      # result: they report the observed box layout and decoded sample
-      # counts. The feature is off by default, so no other job or build is
-      # affected by it.
-      - name: fMP4 spike (screen crate, Windows-only, spec 6.4)
-        run: cargo test -p vault_buddy_screen --features fmp4-spike -- --nocapture --test-threads=1
         working-directory: src-tauri
       - name: Upload Windows installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -21,6 +21,18 @@
 //!
 //! The `--nocapture` matters: the tests print the observed box layout, which
 //! is the evidence the spike exists to produce.
+//!
+//! **The `windows-app` CI step that ran this on every Windows build was
+//! retired at the end of phase 2 — the spike was NOT abandoned.** It answered
+//! its question on 2026-09-19 and the measured result is recorded in spec
+//! §6.4 (fragmented: 280/300 frames decoded back after `abort()`; standard
+//! MP4 control: 0), so re-running it per build spent runner minutes
+//! deliberately aborting child processes to re-derive a settled answer. The
+//! module and its feature stay because this is the working
+//! `MFCreateFMPEG4MediaSink` reference: `sink.rs` was built from it, and it
+//! is the harness to reach for if the container decision is ever reopened or
+//! a Media Foundation regression needs isolating from the capture pipeline.
+//! Run it on demand with the line above.
 
 #![cfg(all(windows, feature = "fmp4-spike"))]
 
