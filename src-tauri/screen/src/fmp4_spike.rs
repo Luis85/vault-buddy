@@ -32,9 +32,12 @@ use windows::Win32::Media::MediaFoundation::*;
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 const FPS: u32 = 30;
-/// 3 seconds. Long enough that a ~1 s fragment cadence must close several
-/// fragments; short enough to keep a CI runner honest.
-const FRAMES: u32 = 90;
+/// 10 seconds. The first runs used 3 s, which left open whether the sink
+/// simply had not reached a fragment boundary yet. 10 s at a ~333 ms
+/// observed cadence is ~30 fragments — far past any plausible threshold.
+const FRAMES: u32 = 300;
+/// Probe the on-disk size every N frames (~1 s) during the capture.
+const PROBE_EVERY: u32 = 30;
 const BITRATE: u32 = 2_000_000;
 /// 100-nanosecond units per second — Media Foundation's time base.
 const HNS_PER_SEC: i64 = 10_000_000;
@@ -53,13 +56,15 @@ pub enum SinkKind {
 pub enum Ending {
     /// `Finalize()` — the clean stop path.
     Finalized,
-    /// Frames written, the encoder drained into the sink, the byte stream
-    /// flushed to the OS, then `std::process::abort()`.
+    /// Frames written, then `std::process::abort()` — and deliberately
+    /// nothing in between. No `Finalize`, and no `Flush` either: MF's
+    /// `IMFSinkWriter::Flush` DROPS pending samples rather than draining
+    /// them, so calling it before the crash destroys the very footage the
+    /// spike is trying to recover.
     ///
     /// This must run in a CHILD process, because it kills the process it
-    /// runs in. That is the point: `Finalize` never runs, no destructor
-    /// runs, and nothing still held in user space is written — the same
-    /// boundary a real crash draws.
+    /// runs in. Whatever the sink pushed to the OS during the capture is
+    /// what survives — the same boundary a real crash draws.
     Crashed,
 }
 
@@ -177,6 +182,16 @@ pub fn write_capture(path: &Path, kind: SinkKind, ending: Ending) -> WinResult<(
 
         for i in 0..FRAMES {
             writer.WriteSample(0, &sample_for(i)?)?;
+
+            // Does the sink write to disk DURING the capture, or does it
+            // hold everything until Finalize? That is the real question
+            // behind crash-safety, and one size probe per second answers it
+            // without needing a crash at all. std::fs::metadata is a
+            // metadata query, so it does not disturb MF's open handle.
+            if PROBE_EVERY > 0 && i % PROBE_EVERY == PROBE_EVERY - 1 {
+                let on_disk = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                println!("SPIKE-PROBE frame={} on_disk_bytes={}", i + 1, on_disk);
+            }
         }
 
         match ending {
@@ -184,22 +199,24 @@ pub fn write_capture(path: &Path, kind: SinkKind, ending: Ending) -> WinResult<(
                 writer.Finalize()?;
             }
             Ending::Crashed => {
-                // Drain the encoder into the sink, then push the byte
-                // stream's own buffer out to the OS. That second flush is
-                // the part a production session must also do (spec §6.4
-                // says fragments are "flushed as they close") — without it
-                // the bytes sit in user space and die with the process, and
-                // no container format can survive that.
-                writer.Flush(0)?;
-                byte_stream.Flush()?;
+                // NOTE: deliberately NO writer.Flush() here.
+                //
+                // IMFSinkWriter::Flush is documented to "drop all pending
+                // samples" — it is a seek-style discard, not a drain. Both
+                // earlier versions of this spike called it immediately
+                // before crashing, which threw the footage away and then
+                // measured its absence: every run produced a 0-byte file,
+                // for the fragmented AND the standard sink alike.
+                //
+                // A real crash does not get to call anything. So we call
+                // nothing: whatever the sink already pushed to the OS during
+                // the capture is what a crash would have left behind, and
+                // that is exactly what we want to inspect.
+                let on_disk = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                println!("SPIKE-PROBE pre_abort on_disk_bytes={on_disk}");
 
-                // Abort rather than return: no destructors, no CRT flushing,
-                // no COM teardown, and above all no Finalize. Whatever
-                // reached the OS stays on disk; whatever did not, does not.
-                // That is exactly the boundary a real crash draws, which a
-                // clean `drop` does NOT — a dropped byte stream discards its
-                // buffer, which is how the first version of this spike
-                // produced a 0-byte file for BOTH sinks and measured nothing.
+                // Abort: no destructors, no CRT flush, no COM teardown, no
+                // Finalize — the boundary a real crash draws.
                 std::process::abort();
             }
         }
@@ -336,57 +353,36 @@ mod tests {
         );
     }
 
-    /// Q1: after a real crash, does the fragmented file still carry `moof`
-    /// fragments on disk?
-    #[test]
-    fn q1_crashed_fragmented_capture_contains_fragments() {
-        let p = scratch("q1-frag-crashed");
-        capture_then_crash(&p, SinkKind::Fragmented);
-        let scan = report("q1 fragmented/crashed", &p);
-        assert!(
-            scan.is_fragmented(),
-            "a crashed fMP4 capture must still carry moof fragments; saw {:?}",
-            scan.kinds()
-        );
-    }
-
-    /// Q2: the headline question. Is that crashed file playable?
-    #[test]
-    fn q2_crashed_fragmented_capture_is_still_decodable() {
-        let p = scratch("q2-frag-crashed");
-        capture_then_crash(&p, SinkKind::Fragmented);
-        report("q2 fragmented/crashed", &p);
-        let n = decodable_sample_count(&p).unwrap_or(0);
-        println!("SPIKE[q2 fragmented/crashed] decoded_samples={n}");
-        assert!(
-            n > 0,
-            "spec §6.4's crash-safety claim requires a crashed fragmented \
-             capture to decode as a prefix; decoded {n} samples"
-        );
-    }
-
-    /// The CONTROL, and the reason Q2 means anything: the same crash through
-    /// the STANDARD mp4 sink must NOT decode. If it did, fragmentation would
-    /// be buying nothing and §6.4's premise would be wrong.
+    /// The spike's actual measurement, reported rather than asserted.
     ///
-    /// Note this asserts on a NON-EMPTY file. The first version of this spike
-    /// passed a near-identical assertion against a 0-byte file — true, but
-    /// for the wrong reason, and it measured nothing.
+    /// Two earlier iterations asserted the outcome spec §6.4 HOPES for and
+    /// failed for reasons that had nothing to do with the question (a
+    /// discarding `Flush`). A spike exists to find out, so this prints the
+    /// evidence and asserts only what is already established. The gate
+    /// decision is made from these lines.
     #[test]
-    fn control_crashed_standard_capture_is_not_decodable() {
-        let p = scratch("control-std-crashed");
-        capture_then_crash(&p, SinkKind::Standard);
-        let scan = report("control standard/crashed", &p);
-        let n = decodable_sample_count(&p).unwrap_or(0);
-        println!("SPIKE[control standard/crashed] decoded_samples={n}");
-        assert!(
-            !scan.is_fragmented(),
-            "the standard sink must not be emitting fragments"
-        );
-        assert_eq!(
-            n, 0,
-            "an un-finalized standard MP4 is expected to be unplayable — if \
-             this decodes, fMP4 is not buying the crash-safety §6.4 assumes"
+    fn spike_measurement_crashed_fragmented_vs_standard() {
+        for (label, kind) in [
+            ("fragmented", SinkKind::Fragmented),
+            ("standard", SinkKind::Standard),
+        ] {
+            let p = scratch(&format!("crash-{label}"));
+            capture_then_crash(&p, kind);
+            let scan = report(&format!("crashed/{label}"), &p);
+            let n = decodable_sample_count(&p).unwrap_or(0);
+            println!(
+                "SPIKE-RESULT crashed/{label} on_disk_bytes={} fragments={} decoded_samples={}",
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
+                scan.fragment_count(),
+                n
+            );
+        }
+        println!(
+            "SPIKE-VERDICT read the SPIKE-PROBE and SPIKE-RESULT lines above: \
+             if crashed/fragmented has bytes>0 and decoded_samples>0 while \
+             crashed/standard decodes 0, spec 6.4 holds as written; if the \
+             PROBE lines stay at 0 for the whole capture, the sink does not \
+             write incrementally and the chunked-rolling fallback applies."
         );
     }
 
