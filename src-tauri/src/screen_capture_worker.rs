@@ -292,14 +292,22 @@ pub(crate) fn start_screen_capture_blocking(
             return Err(e);
         }
         Err(_) => {
-            // Difference (1) from the audio domain: no startup-wedged
-            // janitor. The sink is created only once ScreenSession::start
-            // succeeds, so a hang before this handshake has produced no
-            // file — release the guard and fail cleanly rather than keep a
-            // reservation nothing will ever clear on its own. Stop is still
-            // sent pre-emptively so a worker that eventually reaches its
-            // poll loop halts (and finalizes an all-but-empty file) instead
-            // of recording on with nothing watching it.
+            // Brief-mandated: release the guard and fail cleanly rather than
+            // keep a reservation nothing will ever clear on its own. Be
+            // clear about what that COSTS, because the obvious justification
+            // is false: `run_mux` opens the .part BEFORE it signals ready,
+            // and ScreenSession::start blocks on that handshake
+            // (screen/src/session/windows_session.rs), so the sink exists
+            // strictly before `start` returns — a timeout here can fire with
+            // an open .part on disk. The likelier shape is a device thread
+            // still inside open_selected_sources (a wedged audio driver);
+            // when it later succeeds it sees the pre-emptive Stop below,
+            // finalizes, and renames to a staged .mp4 whose done_tx.send
+            // lands in a dropped receiver — so it publishes with no sidecar
+            // and no event, and no janitor sweeps the staging dir (Phase 5
+            // owns staging recovery). The guard is also free for that whole
+            // stretch, so a retry can open the same audio endpoint beside
+            // the first capture. Both residuals: docs/Gaps.md GAP-110.
             clear_active_screen(app);
             let _ = control_tx.send(Control::Stop);
             let msg = "Screen capture did not start in time.".to_string();
@@ -320,22 +328,25 @@ pub(crate) fn start_screen_capture_blocking(
             let result = done_rx.recv().unwrap_or_else(|_| {
                 Err(ScreenError::Sink("screen capture thread vanished".into()))
             });
+            // Clear FIRST, then announce — the ordering capture_commands.rs's
+            // capture-monitor uses. The device thread has already finalized
+            // and published the .mp4 by the time `done_rx` yields, so the
+            // reservation is protecting nothing from here on; holding it
+            // across the sidecar write and the OS toast would let a listener
+            // reacting to `screen:stopped` read `capturing: true`, and would
+            // put that disk I/O inside stop_screen_capture's 30 s budget so
+            // a slow disk reports `stillSaving` on a fully-saved capture.
+            clear_active_screen(&monitor_app);
             match result {
-                Ok(bundle) => match finalize_stopped(&monitor_vault_id, bundle) {
-                    Ok((dto, warning)) => {
-                        emit_screen_stopped(&monitor_app, &dto, warning.as_deref())
-                    }
-                    Err(e) => {
-                        log::error!("screen capture: could not finalize the staged capture: {e}");
-                        emit_screen_failed(&monitor_app, &e, None);
-                    }
-                },
+                Ok(bundle) => {
+                    let (dto, warning) = finalize_stopped(&monitor_vault_id, bundle);
+                    emit_screen_stopped(&monitor_app, &dto, warning.as_deref());
+                }
                 Err(e) => {
                     let (message, retained) = describe_screen_error(&e);
                     emit_screen_failed(&monitor_app, &message, retained.as_deref());
                 }
             }
-            clear_active_screen(&monitor_app);
             crate::tray::set_capture_state(&monitor_app, crate::tray::TrayCaptureState::Idle);
         });
     if let Err(e) = monitor {
@@ -375,11 +386,14 @@ fn describe_screen_error(err: &ScreenError) -> (String, Option<PathBuf>) {
 /// sidecar write failure is logged but does not fail the finalize — the
 /// capture itself already landed on disk under `outcome.mp4`; losing the
 /// resume metadata is a lesser, separately-visible problem than reporting a
-/// safely-saved capture as failed.
+/// safely-saved capture as failed. INFALLIBLE by construction, and typed
+/// that way: the only fallible call is the sidecar write above, which is
+/// deliberately swallowed, so a `Result` here would give the monitor an
+/// error arm nothing can ever reach.
 fn finalize_stopped(
     vault_id: &str,
     bundle: ScreenStopBundle,
-) -> Result<(StagedCaptureDto, Option<String>), String> {
+) -> (StagedCaptureDto, Option<String>) {
     let ScreenStopBundle {
         outcome,
         source_title,
@@ -409,7 +423,7 @@ fn finalize_stopped(
     if let Err(e) = staging::write_sidecar(dir, &sidecar) {
         log::warn!("screen capture: writing the sidecar failed: {e}");
     }
-    Ok((
+    (
         StagedCaptureDto {
             base,
             path: outcome.mp4.to_string_lossy().into_owned(),
@@ -419,5 +433,119 @@ fn finalize_stopped(
             height: outcome.height,
         },
         outcome.warning,
-    ))
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_retained_error_hands_back_the_part_path_as_typed_data() {
+        // Task 7 introduced `Retained` precisely so a stop that failed AFTER
+        // real footage was written hands the surviving `.part` back as DATA,
+        // not as prose the frontend would have to parse out of a message.
+        // Folding this arm into the catch-all below is a one-character edit
+        // that silently drops `retainedPath` from the emitted payload.
+        let err = ScreenError::Retained {
+            path: PathBuf::from("/staging/.2026-01-02 0915 Demo.mp4.part"),
+            cause: Box::new(ScreenError::Sink("disk full".into())),
+        };
+        let (message, retained) = describe_screen_error(&err);
+        assert_eq!(
+            retained.as_deref(),
+            Some(Path::new("/staging/.2026-01-02 0915 Demo.mp4.part"))
+        );
+        // The message must still name the cause, so a listener that only
+        // renders `message` does not regress to "something went wrong".
+        assert!(message.contains("disk full"), "got {message}");
+    }
+
+    #[test]
+    fn every_other_screen_error_carries_a_message_and_no_retained_path() {
+        // A non-Retained variant has no surviving file, so reporting one
+        // would offer the user a path that does not exist.
+        for err in [
+            ScreenError::Unsupported,
+            ScreenError::SourceGone,
+            ScreenError::EncoderUnavailable,
+            ScreenError::AlreadyCapturing,
+            ScreenError::Io("no space".into()),
+            ScreenError::Sink("mux refused".into()),
+        ] {
+            let (message, retained) = describe_screen_error(&err);
+            assert_eq!(retained, None, "{err} must carry no retained path");
+            assert_eq!(message, err.to_string(), "{err} must render its Display");
+        }
+    }
+
+    #[test]
+    fn the_source_kind_crosses_the_wire_as_the_sidecar_spelling() {
+        // The sidecar stores this as a plain string (staging::StagedSidecar),
+        // so a renamed spelling here would silently orphan every capture a
+        // previous build staged.
+        let screen = source::SourceId::parse("screen:0").expect("screen id");
+        let window = source::SourceId::parse("window:12345").expect("window id");
+        assert_eq!(source_kind_str(&screen), "screen");
+        assert_eq!(source_kind_str(&window), "window");
+    }
+
+    #[test]
+    fn a_finalize_reports_the_capture_even_when_the_sidecar_cannot_be_written() {
+        // The capture already landed on disk as `outcome.mp4`. Losing the
+        // resume metadata is a lesser, separately-logged problem than
+        // reporting a safely-saved capture as failed — so the DTO must come
+        // back intact. The parent directory deliberately does not exist, so
+        // `staging::write_sidecar` really fails here (nothing is written).
+        let bundle = ScreenStopBundle {
+            outcome: ScreenOutcome {
+                mp4: PathBuf::from("/vb-no-such-dir-9e3a/2026-01-02 0915 Demo.mp4"),
+                duration_ms: 61_000,
+                paused_ms: 4_000,
+                width: 1920,
+                height: 1080,
+                dropped: 3,
+                warning: Some("the capture source closed".to_string()),
+            },
+            source_title: "Demo Window".to_string(),
+            source_kind: "window",
+            recorded_at: "2026-01-02T09:15:00+01:00".to_string(),
+            inputs: vec!["Microphone (Yeti)".to_string()],
+        };
+        let (dto, warning) = finalize_stopped("vault-1", bundle);
+        assert_eq!(dto.base, "2026-01-02 0915 Demo");
+        assert_eq!(dto.path, "/vb-no-such-dir-9e3a/2026-01-02 0915 Demo.mp4");
+        assert_eq!(dto.duration_ms, 61_000);
+        assert_eq!(dto.source_title, "Demo Window");
+        assert_eq!(dto.width, 1920);
+        assert_eq!(dto.height, 1080);
+        // A warning must survive to the stopped event: spec 14's "a closed
+        // window still saves" story is told by this string.
+        assert_eq!(warning.as_deref(), Some("the capture source closed"));
+    }
+
+    // Structural regression, the style this file's sibling already uses. The
+    // monitor must drop the reservation BEFORE it announces the outcome —
+    // audio's capture-monitor does (capture_commands.rs), and a listener
+    // that reacts to `screen:stopped` by reading `screen_capture_status`
+    // would otherwise still be told a capture is running.
+    #[test]
+    fn the_monitor_clears_the_reservation_before_it_emits() {
+        let src = include_str!("screen_capture_worker.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let clear = production
+            .find("clear_active_screen(&monitor_app)")
+            .expect("the monitor must clear the reservation");
+        let emit = production
+            .find("emit_screen_stopped(&monitor_app")
+            .expect("the monitor must emit the stopped event");
+        assert!(
+            clear < emit,
+            "clear the reservation before emitting, as capture_commands.rs's monitor does: \
+             emitting first lets a listener read `capturing: true` for a capture it was \
+             just told had finished, and puts the sidecar write and the OS toast inside \
+             stop_screen_capture's 30 s budget (a slow disk then reports stillSaving on a \
+             fully-saved capture)"
+        );
+    }
 }

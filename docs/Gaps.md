@@ -2256,3 +2256,49 @@ for a matching `.index()`.
 Both belong on the Windows verification checklist: pick screen 2 and confirm
 screen 2 is what recorded; pick a window, close it, and confirm the capture
 refuses rather than recording something else.
+
+### GAP-110 · Medium · The 15 s screen-capture ready timeout frees the guard while the capture may still be starting
+`src-tauri/src/screen_capture_worker.rs`, the `Err(_)` arm of
+`ready_rx.recv_timeout(READY_TIMEOUT)`. The behaviour is brief-mandated
+("release the guard and fail cleanly"), so this is a design gap, not a
+deviation — but the design has two residuals worth naming before Phase 5.
+
+The timeout was justified in-code by the claim that no file can exist yet.
+**That claim was false and is now corrected** (same commit): `run_mux`
+creates the sink — which opens the `.part` — and only THEN sends on
+`ready_tx`, and `ScreenSession::start` blocks on that handshake
+(`src-tauri/screen/src/session/windows_session.rs`, the `ready_rx.recv()`
+before `spawn_producers`). So the sink exists strictly BEFORE `start`
+returns success, and the 15 s timeout can fire with an open `.part` on disk.
+
+Two residuals follow:
+
+1. **An orphan with no recovery path.** The commonest shape is a device
+   thread still inside `open_selected_sources` (a wedged audio driver — the
+   documented premise for the audio domain's own timeout) when the 15 s
+   expires. The start path releases the reservation and returns an error.
+   The device thread later succeeds, creates the sink, records briefly, sees
+   the pre-emptively-sent `Control::Stop`, finalizes, and RENAMES to a staged
+   `.mp4`. Its `done_tx.send` lands in a dropped receiver (the monitor is
+   spawned only on the success path), so no sidecar is written and no
+   `screen:stopped` is emitted. Nothing sweeps it: there is no
+   `run_screen_recovery` anywhere, and `capture/src/recovery.rs` sweeps vault
+   recording roots, not `%LOCALAPPDATA%\…\screen-captures`. Spec §10's
+   staging recovery is Phase 5. No user data is lost (the file is near-empty
+   and un-resumable without its sidecar), but staging grows silently.
+2. **A mutual-exclusion window.** Between the timeout and that old device
+   thread finishing, `CaptureGuard` is FREE. The user sees "Screen capture
+   did not start in time.", retries, and the second capture opens the same
+   audio endpoint while the first is still opening or recording it — the
+   exact reliability hazard spec §7.3 says the guard exists to prevent. The
+   pre-emptive `Stop` narrows this window but cannot close it: the first
+   thread is by definition not yet reading its control channel.
+
+**Two candidate fixes, both bigger than a comment.** Either hold the claim
+until the device thread reports terminally — return the error to the user
+without freeing the guard and let the monitor free it, which costs a monitor
+spawned on the timeout path too — or bring a minimal staging janitor forward
+from Phase 5, which fixes (1) but not (2). Residual (2) is the one that
+argues for the first option. For the plan owner to decide; until then the
+timeout arm's comment states the real behaviour rather than the invariant it
+does not have.

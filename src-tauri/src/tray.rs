@@ -5,6 +5,8 @@ use tauri::{
 };
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+use crate::capture_guard::{CaptureGuard, CaptureKind};
+
 /// Hide the companion (and its panel/bubble); the tray "Show / Hide" brings
 /// the buddy back.
 ///
@@ -197,6 +199,30 @@ pub fn set_capture_state(app: &AppHandle, state: TrayCaptureState) {
     }
 }
 
+/// Which capture domain the tray's Pause/Resume/Stop items act on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MenuTarget {
+    Audio,
+    Screen,
+}
+
+/// The tray menu shows ONE set of capture controls, but two domains can
+/// have put it into its `active` state (`set_capture_state(Recording)` is
+/// called from the audio start path AND from the screen one). Routing them
+/// unconditionally to `capture_commands` left the screen case with a stop
+/// that returned instantly (no audio reservation) and a pause that only
+/// logged — while "Show / Hide" was disabled, so the tray offered nothing
+/// that worked. `CaptureGuard` is the one place that knows which domain is
+/// live, so the items follow it. Idle falls to audio: the items are not
+/// rendered then, and the audio path's "No recording is running." refusal
+/// is the right answer to a stale click.
+fn menu_target(active: Option<CaptureKind>) -> MenuTarget {
+    match active {
+        Some(CaptureKind::Screen) => MenuTarget::Screen,
+        _ => MenuTarget::Audio,
+    }
+}
+
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = tray_menu(app, TrayCaptureState::Idle)?;
 
@@ -218,27 +244,80 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "tray-stop-recording" => {
-                // Stopping waits up to 15s for the finalize — never block
-                // the menu callback (and the event loop) on it.
+                // Stopping waits for the finalize (15 s audio, 30 s screen)
+                // — never block the menu callback (and the event loop) on
+                // it. The guard read happens on the worker too: it is O(1)
+                // either way, and taking it there keeps the callback free of
+                // every lock.
                 let app = app.clone();
                 let spawned =
                     std::thread::Builder::new()
                         .name("tray-stop".into())
-                        .spawn(move || {
-                            crate::capture_commands::stop_from_menu(&app);
-                        });
+                        .spawn(
+                            move || match menu_target(app.state::<CaptureGuard>().active()) {
+                                MenuTarget::Screen => crate::screen_commands::stop_from_menu(&app),
+                                MenuTarget::Audio => crate::capture_commands::stop_from_menu(&app),
+                            },
+                        );
                 if let Err(e) = spawned {
                     // Dropping one stop request is harmless — the user
                     // retries from the still-visible tray item.
                     log::warn!("could not spawn tray-stop thread: {e}");
                 }
             }
-            "tray-pause-recording" => crate::capture_commands::pause_from_menu(app),
-            "tray-resume-recording" => crate::capture_commands::resume_from_menu(app),
+            // Pause/resume stay INLINE on the main thread in both domains:
+            // each takes its domain's state mutex for O(1) work and sends on
+            // an unbounded channel, so neither can block the event loop.
+            "tray-pause-recording" => match menu_target(app.state::<CaptureGuard>().active()) {
+                MenuTarget::Screen => crate::screen_commands::pause_from_menu(app),
+                MenuTarget::Audio => crate::capture_commands::pause_from_menu(app),
+            },
+            "tray-resume-recording" => match menu_target(app.state::<CaptureGuard>().active()) {
+                MenuTarget::Screen => crate::screen_commands::resume_from_menu(app),
+                MenuTarget::Audio => crate::capture_commands::resume_from_menu(app),
+            },
             "open-logs" => crate::diagnostics::open_log_dir(app),
             "quit" => quit(app),
             _ => {}
         })
         .build(app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_live_screen_capture_routes_the_tray_controls_to_the_screen_domain() {
+        // The bug this pins: `set_capture_state(Recording)` from the screen
+        // start path activates the tray's "⏸ Pause recording" / "⏹ Stop
+        // recording" items AND disables "Show / Hide". Routed to the audio
+        // domain they are dead — stop finds no audio reservation and returns
+        // immediately, pause only logs an error the user never sees — so the
+        // tray advertises a stop it cannot perform while every other control
+        // is disabled.
+        assert_eq!(menu_target(Some(CaptureKind::Screen)), MenuTarget::Screen);
+        assert_eq!(menu_target(Some(CaptureKind::Audio)), MenuTarget::Audio);
+        // Idle keeps today's behaviour: the items are not shown, and if one
+        // is somehow clicked the audio path's own "no recording" refusal is
+        // the right (and only harmless) answer.
+        assert_eq!(menu_target(None), MenuTarget::Audio);
+    }
+
+    #[test]
+    fn every_capture_menu_handler_dispatches_on_the_guard() {
+        // Structural, because the failure mode is a handler left behind:
+        // stop, pause and resume each need the dispatch, and fixing one
+        // while the other two keep calling straight into capture_commands
+        // reproduces exactly half of the dead-control bug.
+        let src = include_str!("tray.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let dispatches = production.matches("menu_target(").count();
+        assert_eq!(
+            dispatches, 4,
+            "expected the menu_target definition plus one dispatch in each of the three \
+             capture menu handlers (stop, pause, resume); found {dispatches}"
+        );
+    }
 }

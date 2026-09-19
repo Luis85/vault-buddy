@@ -23,23 +23,24 @@ use vault_buddy_core::sync_util::lock_ignoring_poison;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureKind {
     Audio,
-    // Only this task's own tests construct this variant so far — Task 7
-    // wires the screen-capture commands to claim it in production.
-    //
-    // The allow is needed because `capture_guard` is a PRIVATE `mod` in
-    // lib.rs: a `pub` item inside a private module is not reachable from
-    // outside the crate, so rustc treats it as private for dead-code
-    // purposes and flags it. (This is not a crate-type effect — the mixed
-    // staticlib/cdylib/rlib setting makes no difference here; that was
-    // checked against a minimal repro rather than assumed.)
-    #[allow(dead_code)]
+    // Constructed in production since Task 8 wired the screen-capture
+    // commands: the start path claims it, `clear_active_screen` releases
+    // it, and the tray dispatches its capture items on it — so the
+    // `#[allow(dead_code)]` this variant used to carry is gone (verified by
+    // removing it and compiling, not assumed).
     Screen,
 }
 
 impl CaptureKind {
-    // Not yet called in production (Task 7 uses it for its own audit-log /
-    // UI copy); part of the API this task's brief specifies, exercised
-    // today only by capture_guard's own tests.
+    // STILL not called in production — `busy_message` is what the UI
+    // renders, and the tray dispatches on the variant itself, so nothing
+    // needs this prose form yet; a later audit-log surface is its intended
+    // caller. Exercised today only by this module's own tests, and the
+    // allow is still load-bearing: removing it fails the build with
+    // "method `label` is never used" (checked, not assumed). It is needed
+    // at all because `capture_guard` is a PRIVATE `mod` in lib.rs — a `pub`
+    // item inside a private module is not reachable from outside the crate,
+    // so rustc treats it as private for dead-code purposes.
     #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
@@ -86,10 +87,9 @@ impl CaptureGuard {
         }
     }
 
-    // Not yet called in production — a future status surface (e.g. a
-    // screen-capture status command) reads it; exercised today only by
-    // this module's own tests.
-    #[allow(dead_code)]
+    /// Which domain holds the guard right now. `tray::menu_target` reads it
+    /// to route the tray's one set of capture controls at whichever domain
+    /// actually put the tray into its recording state.
     pub fn active(&self) -> Option<CaptureKind> {
         *lock_ignoring_poison(&self.0)
     }

@@ -251,7 +251,7 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 73 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 79 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands.
 
 | Defined in | Commands |
@@ -266,6 +266,7 @@ Keep this table in sync when adding/removing commands.
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc` *(async)*, `convert_document` *(async — spawns the pandoc child off the main thread)*, `get_documents_config`, `set_documents_config` *(async — now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields)*, `set_pandoc_path` *(async)*, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
+| `screen_commands.rs` | The screen-capture phase-2 surface (the nine later-phase commands — region select, the editor, the config setters — are deliberately absent). `list_capture_sources` *(async — WGC/WinRT enumeration takes hundreds of ms, GAP-22's reasoning for `list_audio_devices`; degrades to an empty list rather than an error)*, `start_screen_capture` *(async — source re-resolve, cpal endpoint opening, sink creation and staging-directory I/O all block, and the start waits on a 15 s ready handshake)*, `stop_screen_capture` *(async — the wait is bounded at 30 s of mux teardown + fMP4 finalize + the publish rename, wider than audio's 15 s; returns typed `stillSaving` on expiry, mirroring `stop_capture`)*, `pause_screen_capture`, `resume_screen_capture`, `screen_capture_status` *(all three sync: each takes the reservation mutex for O(1) work and sends on an unbounded channel, so none can block the main thread — the same posture as the audio siblings)*. Mutual exclusion with the audio domain lives in `CaptureGuard` (spec §7.3), claimed before the reservation and freed from exactly one chokepoint, `clear_active_screen` — both facts pinned by structural tests |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu

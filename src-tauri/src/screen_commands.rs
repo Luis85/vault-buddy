@@ -11,12 +11,17 @@
 //!
 //! THREE deliberate differences from the audio domain:
 //!
-//! 1. No startup-wedged janitor. Audio needs one because a wedged driver can
-//!    hang device setup past the handshake with a .part already on disk.
-//!    Here the sink is created only once `ScreenSession::start` succeeds, so
-//!    a hang before the handshake has produced no file: the start fails
-//!    cleanly and releases the guard instead of keeping a reservation
-//!    nothing would ever clear on its own.
+//! 1. No startup-wedged janitor (yet). Audio needs one because a wedged
+//!    driver can hang device setup past the handshake with a .part already
+//!    on disk. The same is true here — `ScreenSession::start` blocks until
+//!    the mux has OPENED the .part, so a timeout can fire with a file on
+//!    disk — but a screen capture stages OUTSIDE every vault, so the orphan
+//!    is a near-empty staged .mp4 in the app's own staging directory rather
+//!    than something in the user's notes. The start fails cleanly and
+//!    releases the guard; sweeping the staging directory is Phase 5's job.
+//!    Both residuals (the unswept orphan, and the window in which the freed
+//!    guard lets a retry run beside the still-starting first capture) are
+//!    recorded as docs/Gaps.md GAP-110.
 //! 2. Mutual exclusion lives in `CaptureGuard`, claimed FIRST. The
 //!    reservation below is defence in depth behind it, not the mechanism.
 //! 3. A source closing mid-capture is a WARNING that finalizes cleanly
@@ -193,10 +198,17 @@ pub fn capture_blocks_shutdown(app: &AppHandle) -> bool {
 
 fn our_window_titles(app: &AppHandle) -> Vec<String> {
     // Spec 7.2: Vault Buddy must never offer itself as a capture source.
-    // `WebviewWindow::title()` reads the OS window text (Win32 marshals a
-    // cross-thread GetWindowText itself), unlike `show`/`hide`/`set_position`
-    // which the window-system invariant reserves for the main thread — this
-    // is safe to call from the blocking-pool task below.
+    // `WebviewWindow::title()` is safe to call from the blocking-pool task
+    // below, but NOT for the reason the obvious one: tauri marshals it, not
+    // Win32. `title()` expands to `window_getter!` -> `send_user_message`,
+    // which off the main thread posts a `Message::Window(_, Title(tx))` to
+    // the tao event loop and then blocks on `rx.recv()`
+    // (tauri-runtime-wry-2.11.4/src/lib.rs). That round-trip is UNBOUNDED:
+    // while the main thread sits in an OS modal loop (a buddy drag, a native
+    // file dialog) this call waits. Harmless only because the command that
+    // reaches it is async; a future `sync` refactor of
+    // `list_capture_sources` would hang the event loop on itself, which is
+    // why this comment has to be accurate rather than merely reassuring.
     app.webview_windows()
         .values()
         .filter_map(|w| w.title().ok())
@@ -253,6 +265,13 @@ pub async fn start_screen_capture(
         }
     });
     crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
+    // The monitor thread is already live when the blocking start returns, so
+    // a source that closes in the few ms this tail takes emits
+    // `screen:stopped` BEFORE this `screen:started`. Matches the audio
+    // precedent (capture_commands.rs emits `capture:started` the same way),
+    // so it is left alone — but the frontend store must treat
+    // `screen_capture_status` as authoritative and tolerate out-of-order
+    // lifecycle events rather than deriving its state from arrival order.
     let _ = app.emit("screen:started", payload.clone());
     Ok(payload)
 }
@@ -399,6 +418,30 @@ pub fn screen_capture_status(state: tauri::State<ScreenCaptureState>) -> ScreenS
     }
 }
 
+/// The tray's capture controls, routed here by `tray::menu_target` when a
+/// SCREEN capture holds the cross-domain guard. Bounded like the command
+/// (the tray is not a shutdown path); callers must NOT be on the main
+/// thread — `tray.rs` spawns `tray-stop` for exactly that reason.
+pub fn stop_from_menu(app: &AppHandle) {
+    let _ = request_stop_and_wait_screen(app, Some(STOP_TIMEOUT));
+}
+
+/// Pause/resume from the tray. Safe on the main thread: `set_screen_paused`
+/// holds the state mutex for O(1) work and sends on an unbounded channel.
+/// The error is logged, not surfaced — the tray has no panel to show it in,
+/// mirroring `capture_commands::pause_from_menu`.
+pub fn pause_from_menu(app: &AppHandle) {
+    if let Err(e) = set_screen_paused(app, true) {
+        log::warn!("pause screen capture from tray: {e}");
+    }
+}
+
+pub fn resume_from_menu(app: &AppHandle) {
+    if let Err(e) = set_screen_paused(app, false) {
+        log::warn!("resume screen capture from tray: {e}");
+    }
+}
+
 /// Every shutdown path funnels through here so quitting mid-capture saves
 /// through the normal stop flow instead of stranding a `.part`. Callers must
 /// NOT be on the main/event-loop thread (the wait is unbounded); tray::quit
@@ -437,12 +480,19 @@ mod tests {
         // A reloaded webview re-reads this. Leaking the last capture's vault
         // id or start time into an idle payload would render a phantom
         // capture bar counting up from a recording that ended.
+        // EVERY field, not a sample: `paused: true` with a stale
+        // `paused_since_ms` is the worst of the phantoms — it renders a
+        // PAUSED capture bar counting from a timestamp that belongs to a
+        // recording that already ended, and a sampled assertion leaves that
+        // exact pair unpinned.
         let p = ScreenStatusPayload::idle();
         assert!(!p.capturing);
         assert_eq!(p.vault_id, None);
         assert_eq!(p.started_at_ms, None);
-        assert_eq!(p.source_title, None);
+        assert!(!p.paused);
         assert_eq!(p.paused_total_ms, 0);
+        assert_eq!(p.paused_since_ms, None);
+        assert_eq!(p.source_title, None);
     }
 
     #[test]
@@ -460,10 +510,24 @@ mod tests {
 
     #[test]
     fn an_unparseable_source_id_is_refused_before_anything_is_claimed() {
-        // The id crosses the IPC boundary and is untrusted. Refusing it here,
-        // before the guard is claimed, means a malformed request cannot
-        // wedge both capture domains.
-        assert!(vault_buddy_screen::source::SourceId::parse("nonsense").is_none());
+        // Structural, because the property IS an ordering, not a value: the
+        // id crosses the IPC boundary untrusted, and `SourceId::parse` must
+        // run BEFORE `CaptureGuard::try_claim`. Asserting `parse("nonsense")
+        // .is_none()` instead would only re-test Task 5's parser and would
+        // stay green with the claim moved in front of it.
+        let src = include_str!("screen_capture_worker.rs");
+        let parse = src
+            .find("SourceId::parse")
+            .expect("the start path must parse the source id");
+        let claim = src
+            .find("try_claim(CaptureKind::Screen)")
+            .expect("the start path must claim the cross-domain guard");
+        assert!(
+            parse < claim,
+            "the source id must be validated BEFORE the guard is claimed: a malformed id \
+             that claimed first and returned on `?` would leak the claim and wedge BOTH \
+             capture domains until the app restarts, with no error and no log line"
+        );
     }
 
     // Structural regression, mirroring config_lock_guard.rs: the guard must
@@ -489,6 +553,20 @@ mod tests {
         assert_eq!(
             releases, 1,
             "expected exactly one Screen release (clear_active_screen); found {releases}"
+        );
+        // The scan must span BOTH files, because the split is what created
+        // the hole: 10 of the 11 guard-freeing paths (every lifecycle
+        // early-return) live in the worker and reach the guard only through
+        // `clear_active_screen`, so scanning this file alone left the file
+        // most likely to grow a raw release entirely unguarded. No
+        // self-match problem here — the literal lives in this file, not in
+        // the one being scanned, so the worker is read whole.
+        let worker = include_str!("screen_capture_worker.rs");
+        let worker_releases = worker.matches("release(CaptureKind::Screen)").count();
+        assert_eq!(
+            worker_releases, 0,
+            "screen_capture_worker.rs must free the guard only through clear_active_screen; \
+             found {worker_releases} raw release site(s)"
         );
     }
 }
