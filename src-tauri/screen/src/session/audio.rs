@@ -78,12 +78,36 @@ pub(super) fn run_audio(
             }
         }
 
-        // While paused, throw away whatever arrived rather than buffering
-        // it: buffered paused audio would surface as a burst on resume,
-        // and its frames would push the sample-count timeline past the
-        // video's.
+        // While paused, throw away whatever arrives DURING the pause
+        // rather than buffering it: buffered paused audio would surface as
+        // a burst on resume, and its frames would push the sample-count
+        // timeline past the video's. But anything captured BEFORE the
+        // pause began is real audio that already happened, and must be
+        // written out — see `pacing::pause_flush_frames`'s doc comment for
+        // the ~85 ms-per-pause regression this flush prevents. It goes
+        // through the SAME `AudioPacer::take` as the ordinary batching
+        // path below, so `emitted` — and every timestamp after it —
+        // stays consistent with what was actually written.
         let paused = output_ts(&clock).is_none();
         if paused {
+            let lens: Vec<usize> = buffers.iter().map(|b| b.len()).collect();
+            let take = pacing::pause_flush_frames(&lens);
+            if take > 0 {
+                let slices: Vec<&[f32]> = buffers.iter().map(|b| &b[..take.min(b.len())]).collect();
+                let stereo = mixer::mix_n_to_stereo_i16(&slices);
+                if let Some((ts, dur)) = pacer.take(take) {
+                    if tx
+                        .send(MuxMsg::Audio {
+                            pcm: stereo,
+                            ts,
+                            dur,
+                        })
+                        .is_err()
+                    {
+                        break; // the mux is gone; nothing left to write to
+                    }
+                }
+            }
             for b in &mut buffers {
                 b.clear();
             }

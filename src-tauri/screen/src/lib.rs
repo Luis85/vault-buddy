@@ -44,6 +44,18 @@ pub enum ScreenError {
     Sink(String),
     /// A capture was requested while one is already running.
     AlreadyCapturing,
+    /// `ScreenSession::stop` failed (finalize, or the publish rename) AFTER
+    /// real footage had already been written to the `.part` file at `path`
+    /// — and that file was deliberately left where it is rather than
+    /// deleted, precisely so a failed stop still leaves something playable
+    /// (see `sink.rs`'s fragmented-MP4 module docs). `path` is carried
+    /// TYPED, not stringified into the message, so a caller (Task 8) can
+    /// offer the retained file to the user instead of only logging its
+    /// location.
+    Retained {
+        path: std::path::PathBuf,
+        cause: Box<ScreenError>,
+    },
 }
 
 impl std::fmt::Display for ScreenError {
@@ -55,11 +67,23 @@ impl std::fmt::Display for ScreenError {
             ScreenError::Io(e) => write!(f, "screen capture I/O error: {e}"),
             ScreenError::Sink(e) => write!(f, "screen capture could not be written: {e}"),
             ScreenError::AlreadyCapturing => write!(f, "a capture is already running"),
+            ScreenError::Retained { path, cause } => write!(
+                f,
+                "screen capture could not finish, but {} still holds the recording: {cause}",
+                path.display()
+            ),
         }
     }
 }
 
-impl std::error::Error for ScreenError {}
+impl std::error::Error for ScreenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ScreenError::Retained { cause, .. } => Some(cause.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -113,5 +137,42 @@ mod tests {
         assert!(ScreenError::Sink("MF_E_TOPO_CODEC_NOT_FOUND".into())
             .to_string()
             .contains("MF_E_TOPO_CODEC_NOT_FOUND"));
+    }
+
+    // `Retained` exists so a caller can offer the user the `.part` file a
+    // failed stop deliberately left behind — that only works if the path
+    // is real DATA on the error, not just text baked into the message.
+    #[test]
+    fn retained_carries_the_part_path_as_typed_data_and_renders_the_cause() {
+        let err = ScreenError::Retained {
+            path: std::path::PathBuf::from("/vault/Screen Recordings/.foo.mp4.part"),
+            cause: Box::new(ScreenError::Io("disk full".into())),
+        };
+        // The path must be readable back as a PATH, not re-parsed out of
+        // the message.
+        let ScreenError::Retained { path, .. } = &err else {
+            unreachable!("constructed as Retained");
+        };
+        assert_eq!(
+            path,
+            &std::path::PathBuf::from("/vault/Screen Recordings/.foo.mp4.part")
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("/vault/Screen Recordings/.foo.mp4.part"));
+        assert!(
+            rendered.contains("disk full"),
+            "the cause must still surface: {rendered}"
+        );
+    }
+
+    #[test]
+    fn retained_exposes_its_cause_through_the_error_trait() {
+        use std::error::Error as _;
+        let err = ScreenError::Retained {
+            path: std::path::PathBuf::from("/tmp/x.mp4.part"),
+            cause: Box::new(ScreenError::Sink("MF_E_INVALIDMEDIATYPE".into())),
+        };
+        let source = err.source().expect("Retained always carries a cause");
+        assert!(source.to_string().contains("MF_E_INVALIDMEDIATYPE"));
     }
 }

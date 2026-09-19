@@ -507,6 +507,52 @@ mod tests {
         assert_eq!(take_frames(&[0, 47_999], 4096, 48_000), 0);
     }
 
+    // --- the pause flush (never silently drop already-captured audio) ----
+
+    #[test]
+    fn a_pause_flushes_every_buffered_frame_instead_of_dropping_it() {
+        // REGRESSION: a pause used to clear the pre-pause partial buffers
+        // outright, discarding up to one chunk's worth (~85 ms) of already
+        // captured audio. Unlike `take_frames`, there is no `min_chunk`
+        // gate here — a pause can land mid-chunk, and that partial audio
+        // is still real.
+        assert_eq!(pause_flush_frames(&[4095]), 4095);
+        assert_eq!(pause_flush_frames(&[1]), 1);
+    }
+
+    #[test]
+    fn a_pause_flush_takes_the_longest_source_so_a_lagging_one_is_padded_not_dropped() {
+        // Two sources at different buffer lengths (normal jitter between
+        // independently-delivering streams): flushing the shorter one's
+        // length would silently drop the longer source's tail.
+        assert_eq!(pause_flush_frames(&[2000, 4095]), 4095);
+    }
+
+    #[test]
+    fn a_pause_flush_with_nothing_buffered_is_a_no_op() {
+        assert_eq!(pause_flush_frames(&[]), 0);
+        assert_eq!(pause_flush_frames(&[0, 0]), 0);
+    }
+
+    #[test]
+    fn flushing_a_partial_buffer_on_pause_advances_emitted_like_any_other_chunk() {
+        // Pinning that the pause flush rides the SAME `AudioPacer::take` as
+        // the ordinary batching path, so `emitted` — and every timestamp
+        // derived from it afterward — stays consistent with what was
+        // actually written, instead of silently falling behind by
+        // whatever a bare `buffers.clear()` would have dropped.
+        let mut p = AudioPacer::new(48_000);
+        let flush = pause_flush_frames(&[2048]);
+        let (ts, dur) = p.take(flush).expect("a nonzero flush is written");
+        assert_eq!(ts, Duration::ZERO);
+        assert_eq!(dur, audio_duration(2048, 48_000).unwrap());
+        // The next chunk (post-resume) must start exactly where the flush
+        // left off, not back at zero — which is what "clear without
+        // advancing the pacer" produced.
+        let (ts2, _) = p.take(1024).expect("a nonzero chunk is written");
+        assert_eq!(ts2, ts + dur);
+    }
+
     // --- advisory stats ---------------------------------------------------
 
     #[test]
@@ -514,6 +560,35 @@ mod tests {
         assert_eq!(observed_fps(30, Duration::from_secs(1)), 30.0);
         assert_eq!(observed_fps(15, Duration::from_millis(500)), 30.0);
         assert_eq!(observed_fps(5, Duration::ZERO), 0.0);
+    }
+
+    // --- reported duration: what the mux wrote, never the wall clock -----
+
+    #[test]
+    fn duration_reports_the_last_written_samples_end_not_the_stop_time() {
+        // REGRESSION: the mux can end (a source closing, a write failure)
+        // long before `stop()` is called; reporting the clock's
+        // elapsed-at-stop instead of what was actually written claims
+        // footage the file does not contain — a monitor unplugged at 60 s
+        // with stop() called at 300 s must report 60 s, not 300 s.
+        let written_until = Duration::from_secs(60);
+        let stop_time_elapsed = Duration::from_secs(300);
+        assert_eq!(
+            resolved_duration(written_until, stop_time_elapsed),
+            written_until
+        );
+    }
+
+    #[test]
+    fn duration_falls_back_to_the_clock_only_when_nothing_was_written() {
+        // Duration::ZERO is the unambiguous "the mux never wrote a
+        // sample" case (every real sample carries a nonzero duration —
+        // MIN_SAMPLE), so only then does the clock-elapsed fallback apply.
+        let stop_time_elapsed = Duration::from_secs(42);
+        assert_eq!(
+            resolved_duration(Duration::ZERO, stop_time_elapsed),
+            stop_time_elapsed
+        );
     }
 
     // --- the control state machine ---------------------------------------

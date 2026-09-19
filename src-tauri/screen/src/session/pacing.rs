@@ -113,6 +113,27 @@ pub fn take_frames(lens: &[usize], min_chunk: usize, stall_cap: usize) -> usize 
     }
 }
 
+/// How many frames to flush from the buffered audio when a pause begins,
+/// so the buffers can be safely cleared afterwards without discarding
+/// anything already captured.
+///
+/// Unlike the ordinary batching round (`take_frames`), this is not gated
+/// on `min_chunk` — a pause can land mid-chunk, and that partial audio is
+/// still real audio. It takes the LONGEST per-source buffer, the same
+/// stall-cap posture `take_frames` falls back to once a source stalls:
+/// `mix_n_to_stereo_i16` already pads a shorter source's slice with
+/// silence, so nothing needs to wait for every source to agree before the
+/// already-captured audio can be written out.
+///
+/// REGRESSION this exists to prevent: a pause used to clear every buffer
+/// outright without emitting them first, silently discarding up to one
+/// chunk's worth (~85 ms at the default `AUDIO_CHUNK_FRAMES`) of audio
+/// WITHOUT advancing the pacer's `emitted` count — so audio drifted ~85 ms
+/// earlier relative to video, and the drift accumulated across every pause.
+pub fn pause_flush_frames(lens: &[usize]) -> usize {
+    lens.iter().copied().max().unwrap_or(0)
+}
+
 /// Advisory frame rate for the `screen:frames` stat (spec 11), lossy by
 /// design. Zero rather than an infinity when no time has passed.
 pub fn observed_fps(frames: u64, elapsed: Duration) -> f32 {
@@ -121,6 +142,26 @@ pub fn observed_fps(frames: u64, elapsed: Duration) -> f32 {
         return 0.0;
     }
     frames as f32 / secs
+}
+
+/// The capture's reported duration: the end of the last sample the mux
+/// actually WROTE, never the wall clock at `stop()` time.
+///
+/// The mux can end well before `stop()` runs — a source closing
+/// (`frames.rs`'s `on_closed`), or a write failure that still finalizes
+/// what came before it — so reporting elapsed-at-stop would claim footage
+/// the file does not contain (the same "claims footage the file does not
+/// contain" failure `stopping_while_paused_keeps_the_paused_time_out_of_
+/// the_duration` guards for the pause case). `written_until ==
+/// Duration::ZERO` is the unambiguous "nothing was ever written" case —
+/// every real sample carries a nonzero duration, see `MIN_SAMPLE` — so
+/// only then does the clock-elapsed fallback apply.
+pub fn resolved_duration(written_until: Duration, clock_elapsed: Duration) -> Duration {
+    if written_until.is_zero() {
+        clock_elapsed
+    } else {
+        written_until
+    }
 }
 
 /// Is a delivered frame usable against the size the sink was opened

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use vault_buddy_capture::session::SourceInput;
 use vault_buddy_core::capture_paths;
@@ -14,6 +14,7 @@ use vault_buddy_core::screen_capture_config::{bitrate_bps, normalize_fps};
 use windows_capture::capture::{
     CaptureControl, GraphicsCaptureApiError, GraphicsCaptureApiHandler,
 };
+use windows_capture::graphics_capture_api::GraphicsCaptureApi;
 use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
     GraphicsCaptureItemType, MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
@@ -42,7 +43,7 @@ pub struct ScreenSession {
     warnings: Arc<Warnings>,
     control: Option<CaptureControl<FrameHandler, ScreenError>>,
     audio: Option<JoinHandle<()>>,
-    mux: Option<JoinHandle<Result<(), ScreenError>>>,
+    mux: Option<JoinHandle<Result<Duration, ScreenError>>>,
     started: Instant,
     part: PathBuf,
     staged: PathBuf,
@@ -321,23 +322,39 @@ impl ScreenSession {
             .saturating_sub(elapsed);
 
         // The mux finalizes as it exits. Finalize is the only drain.
-        match self.mux.take() {
+        // A finalize failure or a mux panic both still leave the `.part`
+        // on disk holding whatever it had written — the fragmented
+        // container degrades to a playable prefix rather than an
+        // unopenable file — so both are reported as `Retained` with that
+        // path, not a bare Sink error, so a caller can offer it to the
+        // user instead of only logging where it went.
+        let written_until = match self.mux.take() {
             Some(h) => match h.join() {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(e),
+                Ok(Ok(written_until)) => written_until,
+                Ok(Err(e)) => {
+                    return Err(ScreenError::Retained {
+                        path: self.part.clone(),
+                        cause: Box::new(e),
+                    })
+                }
                 Err(_) => {
                     log::error!("screen capture: the mux thread panicked");
-                    return Err(ScreenError::Sink(
-                        "the capture writer stopped unexpectedly".into(),
-                    ));
+                    return Err(ScreenError::Retained {
+                        path: self.part.clone(),
+                        cause: Box::new(ScreenError::Sink(
+                            "the capture writer stopped unexpectedly".into(),
+                        )),
+                    });
                 }
             },
             None => return Err(ScreenError::Sink("the capture was already stopped".into())),
-        }
+        };
 
         // rename_noreplace, never std::fs::rename, which REPLACES on
         // every platform. On failure the .part is deliberately left
-        // where it is: it holds the footage, and recovery finds it.
+        // where it is: it holds the footage, and recovery finds it —
+        // and `Retained` carries that path so a caller need not rely on
+        // recovery alone to offer it back to the user.
         capture_paths::rename_noreplace(&self.part, &self.staged).map_err(|e| {
             log::error!(
                 "screen capture: could not publish {:?} as {:?}: {e}; the .part file is \
@@ -345,12 +362,22 @@ impl ScreenSession {
                 self.part,
                 self.staged
             );
-            ScreenError::Io(format!("could not finish the capture file: {e}"))
+            ScreenError::Retained {
+                path: self.part.clone(),
+                cause: Box::new(ScreenError::Io(format!(
+                    "could not finish the capture file: {e}"
+                ))),
+            }
         })?;
 
         Ok(ScreenOutcome {
             mp4: self.staged.clone(),
-            duration_ms: elapsed.as_millis() as u64,
+            // The last sample the mux actually wrote, not the wall clock at
+            // stop() time (`pacing::resolved_duration`'s doc comment has the
+            // full reasoning): the mux can end well before stop() is
+            // called, and reporting stop-time would claim footage the file
+            // does not contain.
+            duration_ms: pacing::resolved_duration(written_until, elapsed).as_millis() as u64,
             paused_ms: paused.as_millis() as u64,
             width: self.width,
             height: self.height,
@@ -416,7 +443,7 @@ fn settings<T: TryInto<GraphicsCaptureItemType>>(
         // every one the mux wants and report the rest to the user as
         // DROPPED frames. Capping eligibility at one frame period makes
         // that counter mean what it says.
-        MinimumUpdateIntervalSettings::Custom(pacing::frame_duration(fps)),
+        minimum_update_interval_settings(fps),
         DirtyRegionSettings::Default,
         // BGRA8, NOT this crate's Rgba8 DEFAULT: `convert::bgra_to_nv12`
         // reads B, G, R, A per pixel, so the default would swap red and
@@ -425,4 +452,48 @@ fn settings<T: TryInto<GraphicsCaptureItemType>>(
         ColorFormat::Bgra8,
         flags,
     )
+}
+
+/// Whether to throttle WGC delivery to the frame rate, or leave it at
+/// `Default` (deliver at the monitor's refresh).
+///
+/// `MinimumUpdateIntervalSettings::Custom` is a HARD GATE in the vendored
+/// `windows-capture` crate, not a hint: `GraphicsCaptureApi::new` checks
+/// it BEFORE the session is created (`graphics_capture_api.rs` ~150-153)
+/// and `GraphicsCaptureApi::start` checks it again when applying the
+/// settings (~349-358) — both refuse the WHOLE session with
+/// `MinimumUpdateIntervalUnsupported` whenever this setting is anything
+/// but `Default` and `is_minimum_update_interval_supported()` does not
+/// return `Ok(true)`. That probe queries a Windows 11-era WinRT property
+/// (`GraphicsCaptureSession.MinUpdateInterval`) a Windows 10 build does
+/// not have — and this app still documents Windows 10 as supported. So
+/// unlike every other OS-policy knob above (deliberately left at
+/// `Default`), this one is checked first: `Custom` only when the probe
+/// says `Ok(true)`, and `Default` for `Ok(false)` OR a probe error — an
+/// optional throttling knob must never be the reason a capture cannot
+/// start at all.
+fn minimum_update_interval_settings(fps: u32) -> MinimumUpdateIntervalSettings {
+    match GraphicsCaptureApi::is_minimum_update_interval_supported() {
+        Ok(true) => {
+            log::debug!(
+                "screen capture: MinUpdateInterval is supported; throttling WGC delivery to \
+                 the frame rate"
+            );
+            MinimumUpdateIntervalSettings::Custom(pacing::frame_duration(fps))
+        }
+        Ok(false) => {
+            log::debug!(
+                "screen capture: MinUpdateInterval is not supported on this Windows build; \
+                 capturing at the monitor's full refresh rate instead"
+            );
+            MinimumUpdateIntervalSettings::Default
+        }
+        Err(e) => {
+            log::debug!(
+                "screen capture: could not probe MinUpdateInterval support ({e}); capturing \
+                 at the monitor's full refresh rate instead"
+            );
+            MinimumUpdateIntervalSettings::Default
+        }
+    }
 }
