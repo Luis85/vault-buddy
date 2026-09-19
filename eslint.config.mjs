@@ -72,6 +72,15 @@ export default defineConfig([
       // Vendored superpowers skills framework — third-party code, not ours
       // to lint (see docs/DEVELOPMENT.md § Superpowers skills).
       ".claude/**",
+      // Design-concept drops: standalone prototype pages and their fixtures
+      // (HTML/JS/CSS plus PNGs, zips, logs and Python helpers), kept for
+      // reference, never bundled and never imported by src/. They are
+      // browser scripts with no module system, so the app's config reports
+      // thousands of no-undef errors on `window`/`document` — linting them
+      // under src/'s rules measures nothing. Same reasoning as .claude/**
+      // above. If a concept ever graduates into the app it moves to src/
+      // and is linted there.
+      "docs/concepts/**",
     ],
   },
   js.configs.recommended,
