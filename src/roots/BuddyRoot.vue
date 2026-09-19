@@ -144,8 +144,12 @@ onUnmounted(() => {
       :character="settings.character"
       :draggable="settings.draggingEnabled"
       :facing="facing"
-      :recording="capture.status === 'recording' || capture.status === 'saving'"
-      :paused="capture.paused"
+      :recording="
+        capture.status === 'recording' ||
+          capture.status === 'saving' ||
+          screenCapture.status !== 'idle'
+      "
+      :paused="capture.paused || screenCapture.paused"
       :transcribing="transcribing"
       :drop-target="dragActive"
       @toggle="onToggle"

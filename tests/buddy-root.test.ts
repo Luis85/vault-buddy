@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import BuddyRoot from "../src/roots/BuddyRoot.vue";
 import { useCaptureStore } from "../src/stores/capture";
+import { useScreenCaptureStore } from "../src/stores/screenCapture";
 import { useSettingsStore } from "../src/stores/settings";
 
 vi.mock("@tauri-apps/plugin-log", () => ({
@@ -58,6 +59,44 @@ describe("BuddyRoot", () => {
     mount(BuddyRoot);
     await flushPromises();
     expect(calls).toContain("screen_capture_status");
+  });
+
+  it("shows the recording badge while a SCREEN capture runs", async () => {
+    // The buddy is documented (spec 7.3, AGENTS.md) as the capture indicator
+    // for BOTH capture kinds, and `tray::hide_buddy` refuses to hide it
+    // mid-screen-capture on exactly that premise. It bound only the AUDIO
+    // store, so a screen capture left the buddy looking idle while Hide
+    // silently did nothing — the user is refused with no visible reason.
+    const wrapper = mount(BuddyRoot);
+    await flushPromises();
+    const screen = useScreenCaptureStore();
+    screen.$patch({ status: "capturing" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("button.buddy").classes()).toContain("recording");
+    expect(wrapper.find(".rec-dot").exists()).toBe(true);
+  });
+
+  it("shows the paused tint while a SCREEN capture is paused", async () => {
+    // The screen store's tri-state is not the audio store's two booleans:
+    // `paused` is a getter over `status === "paused"`, so the paused arm has
+    // to read the screen store too or a paused capture renders as a live one.
+    const wrapper = mount(BuddyRoot);
+    await flushPromises();
+    const screen = useScreenCaptureStore();
+    screen.$patch({ status: "paused" });
+    await wrapper.vm.$nextTick();
+    const buddy = wrapper.find("button.buddy");
+    expect(buddy.classes()).toContain("recording");
+    expect(buddy.classes()).toContain("paused");
+  });
+
+  it("stays idle-looking when no capture of either kind runs", async () => {
+    // The other half of the badge: `status !== "idle"` must not be a way of
+    // saying "always on".
+    const wrapper = mount(BuddyRoot);
+    await flushPromises();
+    expect(wrapper.find("button.buddy").classes()).not.toContain("recording");
+    expect(wrapper.find(".rec-dot").exists()).toBe(false);
   });
 
   it("toggles the panel when the buddy is clicked", async () => {

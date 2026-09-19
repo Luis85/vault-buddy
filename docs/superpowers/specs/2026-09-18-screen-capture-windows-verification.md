@@ -45,10 +45,10 @@ hoped-for outcome fails for unrelated reasons and tells you nothing.
 | 4 | **Pause excludes its stretch** (spec §6.2/6.3) | Record ~20 s with a visible timer on screen, Pause from the tray, wait ~20 s (change the screen visibly during the pause), Resume, record ~20 s more, Stop. | File duration (expect ~40 s, NOT ~60 s); is the paused stretch absent; do A/V stay in sync after the resume? |
 | 5 | **Recorded window closes mid-capture** (spec §14) | Record a window, close it after ~20 s, then Stop (or let it self-finalize). | Was a warning surfaced? Did it finalize cleanly rather than fail? Does the file hold everything up to the close? Duration |
 | 6 | **Mutual exclusion, both directions** (spec §7.3) | (a) Start an **audio** recording, then try to start a screen capture. (b) Stop it; start a **screen** capture, then try to start an audio recording. | The refusal text each way — it must name the running kind ("A recording is already in progress." / "A screen capture is already in progress."). Confirm the running capture is undisturbed and still saves correctly |
-| 7 | **Hide to tray mid-capture** | Mid-capture, tray → *Show / Hide* (and try the buddy's own hide). | Does the buddy stay visible? The log should carry `hide ignored: a capture is in progress` |
+| 7 | **Hide to tray mid-capture** | Mid-capture, tray → *Show / Hide* (and try the buddy's own hide). | Does the buddy stay visible, **and is it visibly showing the recording badge** (the red dot; amber while paused)? Hide being refused is only defensible if the buddy says why it is refusing — a buddy that looks idle while Hide silently does nothing reads as a wedged app. Also check the vault row's own recording dot in the panel. The log should carry `hide ignored: a capture is in progress` |
 | 8 | **Kill the process mid-capture** (spec §6.4, through the real pipeline) | Record ~60 s, then Task Manager → *End task* on Vault Buddy. Relaunch. Copy the orphaned `.<base>.mp4.part` out of the staging dir, rename it `.mp4`, and open it in a player / `ffprobe -count_frames` it. | Byte count of the `.part`; how much decoded (seconds and frames) vs. what was recorded. This is §6.4's measured property exercised through the real capture pipeline rather than the synthetic spike |
 | 9 | **Static-screen heartbeat** | Start a capture and leave the screen **completely still** for ~60 s (no cursor movement), then move something, then Stop. | Does the result play through the still stretch at a steady rate, with the timeline advancing (not a freeze that jumps)? Note any stall |
-| 10 | **4K @ 60 fps for two minutes** (spec §17.3) | Set 60 fps in config, capture a 4K monitor playing video for 2 minutes, Stop. | **Record the real numbers**: `screen capture: finalizing after N dropped frame(s)` from the log, the `fps` readings, the output file size, and whether playback is smooth. §17.3 wants a measurement, not a guess — this is where the hardware-vs-software-encoder question gets its data |
+| 10 | **4K @ 60 fps for two minutes** (spec §17.3) | There is no settings surface for this in Phase 2 (`ScreenCaptureConfigTab` and `set_screen_capture_config` are Phase 6): with the app CLOSED, hand-edit the target vault's entry in `%APPDATA%\vault-buddy\config.json`, setting `"screenFps": 60`, then relaunch. Now capture a 4K monitor playing video for 2 minutes, Stop. | **Record the real numbers**: `screen capture: finalizing after N dropped frame(s)` from the log, the `fps` readings, the output file size, and whether playback is smooth. §17.3 wants a measurement, not a guess — this is where the hardware-vs-software-encoder question gets its data |
 
 Extra observations worth writing down whatever the outcome: the CPU/GPU load
 during (10), whether the encoder chosen was hardware or software (if the log
@@ -79,10 +79,18 @@ return for each capture (the stop wait is bounded at 30 s and reports
   expected, not a bug: `WDA_EXCLUDEFROMCAPTURE` (spec §5.3) is Phase 3. If
   the buddy is in frame in a recording made here, that is the documented
   state.
-- **No staging recovery.** A capture killed at item 8 leaves its `.part`
-  behind permanently; nothing sweeps it until Phase 5's
-  `run_screen_recovery` (docs/Gaps.md GAP-115). Clean the staging directory
-  by hand between verification runs.
+- **No staging recovery, and nothing collects finished captures either.** A
+  capture killed at item 8 leaves its `.part` behind permanently, and every
+  capture that stops CLEANLY leaves a `<base>.mp4` + `<base>.json` in the
+  same directory with no in-app way to see, open or delete them. Nothing
+  sweeps either until Phase 5's `run_screen_recovery` / Phase 6's "Clear
+  staged captures" (docs/Gaps.md GAP-115). Clean the staging directory by
+  hand between verification runs, and expect it to grow fast at 4K.
+- **The stop notification says "Screen capture ready", not "saved", on
+  purpose.** Phase 2 writes nothing into any vault. If you go looking in
+  Obsidian for a captured file you will not find one — the file is in
+  `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. That is the
+  documented state, not a failure.
 
 ## NOT reachable in Phase 2
 

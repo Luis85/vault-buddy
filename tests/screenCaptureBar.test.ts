@@ -107,8 +107,8 @@ describe("ScreenCaptureBar", () => {
     // live (its own comment says the bar shows it inline) — so if the bar
     // does not render it, the warning is invisible for the whole live
     // capture. (A TERMINAL warning still reaches the user either way, via
-    // Rust's "Saved with a warning: {w}" stop toast; it is the live window
-    // this line is the only surface for.)
+    // Rust's "Recorded {base} with a warning: {w}" stop toast; it is the
+    // live window this line is the only surface for.)
     const store = useScreenCaptureStore();
     store.$patch({ status: "capturing", sourceTitle: "S", startedAtMs: 0 });
     const w = mount(ScreenCaptureBar);

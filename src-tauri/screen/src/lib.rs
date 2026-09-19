@@ -43,6 +43,15 @@ pub enum ScreenError {
     /// finalize failed. Carries the OS message.
     Sink(String),
     /// A capture was requested while one is already running.
+    ///
+    /// RESERVED, not dead: spec §14 names this among the typed start
+    /// refusals and the frontend store's own comment lists it, but the
+    /// SHIPPED refusal comes from `CaptureKind::busy_message()` one layer up
+    /// — the cross-domain guard has to name WHICH kind is running (an audio
+    /// recording blocks a screen capture and vice versa), which this crate,
+    /// being unaware of the audio domain, cannot say. Kept so the crate's
+    /// error vocabulary still matches the spec and a future in-crate refusal
+    /// has a variant to use; constructed today only by its own Display test.
     AlreadyCapturing,
     /// `ScreenSession::stop` failed (finalize, or the publish rename) AFTER
     /// real footage had already been written to the `.part` file at `path`

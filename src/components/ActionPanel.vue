@@ -420,7 +420,7 @@ watch(
           :busy-vault-id="store.busyVaultId"
           :busy-command="store.busyCommand"
           :capture-disabled="capture.status !== 'idle'"
-          :recording-vault-id="capture.vaultId"
+          :recording-vault-id="capture.vaultId ?? screenCapture.vaultId"
           :transcribing-vault-id="capture.transcribingVaultId"
           :task-counts="store.taskCounts"
           @open-vault="store.runAction('open_vault', $event)"

@@ -99,18 +99,22 @@ vault-buddy/
 │   ├── stores/                 # Pinia: vaults, capture, updates, settings, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements
 │   └── utils/                  # highlight, recentSearches, formatDuration
-├── src-tauri/                  # Rust workspace: root shell crate + 3 member crates
+├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
 │   ├── tauri.conf.json         # the 3 windows, updater endpoint, version
 │   ├── capabilities/           # single default capability (all 3 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
 │   │                           #   transcription.rs, task_commands.rs, task_config_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
+│   │                           #   screen_commands.rs, screen_capture_worker.rs,
+│   │                           #   capture_guard.rs (cross-domain capture exclusion),
 │   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
 │   │                           #   transcript, recordings, capture_{config,note,paths}, vault_config,
 │   │                           #   mcp_config + document_import_config + transcription_config (split-out config sections),
 │   │                           #   document_import, companion_placement, checkpoint,
+│   │                           #   template, config_merge, timeline, screen_geometry,
+│   │                           #   screen_note, screen_capture_config,
 │   │                           #   app_diagnostics, vault_walk, crash, throttle, sync_util
 │   ├── capture/src/            # AUDIO engine: devices, mixer, encoder, session,
 │   │                           #   recovery, rename
@@ -292,7 +296,7 @@ actually subscribe.
 | `capture:transcribing/transcribeProgress/transcribed/transcribeSkipped/transcribeFailed/transcribeCancelled` | Transcription job lifecycle (each carries the `mp3`) | capture store |
 | `capture:transcribeRetargeted` | A rename moved a queued job OR a transcript sidecar `{from, to}`; the store re-keys its seeded row (queued or terminal) | capture store |
 | `capture:modelDownload` / `capture:modelReady` | Whisper model download progress / ready | capture store |
-| `screen:started` | A screen capture began (no payload — the store re-reads `screen_capture_status` rather than trusting arrival order) | screenCapture store (init in BuddyRoot **and** PanelRoot) |
+| `screen:started` | A screen capture began. Carries a full `ScreenStatusPayload` (same shape as `screen_capture_status`' reply, and `src/types.ts` documents it as such) which the store deliberately IGNORES in favour of a re-read: the `screen-capture-monitor` thread is live before `start_screen_capture`'s tail emits, so this event can arrive AFTER `screen:stopped` for the same capture | screenCapture store (init in BuddyRoot **and** PanelRoot) |
 | `screen:paused` / `screen:resumed` | `{atMs}` / `{pausedTotalMs}` — the pause edges. The store IGNORES either while idle: its `status` is one tri-state, so an ungated pause would raise a paused capture out of nothing | screenCapture store |
 | `screen:stopped` | The staged capture `{base, path, durationMs, sourceTitle, width, height}` — emitted on the clean stop AND on a self-finalize (the source closed) | screenCapture store |
 | `screen:failed` | `{message, retainedPath}` — `retainedPath` is the `.part` a stop that failed AFTER writing real footage deliberately left behind, carried as data so the UI can offer that (still playable) file | screenCapture store |
@@ -807,7 +811,10 @@ companion note. Do not add one here.
   is open — a per-frame probe read 0 bytes across a capture that had written
   59 KB). The spike that produced the numbers is kept re-runnable in
   `fmp4_spike.rs` behind the non-default `fmp4-spike` feature; its per-build
-  CI step was retired once the question was answered.
+  CI step was retired once the question was answered — which means the module
+  (and `mp4_boxes`, its only consumer) is now compiled by NO CI job, since
+  neither workspace clippy nor `tauri build` enables non-default features.
+  Re-check it by hand before re-running the spike (GAP-120).
 - **Staging lives OUTSIDE every vault (§10).** The staging dir is
   `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures` — a hidden
   dot-prefixed `.<base>.mp4.part` while recording, published on a clean stop by
@@ -841,6 +848,56 @@ companion note. Do not add one here.
   structural source scans that fail if a raw release site is ever added.
   Its lock-ordering rule is in the tasks domain's concurrency note: the
   guard's mutex is never held while another lock is taken.
+- **The buddy indicates BOTH capture kinds, and it must, because hide is
+  refused on both.** `tray::hide_buddy` no-ops while `capture_blocks_shutdown`
+  is true, so a user mid-screen-capture who asks to Hide gets nothing but a
+  log line. That is only tolerable if the buddy visibly says why, so
+  `BuddyRoot` binds its `recording` to `capture.status === 'recording' ||
+  'saving' || screenCapture.status !== 'idle'` and its `paused` to
+  `capture.paused || screenCapture.paused` — note the two stores do NOT share
+  a shape: the audio store has four named statuses plus a `paused` flag, the
+  screen store a tri-state (`idle`/`capturing`/`paused`) whose `paused` is a
+  getter over it, so neither arm can be copied from the other. The vault-row
+  dot is the same rule one layer up: `ActionPanel` passes
+  `capture.vaultId ?? screenCapture.vaultId`. This shipped unwired for five
+  commits with the claim standing in three places (the spec, this file, the
+  store's own comment) — if a later phase adds a third capture kind, wire the
+  indicator in the same commit as the guard.
+- **The stop notification must not claim a save (`stopped_toast_copy`).**
+  Phase 2 stages the file and stops; there is no vault write (Phase 5), no
+  editor (Phase 4), no Recordings entry and no staged-capture browser
+  (Phase 6), so the audio domain's "Screen capture saved" / "Saved {base}"
+  wording — which it was copied from, where it is true — sends the user
+  hunting through Obsidian for a file nobody put there. The copy is split out
+  as a pure function precisely so a test can assert it, and it reads
+  "Screen capture ready" / "Recorded {base}. Editing and saving into a vault
+  arrive in a later update." Completed staged captures are never swept,
+  surfaced or user-deletable until Phases 5/6 (GAP-115).
+- **The start tail must not announce a capture that already ended.**
+  `start_screen_capture`'s async tail runs after the blocking start returns,
+  and the `screen-capture-monitor` thread is live before then — so spec §14's
+  self-finalize (the recorded window closes) can complete first. An
+  unconditional `set_capture_state(Recording)` there latched the tray into a
+  phantom recording: Pause/Stop rendered, "Show / Hide" DISABLED, and Stop
+  routed to the audio domain where it only logged "No recording is running."
+  The tail therefore goes through `tray_state_after_start(is_capturing(&app))`.
+  The audio domain shares the tail ordering but has no self-finalize path,
+  which is why this was reachable only here.
+- **Our own windows are filtered out of the picker by TITLE, not HWND**
+  (spec §7.2 says HWND). Inert today — all three windows are
+  `skipTaskbar: true`, which tao implements as `WS_EX_TOOLWINDOW`, and
+  `windows-capture`'s `Window::is_valid()` already rejects those, so the
+  title filter never fires. It becomes load-bearing in Phase 4, whose spec'd
+  `editor` window is `skipTaskbar: false`: do not assume an HWND filter
+  exists (GAP-116).
+- **Four Phase-1 modules have no production caller yet** — `core::timeline`
+  and `screen::select` (Phases 4/5), `core::screen_geometry` (Phase 3's
+  region select) and `core::screen_note` (Phase 5's vault write), plus
+  `screen::mp4_boxes`, reachable only from the feature-gated `fmp4_spike`.
+  All are unit-tested and count toward the coverage floor; none is dead code
+  to delete. Five of the seven `screen_*` `vault_config` fields are likewise
+  parsed, serialized and merge-preserved but read by nothing until Phase 6.
+
 - **Frontend.** `RecordMode.vue`'s chooser → `ScreenSourcePicker.vue`
   (Screen / Window tabs, `ScreenAudioPicker.vue` for the multi-select
   devices) on the `screenCapture` panel view; the `screenCapture` Pinia
@@ -2183,7 +2240,13 @@ view too.
 ## Diagnostics invariants
 
 - Every spawned thread is named (`std::thread::Builder`) — crash records
-  must identify the dying thread.
+  must identify the dying thread. **One documented exception, and it is not
+  ours to fix:** `windows-capture`'s `start_free_threaded` spawns the WGC
+  frame worker with a bare `thread::spawn`, so a crash inside it is reported
+  unnamed. `screen/src/session/windows_session.rs` records why the blocking
+  alternative is worse (it offers no way to stop a session that is receiving
+  no frames, so a still screen would hang Stop). Any OTHER unnamed spawn is a
+  defect — see docs/Gaps.md GAP-119.
 - No swallowed error: anything caught-and-hidden goes through
   `log::warn!`/`log::error!` (Rust) or `src/logging.ts` (frontend);
   user-facing failures funnel through their domain chokepoint (e.g.

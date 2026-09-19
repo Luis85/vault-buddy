@@ -164,13 +164,36 @@ pub(crate) fn emit_screen_failed(app: &AppHandle, message: &str, retained: Optio
     toast(app, "Screen capture failed", message);
 }
 
+/// The stop notification's copy, split out so it can be asserted directly.
+///
+/// It deliberately does NOT say "saved". Phase 2 writes nothing into any
+/// vault: the capture lands in the app's own staging directory, the ninth
+/// sanctioned vault write is Phase 5, the editor is Phase 4 and the
+/// staged-capture browser is Phase 6, so there is nowhere the user could go
+/// and find a saved file. The wording here started as a verbatim copy of the
+/// audio domain's stop toast, where "saved" is true because the MP3 and its
+/// companion note really are in the vault — the same words one domain over
+/// send the user hunting through Obsidian and concluding the app lost their
+/// recording. Keep any future edit honest about what actually happened.
+pub(crate) fn stopped_toast_copy(base: &str, warning: Option<&str>) -> (&'static str, String) {
+    // The trailing sentence, shared by both arms, is what tells the user the
+    // footage is not missing — only not in the vault YET.
+    let body = match warning {
+        Some(w) => format!(
+            "Recorded {base} with a warning: {w}. Editing and saving into a vault \
+             arrive in a later update."
+        ),
+        None => {
+            format!("Recorded {base}. Editing and saving into a vault arrive in a later update.")
+        }
+    };
+    ("Screen capture ready", body)
+}
+
 pub(crate) fn emit_screen_stopped(app: &AppHandle, dto: &StagedCaptureDto, warning: Option<&str>) {
     let _ = app.emit("screen:stopped", dto);
-    let body = match warning {
-        Some(w) => format!("Saved with a warning: {w}"),
-        None => format!("Saved {}", dto.base),
-    };
-    toast(app, "Screen capture saved", &body);
+    let (title, body) = stopped_toast_copy(&dto.base, warning);
+    toast(app, title, &body);
 }
 
 /// THE chokepoint: drop the reservation and release the cross-domain claim
@@ -233,6 +256,29 @@ pub async fn list_capture_sources(app: AppHandle) -> Vec<source::CaptureSourceIn
     })
 }
 
+/// Whether `start_screen_capture`'s async tail may put the tray into its
+/// recording state.
+///
+/// The tail runs after the blocking start returned, by which time the
+/// `screen-capture-monitor` thread is already live — so spec 14's
+/// self-finalize (the recorded window closes) can have run the whole
+/// teardown first: `clear_active_screen` -> `screen:stopped` ->
+/// `set_capture_state(Idle)`. Announcing `Recording` unconditionally after
+/// that latches the tray into a phantom recording: it renders Pause/Stop and
+/// DISABLES "Show / Hide", while Stop routes to the audio domain
+/// (`menu_target(None)`) and only logs "No recording is running.", so nothing
+/// clears it until a real capture starts and ends. The audio domain shares
+/// the tail ordering but has no self-finalize path, which is why this is
+/// newly reachable here. Reading the live reservation closes the window the
+/// self-finalize actually opens; a teardown landing between this read and
+/// the `set_capture_state` call is still possible in principle, but that is
+/// a few instructions rather than a whole blocking start.
+pub(crate) fn tray_state_after_start(
+    still_capturing: bool,
+) -> Option<crate::tray::TrayCaptureState> {
+    still_capturing.then_some(crate::tray::TrayCaptureState::Recording)
+}
+
 /// ASYNC: device setup (source re-resolve, cpal endpoints), sink creation
 /// and staging-directory I/O are all blocking work; on the main thread this
 /// would stall window show/hide and drags for the whole handshake.
@@ -264,7 +310,9 @@ pub async fn start_screen_capture(
             let _ = window.show();
         }
     });
-    crate::tray::set_capture_state(&app, crate::tray::TrayCaptureState::Recording);
+    if let Some(state) = tray_state_after_start(is_capturing(&app)) {
+        crate::tray::set_capture_state(&app, state);
+    }
     // The monitor thread is already live when the blocking start returns, so
     // a source that closes in the few ms this tail takes emits
     // `screen:stopped` BEFORE this `screen:started`. Matches the audio
@@ -496,6 +544,46 @@ mod tests {
     }
 
     #[test]
+    fn the_stop_notification_does_not_claim_a_save_that_did_not_happen() {
+        // Phase 2 writes NOTHING into a vault: the capture stages in
+        // `%LOCALAPPDATA%\\com.vaultbuddy.desktop\\screen-captures`, the ninth
+        // sanctioned vault write is Phase 5, there is no editor (Phase 4), no
+        // Recordings entry (out of scope) and no staged-capture browser
+        // (Phase 6). This copy was lifted verbatim from the audio domain,
+        // where "saved" is true because the MP3 and its note really are in
+        // the vault. Here it sends the user hunting through their vault for
+        // a file that was never put there, and concluding the app lost a
+        // ten-minute recording.
+        let (title, body) = stopped_toast_copy("2026-09-19 1432 Figma", None);
+        assert_eq!(title, "Screen capture ready");
+        assert_eq!(
+            body,
+            "Recorded 2026-09-19 1432 Figma. Editing and saving into a vault \
+             arrive in a later update."
+        );
+
+        // The warning arm keeps its meaning — a capture that finalized with
+        // a vanished source or device still has to say so — but must not
+        // smuggle the same false claim back in.
+        let (title, body) = stopped_toast_copy("2026-09-19 1432 Figma", Some("a device vanished"));
+        assert_eq!(title, "Screen capture ready");
+        assert_eq!(
+            body,
+            "Recorded 2026-09-19 1432 Figma with a warning: a device vanished. \
+             Editing and saving into a vault arrive in a later update."
+        );
+
+        // Belt for a future copy edit: whatever the wording becomes, it may
+        // not assert a save, because in Phase 2 there is nowhere the user
+        // could go and find one.
+        for w in [None, Some("a device vanished")] {
+            let (title, body) = stopped_toast_copy("base", w);
+            assert!(!title.to_lowercase().contains("saved"), "title: {title}");
+            assert!(!body.to_lowercase().contains("saved"), "body: {body}");
+        }
+    }
+
+    #[test]
     fn the_device_selection_is_built_from_the_ipc_arguments_verbatim() {
         // These names were ticked in front of the live device list. Any
         // normalization here (trimming, casing, dedupe) would stop them
@@ -506,6 +594,63 @@ mod tests {
         );
         assert_eq!(sel.inputs, vec!["Microphone (Yeti)".to_string()]);
         assert_eq!(sel.outputs, vec!["Speakers (Realtek)".to_string()]);
+    }
+
+    #[test]
+    fn a_self_finalized_capture_does_not_latch_the_tray_into_a_phantom_recording() {
+        // `start_screen_capture`'s async tail runs AFTER the blocking start
+        // returned, and the `screen-capture-monitor` thread is already live
+        // by then. Spec 14's self-finalize (the recorded window closes) is
+        // unique to this domain — the audio path has no such route — so the
+        // monitor can run `clear_active_screen` -> `screen:stopped` ->
+        // `set_capture_state(Idle)` and only THEN does the tail land. An
+        // unconditional `Recording` there leaves the tray rendering
+        // "Pause recording" / "Stop recording" and DISABLING "Show / Hide"
+        // with nothing running; Stop routes to the audio domain and only
+        // logs "No recording is running.", so nothing clears it until a real
+        // capture starts and ends.
+        assert!(
+            tray_state_after_start(false).is_none(),
+            "the tail must not announce a recording the capture no longer has"
+        );
+        assert!(
+            matches!(
+                tray_state_after_start(true),
+                Some(crate::tray::TrayCaptureState::Recording)
+            ),
+            "a capture that IS still claimed must still light the tray"
+        );
+    }
+
+    #[test]
+    fn the_tray_tail_asks_whether_the_capture_is_still_claimed() {
+        // Structural, because the property is the WIRING: the helper above
+        // is only worth anything if the tail feeds it the live reservation
+        // rather than a constant. `is_capturing` is the one reader of that
+        // reservation, and `clear_active_screen` (the sole release site)
+        // clears it before the monitor touches the tray, so it is exactly
+        // the question the tail has to ask.
+        let src = include_str!("screen_commands.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert_eq!(
+            production
+                .matches("tray_state_after_start(is_capturing(&app))")
+                .count(),
+            1,
+            "the start tail must gate the tray state on the live reservation"
+        );
+        // The exact shape the bug had. `pause_from_menu` / `resume_from_menu`
+        // also write the tray state, but they take `app: &AppHandle` and run
+        // only while the reservation is held, so they are spelled `(app, ..)`
+        // and are not what this scan is about — restoring the start tail's
+        // unconditional write is.
+        assert_eq!(
+            production
+                .matches("set_capture_state(&app, crate::tray::TrayCaptureState::Recording)")
+                .count(),
+            0,
+            "an ungated tray write in the start tail reopens the phantom-recording window"
+        );
     }
 
     #[test]

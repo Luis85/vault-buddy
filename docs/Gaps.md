@@ -2413,7 +2413,7 @@ what checklist item 10 produces. The running total is visible in the UI as of
 2026-09-19 (`ScreenCaptureBar.vue`'s dropped chip, GAP-118); the per-drop
 log lines and the teardown total remain the fuller record.
 
-### GAP-115 · Medium · Phase 2 has no staging recovery: a crashed capture's `.mp4.part` is never swept
+### GAP-115 · Medium · Phase 2 never sweeps, surfaces or bounds its staging directory — for CRASHED and for cleanly finished captures alike
 `src-tauri/src/lib.rs` (`setup` wires `capture_commands::run_recovery` and
 `document_commands::run_import_recovery`, and nothing for the screen domain)
 plus `src-tauri/screen/src/staging.rs`. A screen capture writes into
@@ -2435,12 +2435,43 @@ shape:** Phase 5's `run_screen_recovery` — sweep the staging dir, pair each
 `.part` with its sidecar, offer resume-or-discard, and only then apply a
 staleness rule.
 
+**The happy path leaks too, and it is the far more common case.** Everything
+above is about the crash. But EVERY cleanly stopped capture also leaves a
+`<base>.mp4` plus its `<base>.json` sidecar in the same directory, and in
+Phase 2 nothing surfaces them, nothing deletes them and nothing bounds their
+total size: there is no editor (Phase 4), no vault write (Phase 5), no entry
+in the Recordings browser (out of scope, spec §1), no staged-capture list and
+no "Clear staged captures" action (spec §10 puts it in Phase 6). The store's
+`lastStaged` is rendered by nothing. **Failure scenario:** a user tries the
+new Record Screen button a dozen times over a week at 1080p; several
+gigabytes of MP4 accumulate under `%LOCALAPPDATA%` with no in-app way to see
+or remove them, and no UI ever mentions that the directory exists. Spec §10
+names disk pressure as something the design cares about; the Phase-2 slice
+inherits none of it. The stop notification at least no longer calls this
+"saved" (it reads "Screen capture ready … editing and saving into a vault
+arrive in a later update", `screen_commands.rs::stopped_toast_copy`), so the
+user is not sent hunting through their vault — but they are still not told
+where the file went. **Fix shape:** Phase 6's "Clear staged captures" action
+plus a size readout, and Phase 5's editor/export giving a finished capture
+somewhere to GO; until then the honest statement is that Phase 2 stages
+without ever collecting.
+
 ### GAP-116 · Low · Vault Buddy's own windows appear in a Phase 2 recording
 `src-tauri/src/screen_commands.rs` (`our_window_titles`, used only to filter
 `list_capture_sources`). Spec §7.2's rule — never offer ourselves as a
-capture *source* — is implemented; spec §5.3's rule — never appear *in* a
-recording — is not, because `WDA_EXCLUDEFROMCAPTURE` is Phase 3's row in
-§13. **Failure scenario:** a user recording their whole monitor gets the
+capture *source* — is implemented, though **by TITLE rather than by HWND**,
+which is a fourth unrecorded deviation from that section: `our_window_titles`
+collects `WebviewWindow::title()` strings and `source.rs` drops any
+enumerated window whose title matches one exactly. It is inert today — all
+three windows are `skipTaskbar: true`, which tao implements as
+`WS_EX_TOOLWINDOW`, and `windows-capture`'s `Window::is_valid()` already
+rejects those, so the filter never fires — but it becomes load-bearing in
+**Phase 4**, whose spec'd `editor` window is `skipTaskbar: false` and will
+therefore enumerate. A title match is also, in principle, capable of hiding a
+USER's window that happens to carry the exact same string. Phase 4 must not
+assume an HWND filter exists. Spec §5.3's rule — never appear *in* a
+recording — is not implemented at all, because `WDA_EXCLUDEFROMCAPTURE` is
+Phase 3's row in §13. **Failure scenario:** a user recording their whole monitor gets the
 buddy, the panel, and any bubble baked into the footage, including whatever
 vault names the panel was showing. It is cosmetic rather than a data leak in
 the ordinary case (the user can see what is on their own screen), but it is
@@ -2489,8 +2520,8 @@ RecordingBar" — it navigates to a view that shows nothing.
 the vault list with no visible sign a capture is running. Elapsed time,
 paused state, the dropped-frame indicator and any `screen:warning` are
 invisible **while the capture is live** — a terminal warning still reaches
-the user, through `emit_screen_stopped`'s `"Saved with a warning: {w}"`
-toast (`screen_commands.rs`); it is the live window that has no surface; the only controls are the tray / buddy right-click menu items
+the user, through `emit_screen_stopped`'s `"Recorded {base} with a warning:
+{w}"` toast (`screen_commands.rs::stopped_toast_copy`); it is the live window that has no surface; the only controls are the tray / buddy right-click menu items
 (`tray.rs` does route Stop/Pause/Resume to the screen domain, so the capture
 is controllable and never strandable — this is a missing surface, not a
 missing capability), and the only place the dropped-frame count can be read
@@ -2529,3 +2560,63 @@ a rate, not an anomaly; §17.3's signal is the drop COUNT, and the Windows
 verification checklist's item 10 already reads the fps values from
 `vault-buddy.log` by design. GAP-114's mitigation is no longer blunted — the
 dropped count is now visible in the UI as that entry assumed.
+
+### GAP-119 · Low · "Every spawned thread is named" has one unnameable exception: the WGC frame worker
+`src-tauri/screen/src/session/windows_session.rs` (the `start_free_threaded`
+call) against AGENTS.md's Diagnostics-invariants rule. Vault Buddy names
+every thread it spawns with `std::thread::Builder` so a crash record
+identifies the dying thread — `screen-mux`, `screen-audio`, `screen-warn`,
+`screen-stats`, `screen-capture-device`, `screen-capture-monitor` and the
+rest all comply. `windows-capture`'s `start_free_threaded`, however, spawns
+the WGC frame worker itself with a bare `thread::spawn`, and that thread is
+where the frame callback (`frames.rs`) runs. **Failure scenario:** a native
+fault inside frame acquisition produces a crash record naming an unnamed
+thread, and the first reader of that record wastes time deciding whether the
+invariant was violated by our own code. **Why it is not fixed:** the thread
+is created inside a third-party crate, so naming it would need an upstream
+change; the blocking alternative (`start` rather than `start_free_threaded`)
+is strictly worse and the call site says why — it offers no way to stop a
+session that is receiving no frames, so a still screen would hang Stop.
+**Fix shape:** none locally beyond keeping the exception written down in both
+places (the call site and AGENTS.md's invariant, both done) — or, upstream,
+a PR giving `windows-capture` a named worker.
+
+### GAP-120 · Low · `fmp4_spike` and `mp4_boxes` are compiled by no CI job
+`src-tauri/screen/src/fmp4_spike.rs` (behind the non-default `fmp4-spike`
+feature) and `src-tauri/screen/src/mp4_boxes.rs` (its only consumer). The
+per-build `fmp4-spike` CI step was added with the spike and retired once the
+question it answered was settled — correctly, since re-running a 300-frame
+Media Foundation measurement on every push buys nothing. The consequence is
+that the module now builds nowhere in CI: `cargo clippy --workspace
+--all-targets` does not enable non-default features, and neither does either
+`tauri build`. AGENTS.md describes the spike as "kept re-runnable", which is
+true today and untested tomorrow. **Failure scenario:** a refactor of
+`ScreenSession`, `staging` or `sink` breaks the spike's call sites; nothing
+notices; the next person who needs to re-measure the container decision
+(Phase 4's editor work is the likely trigger) finds it does not compile and
+must repair it before they can measure anything. **Fix shape:** one cheap
+`cargo check -p vault_buddy_screen --features fmp4-spike` line on the
+`windows-app` job — no link, no run — or accept the rot and re-check by hand
+before any re-run. Verified 2026-09-19 that it still cross-compiles clean
+against `x86_64-pc-windows-msvc`.
+
+### GAP-121 · Low · An `encoderUnavailable` start leaves a zero-byte `.part` in staging
+`src-tauri/screen/src/sink.rs` (`create`) against spec §14, which says an
+encoder-init failure is "refused before anything is written". `create` calls
+`MFCreateFile` (with `MF_OPENMODE_DELETE_IF_EXIST`) **before** it builds the
+media types and the sink writer, so a machine with no usable H.264 encoder
+refuses the capture only after the `.part` file exists. Nothing is *written*,
+so §14's letter holds; the deviation is that a zero-byte orphan is left
+behind. Combined with GAP-115 (no staging sweep of any kind in Phase 2) that
+orphan is permanent. **What is NOT a problem here, checked rather than
+assumed:** `DELETE_IF_EXIST` cannot clobber a previous crashed capture's
+retained `.part`, because `staging::reserve_base` tests all three names
+(`.mp4`, `.json`, `.mp4.part`) for freeness before a base is handed out.
+**Failure scenario:** a user on a machine whose encoder is missing or held by
+another application presses Record Screen repeatedly and accumulates one
+zero-byte file per attempt, invisible to them. **Fix shape:** build the media
+types and the sink writer first and call `MFCreateFile` last, so the refusal
+really does precede the file; or delete the `.part` on the failure arm.
+Either is a small, local change — deferred only because it is untestable
+outside Windows and this phase's Windows path is entirely unverified
+(GAP-117).

@@ -67,6 +67,21 @@ describe("ActionPanel", () => {
     expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
   });
 
+  it("lights the vault row's recording dot for a SCREEN capture too", async () => {
+    // `screenCapture.vaultId` is documented as driving the vault-row
+    // indicator "exactly like the audio store's own vaultId" — but the list
+    // was passed the audio store's id alone, so the row stayed dark for the
+    // whole screen capture while the claim stood in the store's own comment.
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    useScreenCaptureStore().$patch({ status: "capturing", vaultId: "a1b2c3" });
+    const wrapper = mount(ActionPanel);
+    await flushPromises();
+    const dot = wrapper.find('[title="Recording…"]');
+    expect(dot.exists()).toBe(true);
+  });
+
   it("disables the header Back button while a Task Detail write is in flight", async () => {
     // Leaving the detail view mid-write would let the write finish off-screen
     // against a stale, remounted Tasks list — so Back is inert until it settles
