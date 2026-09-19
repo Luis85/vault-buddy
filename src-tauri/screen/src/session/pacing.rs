@@ -183,19 +183,31 @@ pub fn resolved_duration(written_until: Duration, clock_elapsed: Duration) -> Du
     }
 }
 
-/// Is a delivered frame usable against the size the sink was opened
-/// with?
+/// Is this delivered frame big enough to produce the output we declared?
 ///
 /// The output format is fixed at start, but a WINDOW can be resized
-/// mid-capture and WGC then delivers a different size. A frame at or
-/// above the declared size crops for free — `bgra_to_nv12` reads
-/// `width * 4` bytes out of each of the first `height` rows of a
-/// stride-pitched buffer. A SMALLER frame has to be dropped and
-/// counted: reading the declared height out of it runs past the end of
-/// the mapped staging texture, and row padding can make a
-/// buffer-length check pass while the dimensions do not.
-pub fn usable_frame(got_w: u32, got_h: u32, want_w: u32, want_h: u32) -> bool {
-    got_w >= want_w && got_h >= want_h
+/// mid-capture and WGC then delivers a different size, and a REGION is a
+/// rectangle inside a frame that is bigger than it. A frame whose far edge
+/// covers the crop can be cropped for free -- `bgra_crop_to_nv12` reads
+/// `width * 4` bytes out of `height` rows starting at `(crop_x, crop_y)` of
+/// a stride-pitched buffer. Anything smaller has to be dropped and counted:
+/// reading past the crop runs off the end of the mapped staging texture,
+/// and row padding can make a buffer-length check pass while the dimensions
+/// do not.
+///
+/// u64 arithmetic because `crop_x` and `crop_y` come from a parsed source
+/// id: in u32, `crop_x + want_w` can wrap and call an impossible region
+/// usable.
+pub fn usable_frame(
+    got_w: u32,
+    got_h: u32,
+    crop_x: u32,
+    crop_y: u32,
+    want_w: u32,
+    want_h: u32,
+) -> bool {
+    u64::from(got_w) >= u64::from(crop_x) + u64::from(want_w)
+        && u64::from(got_h) >= u64::from(crop_y) + u64::from(want_h)
 }
 
 /// Log the first dropped frame of a run, then one in every 300.

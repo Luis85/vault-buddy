@@ -90,6 +90,9 @@ impl GraphicsCaptureApiHandler for FrameHandler {
         if !pacing::usable_frame(
             frame.width(),
             frame.height(),
+            // Task 3 replaces these with the session's crop origin
+            0,
+            0,
             self.flags.width,
             self.flags.height,
         ) {

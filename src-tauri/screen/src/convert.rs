@@ -80,6 +80,11 @@ fn chroma709(r: f32, g: f32, b: f32) -> (u8, u8) {
 /// is usually wider than `width * 4`. Reading the buffer as tightly packed
 /// shears the image progressively down the frame -- a bug that presents as a
 /// capture glitch rather than as a stride mistake.
+///
+/// This is the whole-frame (top-left) case of `bgra_crop_to_nv12`, kept as
+/// its own entry point because every non-region capture uses it and its
+/// behaviour must not drift: it delegates rather than duplicating, so there
+/// is one conversion, not two that can diverge.
 pub fn bgra_to_nv12(
     bgra: &[u8],
     stride: usize,
@@ -87,32 +92,64 @@ pub fn bgra_to_nv12(
     height: u32,
     out: &mut Vec<u8>,
 ) -> Result<(), ConvertError> {
+    bgra_crop_to_nv12(bgra, stride, 0, 0, width, height, out)
+}
+
+/// Convert the `width` x `height` rectangle at `(src_x, src_y)` of a BGRA
+/// frame into NV12 in `out`.
+///
+/// This is how REGION capture works (spec 5.2): WGC hands us the whole
+/// monitor and the region is a window onto it, so the crop happens here,
+/// on the CPU, in a pure function -- which is the only reason any of
+/// region capture's correctness is provable on Linux (docs/Gaps.md
+/// GAP-117). Cropping on the GPU before readback would be cheaper at 4K60
+/// (spec 17.2) and is deliberately not done: it would move this logic
+/// somewhere nothing can test it.
+///
+/// `src_x` / `src_y` are NOT required to be even. The 2x2 chroma blocks are
+/// averaged from the full-colour BGRA source *inside* the crop, so an odd
+/// origin still yields a self-consistent NV12 frame; rounding the origin to
+/// even would silently move the rectangle the user drew.
+pub fn bgra_crop_to_nv12(
+    bgra: &[u8],
+    stride: usize,
+    src_x: u32,
+    src_y: u32,
+    width: u32,
+    height: u32,
+    out: &mut Vec<u8>,
+) -> Result<(), ConvertError> {
     if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(ConvertError::OddDimensions);
     }
-    // A stride narrower than one packed row of pixels does not overrun until
-    // the LAST row: every earlier row's furthest read (row * stride +
-    // width*4 - 1) still lands inside the following row's bytes, so the
-    // buffer-length check below stays satisfied right up to the final row,
-    // where the read pushes past the end of `bgra` and panics instead of
-    // returning a typed error. Invisible to any test that doesn't probe the
-    // last row.
-    let row_bytes = width as usize * 4;
-    if stride < row_bytes {
+    // The crop's RIGHT edge must lie inside one row. A row that ends short
+    // of it does not overrun the buffer until the last row -- every
+    // earlier row's furthest read lands inside the following row's bytes,
+    // so a length check alone stays satisfied right up to the end and then
+    // panics, or (worse, and invisibly) reads the next row's pixels and
+    // shears the image. u64 throughout: `src_x + width` is attacker-
+    // adjacent arithmetic and must not wrap.
+    let right_edge_bytes = (u64::from(src_x) + u64::from(width)) * 4;
+    if right_edge_bytes > stride as u64 {
         return Err(ConvertError::ShortInput {
-            needed: row_bytes,
+            needed: right_edge_bytes as usize,
             got: stride,
         });
     }
-    let needed = stride * height as usize;
-    if bgra.len() < needed {
+    // Conservative on purpose: a mapped D3D11 staging texture is always
+    // `stride * rows` bytes, so requiring the whole final row costs
+    // nothing real and keeps the zero-origin case byte-for-byte the check
+    // it has always been.
+    let needed = (u64::from(src_y) + u64::from(height)) * stride as u64;
+    if (bgra.len() as u64) < needed {
         return Err(ConvertError::ShortInput {
-            needed,
+            needed: needed as usize,
             got: bgra.len(),
         });
     }
 
     let (w, h) = (width as usize, height as usize);
+    let (ox, oy) = (src_x as usize, src_y as usize);
     let y_len = w * h;
     // resize() keeps the existing allocation when the length is unchanged,
     // which is the whole point: at 60 fps and 4K a per-frame allocation is
@@ -121,7 +158,7 @@ pub fn bgra_to_nv12(
     let (y_plane, uv_plane) = out.split_at_mut(y_len);
 
     for row in 0..h {
-        let src_row = row * stride;
+        let src_row = (oy + row) * stride + ox * 4;
         let dst_row = row * w;
         for col in 0..w {
             let i = src_row + col * 4;
@@ -142,7 +179,7 @@ pub fn bgra_to_nv12(
             let mut sb = 0.0f32;
             for dy in 0..2 {
                 for dx in 0..2 {
-                    let i = (by * 2 + dy) * stride + (bx * 2 + dx) * 4;
+                    let i = (oy + by * 2 + dy) * stride + (ox + bx * 2 + dx) * 4;
                     sb += bgra[i] as f32;
                     sg += bgra[i + 1] as f32;
                     sr += bgra[i + 2] as f32;
@@ -364,6 +401,122 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             bgra_to_nv12(&src, 12, 3, 3, &mut out),
+            Err(ConvertError::OddDimensions)
+        ));
+    }
+
+    /// A 4x4 BGRA frame whose four 2x2 quadrants are four distinct
+    /// luminances, packed (stride = 16). Every expected Y below is derived
+    /// BY HAND from `luma709` = `16 + Y*(219/255)` rounded, never by
+    /// running the converter:
+    ///   top-left     black  (0,0,0)       -> Y=0    -> 16
+    ///   top-right    white  (255,255,255) -> Y=255  -> 16 + 219      = 235
+    ///   bottom-left  grey   (128,128,128) -> Y=128  -> 16 + 109.929  = 126
+    ///   bottom-right blue   (b=255,g=0,r=0) -> Y=18.411 -> 16 + 15.812 = 32
+    /// The four differ enough that reading the wrong quadrant can never
+    /// coincidentally produce the right answer.
+    #[rustfmt::skip]
+    fn four_quadrants() -> Vec<u8> {
+        vec![
+            // row 0: black, black, white, white          (b, g, r, a)
+            0,0,0,255,      0,0,0,255,      255,255,255,255, 255,255,255,255,
+            // row 1: black, black, white, white
+            0,0,0,255,      0,0,0,255,      255,255,255,255, 255,255,255,255,
+            // row 2: grey, grey, blue, blue
+            128,128,128,255, 128,128,128,255, 255,0,0,255,    255,0,0,255,
+            // row 3: grey, grey, blue, blue
+            128,128,128,255, 128,128,128,255, 255,0,0,255,    255,0,0,255,
+        ]
+    }
+
+    // THE region-capture test. A crop that ignores its origin reads the
+    // top-left quadrant (16); one that swaps x and y reads the opposite
+    // off-diagonal quadrant; one that negates the offset reads the
+    // top-left again. All three mutations produce a different constant
+    // from the correct one, in every direction.
+    #[test]
+    fn a_crop_reads_the_quadrant_its_origin_names() {
+        let src = four_quadrants();
+        let mut out = Vec::new();
+
+        bgra_crop_to_nv12(&src, 16, 2, 0, 2, 2, &mut out).unwrap();
+        assert_eq!(&out[0..4], &[235, 235, 235, 235], "top-right is white");
+
+        bgra_crop_to_nv12(&src, 16, 0, 2, 2, 2, &mut out).unwrap();
+        assert_eq!(&out[0..4], &[126, 126, 126, 126], "bottom-left is grey");
+
+        bgra_crop_to_nv12(&src, 16, 2, 2, 2, 2, &mut out).unwrap();
+        assert_eq!(&out[0..4], &[32, 32, 32, 32], "bottom-right is blue");
+
+        bgra_crop_to_nv12(&src, 16, 0, 0, 2, 2, &mut out).unwrap();
+        assert_eq!(&out[0..4], &[16, 16, 16, 16], "top-left is black");
+    }
+
+    // A crop is not required to start on an even pixel, and that is
+    // deliberate rather than an oversight: NV12's 2x2 chroma blocks are
+    // computed from the FULL-COLOUR BGRA source inside the crop, so an odd
+    // origin produces a self-consistent frame. (Slicing an existing NV12
+    // buffer at an odd offset would not — do not "fix" this by rounding
+    // the origin, which would silently move the region the user drew.)
+    #[test]
+    fn an_odd_crop_origin_is_allowed_and_reads_the_right_pixels() {
+        let src = four_quadrants();
+        let mut out = Vec::new();
+        // x=1,y=1: one pixel of each quadrant. Row 0 of the crop is
+        // (1,1)=black and (2,1)=white; row 1 is (1,2)=grey and (2,2)=blue.
+        bgra_crop_to_nv12(&src, 16, 1, 1, 2, 2, &mut out).unwrap();
+        assert_eq!(&out[0..4], &[16, 235, 126, 32]);
+    }
+
+    // The whole point of keeping one implementation: the no-crop entry
+    // point must still be byte-for-byte what it was, or every frame of
+    // every non-region capture changes.
+    #[test]
+    fn the_uncropped_entry_point_equals_a_zero_origin_crop() {
+        let src = four_quadrants();
+        let mut via_plain = Vec::new();
+        let mut via_crop = Vec::new();
+        bgra_to_nv12(&src, 16, 4, 4, &mut via_plain).unwrap();
+        bgra_crop_to_nv12(&src, 16, 0, 0, 4, 4, &mut via_crop).unwrap();
+        assert_eq!(via_plain, via_crop);
+        // And it is not vacuously equal because both are empty.
+        assert_eq!(via_plain.len(), nv12_len(4, 4));
+    }
+
+    // A crop whose RIGHT edge runs past the row is a read of the next
+    // row's pixels, which shears the image rather than overrunning the
+    // buffer -- so the length check alone cannot catch it. Same class as
+    // the existing narrow-stride test, one origin to the right.
+    #[test]
+    fn a_crop_running_past_the_row_is_refused() {
+        let src = four_quadrants();
+        let mut out = Vec::new();
+        // stride 16 holds 4 pixels; a 4-wide crop at x=2 needs 6.
+        assert!(matches!(
+            bgra_crop_to_nv12(&src, 16, 2, 0, 4, 2, &mut out),
+            Err(ConvertError::ShortInput { .. })
+        ));
+    }
+
+    // A crop whose BOTTOM edge runs past the frame overruns the buffer.
+    #[test]
+    fn a_crop_running_past_the_last_row_is_refused() {
+        let src = four_quadrants(); // 4 rows
+        let mut out = Vec::new();
+        assert!(matches!(
+            bgra_crop_to_nv12(&src, 16, 0, 2, 2, 4, &mut out),
+            Err(ConvertError::ShortInput { .. })
+        ));
+    }
+
+    // Odd DIMENSIONS stay refused whatever the origin: NV12 has no way to
+    // express a half chroma sample.
+    #[test]
+    fn a_crop_with_odd_dimensions_is_refused() {
+        let src = four_quadrants();
+        let mut out = Vec::new();
+        assert!(matches!(
+            bgra_crop_to_nv12(&src, 16, 1, 1, 3, 2, &mut out),
             Err(ConvertError::OddDimensions)
         ));
     }

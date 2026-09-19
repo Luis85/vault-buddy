@@ -529,22 +529,43 @@ mod tests {
 
     #[test]
     fn a_frame_at_or_above_the_declared_size_is_kept_and_cropped() {
-        // The sink's format is fixed at start. A window enlarged mid-capture
-        // delivers BIGGER frames; bgra_to_nv12 reads width*4 bytes of each
-        // of the first `height` rows out of a stride-pitched buffer, so a
+        // A window can be resized mid-capture and WGC then delivers a
+        // different size; the output format is fixed at start, so a
         // bigger frame crops to the declared size for free.
-        assert!(usable_frame(1920, 1080, 1920, 1080));
-        assert!(usable_frame(2560, 1440, 1920, 1080));
+        assert!(usable_frame(1920, 1080, 0, 0, 1920, 1080));
+        assert!(usable_frame(2560, 1440, 0, 0, 1920, 1080));
     }
 
     #[test]
-    fn a_frame_smaller_than_the_declared_size_is_dropped_not_read_past() {
-        // A window SHRUNK mid-capture delivers frames with fewer rows. Reading
-        // the declared height out of them runs past the end of the mapped
-        // staging texture; padding can make the length check pass, so the
-        // check has to be on the dimensions, not on the buffer length.
-        assert!(!usable_frame(1920, 1079, 1920, 1080));
-        assert!(!usable_frame(1919, 1080, 1920, 1080));
+    fn an_undersized_frame_is_rejected() {
+        // Reading the declared height out of a shorter frame runs past the
+        // end of the mapped staging texture.
+        assert!(!usable_frame(1920, 1079, 0, 0, 1920, 1080));
+        assert!(!usable_frame(1919, 1080, 0, 0, 1920, 1080));
+    }
+
+    // REGION capture: the frame is the whole monitor and the output is a
+    // rectangle inside it, so "big enough" is measured from the crop's FAR
+    // edge, not from the output size. A monitor that drops to 1280x720
+    // while a 640x480 region at (1600, 900) is being recorded delivers a
+    // frame that is larger than the OUTPUT and still unusable.
+    #[test]
+    fn a_region_is_judged_by_its_far_edge_not_its_size() {
+        assert!(usable_frame(1920, 1080, 1280, 600, 640, 480));
+        assert!(!usable_frame(1919, 1080, 1280, 600, 640, 480));
+        assert!(!usable_frame(1920, 1079, 1280, 600, 640, 480));
+        assert!(
+            !usable_frame(1280, 720, 1600, 900, 640, 480),
+            "the frame is bigger than the output but the region is off it"
+        );
+    }
+
+    // The offsets arrive from a parsed id. Adding them in u32 would wrap
+    // and turn an impossible region into a usable one.
+    #[test]
+    fn an_overflowing_crop_offset_is_rejected_rather_than_wrapping() {
+        assert!(!usable_frame(1920, 1080, u32::MAX, 0, 2, 1080));
+        assert!(!usable_frame(1920, 1080, 0, u32::MAX, 1920, 2));
     }
 
     #[test]
