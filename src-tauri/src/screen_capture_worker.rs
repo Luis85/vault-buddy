@@ -31,6 +31,7 @@ fn source_kind_str(id: &source::SourceId) -> &'static str {
     match id.kind() {
         source::SourceKind::Screen => "screen",
         source::SourceKind::Window => "window",
+        source::SourceKind::Region => "region",
     }
 }
 
