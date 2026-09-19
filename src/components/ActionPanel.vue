@@ -18,6 +18,7 @@ import RecordingBar from "./RecordingBar.vue";
 import Recordings from "./Recordings.vue";
 import RecordMode from "./RecordMode.vue";
 import RenamePrompt from "./RenamePrompt.vue";
+import ScreenSourcePicker from "./ScreenSourcePicker.vue";
 import Search from "./Search.vue";
 import TaskDetail from "./TaskDetail.vue";
 import Tasks from "./Tasks.vue";
@@ -64,6 +65,7 @@ const VIEW_TITLES: Record<string, string> = {
   captureSettings: "Vault settings",
   recordings: "Recordings",
   recordMode: "Capture knowledge",
+  screenCapture: "Record screen",
   transcriptions: "Transcriptions",
   tasks: "Tasks",
   search: "Search",
@@ -323,6 +325,16 @@ watch(
         <RecordMode
           :key="store.recordModeVaultId"
           :vault-id="store.recordModeVaultId"
+        />
+      </div>
+      <div
+        v-else-if="view === 'screenCapture' && store.screenCaptureVaultId"
+        key="screenCapture"
+        class="panel-scroll min-h-0 flex-1 overflow-y-auto pr-1"
+      >
+        <ScreenSourcePicker
+          :key="store.screenCaptureVaultId"
+          :vault-id="store.screenCaptureVaultId"
         />
       </div>
       <div

@@ -35,13 +35,16 @@ export const useVaultsStore = defineStore("vaults", {
       | "importPicker"
       | "documentImport"
       | "update"
-      | "taskDetail",
+      | "taskDetail"
+      | "screenCapture",
     // Which vault the captureSettings view edits.
     captureSettingsVaultId: null as string | null,
     // Which vault the recordings view lists.
     recordingsVaultId: null as string | null,
     // Which vault the recordMode view shows.
     recordModeVaultId: null as string | null,
+    // Which vault a screen capture will be filed into (the source picker).
+    screenCaptureVaultId: null as string | null,
     // Which vault the tasks view lists.
     tasksVaultId: null as string | null,
     // The task whose detail surface is showing (its own vaultId decides which
@@ -241,6 +244,7 @@ export const useVaultsStore = defineStore("vaults", {
       this.captureSettingsVaultId = null;
       this.recordingsVaultId = null;
       this.recordModeVaultId = null;
+      this.screenCaptureVaultId = null;
       this.tasksVaultId = null;
       this.taskDetailTask = null;
       this.pendingImports = [];
@@ -264,6 +268,12 @@ export const useVaultsStore = defineStore("vaults", {
     openRecordMode(vaultId: string) {
       this.view = "recordMode";
       this.recordModeVaultId = vaultId;
+    },
+    /** The screen/window source picker. Its parent is the record chooser it
+     * was reached from, so `back()` returns there rather than to the list. */
+    openScreenCapture(vaultId: string) {
+      this.view = "screenCapture";
+      this.screenCaptureVaultId = vaultId;
     },
     openTranscriptions() {
       this.view = "transcriptions";
@@ -333,6 +343,12 @@ export const useVaultsStore = defineStore("vaults", {
     back() {
       if (this.view === "recordings" && this.recordingsVaultId) {
         this.openRecordMode(this.recordingsVaultId);
+      } else if (this.view === "screenCapture" && this.screenCaptureVaultId) {
+        // Same shape as `recordings` above: the source picker is reached from
+        // the record chooser, so back() returns there. Without this branch it
+        // falls through to the final else and lands on the vault list,
+        // skipping a level and contradicting the one-parent-per-view tree.
+        this.openRecordMode(this.screenCaptureVaultId);
       } else if (this.view === "transcriptions") {
         return this.showList();
       } else if (this.view === "tasks") {

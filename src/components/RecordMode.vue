@@ -23,10 +23,20 @@ const notifications = useNotificationsStore();
 const pandocStore = usePandocStore();
 const documentImports = useDocumentImportsStore();
 
+// Capture actions first (spec 7.1), import next, browse last. The screen
+// entry NAVIGATES rather than starting anything — a screen capture needs a
+// source picked first — so each option carries its own aria label instead of
+// the old derived "Start a <title> recording" (which would have read "Start a
+// record screen recording"). The hint deliberately says "Screen or window",
+// not the spec's "Screen, window, or region": region capture is phase 3, and
+// advertising it here is the same dead promise a disabled Region tab would be.
 const OPTIONS = [
-  { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting" },
-  { key: "voice-note", title: "Voice Note", hint: "Microphone only", testId: "mode-voice-note" },
+  { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting", aria: "Start a meeting recording" },
+  { key: "voice-note", title: "Voice Note", hint: "Microphone only", testId: "mode-voice-note", aria: "Start a voice note recording" },
+  { key: "screen", title: "Record Screen", hint: "Screen or window", testId: "mode-screen", aria: "Choose a screen or window to capture" },
 ] as const;
+
+type ModeKey = (typeof OPTIONS)[number]["key"];
 
 // Gates persist() (not rendering) until the vault's real config has landed
 // (set ONLY on a successful read — a failed read never unlocks persistence,
@@ -240,6 +250,17 @@ function start(mode: "meeting" | "voice-note") {
   store.showList(); // recording bar shows on the list view
 }
 
+// Screen capture has no single "just start it" shape — the user must pick a
+// monitor or window first — so this option opens the picker instead of
+// starting an audio recording behind a button labelled Record Screen.
+function onOption(key: ModeKey) {
+  if (key === "screen") {
+    store.openScreenCapture(props.vaultId);
+    return;
+  }
+  start(key);
+}
+
 // A blocked click (Pandoc missing/old) jumps to the focused document-import
 // setup screen — the one place to fix it — instead of dead-ending or dumping
 // the user at the bottom of the long Buddy-settings page; otherwise open the
@@ -298,9 +319,9 @@ async function importDocument() {
         :key="option.key"
         type="button"
         :data-testid="option.testId"
-        :aria-label="`Start a ${option.title.toLowerCase()} recording`"
+        :aria-label="option.aria"
         class="w-full cursor-pointer rounded-control border border-white/10 bg-white/5 px-3 py-2 text-left transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        @click="start(option.key)"
+        @click="onOption(option.key)"
       >
         <span class="block text-sm font-medium text-fg">{{ option.title }}</span>
         <span class="block text-xs text-fg-muted">{{ option.hint }}</span>

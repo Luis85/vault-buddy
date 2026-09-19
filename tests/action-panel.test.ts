@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { dailyNoteOpenedMessage } from "../src/buddyMessages";
 import ActionPanel from "../src/components/ActionPanel.vue";
+import ScreenSourcePicker from "../src/components/ScreenSourcePicker.vue";
 import TaskDetail from "../src/components/TaskDetail.vue";
 import Tasks from "../src/components/Tasks.vue";
 import UpdateView from "../src/components/UpdateView.vue";
@@ -47,6 +48,22 @@ describe("ActionPanel", () => {
     expect(wrapper.text()).toContain("Update"); // the view title
     expect(wrapper.findComponent(UpdateView).exists()).toBe(true);
     expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+  });
+
+  it("renders the screen source picker on its own view, with a back button", () => {
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    store.openScreenCapture("d4e5f6");
+    const wrapper = mount(ActionPanel, {
+      global: { stubs: { ScreenSourcePicker: true } },
+    });
+    expect(wrapper.findComponent(ScreenSourcePicker).exists()).toBe(true);
+    // A titled view, not the vault-list fallback — the fallback would also
+    // render the magnifier/cog instead of Back.
+    expect(wrapper.text()).toContain("Record screen");
+    expect(wrapper.find('[data-testid="back-button"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="settings-toggle"]').exists()).toBe(false);
   });
 
   it("disables the header Back button while a Task Detail write is in flight", async () => {

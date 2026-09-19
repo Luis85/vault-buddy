@@ -50,6 +50,16 @@ describe("BuddyRoot", () => {
   });
   afterEach(() => clearMocks());
 
+  it("initializes the screen-capture store on mount, like the panel window does", async () => {
+    // The buddy IS the capture indicator, so it must learn about a screen
+    // capture the panel started. Each window is its own webview with its own
+    // Pinia instance; initialising in only one leaves the other dead — the
+    // same rule capture.init() already follows in both roots.
+    mount(BuddyRoot);
+    await flushPromises();
+    expect(calls).toContain("screen_capture_status");
+  });
+
   it("toggles the panel when the buddy is clicked", async () => {
     const wrapper = mount(BuddyRoot);
     await wrapper.find("button.buddy").trigger("click");

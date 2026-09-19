@@ -1,0 +1,238 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { defineStore } from "pinia";
+
+import { logWarning } from "../logging";
+import type { ScreenCaptureStatus, StagedCapture } from "../types";
+import { useNotificationsStore } from "./notifications";
+
+/** The view's three-valued capture state. Rust reports `capturing` and
+ * `paused` as two independent booleans (`ScreenStatusPayload`); this is the
+ * one place that mapping happens, so no component has to re-derive it and
+ * get the paused arm wrong. */
+type ScreenStatus = "idle" | "capturing" | "paused";
+
+function statusFrom(s: ScreenCaptureStatus): ScreenStatus {
+  if (!s.capturing) return "idle";
+  return s.paused ? "paused" : "capturing";
+}
+
+export const useScreenCaptureStore = defineStore("screenCapture", {
+  state: () => ({
+    status: "idle" as ScreenStatus,
+    /** Which vault the capture will be filed into — drives the vault-row
+     * indicator, exactly like the audio store's own `vaultId`. */
+    vaultId: null as string | null,
+    sourceTitle: null as string | null,
+    startedAtMs: null as number | null,
+    /** Accumulated pause time, authoritative from Rust's `screen:resumed`. */
+    pausedTotalMs: 0,
+    /** Start of the current pause span; null while not paused. */
+    pausedSinceMs: null as number | null,
+    /** Advisory frame stats (~2 Hz, lossy by design — spec 11). */
+    fps: 0,
+    dropped: 0,
+    /** The last finished capture's staged `.mp4`, for the editor (phase 3). */
+    lastStaged: null as StagedCapture | null,
+    error: null as string | null,
+    warning: null as string | null,
+    /** The surviving `.part` a failed finalize kept (`ScreenError::Retained`).
+     * Typed data, not prose to parse back out of `error` — the fMP4 design
+     * exists precisely so that file is still playable. */
+    retainedPath: null as string | null,
+    /**
+     * Bumped by every transition this store applies locally. A `resync()`
+     * captures it before awaiting and discards its (by then stale) answer if
+     * it changed — otherwise a status read issued just before a
+     * `screen:stopped` lands could resurrect the capture it was told ended.
+     */
+    seq: 0,
+  }),
+  getters: {
+    /** Mirror of Rust's `paused` boolean, derived rather than stored: two
+     * copies of one fact are two chances to desync. */
+    paused(state): boolean {
+      return state.status === "paused";
+    },
+  },
+  actions: {
+    /**
+     * Real elapsed footage at `now`: wall time since the start, minus the
+     * banked pause time, minus the pause currently open. Without the second
+     * subtraction a two-minute pause reads as two minutes of recording that
+     * is not in the file. The open-pause term is gated on actually being
+     * paused — applying a stale `pausedSinceMs` while capturing would freeze
+     * the clock after the first resume.
+     */
+    elapsedMs(now: number): number {
+      if (this.startedAtMs === null) return 0;
+      const open =
+        this.status === "paused" && this.pausedSinceMs !== null
+          ? now - this.pausedSinceMs
+          : 0;
+      return Math.max(0, now - this.startedAtMs - this.pausedTotalMs - open);
+    },
+    /** Apply a `ScreenStatusPayload` wholesale — the authoritative shape. */
+    applyStatus(s: ScreenCaptureStatus) {
+      this.seq++;
+      this.status = statusFrom(s);
+      this.vaultId = s.vaultId;
+      this.sourceTitle = s.sourceTitle;
+      this.startedAtMs = s.startedAtMs;
+      this.pausedTotalMs = s.pausedTotalMs ?? 0;
+      this.pausedSinceMs = s.pausedSinceMs ?? null;
+    },
+    /** Back to "nothing is running" — every live-capture field cleared, so no
+     * phantom bar can count up from a capture that already ended. */
+    reset() {
+      this.seq++;
+      this.status = "idle";
+      this.vaultId = null;
+      this.sourceTitle = null;
+      this.startedAtMs = null;
+      this.pausedTotalMs = 0;
+      this.pausedSinceMs = null;
+      this.fps = 0;
+      this.dropped = 0;
+    },
+    applyStopped(staged: StagedCapture) {
+      this.reset();
+      this.lastStaged = staged;
+      this.error = null;
+      this.warning = null;
+    },
+    /**
+     * Re-read the authoritative status. Used at init (a reloaded webview must
+     * not render blank over a live capture) and as the `screen:started`
+     * handler, because that event can arrive AFTER `screen:stopped` for the
+     * same capture — the monitor thread is live before `start_screen_capture`
+     * emits, so a source closing in that window finishes first
+     * (screen_commands.rs names this and points here). Deriving state from
+     * arrival order would leave a capture bar over no session.
+     */
+    async resync() {
+      const seq = this.seq;
+      try {
+        const s = await invoke<ScreenCaptureStatus>("screen_capture_status");
+        // A locally-applied transition landed while this was in flight: the
+        // answer describes a moment that has already passed.
+        if (seq !== this.seq) return;
+        if (s) this.applyStatus(s);
+      } catch (e) {
+        // Best-effort resync only (the panel may not be under Tauri in
+        // tests); never throw out of an event handler or onMounted.
+        logWarning(`screen_capture_status failed: ${String(e)}`);
+      }
+    },
+    async init() {
+      await listen("screen:started", () => void this.resync());
+      await listen<{ atMs: number }>("screen:paused", (event) => {
+        this.seq++;
+        this.status = "paused";
+        this.pausedSinceMs = event.payload.atMs;
+      });
+      await listen<{ pausedTotalMs: number }>("screen:resumed", (event) => {
+        this.seq++;
+        this.status = "capturing";
+        this.pausedTotalMs = event.payload.pausedTotalMs ?? 0;
+        this.pausedSinceMs = null;
+      });
+      await listen<StagedCapture>("screen:stopped", (event) => {
+        this.applyStopped(event.payload);
+      });
+      await listen<{ message: string; retainedPath: string | null }>(
+        "screen:failed",
+        (event) => {
+          this.reset();
+          this.error = event.payload.message;
+          this.retainedPath = event.payload.retainedPath ?? null;
+          useNotificationsStore().error(event.payload.message);
+        },
+      );
+      await listen<{ message: string }>("screen:warning", (event) => {
+        // Spec 14: a vanished source or device warns and the capture
+        // finalizes cleanly — never a teardown. The capture bar shows this
+        // inline while capturing, so only a warning outside a live capture
+        // needs a toast (the audio domain's own posture).
+        this.warning = event.payload.message;
+        if (this.status === "idle") {
+          useNotificationsStore().warning(event.payload.message);
+        }
+      });
+      await listen<{ fps: number; dropped: number }>("screen:frames", (event) => {
+        this.fps = event.payload.fps;
+        this.dropped = event.payload.dropped;
+      });
+      // Seed from backend truth LAST, so a live capture is reflected in a
+      // webview that was reloaded (or only just mounted) mid-capture.
+      await this.resync();
+    },
+    /**
+     * Start a capture. A refusal (spec 14's typed errors — alreadyCapturing,
+     * sourceGone, encoderUnavailable) must leave the store agreeing with
+     * Rust: believing a capture is running when none is renders the bar over
+     * nothing and gives Stop no session to stop. It reconciles by re-reading
+     * the authoritative status rather than by resetting, because the refusal
+     * this codepath sees MOST is `alreadyCapturing` — and blanking the store
+     * there would erase the bar of the very capture that caused the refusal.
+     * The error is rethrown so the picker can render it inline and refresh
+     * its source list.
+     */
+    async start(
+      vaultId: string,
+      sourceId: string,
+      inputs: string[],
+      outputs: string[],
+    ) {
+      this.error = null;
+      this.warning = null;
+      // A retained path belongs to the capture that produced it; carrying it
+      // into the next one would offer a stale file as this capture's own.
+      this.retainedPath = null;
+      try {
+        const s = await invoke<ScreenCaptureStatus>("start_screen_capture", {
+          id: vaultId,
+          sourceId,
+          inputs,
+          outputs,
+        });
+        this.applyStatus(s);
+        this.lastStaged = null;
+      } catch (e) {
+        this.error = String(e);
+        await this.resync();
+        throw e;
+      }
+    },
+    async pause() {
+      try {
+        await invoke("pause_screen_capture");
+      } catch (e) {
+        logWarning(`pause_screen_capture failed: ${String(e)}`);
+        useNotificationsStore().error(String(e));
+        await this.resync();
+      }
+    },
+    async resume() {
+      try {
+        await invoke("resume_screen_capture");
+      } catch (e) {
+        logWarning(`resume_screen_capture failed: ${String(e)}`);
+        useNotificationsStore().error(String(e));
+        await this.resync();
+      }
+    },
+    /** Stop and let `screen:stopped` / `screen:failed` finish the story — a
+     * `stillSaving` reply means the bounded wait expired while finalize was
+     * still running, NOT that anything failed. */
+    async stop() {
+      try {
+        await invoke<{ stillSaving: boolean }>("stop_screen_capture");
+      } catch (e) {
+        logWarning(`stop_screen_capture failed: ${String(e)}`);
+        useNotificationsStore().error(String(e));
+        await this.resync();
+      }
+    },
+  },
+});

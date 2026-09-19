@@ -9,11 +9,13 @@ import { useBuddyAnnouncements } from "../composables/useBuddyAnnouncements";
 import { useSettingsStorageSync } from "../composables/useSettingsStorageSync";
 import { useSuppressContextMenu } from "../composables/useSuppressContextMenu";
 import { useCaptureStore } from "../stores/capture";
+import { useScreenCaptureStore } from "../stores/screenCapture";
 import type { Facing } from "../stores/settings";
 import { useSettingsStore } from "../stores/settings";
 
 const settings = useSettingsStore();
 const capture = useCaptureStore();
+const screenCapture = useScreenCaptureStore();
 useSuppressContextMenu();
 useSettingsStorageSync();
 // The buddy window is the single announcer for capture-driven progress
@@ -66,6 +68,13 @@ let unlistenDrop: (() => void) | undefined;
 
 onMounted(async () => {
   void capture.init();
+  // Both roots init this store, and that is not redundant: each window is its
+  // own webview with its own Pinia instance, so a store mirroring Rust state
+  // that is initialised in only one of them leaves the other with a dead
+  // indicator. The buddy IS the capture indicator, so it must learn about a
+  // screen capture the PANEL started — the same rule capture.init() above
+  // already follows (see PanelRoot for the other copy).
+  void screenCapture.init();
   try {
     const initial = await invoke<string>("get_buddy_facing");
     facing.value = initial === "left" ? "left" : "right";
