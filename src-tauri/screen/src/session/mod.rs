@@ -170,9 +170,6 @@ pub struct ScreenOutcome {
     pub warning: Option<String>,
 }
 
-/// Repeat the last frame after this long with nothing new, so fragments
-/// keep closing on a still screen (see `pacing::VideoPacer::on_idle`).
-pub const HEARTBEAT: Duration = Duration::from_millis(500);
 /// Everything is resampled to this: the rate every Windows AAC encoder MFT
 /// is required to accept. The MP3 path's 44 100 is untouched.
 pub const AUDIO_RATE: u32 = 48_000;
@@ -209,7 +206,8 @@ pub fn output_ts(clock: &SharedClock) -> Option<Duration> {
 /// Audio carries its own timestamp and duration because the `AudioPacer`
 /// that derives them from the emitted sample count belongs with the thread
 /// that does the mixing; video is stamped in the mux, where the
-/// `VideoPacer` also owns the still-screen heartbeat.
+/// `VideoPacer` also fills the slots a still screen delivered no frame
+/// for, so the track stays as long as the capture.
 #[cfg(windows)]
 pub(crate) enum MuxMsg {
     Video {
@@ -267,6 +265,10 @@ mod tests {
     use super::pacing::*;
     use std::time::{Duration, Instant};
 
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
+    }
+
     #[test]
     fn a_frame_lasts_its_share_of_a_second() {
         assert_eq!(frame_duration(30), Duration::from_nanos(33_333_333));
@@ -280,15 +282,6 @@ mod tests {
         // across the WebView2 FFI boundary — an abort with no crash record.
         assert_eq!(frame_duration(0), frame_duration(1));
     }
-
-    #[test]
-    fn a_still_screen_repeats_its_last_frame_once_the_heartbeat_elapses() {
-        let hb = Duration::from_millis(500);
-        assert!(!should_repeat(Duration::from_millis(499), hb));
-        assert!(should_repeat(Duration::from_millis(500), hb));
-        assert!(should_repeat(Duration::from_secs(30), hb));
-    }
-
     #[test]
     fn audio_is_batched_rather_than_written_per_callback() {
         assert!(!audio_chunk_ready(1023, 1024));
@@ -421,86 +414,6 @@ mod tests {
             "a value already ahead is left exactly as it is"
         );
     }
-
-    // --- the video pacer, which owns the heartbeat -----------------------
-
-    fn at(base: Instant, ms: u64) -> Instant {
-        base + Duration::from_millis(ms)
-    }
-
-    #[test]
-    fn a_pacer_with_no_frame_yet_has_nothing_to_repeat() {
-        // Repeating before the first frame would write an empty sample.
-        let mut p = VideoPacer::new(30, Duration::from_millis(500));
-        let base = Instant::now();
-        assert!(p
-            .on_idle(Some(Duration::from_secs(9)), at(base, 9_000))
-            .is_none());
-    }
-
-    #[test]
-    fn a_still_screen_repeats_the_last_frame_on_the_capture_clocks_timeline() {
-        let mut p = VideoPacer::new(30, Duration::from_millis(500));
-        let base = Instant::now();
-        p.on_frame(Duration::from_millis(100), at(base, 100));
-        // Not yet: only 499 ms of stillness.
-        assert!(p
-            .on_idle(Some(Duration::from_millis(599)), at(base, 599))
-            .is_none());
-        let (ts, dur) = p
-            .on_idle(Some(Duration::from_millis(600)), at(base, 600))
-            .expect("half a second of stillness closes no fragment otherwise");
-        assert_eq!(
-            ts,
-            Duration::from_millis(600),
-            "the repeat rides the capture clock"
-        );
-        assert_eq!(dur, frame_duration(30));
-    }
-
-    #[test]
-    fn a_paused_capture_never_repeats_a_frame() {
-        // REGRESSION: repeating while paused advances the output timeline by
-        // PAUSED WALL-CLOCK TIME — exactly what CaptureClock exists to keep
-        // out of the output — and then makes the first frame after resume
-        // stamp EARLIER than the repeats, i.e. a non-monotonic stream.
-        let mut p = VideoPacer::new(30, Duration::from_millis(500));
-        let base = Instant::now();
-        p.on_frame(Duration::from_millis(100), at(base, 100));
-        // Paused: the clock reports None for as long as the pause lasts.
-        assert!(p.on_idle(None, at(base, 5_000)).is_none());
-        assert!(p.on_idle(None, at(base, 60_000)).is_none());
-        // Resumed. The clock's output time has NOT advanced by the pause.
-        let (ts, _) = p.on_frame(Duration::from_millis(150), at(base, 60_100));
-        assert_eq!(ts, Duration::from_millis(150));
-    }
-
-    #[test]
-    fn the_wait_shrinks_so_the_heartbeat_fires_even_while_audio_keeps_arriving() {
-        // REGRESSION: blocking a full heartbeat on every wakeup means the
-        // timeout arm never runs while audio chunks arrive every ~85 ms, so
-        // a still screen recorded WITH a microphone never repeats a frame
-        // and closes no fragments — the heartbeat silently does nothing in
-        // the common case.
-        let mut p = VideoPacer::new(30, Duration::from_millis(500));
-        let base = Instant::now();
-        p.on_frame(Duration::from_millis(0), base);
-        assert_eq!(p.wait(at(base, 100)), Duration::from_millis(400));
-        // Never zero: a zero wait busy-spins the mux thread.
-        assert!(p.wait(at(base, 5_000)) > Duration::ZERO);
-    }
-
-    #[test]
-    fn a_repeat_is_forced_past_the_previous_timestamp_when_the_clock_has_not_moved() {
-        let mut p = VideoPacer::new(30, Duration::from_millis(500));
-        let base = Instant::now();
-        p.on_frame(Duration::from_millis(100), at(base, 100));
-        let (ts, _) = p
-            .on_idle(Some(Duration::from_millis(100)), at(base, 700))
-            .expect("the heartbeat elapsed");
-        assert!(ts > Duration::from_millis(100));
-    }
-
     // --- the mixing round ------------------------------------------------
 
     #[test]
@@ -612,6 +525,38 @@ mod tests {
         );
     }
 
+    // --- which frames are usable ------------------------------------------
+
+    #[test]
+    fn a_frame_at_or_above_the_declared_size_is_kept_and_cropped() {
+        // The sink's format is fixed at start. A window enlarged mid-capture
+        // delivers BIGGER frames; bgra_to_nv12 reads width*4 bytes of each
+        // of the first `height` rows out of a stride-pitched buffer, so a
+        // bigger frame crops to the declared size for free.
+        assert!(usable_frame(1920, 1080, 1920, 1080));
+        assert!(usable_frame(2560, 1440, 1920, 1080));
+    }
+
+    #[test]
+    fn a_frame_smaller_than_the_declared_size_is_dropped_not_read_past() {
+        // A window SHRUNK mid-capture delivers frames with fewer rows. Reading
+        // the declared height out of them runs past the end of the mapped
+        // staging texture; padding can make the length check pass, so the
+        // check has to be on the dimensions, not on the buffer length.
+        assert!(!usable_frame(1920, 1079, 1920, 1080));
+        assert!(!usable_frame(1919, 1080, 1920, 1080));
+    }
+
+    #[test]
+    fn a_dropped_frame_is_logged_at_the_start_of_a_run_then_rate_limited() {
+        // At 60 fps a persistently failing conversion would write a log line
+        // every 16 ms and bury every other diagnostic in the file.
+        assert!(should_log_drop(1));
+        assert!(!should_log_drop(2));
+        assert!(!should_log_drop(299));
+        assert!(should_log_drop(301));
+    }
+
     // --- the control state machine ---------------------------------------
     // Pause/resume/stop accounting is pure logic over the shared clock and
     // one flag, so it lives here where Linux can prove it rather than
@@ -721,38 +666,6 @@ mod tests {
             crate::source::resolve(&crate::source::SourceId::Screen(0)),
             Err(crate::ScreenError::Unsupported)
         ));
-    }
-
-    // --- which frames are usable ------------------------------------------
-
-    #[test]
-    fn a_frame_at_or_above_the_declared_size_is_kept_and_cropped() {
-        // The sink's format is fixed at start. A window enlarged mid-capture
-        // delivers BIGGER frames; bgra_to_nv12 reads width*4 bytes of each
-        // of the first `height` rows out of a stride-pitched buffer, so a
-        // bigger frame crops to the declared size for free.
-        assert!(usable_frame(1920, 1080, 1920, 1080));
-        assert!(usable_frame(2560, 1440, 1920, 1080));
-    }
-
-    #[test]
-    fn a_frame_smaller_than_the_declared_size_is_dropped_not_read_past() {
-        // A window SHRUNK mid-capture delivers frames with fewer rows. Reading
-        // the declared height out of them runs past the end of the mapped
-        // staging texture; padding can make the length check pass, so the
-        // check has to be on the dimensions, not on the buffer length.
-        assert!(!usable_frame(1920, 1079, 1920, 1080));
-        assert!(!usable_frame(1919, 1080, 1920, 1080));
-    }
-
-    #[test]
-    fn a_dropped_frame_is_logged_at_the_start_of_a_run_then_rate_limited() {
-        // At 60 fps a persistently failing conversion would write a log line
-        // every 16 ms and bury every other diagnostic in the file.
-        assert!(should_log_drop(1));
-        assert!(!should_log_drop(2));
-        assert!(!should_log_drop(299));
-        assert!(should_log_drop(301));
     }
 
     #[test]

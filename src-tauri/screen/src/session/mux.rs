@@ -14,7 +14,7 @@ use crate::diagnose;
 use crate::sink::{AudioFormat, FragmentedSink, VideoFormat};
 use crate::ScreenError;
 
-use super::{output_ts, pacing, Counters, FrameStats, MuxMsg, SharedClock, Warnings, HEARTBEAT};
+use super::{output_ts, pacing, Counters, FrameStats, MuxMsg, SharedClock, Warnings};
 
 /// How often the advisory `FrameStats` go out (~2 Hz, spec 11).
 const STATS_EVERY: Duration = Duration::from_millis(500);
@@ -27,14 +27,14 @@ const STATS_EVERY: Duration = Duration::from_millis(500);
 /// the frame sender straight away.
 ///
 /// `STOP_GRACE` is NOT that bound — it is evaluated only in
-/// `recv_timeout`'s `Timeout` arm below, and `pacer.wait()` resets to
-/// roughly the heartbeat (~500 ms) after every frame, so a
-/// steadily-delivering producer never lets that arm run at all; this
-/// constant sits unreached on the ordinary stop path. What it covers is
-/// the abnormal, much rarer case where the Timeout arm genuinely keeps
-/// firing while stopping is set: a `CaptureControl::stop` whose WM_QUIT
-/// could not be posted, or a session that has gone fully idle (no video,
-/// no audio) right as Stop is signalled. Either would otherwise wait on a
+/// `recv_timeout`'s `Timeout` arm below, and that arm does nothing at all
+/// unless `stopping` is already set, so this constant sits unreached on
+/// the ordinary stop path however often the arm runs (`pacer.wait()` is
+/// now one frame period, so it runs often). What it covers is the
+/// abnormal, much rarer case where the Timeout arm keeps firing while
+/// stopping is set: a `CaptureControl::stop` whose WM_QUIT could not be
+/// posted, or a session that has gone fully idle (no video, no audio)
+/// right as Stop is signalled. Either would otherwise wait on a
 /// disconnect that never comes and hang the app on Stop with no crash
 /// record — `STOP_GRACE` is the bound for THAT wait, not for stop in
 /// general.
@@ -50,12 +50,15 @@ pub(super) struct SinkPlan {
 
 /// The mux thread: the ONLY owner of the sink.
 ///
-/// It also carries the still-screen heartbeat. WGC emits a frame only
-/// when something changes, so an untouched screen closes no fragments
-/// and a crash would lose the whole idle stretch — exactly what spec
-/// 6.4's container choice exists to prevent. The repeat decision, its
-/// timestamp and the wait that lets it fire while audio keeps arriving
-/// all live in `pacing::VideoPacer`, which Linux can prove.
+/// It also paces the video track. WGC emits a frame only when something
+/// changes, so an untouched screen would otherwise write almost no
+/// samples — closing no fragments (losing the idle stretch to a crash,
+/// exactly what spec 6.4's container choice exists to prevent) and, since
+/// an MP4 timeline is the SUM of its sample durations, producing a track
+/// far shorter than the capture. Repeating the last frame into every
+/// elapsed frame slot fixes both. The repeat decision, its timestamp and
+/// the wait that lets it fire while audio keeps arriving all live in
+/// `pacing::VideoPacer`, which Linux can prove.
 ///
 /// Returns the end timestamp of the last sample actually written on a
 /// clean finalize — `ScreenSession::stop` reports THIS as the capture's
@@ -101,7 +104,7 @@ pub(super) fn run_mux(
     };
     drop(ready_tx);
 
-    let mut pacer = pacing::VideoPacer::new(fps, HEARTBEAT);
+    let mut pacer = pacing::VideoPacer::new(fps);
     let mut last_frame: Option<Vec<u8>> = None;
     let mut stop_seen: Option<Instant> = None;
     let mut stats_at = Instant::now();
@@ -117,7 +120,10 @@ pub(super) fn run_mux(
     // zero can never be a legitimate written-until value.
     let mut written_until = Duration::ZERO;
 
-    let result = loop {
+    // Labelled: the repeat catch-up below is itself a loop, so a write
+    // failure inside it has to break the MUX loop with its error rather
+    // than just ending the catch-up and silently continuing.
+    let result = 'mux: loop {
         let wait = pacer.wait(Instant::now());
         match rx.recv_timeout(wait) {
             Ok(MuxMsg::Video { nv12, ts }) => {
@@ -154,13 +160,23 @@ pub(super) fn run_mux(
         }
 
         // Checked on EVERY wakeup, not only on a timeout: audio chunks
-        // arrive every ~85 ms, so a heartbeat that only ran in the
-        // timeout arm would never fire on a still screen recorded with a
+        // arrive every ~85 ms, so a repeat that only ran in the timeout
+        // arm would never fire on a still screen recorded with a
         // microphone.
+        //
+        // A LOOP, not a single call: each call fills at most one frame
+        // slot, so a wakeup that landed several slots late (a mux blocked
+        // through a fragment write) catches back up instead of leaving
+        // the track permanently short of the capture. It terminates —
+        // `clock_ts` is read ONCE, and every repeat advances the timeline
+        // a whole frame towards it. `on_idle` declines the first call
+        // after a real frame, which is what keeps a backed-up frame
+        // channel from being "caught up" over frames still queued.
         if let Some(frame) = &last_frame {
-            if let Some((ts, dur)) = pacer.on_idle(output_ts(&clock), Instant::now()) {
+            let clock_ts = output_ts(&clock);
+            while let Some((ts, dur)) = pacer.on_idle(clock_ts, Instant::now()) {
                 if let Err(e) = sink.write_video(frame, ts, dur) {
-                    break Err(e);
+                    break 'mux Err(e);
                 }
                 written_until = written_until.max(ts + dur);
                 counters.video_written.fetch_add(1, Ordering::Relaxed);

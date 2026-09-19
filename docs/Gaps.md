@@ -2678,3 +2678,49 @@ machine and this build*. It does not make the equality a contract:
 Microsoft still documents none, so the diagnosis path added alongside the
 fix (a zero-video capture explains itself and names both sizes) remains
 the thing that keeps a future drift loud instead of silent.
+
+### GAP-123 · Medium · The pacer governs only the UNDER-delivery direction of the video timeline
+`src-tauri/screen/src/session/pacing.rs` (`VideoPacer`),
+`src-tauri/screen/src/frames.rs` (`on_frame_arrived`) and
+`src-tauri/screen/src/session/windows_session.rs`
+(`minimum_update_interval_settings`). An MP4 track's timeline is the sum of
+its sample durations, and every video sample is stamped with the nominal
+`frame_duration(fps)`. The still-screen fix makes the pacer fill every frame
+slot WGC left empty, so the track can no longer come out shorter than the
+capture — the confirmed bug where 40 recorded seconds played back in 3-4.
+The opposite direction is still ungoverned: nothing drops a frame that
+arrives for a slot already written, so if WGC delivers FASTER than `fps`
+the track comes out longer than the capture and plays in slow motion, by
+exactly the delivery/`fps` ratio.
+
+Today that is held off one layer up rather than in the pacer.
+`minimum_update_interval_settings` asks WGC for a `MinUpdateInterval` of one
+frame period, which caps delivery at `fps`, and on the Windows 11 the app
+targets that is the path taken. But it is deliberately a capability query,
+not a version check: a build whose `GraphicsCaptureSession.MinUpdateInterval`
+probe returns false or errors falls back to `MinimumUpdateIntervalSettings::
+Default`, and WGC then delivers at the monitor's refresh — 2x on a 60 Hz
+panel at 30 fps, ~4.8x on a 144 Hz one. On such a machine a busy screen
+records in slow motion while a still one is correct, and nothing in the
+capture reports it; the `dropped` counter stays at zero because these frames
+are written, not dropped.
+
+The fix is the symmetric half of the slot rule the still-screen work added:
+have the pacer decline a real frame whose timestamp falls in a slot it has
+already written, exactly as it declines a repeat for a slot still in
+progress. That is a constant-frame-rate converter, which is what the sink's
+own declared `MF_MT_FRAME_RATE` already claims the stream is. It was left out
+of the still-screen fix because it means DROPPING captured content on a path
+no CI runner and no reviewer here can exercise, and because the confirmed
+production failure was the other direction. Pin it with the same pure
+pacing.rs tests, whose fps and elapsed time are hand-derived.
+
+Not to be confused with the accepted COST of constant rate, which is not a
+gap: a still 4K60 capture now hands the encoder 60 identical frames a second
+instead of two. The bitrate cost is small (H.264 codes an unchanged frame as
+an all-skip P-slice, on the order of bytes) and bounded by the
+`MF_MT_AVG_BITRATE` the sink was already opened with for `fps` frames a
+second, but the per-frame NV12 copy and encode load on a still screen now
+match a busy one. That is the price of a timeline whose durations are true,
+and the alternative — variable durations with a frame of lookahead — trades
+it for VFR MP4s that players handle unevenly.
