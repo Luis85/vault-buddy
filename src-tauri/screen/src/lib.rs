@@ -7,6 +7,7 @@
 //! surfaces; `engine` remains a stub until frame acquisition lands.
 
 pub mod clock;
+pub mod convert;
 pub mod engine;
 pub mod mp4_boxes;
 pub mod select;

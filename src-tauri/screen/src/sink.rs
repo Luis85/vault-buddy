@@ -227,6 +227,12 @@ mod imp {
             let t = MFCreateMediaType()?;
             t.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             t.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+            // Declared, not inferred. convert.rs produces BT.709 limited
+            // range; without this the encoder infers a matrix from the frame
+            // size and a sub-HD window capture would be tagged BT.601 while
+            // carrying BT.709 samples.
+            t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+            t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
             t.SetUINT32(&MF_MT_AVG_BITRATE, v.bitrate_bps)?;
             t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             // Spec 12: a fixed 1-second keyframe interval regardless of
@@ -253,6 +259,12 @@ mod imp {
             // handing the encoder BGRA would work only where a software
             // colour converter happens to be inserted.
             t.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            // Declared, not inferred. convert.rs produces BT.709 limited
+            // range; without this the encoder infers a matrix from the frame
+            // size and a sub-HD window capture would be tagged BT.601 while
+            // carrying BT.709 samples.
+            t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+            t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
             t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             t.SetUINT64(
                 &MF_MT_FRAME_SIZE,
