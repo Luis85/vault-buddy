@@ -1,0 +1,11 @@
+{
+  "python": "3.13.5",
+  "playwright": "1.57.0",
+  "pillow": "12.3.0",
+  "jsonschema": "4.26.0",
+  "chromium": "Chromium 144.0.7559.96 built on Debian GNU/Linux 13 (trixie)",
+  "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+  "native_executed": false,
+  "camera": "simulated media streams with real browser recorder",
+  "navigation": "set_content used; real-origin reload paths are classified from test results"
+}

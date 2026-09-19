@@ -1,0 +1,258 @@
+{
+  "results": [
+    {
+      "name": "Teaching toolbar is inside one 48px preview header; preview keeps its aspect ratio",
+      "status": "PASS",
+      "detail": {
+        ".preview-header": {
+          "x": 244,
+          "y": 56,
+          "w": 1080,
+          "h": 48
+        },
+        ".toolstrip": {
+          "x": 584.203125,
+          "y": 61.5,
+          "w": 401.21875,
+          "h": 36
+        },
+        "#canvasWrap": {
+          "x": 438.21875,
+          "y": 118,
+          "w": 691.546875,
+          "h": 389
+        }
+      }
+    },
+    {
+      "name": "Save, webcam, text, arrow and selection actions each have one persistent entry",
+      "status": "PASS",
+      "detail": {
+        "[data-action=\"downloadProject\"]": 1,
+        "[data-action=\"webcam\"]": 1,
+        "[data-effect=\"text\"]": 1,
+        "[data-effect=\"arrow\"]": 1,
+        "[data-editor=\"more\"]": 1
+      }
+    },
+    {
+      "name": "Four distinct library destinations occupy one row",
+      "status": "PASS",
+      "detail": [
+        {
+          "text": "Media",
+          "y": 63.5
+        },
+        {
+          "text": "Titles",
+          "y": 63.5
+        },
+        {
+          "text": "Captions",
+          "y": 63.5
+        },
+        {
+          "text": "Chapters",
+          "y": 63.5
+        }
+      ]
+    },
+    {
+      "name": "Inline project title still renames and participates in Undo",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Project menu supports arrow entry, End, Escape and focus restoration",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Clicking the same menu trigger twice closes it",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Project and view navigation never create a project edit or revision",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Spotlight, numbered step and privacy cover dispatch real undoable commands",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "At five viewport sizes the header remains one row and overflowed tools stay reachable",
+      "status": "PASS",
+      "detail": [
+        {
+          "viewport": 1600,
+          "height": 48,
+          "commands_fit": true,
+          "overflow_reachable": true
+        },
+        {
+          "viewport": 1280,
+          "height": 48,
+          "commands_fit": true,
+          "overflow_reachable": true
+        },
+        {
+          "viewport": 960,
+          "height": 44,
+          "commands_fit": true,
+          "overflow_reachable": true
+        },
+        {
+          "viewport": 720,
+          "height": 44,
+          "commands_fit": true,
+          "overflow_reachable": true
+        },
+        {
+          "viewport": 390,
+          "height": 48,
+          "commands_fit": true,
+          "overflow_reachable": true
+        }
+      ]
+    },
+    {
+      "name": "Zoom works through the overflow menu in a narrow viewport",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Webcam has one Media entry and opening it does not start capture",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Relocated Import opens the real picker and imports a real audio file",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Advanced framing is disclosed explicitly and stays open while editing",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Edit actions and right-click retain the same object-specific command family",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "All six property categories remain available; fades still change the real clip",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Preview tools have a single tab stop and arrow navigation without moving the playhead",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Library and property toggles work in docked and compact layouts",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Focus preview and Reset layout change workspace visibility only",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Saving the editable project stays distinct from rendering the video product",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Relocated guide lessons highlight the actual live controls",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Onboarding suspends for webcam setup and resumes the same lesson",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "More tools remains compatible with tutorial suspension and resume",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "New view preferences validate and round-trip in the editable workspace envelope",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "All four output formats preserve correct display proportions after the toolbar move",
+      "status": "PASS",
+      "detail": [
+        {
+          "w": 691.546875,
+          "h": 389,
+          "expected": 1.7777777777777777
+        },
+        {
+          "w": 218.8125,
+          "h": 389,
+          "expected": 0.5625
+        },
+        {
+          "w": 389,
+          "h": 389,
+          "expected": 1
+        },
+        {
+          "w": 518.65625,
+          "h": 389,
+          "expected": 1.3333333333333333
+        }
+      ]
+    },
+    {
+      "name": "Review retains a visible Back to edit action in the same header",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "New project keeps its confirmation and leads directly to import or webcam",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Command menus stay within narrow and short viewports",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Compact global commands keep visible labels or icons; resizing never duplicates More text",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Focus mode reveals panels in one click and narrow drawers are mutually exclusive",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Clear selection remains pointer-accessible without a permanent Select button",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "No JavaScript errors and no network requests during these workflows",
+      "status": "PASS",
+      "detail": [
+        null,
+        null
+      ]
+    }
+  ],
+  "errors": [],
+  "requests": []
+}

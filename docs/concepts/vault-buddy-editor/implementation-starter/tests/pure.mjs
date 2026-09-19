@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {decodeSnapshot,decodeSaveReceipt,decodeProgress} from '../.pure/contracts.js';
+import {durationMs,sourceAt,frameTimestamp} from '../.pure/time.js';
+import {createListenerScope} from '../.pure/listenerScope.js';
+const results=[];
+async function test(name,fn){try{await fn();results.push({name,status:'PASS'});}catch(e){results.push({name,status:'FAIL',error:String(e)});}}
+const base={sessionId:'s',projectId:'p',revision:1,persistedRevision:null,title:'Tutorial',durationMs:10000,canUndo:false,canRedo:false};
+await test('Decode a valid native summary',()=>assert.deepEqual(decodeSnapshot(base),base));
+await test('Reject malformed revision scalars',()=>{for(const revision of [NaN,Infinity,1.2,-1,'1'])assert.throws(()=>decodeSnapshot({...base,revision}));});
+await test('Reject saved revision beyond current',()=>assert.throws(()=>decodeSnapshot({...base,persistedRevision:2})));
+await test('Reject unknown shape and empty identity',()=>{assert.throws(()=>decodeSnapshot('ok'));assert.throws(()=>decodeSnapshot({...base,sessionId:''}));});
+await test('Decode native save receipt',()=>assert.equal(decodeSaveReceipt({sessionId:'s',savedRevision:1,projectFileId:'file'}).savedRevision,1));
+await test('Reject invalid save receipt',()=>assert.throws(()=>decodeSaveReceipt({sessionId:'s',savedRevision:1.1,projectFileId:'file'})));
+await test('Validate progress phase and bounds',()=>{assert.equal(decodeProgress({sessionId:'s',jobId:'j',sequence:1,phase:'publishing',fraction:.99}).phase,'publishing');for(const fraction of [NaN,Infinity,-1,2])assert.throws(()=>decodeProgress({sessionId:'s',jobId:'j',sequence:1,phase:'rendering',fraction}));assert.throws(()=>decodeProgress({sessionId:'s',jobId:'j',sequence:1,phase:'maybe',fraction:0}));});
+await test('Half-open clip source mapping',()=>{const c={startMs:500,sourceInMs:1000,sourceOutMs:3000,speed:2};assert.equal(durationMs(c),1000);assert.equal(sourceAt(c,500),1000);assert.equal(sourceAt(c,1499),2998);assert.equal(sourceAt(c,1500),null);assert.equal(sourceAt(c,499),null);});
+await test('Invalid media spans fail',()=>{assert.throws(()=>durationMs({startMs:0,sourceInMs:2,sourceOutMs:1,speed:1}));assert.throws(()=>durationMs({startMs:0,sourceInMs:0,sourceOutMs:1000,speed:0}));});
+await test('Rational timestamp mapping has no accumulated roundoff',()=>{assert.equal(frameTimestamp(1n,30n,1n),333333n);assert.equal(frameTimestamp(30n,30n,1n),10000000n);assert.equal(frameTimestamp(30000n,30000n,1001n),10010000000n);assert.throws(()=>frameTimestamp(1n,0n,1n));});
+await test('Late listeners release after scope disposal',async()=>{let resolve;let count=0;const promise=new Promise(r=>resolve=r);const scope=createListenerScope();const task=scope.add(promise);scope.dispose();resolve(()=>count++);await task;assert.equal(count,1);});
+await test('Cleanup exceptions cannot strand other listeners',async()=>{let count=0;const scope=createListenerScope();await scope.add(Promise.resolve(()=>{throw Error('fixture');}));await scope.add(Promise.resolve(()=>count++));scope.dispose();scope.dispose();assert.equal(count,1);});
+console.log(JSON.stringify({node:process.version,scope:'Pure TypeScript DTO, timing and listener helpers only; no Vue/Pinia/Tauri dependency emulation.',results},null,2));
+if(results.some(r=>r.status==='FAIL'))process.exitCode=1;

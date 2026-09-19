@@ -1,0 +1,153 @@
+{
+  "artifact_sha256": "576ecde17da0d1d62d852151097eb7335e21b138bfb6206f4f7d34e658f9e62f",
+  "results": [
+    {
+      "name": "Editor becomes ready with optional nonmodal onboarding",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Product title identifies the current tutorial",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Document title follows rename and Undo without stale metadata",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Primary navigation has product labels, not iteration badges",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Unchanged frame sizing does not rebuild the aspect-ratio toolbar",
+      "status": "PASS",
+      "detail": {
+        "repeated_canvas_checks": 20,
+        "toolbar_mutations": 0
+      }
+    },
+    {
+      "name": "A real canvas change refreshes ratio and geometry",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Machine-readable onboarding matches all runtime lesson IDs",
+      "status": "PASS",
+      "detail": {
+        "lessons": 22,
+        "chapters": 7
+      }
+    },
+    {
+      "name": "Learning center uses current navigation guidance",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Current workspace has one preview toolbar row",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Direct editing context is visible on the target clip",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Fade presets and numeric editing remain available",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Webcam setup opens without requesting a live stream",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Caption controls have a current standalone screen",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Pre-render findings remain actionable in their own dialog",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Saving editable work remains separate from rendering",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Render dialog states the actual browser execution boundary",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Contextual guide highlights without modifying composition",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Compact layout and light theme retain visible Help",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Forced colors preserve keyboard focus without recoloring media",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Reference loads with no external network calls or browser exceptions",
+      "status": "PASS",
+      "detail": [
+        null,
+        null
+      ]
+    },
+    {
+      "name": "Injected startup failure has safe actionable recovery copy",
+      "status": "PASS",
+      "detail": null
+    },
+    {
+      "name": "Interchange schema accepts the example and rejects invalid basic fields",
+      "status": "PASS",
+      "detail": "Example accepted; invalid speed and direct asset path rejected structurally; semantic graph rules tested separately."
+    },
+    {
+      "name": "All 50 feature IDs have ownership and acceptance criteria",
+      "status": "PASS",
+      "detail": {
+        "features": 50
+      }
+    },
+    {
+      "name": "Reference rebuild is byte-identical to the delivered HTML",
+      "status": "PASS",
+      "detail": null
+    }
+  ],
+  "screenshots": [
+    "01-welcome.png",
+    "02-workspace.png",
+    "03-context-menu.png",
+    "04-fades.png",
+    "05-webcam.png",
+    "06-captions.png",
+    "07-checks.png",
+    "08-save-project.png",
+    "09-render.png",
+    "10-onboarding.png",
+    "11-learning-center.png",
+    "12-compact.png",
+    "13-light.png",
+    "14-high-contrast.png",
+    "15-startup-recovery.png"
+  ]
+}

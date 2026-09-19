@@ -1,0 +1,54 @@
+{
+  "node": "v22.16.0",
+  "scope": "Pure TypeScript DTO, timing and listener helpers only; no Vue/Pinia/Tauri dependency emulation.",
+  "results": [
+    {
+      "name": "Decode a valid native summary",
+      "status": "PASS"
+    },
+    {
+      "name": "Reject malformed revision scalars",
+      "status": "PASS"
+    },
+    {
+      "name": "Reject saved revision beyond current",
+      "status": "PASS"
+    },
+    {
+      "name": "Reject unknown shape and empty identity",
+      "status": "PASS"
+    },
+    {
+      "name": "Decode native save receipt",
+      "status": "PASS"
+    },
+    {
+      "name": "Reject invalid save receipt",
+      "status": "PASS"
+    },
+    {
+      "name": "Validate progress phase and bounds",
+      "status": "PASS"
+    },
+    {
+      "name": "Half-open clip source mapping",
+      "status": "PASS"
+    },
+    {
+      "name": "Invalid media spans fail",
+      "status": "PASS"
+    },
+    {
+      "name": "Rational timestamp mapping has no accumulated roundoff",
+      "status": "PASS"
+    },
+    {
+      "name": "Late listeners release after scope disposal",
+      "status": "PASS"
+    },
+    {
+      "name": "Cleanup exceptions cannot strand other listeners",
+      "status": "PASS"
+    }
+  ]
+}

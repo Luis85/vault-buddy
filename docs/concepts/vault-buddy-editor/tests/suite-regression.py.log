@@ -1,0 +1,39 @@
+PASS Sample graph, multiple tracks and camera-off initial state {'valid': True, 'tracks': 5, 'clips': 7, 'ms': 33500, 'camera': 'idle'}
+PASS Playback, pause and output-to-source mapping 
+PASS Add video/audio tracks and undo 
+PASS Split preserves intersecting annotations and undo/redo 
+PASS Reorder carries callouts without moving other tracks 
+PASS Gap delete versus explicitly track-local ripple delete 
+PASS Locked tracks reject movement, deletion and layout changes 
+PASS Numeric fades, fade envelopes and duration limits 
+PASS Cross dissolve and removal preserve other tracks 
+PASS Equal-power audio crossfade envelope [0.4949747468305833, 0.4949747468305832]
+PASS Track mute/solo, master mix and independent monitoring mute 
+PASS Resizable circle/PiP, corner presets, crop and mirror 
+PASS Pointer corner resize preserves circle and is one undo 
+PASS Pointer webcam repositioning and bounds 
+PASS Gold timeline handle changes fade and supports undo 
+PASS Pointer trim preserves source and reversible edit 
+PASS Teaching tools, clip-linked markers and generated note 
+PASS Keyboard seek, snapping, project save and timeline resize 
+PASS Light/dark themes and resized workspace screenshots 
+PASS Real local video/audio import, metadata and peaks [{'id': 'asset-mu8gj5il-g', 'kind': 'video', 'duration': 6000, 'width': 640}, {'id': 'asset-mu8gj5nz-h', 'kind': 'audio', 'duration': 6000, 'width': 0}]
+PASS Independent real video layers and simultaneous audio playback 
+PASS Save portable workspace without rendering: sources, layout, CRC ['project.vbproject.json', 'manifest.json', 'Sources/asset-mu8gj5il-g-capture-with-audio.mp4', 'Sources/asset-mu8gj5nz-h-narration-tone.wav', 'READ-ME.txt']
+PASS Reopen portable project in a fresh context with playable sources 
+PASS Real multi-track render creates an immutable product and editable snapshot {'files': ['Intake/Screen/Workspace roundtrip test-r1-jfqo-i.webm', 'Intake/Screen/Workspace roundtrip test-r1-jfqo-i.md', 'Intake/Screen/Workspace roundtrip test-r1-jfqo-i.png', 'Render/edit-snapshot.json', 'Render/product.json', 'READ-ME.txt'], 'product_id': 'product-mu8gjfqo-i'}
+PASS Rendered streams decode with both mixed audio frequencies {'streams': [{'codec_name': 'vp9', 'codec_type': 'video', 'width': 1280, 'height': 720}, {'codec_name': 'opus', 'codec_type': 'audio'}], 'audio_rms': 0.0974949449300766, 'tone_magnitudes': {440: 6809.5947265625, 880: 2083.56005859375}}
+PASS Edit after rendering, restore its revision and undo without mutating output 
+PASS Project package includes render history, sources and product video 
+PASS Project with prior renders reopens in another fresh context 
+PASS Portable project retains source files needed only by a prior rendered revision 
+PASS Lightweight project missing-media state allows saving but blocks rendering 
+PASS Reject malformed graphs, unsafe paths, remote media and invalid crop 7
+PASS Corrupt ZIP integrity rejection leaves workspace untouched 
+PASS Camera secure-context/denial UI, optional mic, countdown cancel and release (simulated devices) 
+PASS Late camera grant after close releases all tracks (simulated permission) 
+PASS Responsive containment at five viewport sizes [[1600, 1000], [1280, 800], [960, 640], [720, 480], [390, 844]]
+PASS 100-clip timeline rendering smoke measurement {'clips': 100, 'render_ms': 110.10000000009313}
+PASS No uncaught JavaScript errors or network requests (None, None)
+PASS Annotated PNG export 293621
+TOTAL 38 PASS 38 FAIL 0

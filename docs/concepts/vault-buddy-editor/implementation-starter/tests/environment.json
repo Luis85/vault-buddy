@@ -1,0 +1,11 @@
+{
+  "node": "v22.16.0",
+  "global_typescript": "Version 5.8.3",
+  "cargo_available": false,
+  "registry_dns": {
+    "status": "blocked",
+    "error": "[Errno -3] Temporary failure in name resolution"
+  },
+  "vue_pina_tauri_dependencies_installed": false,
+  "full_framework_execution": "Not performed; missing local dependencies. See README."
+}

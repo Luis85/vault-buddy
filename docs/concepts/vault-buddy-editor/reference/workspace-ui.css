@@ -1,0 +1,204 @@
+/* Space for the video; one home for each persistent command. */
+:root{--sidebar:244px;--inspector:276px}
+.app{grid-template-rows:56px minmax(170px,1fr) 8px var(--timeline) 25px}
+.topbar{gap:14px;padding:0 16px;height:56px}
+.topbar .brand{width:auto;font-size:14px;gap:8px;margin-right:2px}
+.document-heading.header-path{display:flex!important;flex:1;min-width:40px;overflow:hidden}
+.document-name{min-width:0;max-width:100%;gap:10px;justify-content:flex-start;padding:4px 6px}
+.document-name .project-title{font-size:14px;letter-spacing:-.1px;max-width:100%}
+.document-name>.icon-slot{width:13px;opacity:0;flex-shrink:0}
+.document-name:hover>.icon-slot,.document-name:focus-visible>.icon-slot{opacity:1}
+.project-menu-trigger{font-size:11px;border-color:transparent;padding:6px 8px;gap:7px;background:transparent}
+.project-menu-trigger>.icon-slot:last-child .icon{width:12px}
+.header-actions{flex-shrink:0;margin-left:0;gap:7px}
+.header-actions .btn,.header-actions .primary{min-height:34px;font-size:11px}
+.header-actions #editorHelp{border-color:transparent;background:transparent}
+.header-actions .saved{font-size:10px;white-space:nowrap;max-width:170px;overflow:hidden;text-overflow:ellipsis}
+#issuesButton{border-color:transparent;background:transparent}
+#issuesButton:hover,#editorHelp:hover{background:var(--hover)}
+#issuesButton i:empty{display:none}
+.workspace{position:relative;grid-template-columns:var(--sidebar) minmax(0,1fr) var(--inspector)}
+.workspace.library-hidden{grid-template-columns:0 minmax(0,1fr) var(--inspector)}
+.workspace.library-hidden .sidebar{display:none}
+.workspace.properties-hidden{grid-template-columns:var(--sidebar) minmax(0,1fr) 0}
+.workspace.properties-hidden .inspector{display:none}
+.workspace.library-hidden.properties-hidden{grid-template-columns:0 minmax(0,1fr) 0}
+/* The old two rows are now one fixed-height header. Overflow goes into More tools. */
+.preview-header.projectbar{height:48px;min-height:48px;flex:0 0 48px;padding:0 12px;gap:8px;border-bottom:1px solid var(--line);background:var(--bg);flex-wrap:nowrap}
+.preview-heading{font-size:11px;font-weight:600;color:var(--sub);flex-shrink:0}
+.preview-header .ratio-button{font-size:10px;color:var(--muted);padding:4px 7px;border-color:transparent;min-width:55px;min-height:30px}
+.preview-header .ratio-button .icon{width:12px}
+.preview-header .panel-toggle{color:var(--muted);width:30px;min-width:30px}
+.preview-header .panel-toggle[aria-pressed=true]{color:var(--sub)}
+.preview-header .toolstrip{margin-left:auto;display:flex;flex-wrap:nowrap;min-width:0;flex:0 0 auto;align-items:center;justify-content:center;gap:1px;padding:0;height:36px}
+.preview-header .toolstrip button{height:32px;min-height:32px;width:auto;padding:5px 9px;gap:6px;font-size:11px;color:var(--sub)}
+.preview-header .toolstrip button span{display:inline}
+.preview-header .toolstrip .icon{height:15px;width:15px}
+.preview-header .toolstrip #moreToolsButton{border-left:1px solid var(--line);border-radius:0 6px 6px 0;margin-left:5px}
+.preview-header .toolstrip #moreToolsButton>.icon-slot:last-child .icon{width:10px}
+.preview-actions{margin-left:auto;display:flex;flex-shrink:0;align-items:center;gap:3px}
+.preview-actions .btn{background:transparent;border-color:transparent;padding:5px 7px;min-height:32px;font-size:11px}
+.preview-actions .btn:hover{background:var(--hover)}
+.preview-header[data-density=medium] .preview-heading{display:none}
+.preview-header[data-density=medium] .toolstrip button{padding:5px 6px;font-size:10px}
+.preview-header[data-density=medium] #moreToolsButton>.tool-label{font-size:0}
+.preview-header[data-density=compact] .preview-heading{display:none}
+.preview-header[data-density=compact] .toolstrip [data-effect=highlight],.preview-header[data-density=compact] .toolstrip [data-effect=zoom]{display:none}
+.preview-header[data-density=compact] .toolstrip button{padding:5px 6px;gap:5px;font-size:10px}
+.preview-header[data-density=compact] #moreToolsButton>.tool-label{font-size:0}
+.preview-header[data-density=compact] #reviewButton .review-text{display:none}
+.preview-header[data-density=compact] #reviewButton{width:30px;padding:5px}
+.preview-header[data-density=compact]{padding:0 6px;gap:3px}
+.preview-header[data-density=compact] .preview-actions{gap:0}
+#selectionBar,.stagehint,.inspector-bottom{display:none!important}
+.stage{padding:14px 20px;background:var(--stage)}
+.canvas-wrap{border-radius:6px;box-shadow:0 8px 28px #0003}
+.transport{height:46px;min-height:46px;padding:4px 15px;border-top:1px solid var(--line);background:var(--bg)}
+.transport>.row:last-child{max-width:160px;min-width:80px;justify-content:flex-end}
+.transport .preview-badge{position:static;max-width:100%;background:none;border:none;letter-spacing:.1px;color:var(--muted);padding:0;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.transport .time{min-width:137px}
+/* Four navigation destinations, one row, instead of six tabs across two rows. */
+.sidebar .tabs{display:flex;flex-wrap:nowrap;min-height:48px;height:48px;flex:0 0 48px;padding:5px 6px;gap:0;overflow:hidden;align-items:center}
+.sidebar .tabs button{flex:1;min-width:0;padding:6px 4px;border:0;border-radius:6px;font-size:10px;min-height:32px}
+.sidebar .tabs button.active{background:var(--accent-bg);border:0;color:var(--accent-ink)}
+.library{padding:14px 12px}
+.media-actions{display:flex;gap:7px;margin-bottom:12px}
+.media-actions .import{display:inline-flex;flex:1;flex-direction:row;margin:0;padding:7px 9px;min-height:34px;white-space:nowrap;border:0;color:#fff;background:var(--primary)}
+.media-actions .import b{font-size:11px;font-weight:600}
+.media-actions .webcam-entry{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;width:auto;margin:0;padding:6px 8px;gap:6px;min-height:34px;background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--sub);font-size:11px}
+.media-actions .webcam-entry>.icon{width:16px;height:16px;margin:0}
+.media-search{margin-bottom:14px}.media-search input{min-height:32px}
+.library-heading .eyebrow{font-size:10px;letter-spacing:.65px}
+.media-card{padding:9px 0;gap:9px}
+.media-thumb{width:58px;height:40px}
+.media-card .meta{font-size:9px}
+.media-card b{font-size:11px;font-weight:550}
+.library-back{margin:0 0 10px;padding:4px 0;font-size:10px;color:var(--muted)}
+.library-back:hover{color:var(--ink);background:none}
+.library-back>.icon{width:14px}
+/* Advanced framing remains one explicit disclosure away; common placement stays visible. */
+.inspector-heading{height:48px;flex:0 0 48px;color:var(--muted);font-size:10px;font-weight:500}
+.inspector-body{padding:14px;scroll-padding:12px}
+.selection-title{margin-bottom:12px}
+.inspector .property-tabs{margin-bottom:14px}
+.inspector .property-tabs button{font-size:10px}
+.precision-section{padding-top:0}
+.precision-section summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 0;cursor:pointer;font-size:11px;font-weight:550;list-style:none;min-height:40px}
+.precision-section summary::-webkit-details-marker{display:none}
+.precision-section summary::after{content:'+';font-size:16px;font-weight:400;color:var(--muted)}
+.precision-section[open] summary::after{content:'−'}
+.precision-section summary:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
+.precision-body{padding:0 0 5px}
+.precision-body .field-help{margin-top:8px}
+/* Edit tools sit beside the timeline; direct-context menus are the non-persistent alternative. */
+.timeline-toolbar{height:44px;gap:6px;padding:0 12px}
+.timeline-toolbar>[data-editor=more]{display:inline-flex!important;color:var(--sub);font-size:11px;border-left:1px solid var(--line);border-radius:0 6px 6px 0;margin-left:3px}
+.timeline-toolbar #deleteMode{font-size:10px;max-width:none;width:136px;min-height:30px}
+.timeline-toolbar>.name{font-size:10px;color:var(--muted);margin-right:5px}
+.timeline-footer .hint-keys{display:none}
+.timeline-footer{height:27px;min-height:27px}
+.gap-action{opacity:.16;transition:opacity .12s}
+.track-lane:hover .gap-action,.gap-action:focus-visible,.track-lane:focus-within .gap-action{opacity:1}
+.timeline-toolbar #snapButton{background:transparent;border:0}
+.timeline-toolbar #snapButton.active{color:var(--accent);background:var(--accent-bg)}
+.timeline-zoom input{width:66px}
+.statusbar{color:var(--muted);font-size:9px}
+.context-panel:has([role=menuitemcheckbox]) .context-heading small{line-height:1.6}
+/* Focus changes panels, not the composition. Header / timeline / playback remain available. */
+.app.focus-view .workspace{grid-template-columns:0 minmax(0,1fr) 0}
+.app.focus-view .sidebar,.app.focus-view .inspector{display:none!important}
+.app.review-mode .preview-header{display:flex!important}
+.app.review-mode .preview-header .toolstrip,.app.review-mode .preview-header .ratio-button,.app.review-mode .preview-header .panel-toggle{display:none!important}
+.app.review-mode .preview-header .preview-heading{display:inline}
+.app.review-mode .preview-actions{margin-left:auto}
+@media(max-width:1350px){
+ .topbar{gap:8px}.topbar .brand>span{display:none}.topbar .brand{margin-right:5px}
+ .header-actions .saved{display:none}.header-actions{gap:5px}
+}
+@media(max-width:1080px){
+ :root{--sidebar:232px;--inspector:276px}
+ .workspace,.workspace.properties-hidden{grid-template-columns:var(--sidebar) minmax(0,1fr) 0}
+ .workspace.library-hidden,.workspace.library-hidden.properties-hidden{grid-template-columns:0 minmax(0,1fr) 0}
+ .inspector{display:none}
+ .workspace.inspector-open .inspector{display:flex;position:absolute;top:0;bottom:0;right:0;width:276px;z-index:18;box-shadow:var(--shadow)}
+ .document-name .project-title{font-size:12px}
+ .header-actions .primary,.header-actions .btn{padding:6px 9px}
+ .transport>.row:first-child{display:flex;gap:4px}
+}
+@media(max-width:860px){
+ :root{--sidebar:0px}
+ .workspace,.workspace.properties-hidden,.workspace.library-hidden{grid-template-columns:0 minmax(0,1fr) 0}
+ .sidebar{display:none}
+ .app.library-drawer .sidebar{display:flex;position:absolute;top:0;bottom:0;left:0;width:250px;z-index:20;box-shadow:var(--shadow)}
+ .topbar .brand{display:none}.topbar{padding:0 10px;gap:5px}
+ .project-menu-trigger{font-size:10px;padding:5px;gap:4px}
+ #issuesButton>span:not(.icon-slot){display:none}.header-actions .saved{display:none}
+ .header-actions .guide-help-button{display:inline-flex!important}
+ .header-actions .guide-help-button>span{display:none}
+ .timeline-toolbar .detail-label{display:none}
+}
+@media(max-width:620px){
+ .app{min-height:520px;grid-template-rows:52px minmax(160px,1fr) 8px var(--timeline) 23px}
+ .topbar{height:52px}.header-actions{gap:3px}
+ .document-name{padding:3px;gap:4px}.document-name .project-title{font-size:11px}
+ .document-name>.icon-slot{display:none}
+ .project-menu-trigger>span:not(.icon-slot),.project-menu-trigger>.icon-slot:last-child{display:none}.project-menu-trigger{width:32px;min-width:32px}
+ .header-actions .save-project-btn span:not(.icon-slot){display:none}.header-actions .save-project-btn{width:32px;padding:5px}
+ .header-actions .primary{font-size:10px;padding:6px 9px}.header-actions .primary .icon{display:inline;width:14px}
+ .header-actions .guide-help-button{width:30px;min-width:30px;padding:5px}
+ .preview-header .toolstrip button>span{display:inline}
+ .preview-header .toolstrip #moreToolsButton>.tool-label{display:none}
+ .preview-header .toolstrip #moreToolsButton>.icon-slot:last-child .icon{display:none}
+ .transport>.row:last-child{display:none}.transport>.row:first-child .master-meter{display:none}
+ .transport .time{font-size:10px;min-width:123px}.transport>.row:nth-child(2){margin:auto}
+ .timeline-toolbar{gap:3px;padding:0 6px}.timeline-toolbar .name{display:none}
+ .timeline-toolbar #deleteMode{width:120px;font-size:9px;max-width:120px}
+ .timeline-toolbar .edit-actions-label{display:none}.timeline-zoom input{display:none}
+ .timeline-toolbar [data-action=zoomIn],.timeline-toolbar [data-action=zoomOut]{display:none}
+ .timeline-toolbar [data-action=fit]{display:inline-flex!important}
+ .timeline-footer .row span:last-child{font-size:9px}
+ .statusbar .center-status{display:none}
+}
+@media(max-width:390px){
+ .preview-header .toolstrip [data-effect=arrow]{display:none}
+ .preview-header .ratio-button{padding:3px;min-width:47px}
+ .preview-header .toolstrip button{padding:4px}
+ .timeline-toolbar #deleteMode{width:110px;max-width:110px}
+}
+@media(max-height:760px){
+ .app{grid-template-rows:52px minmax(160px,1fr) 8px var(--timeline) 23px}.topbar{height:52px}
+ .preview-header.projectbar{min-height:44px;height:44px;flex-basis:44px}
+ .transport{height:40px;min-height:40px}.stage{padding:10px 14px}
+ .transport #previewBadge{font-size:8px;padding:0}
+}
+@media(pointer:coarse){.gap-action{opacity:.7}.preview-header .toolstrip button{min-height:36px}.context-panel button{min-height:40px}}
+@media(prefers-reduced-motion:reduce){.gap-action{transition:none}}
+@media(forced-colors:active){.precision-section{border-top:1px solid CanvasText}.preview-header{border-bottom:1px solid CanvasText}.toolstrip button:focus-visible{outline-color:Highlight}}
+
+/* Width belongs to its label, not the inherited 32px icon-button slot. */
+.timeline-toolbar>[data-editor=more]{width:auto;min-width:34px;flex:0 0 auto}
+.document-name .project-title{color:var(--ink)}
+.preview-header[data-density=medium] #moreToolsButton>.tool-label,.preview-header[data-density=compact] #moreToolsButton>.tool-label{font-size:10px}
+@media(max-width:620px){.preview-header .toolstrip #moreToolsButton>.tool-label{display:inline}}
+
+/* Grid items must keep their column when a sibling is intentionally absent. */
+.workspace>.sidebar{grid-column:1;grid-row:1}
+.workspace>.center{grid-column:2;grid-row:1}
+.workspace>.inspector{grid-column:3;grid-row:1}
+.app.review-mode #reviewButton .review-text{display:inline!important}
+.app.review-mode #reviewButton{width:auto!important}
+@media(max-width:1080px){.workspace.inspector-open .inspector{top:48px}}
+@media(max-width:860px){.app.library-drawer .sidebar{top:48px}}
+@media(max-height:760px) and (max-width:1080px){.workspace.inspector-open .inspector{top:44px}}
+@media(max-height:760px) and (max-width:860px){.app.library-drawer .sidebar{top:44px}}
+
+/* Compact commands retain either a readable label or a visible, named icon. */
+@media(max-width:860px){.timeline-toolbar>.name{display:none}}
+@media(max-width:620px){
+ .topbar .primary .render-label{display:inline!important}
+ .topbar .primary .icon-slot{display:none}
+ .topbar .primary{min-width:57px}
+ .topbar .project-menu-trigger>.icon-slot:first-child,.topbar .save-project-btn>.icon-slot,#issuesButton>.icon-slot{display:inline-flex!important}
+ .document-name>.icon-slot{display:none}
+ .preview-header .toolstrip #moreToolsButton>.icon-slot:first-child{display:none}
+}

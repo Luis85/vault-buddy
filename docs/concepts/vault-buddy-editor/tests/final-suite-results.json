@@ -1,0 +1,128 @@
+{
+  "artifact_sha256": "576ecde17da0d1d62d852151097eb7335e21b138bfb6206f4f7d34e658f9e62f",
+  "suites": [
+    {
+      "suite": "focus-ui.py",
+      "result_file": "focus-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 31
+      },
+      "failures": [],
+      "blocked": [],
+      "successful": true,
+      "seconds": 28.7,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "quality.py",
+      "result_file": "quality-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 38
+      },
+      "failures": [],
+      "blocked": [],
+      "successful": true,
+      "seconds": 44.6,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "onboarding.py",
+      "result_file": "onboarding-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 39,
+        "BLOCKED": 1
+      },
+      "failures": [],
+      "blocked": [
+        {
+          "name": "Real browser origin reload retains guide progress",
+          "status": "BLOCKED",
+          "detail": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://127.0.0.1:35583/vault-buddy-editor.html\nCall log:\n  - navigating to \"http://127.0.0.1:35583/vault-buddy-editor.html\", waiting until \"load\"\n"
+        }
+      ],
+      "successful": true,
+      "seconds": 52.7,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "editing.py",
+      "result_file": "editing-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 38
+      },
+      "failures": [],
+      "blocked": [],
+      "successful": true,
+      "seconds": 51.7,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "regression.py",
+      "result_file": "results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 38
+      },
+      "failures": [],
+      "blocked": [],
+      "successful": true,
+      "seconds": 77.1,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "webcam-smoke.py",
+      "result_file": "webcam-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 5
+      },
+      "failures": [],
+      "blocked": [],
+      "successful": true,
+      "seconds": 23.8,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "render-review.py",
+      "result_file": "render-review-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 9,
+        "BLOCKED": 1
+      },
+      "failures": [],
+      "blocked": [
+        {
+          "name": "Origin-backed cache reload (requires permitted origin navigation)",
+          "result": "BLOCKED",
+          "detail": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at https://vault-buddy.test/editor\nCall log:\n  - navigating to \"https://vault-buddy.test/editor\", waiting until \"load\"\n"
+        }
+      ],
+      "successful": true,
+      "seconds": 22.1,
+      "artifact_unchanged": true
+    },
+    {
+      "suite": "handover.py",
+      "result_file": "handover-results.json",
+      "exit_code": 0,
+      "counts": {
+        "PASS": 24
+      },
+      "failures": [],
+      "blocked": [],
+      "successful": true,
+      "seconds": 28.4,
+      "artifact_unchanged": true
+    }
+  ],
+  "totals": {
+    "PASS": 222,
+    "BLOCKED": 2
+  },
+  "successful": true
+}

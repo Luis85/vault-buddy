@@ -1,0 +1,39 @@
+PASS v3 initializes with five tracks, four persistent library tabs and two advisory checks (None, None, None)
+PASS Right-click edits the clicked clip at pointer time {'split_ms': 11937}
+PASS Shift+F10, typeahead, arrows, submenu return and restored focus 
+PASS Object-specific menus plus visible More and outside dismissal 
+PASS Locked commands expose disabled state and preserve footage 
+PASS Menus stay in viewport; native text menus remain native 
+PASS Shift multi-selection survives a right-click 
+PASS Grouped copy/paste remaps attachments and is one undo 
+PASS Group drag keeps relative timing and original tracks 
+PASS Group nudge at time zero clamps the group, not individual members 
+PASS Grouping and ungrouping preserve transitions and alignment 
+PASS Batch fade and explicit mute/unmute controls work 
+PASS Speed retimes source-linked annotations, split and following clips 
+PASS Speed guard rejects overlaps, grouped retiming and active crossfades 
+PASS Color controls, look paste, rotation and flips preserve source timing 
+PASS Aspect ratio changes real output size and keeps circular webcam geometry 
+PASS Safe intro insertion shifts every track atomically and respects locks 
+PASS Local cards provide editable text and duration 
+PASS Real still image import and media search 
+PASS SRT/VTT parsing preserves text and maps source-linked caption speed 
+PASS Caption dialog validates timing and preserves open appearance controls 
+PASS Caption text split and clip split conserve timing 
+PASS Actionable checks flag video gaps, audio solo and hard-to-read captions 
+PASS Caption/callout collision has a working corrective action 
+PASS Opaque privacy cover is undoable and warns about originals in project packages 
+PASS Save status distinguishes download request from dirty edits and cache 
+PASS Gap cleanup does not silently break cross-track groups 
+PASS Go to and fit selection connect the timeline with its preview 
+PASS Strict extended schema and v2 migration 
+PASS Workspace reopens with speed, color, captions, group selection and format 
+PASS Batch source reconnection restores media without changing the edit 
+PASS Ambiguous reconnect candidates are not chosen automatically 
+PASS Portable image project includes real bytes and reopens them 
+PASS Review-range controls reject invalid bounds and allow a short range 
+PASS Support diagnostics omit names, paths, captions, frames and audio 
+PASS Five desktop/compact layouts retain preview and avoid page overflow 
+PASS No unhandled browser exceptions 
+PASS No external media, font or API requests 
+RESULT 38 / 38

@@ -1,0 +1,402 @@
+[
+  {
+    "id": "F-01",
+    "name": "Native capture handoff",
+    "behavior": "Open the correct staged capture and retain its intended vault.",
+    "referenceStatus": "Native integration",
+    "owner": "screenCapture store; staging sidecar; EditorRoot",
+    "acceptance": "Capture A stops while vault B is selected; the editor still proposes vault A."
+  },
+  {
+    "id": "F-02",
+    "name": "Local media import",
+    "behavior": "Import playable video/audio and PNG/JPEG/WebP with per-file feedback.",
+    "referenceStatus": "Browser functional",
+    "owner": "MediaLibrary; media service",
+    "acceptance": "Import a mixed batch; valid items remain when another item fails or the batch stops."
+  },
+  {
+    "id": "F-03",
+    "name": "Reconnect originals",
+    "behavior": "Reconnect by explicit/unique matches, preserving all edits.",
+    "referenceStatus": "Browser functional",
+    "owner": "MediaLibrary; recovery service",
+    "acceptance": "Ambiguous candidates are never selected automatically."
+  },
+  {
+    "id": "F-04",
+    "name": "Multi-track video",
+    "behavior": "Independent timed video layers with deterministic compositing order.",
+    "referenceStatus": "Browser functional",
+    "owner": "Timeline; composition engine",
+    "acceptance": "Upper layers cover lower layers; invisible tracks are excluded from output."
+  },
+  {
+    "id": "F-05",
+    "name": "Multi-track audio",
+    "behavior": "Mix concurrent tracks with clip/track/master controls.",
+    "referenceStatus": "Browser functional",
+    "owner": "AudioMixer; native mixer",
+    "acceptance": "Multiple audible sources occur in decoded output, not only preview."
+  },
+  {
+    "id": "F-06",
+    "name": "Track management",
+    "behavior": "Create, rename, order, lock, hide, mute, solo and delete tracks.",
+    "referenceStatus": "Browser functional",
+    "owner": "TrackHeader; command registry",
+    "acceptance": "A locked track refuses mutation from pointer, menus, shortcuts and batches."
+  },
+  {
+    "id": "F-07",
+    "name": "Split",
+    "behavior": "Split at playhead or clicked context time with half-open ranges.",
+    "referenceStatus": "Browser functional",
+    "owner": "TimelineCommands",
+    "acceptance": "Duration is conserved; annotations/captions/markers map correctly."
+  },
+  {
+    "id": "F-08",
+    "name": "Trim",
+    "behavior": "Drag edges or edit numeric source bounds.",
+    "referenceStatus": "Browser functional",
+    "owner": "ClipInspector; TimelineCommands",
+    "acceptance": "No empty clip; source bounds and transition dependencies remain valid."
+  },
+  {
+    "id": "F-09",
+    "name": "Delete and ripple",
+    "behavior": "Choose leave-gap or close-gap behavior; ripple is track-local.",
+    "referenceStatus": "Browser functional",
+    "owner": "TimelineToolbar",
+    "acceptance": "Other tracks do not silently move; blocked grouped/transition edits explain why."
+  },
+  {
+    "id": "F-10",
+    "name": "Move and reorder",
+    "behavior": "Drag or numerically position clips; Earlier/Later swaps adjacent clips.",
+    "referenceStatus": "Browser functional",
+    "owner": "Timeline; ClipInspector",
+    "acceptance": "Relative teaching timing follows source-linked content."
+  },
+  {
+    "id": "F-11",
+    "name": "Multi-selection and grouping",
+    "behavior": "Select multiple clips and move/duplicate as a synchronized group.",
+    "referenceStatus": "Browser functional",
+    "owner": "SelectionStore; TimelineCommands",
+    "acceptance": "One shared delta and all-or-nothing validation preserve relative timing."
+  },
+  {
+    "id": "F-12",
+    "name": "Copy, cut, paste and duplicate",
+    "behavior": "Create new clip identities and copy relevant attached content.",
+    "referenceStatus": "Browser functional",
+    "owner": "Clipboard service",
+    "acceptance": "Cloned content has no colliding IDs; Undo restores the entire operation."
+  },
+  {
+    "id": "F-13",
+    "name": "Undo and redo",
+    "behavior": "Reversible document edits with bounded history.",
+    "referenceStatus": "Browser functional",
+    "owner": "ProjectCommands",
+    "acceptance": "Undo does not evict originals or modify immutable rendered products."
+  },
+  {
+    "id": "F-14",
+    "name": "Timeline navigation",
+    "behavior": "Seek, play, zoom, fit, snap, markers and adjustable timeline height.",
+    "referenceStatus": "Browser functional",
+    "owner": "TimelineViewport; Transport",
+    "acceptance": "Fit shows the entire edit; Escape cancels an uncommitted drag."
+  },
+  {
+    "id": "F-15",
+    "name": "Contextual menus",
+    "behavior": "Object-specific actions with mouse, More and Shift+F10 access.",
+    "referenceStatus": "Browser functional",
+    "owner": "CommandMenu",
+    "acceptance": "Clicked-time commands use the clicked position; keyboard focus returns logically."
+  },
+  {
+    "id": "F-16",
+    "name": "Clip speed",
+    "behavior": "0.25\u00d7\u20134\u00d7 timing with pitch option when supported.",
+    "referenceStatus": "Browser functional",
+    "owner": "SpeedInspector; time mapping",
+    "acceptance": "New duration, audio and source-linked cues use the same speed mapping."
+  },
+  {
+    "id": "F-17",
+    "name": "Video fades",
+    "behavior": "Independent in/out fade durations and supported curves.",
+    "referenceStatus": "Browser functional",
+    "owner": "FadeInspector",
+    "acceptance": "Handle and numeric edits produce equivalent opacity envelopes."
+  },
+  {
+    "id": "F-18",
+    "name": "Audio fades",
+    "behavior": "Gain envelopes with supported fade presets/curves.",
+    "referenceStatus": "Browser functional",
+    "owner": "FadeInspector; mixer",
+    "acceptance": "Decoded audio ramps instead of merely changing a drawn waveform."
+  },
+  {
+    "id": "F-19",
+    "name": "Clip transitions",
+    "behavior": "Explicit same-track video dissolve or equal-power audio crossfade.",
+    "referenceStatus": "Browser functional",
+    "owner": "TransitionCommands",
+    "acceptance": "Only the target track is shortened by the overlap; removal restores spacing."
+  },
+  {
+    "id": "F-20",
+    "name": "Webcam recording",
+    "behavior": "Explicit setup, permission, countdown, recording, review/retake and commit.",
+    "referenceStatus": "Browser functional; simulated-device verification",
+    "owner": "WebcamDialog; capture service",
+    "acceptance": "Opening setup alone never acquires devices; closing releases active tracks."
+  },
+  {
+    "id": "F-21",
+    "name": "Presenter picture-in-picture",
+    "behavior": "Move/resize webcam as an independent clip; shapes, crop, mirror and corner presets.",
+    "referenceStatus": "Browser functional",
+    "owner": "PreviewSurface; LayoutInspector",
+    "acceptance": "Geometry is reflected in the encoded file and portable project."
+  },
+  {
+    "id": "F-22",
+    "name": "Synchronized screen + webcam",
+    "behavior": "Native composite capture with a shared clock and independent editable layers.",
+    "referenceStatus": "Native integration",
+    "owner": "Capture coordinator",
+    "acceptance": "Long-run drift is measured; failures retain usable recordings and offsets."
+  },
+  {
+    "id": "F-23",
+    "name": "Source layout and transforms",
+    "behavior": "Position, size, opacity, fit/fill, crop, rotation and flips.",
+    "referenceStatus": "Browser functional",
+    "owner": "LayoutInspector; compositor",
+    "acceptance": "Preview and output agree; callout alignment is reviewed after source orientation changes."
+  },
+  {
+    "id": "F-24",
+    "name": "Audio detachment",
+    "behavior": "Create a linked audio asset from imported video and mute its original audio.",
+    "referenceStatus": "Browser functional",
+    "owner": "AssetCommands",
+    "acceptance": "Dependency survives portable packaging and source reconnection."
+  },
+  {
+    "id": "F-25",
+    "name": "Mixer and monitoring",
+    "behavior": "Clip/track/master gain, mute/solo and monitoring-only mute.",
+    "referenceStatus": "Browser functional",
+    "owner": "AudioMixer; Transport",
+    "acceptance": "Monitoring mute never changes export audio; sample peak is not described as loudness."
+  },
+  {
+    "id": "F-26",
+    "name": "Waveforms",
+    "behavior": "Display locally derived sample peaks for editing guidance.",
+    "referenceStatus": "Browser functional",
+    "owner": "Media service; Timeline",
+    "acceptance": "Waveform generation is cancelable/bounded in native implementation."
+  },
+  {
+    "id": "F-27",
+    "name": "Text callouts",
+    "behavior": "Timed text with position, size, appearance and background.",
+    "referenceStatus": "Browser functional",
+    "owner": "TeachingToolbar; EffectInspector",
+    "acceptance": "Only the intersecting source span is rendered."
+  },
+  {
+    "id": "F-28",
+    "name": "Arrows",
+    "behavior": "Timed arrows with draggable endpoints and numeric appearance.",
+    "referenceStatus": "Browser functional",
+    "owner": "PreviewSurface; EffectInspector",
+    "acceptance": "Endpoints update predictably and survive clip movement."
+  },
+  {
+    "id": "F-29",
+    "name": "Highlights",
+    "behavior": "Timed outlined/fill highlights for a region of interest.",
+    "referenceStatus": "Browser functional",
+    "owner": "TeachingTools",
+    "acceptance": "Size and source timing match in preview and encoded output."
+  },
+  {
+    "id": "F-30",
+    "name": "Spotlight",
+    "behavior": "Dim the surrounding region while emphasizing the target.",
+    "referenceStatus": "Browser functional",
+    "owner": "TeachingTools; compositor",
+    "acceptance": "Effect respects clipping and output aspect ratio."
+  },
+  {
+    "id": "F-31",
+    "name": "Zoom and focus",
+    "behavior": "Timed animated zoom into a point of interest.",
+    "referenceStatus": "Browser functional",
+    "owner": "TeachingTools; compositor",
+    "acceptance": "Zoom enters/exits smoothly and does not expose empty frame margins."
+  },
+  {
+    "id": "F-32",
+    "name": "Numbered steps",
+    "behavior": "Timed numbered instructional labels.",
+    "referenceStatus": "Browser functional",
+    "owner": "TeachingTools",
+    "acceptance": "Step text, number and timing remain editable and clip-linked."
+  },
+  {
+    "id": "F-33",
+    "name": "Privacy covers",
+    "behavior": "Opaque stationary cover with explicit limitations.",
+    "referenceStatus": "Browser functional",
+    "owner": "TeachingTools; Checks",
+    "acceptance": "Warn about motion/layers and uncensored originals; encoded review is required."
+  },
+  {
+    "id": "F-34",
+    "name": "Caption authoring/import",
+    "behavior": "Manual cues and SRT/plain WebVTT import with text/timing editing and splitting.",
+    "referenceStatus": "Browser functional",
+    "owner": "CaptionsLibrary; caption commands",
+    "acceptance": "No automatic transcription claim; overlap/density warnings are actionable."
+  },
+  {
+    "id": "F-35",
+    "name": "Caption outputs",
+    "behavior": "Burn-in choice and subtitle-file export.",
+    "referenceStatus": "Browser functional",
+    "owner": "Caption settings; render pipeline",
+    "acceptance": "Disabled/excluded captions are surfaced before export; exported time is timeline time."
+  },
+  {
+    "id": "F-36",
+    "name": "Chapter markers",
+    "behavior": "Name and position chapters attached to footage.",
+    "referenceStatus": "Browser functional",
+    "owner": "ChaptersLibrary",
+    "acceptance": "Chapters follow source edits and appear in the companion note."
+  },
+  {
+    "id": "F-37",
+    "name": "Title and background cards",
+    "behavior": "Editable intro, chapter, closing and plain-background clips.",
+    "referenceStatus": "Browser functional",
+    "owner": "TitlesLibrary",
+    "acceptance": "Cards remain editable; intro-before-all shifts every existing track together."
+  },
+  {
+    "id": "F-38",
+    "name": "Canvas formats",
+    "behavior": "Landscape, portrait, square and classic output geometry.",
+    "referenceStatus": "Browser functional",
+    "owner": "PreviewHeader; compositor",
+    "acceptance": "Circle frames stay circular; crop/caption warnings prompt a review."
+  },
+  {
+    "id": "F-39",
+    "name": "Color treatment",
+    "behavior": "Presets and basic brightness/contrast/saturation.",
+    "referenceStatus": "Browser functional",
+    "owner": "ColorInspector",
+    "acceptance": "Treat source footage, not teaching labels; not professional color-managed mastering."
+  },
+  {
+    "id": "F-40",
+    "name": "Save editable project",
+    "behavior": "Save without rendering, preserving workspace and available sources.",
+    "referenceStatus": "Browser functional; native persistence required",
+    "owner": "Project service",
+    "acceptance": "Portable ZIP reopens directly; lightweight JSON asks for missing originals."
+  },
+  {
+    "id": "F-41",
+    "name": "Rendered products",
+    "behavior": "Independent output files with revision/range/snapshot provenance.",
+    "referenceStatus": "Browser functional",
+    "owner": "ProductLibrary; render service",
+    "acceptance": "Further edits never rewrite a prior product; restore snapshot is a new edit revision."
+  },
+  {
+    "id": "F-42",
+    "name": "Output review",
+    "behavior": "Review mode, short-range rendering and actual encoded-file playback.",
+    "referenceStatus": "Browser functional; native encoder required",
+    "owner": "ReviewDialog; render service",
+    "acceptance": "Encoded frames/audio are inspected; no simulated render completion."
+  },
+  {
+    "id": "F-43",
+    "name": "Obsidian companion note",
+    "behavior": "Markdown embed, chapters and contextual metadata.",
+    "referenceStatus": "Browser package functional; native publish required",
+    "owner": "Note service",
+    "acceptance": "Final reserved filename is used in the note; unrelated files are never overwritten."
+  },
+  {
+    "id": "F-44",
+    "name": "Project/session recovery",
+    "behavior": "Unsaved-state explanations, close guards, retained media and render history.",
+    "referenceStatus": "Browser best-effort; native durability required",
+    "owner": "ProjectSession; recovery worker",
+    "acceptance": "Interrupted operations cannot destroy the last committed project."
+  },
+  {
+    "id": "F-45",
+    "name": "Before-you-share checks",
+    "behavior": "Actionable missing-media, gap, audio, caption and visibility findings.",
+    "referenceStatus": "Browser functional",
+    "owner": "ChecksDialog",
+    "acceptance": "Each finding opens a relevant action; no synthetic quality score."
+  },
+  {
+    "id": "F-46",
+    "name": "Guided onboarding",
+    "behavior": "22 optional interactive lessons across seven chapters.",
+    "referenceStatus": "Browser functional",
+    "owner": "GuideController",
+    "acceptance": "Dismiss/resume at the same step; starting/reading lessons makes no document edit."
+  },
+  {
+    "id": "F-47",
+    "name": "Learning center",
+    "behavior": "Searchable answers, shortcuts, chapter jumps and progress/preferences.",
+    "referenceStatus": "Browser functional",
+    "owner": "LearningCenter",
+    "acceptance": "Missing storage is explicit; a progress file can be restored separately from projects."
+  },
+  {
+    "id": "F-48",
+    "name": "Focused responsive shell",
+    "behavior": "One preview header, contextual properties, drawers, focus view and themes.",
+    "referenceStatus": "Browser functional",
+    "owner": "EditorRoot; WorkspaceStore",
+    "acceptance": "Overflow relocates tools without removing them or adding a second preview toolbar."
+  },
+  {
+    "id": "F-49",
+    "name": "Keyboard and accessible controls",
+    "behavior": "Non-dragging alternatives, roving toolbar, menu/dialog focus and visible states.",
+    "referenceStatus": "Browser functional; Windows AT acceptance required",
+    "owner": "Shared UI components",
+    "acceptance": "Core creation journey completes by keyboard; zoom and forced-colors remain usable."
+  },
+  {
+    "id": "F-50",
+    "name": "Local privacy and diagnostics",
+    "behavior": "No content uploads; content-free diagnostic export and clear source/output distinction.",
+    "referenceStatus": "Browser functional",
+    "owner": "Diagnostics service",
+    "acceptance": "Report omits names, paths, captions, frames and audio."
+  }
+]
