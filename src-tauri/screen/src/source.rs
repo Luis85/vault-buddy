@@ -201,10 +201,37 @@ mod imp {
     pub fn resolve(id: &SourceId) -> Result<ResolvedSource, ScreenError> {
         match *id {
             SourceId::Screen(index) => {
-                let monitor = Monitor::from_index(index).map_err(|e| {
-                    log::warn!("screen source: monitor {index} is gone: {e}");
+                // DELIBERATELY NOT `Monitor::from_index(index)`. That method
+                // (windows-capture 2.0.1, monitor.rs) is POSITIONAL: it
+                // indexes the Nth element of a fresh `Monitor::enumerate()`.
+                // But `list_sources` above labels a screen with `m.index()`,
+                // which is the OS DISPLAY NUMBER parsed out of the device
+                // name (`\\.\DISPLAYn`). `EnumDisplayMonitors` order is not
+                // documented to match ascending `\\.\DISPLAYn`, so on a
+                // multi-monitor machine "the 2nd enumerated monitor" and
+                // "display number 2" can be two different, both-live
+                // monitors — `from_index` would silently resolve to the
+                // WRONG screen with no error, not just a stale one. Scan for
+                // the monitor whose `.index()` (device-name-derived) equals
+                // the stored id instead, so the two numbering schemes never
+                // get crossed. If nothing matches, the screen really is gone
+                // (unplugged) and `SourceGone` is the correct outcome.
+                let monitors = Monitor::enumerate().map_err(|e| {
+                    log::warn!("screen source: monitor enumeration failed: {e}");
                     ScreenError::SourceGone
                 })?;
+                let monitor = monitors
+                    .into_iter()
+                    .find(|m| match m.index() {
+                        Ok(i) => i == index,
+                        // One unreadable monitor must not abort the scan —
+                        // same skip-and-continue posture as list_sources.
+                        Err(_) => false,
+                    })
+                    .ok_or_else(|| {
+                        log::warn!("screen source: monitor {index} is gone");
+                        ScreenError::SourceGone
+                    })?;
                 let (Ok(width), Ok(height)) = (monitor.width(), monitor.height()) else {
                     return Err(ScreenError::SourceGone);
                 };
@@ -216,6 +243,25 @@ mod imp {
                     title,
                 })
             }
+            // HWND-REUSE HAZARD (documented, not fixed here — Fix 2 is a
+            // Windows-verification item, not a code change): Windows can
+            // reuse an HWND after the window that owned it closes. Between
+            // `list_sources` handing out this id and a later `resolve` at
+            // Start, the same handle may now belong to an entirely
+            // different, unrelated live window — `is_valid()` below only
+            // checks that SOME window currently owns the handle and is
+            // capturable, not that it's the SAME window the user picked.
+            // Do NOT "fix" this with a title re-check: window titles change
+            // constantly and legitimately (a browser tab navigating, an
+            // editor's title reflecting the current file), so a strict
+            // title match would produce false SourceGone rejections on
+            // perfectly valid, still-correct windows — trading a rare
+            // silent-wrong-capture for a common false-failure is a worse
+            // day-to-day bug. Confirming "the captured window is the one
+            // the user picked" needs an approach that survives legitimate
+            // title changes (e.g. re-deriving identity from something more
+            // stable than title text) and is left as a Windows-verification
+            // item; behaviour here is unchanged.
             SourceId::Window(hwnd) => {
                 let window = Window::from_raw_hwnd(hwnd as *mut std::ffi::c_void);
                 if !window.is_valid() {
@@ -251,6 +297,10 @@ mod tests {
 
     #[test]
     fn a_screen_id_round_trips() {
+        // If Display/parse ever drift, a stored id would no longer name the
+        // same screen it was minted from — `resolve` would then either miss
+        // a live monitor (spurious SourceGone) or, worse, silently match a
+        // DIFFERENT monitor whose index happens to parse the same way.
         let id = SourceId::Screen(2);
         assert_eq!(id.to_string(), "screen:2");
         assert_eq!(SourceId::parse("screen:2"), Some(SourceId::Screen(2)));
@@ -293,6 +343,10 @@ mod tests {
 
     #[test]
     fn the_kind_serializes_lowercase_for_the_webview_and_the_sidecar() {
+        // A casing regression here breaks the TS contract at the IPC
+        // boundary: the frontend matches on the literal strings "screen"/
+        // "window", so "Screen"/"Window" would silently fail every kind
+        // comparison in the picker.
         assert_eq!(
             serde_json::to_string(&SourceKind::Screen).unwrap(),
             "\"screen\""
@@ -305,6 +359,10 @@ mod tests {
 
     #[test]
     fn source_info_serializes_camel_case() {
+        // Same IPC-boundary contract as the kind test above: a regression
+        // to snake_case here would silently break the TS side's `isPrimary`
+        // field access (it would read `undefined`, not throw), so the
+        // primary badge would just stop appearing with no visible error.
         let info = CaptureSourceInfo {
             id: "screen:0".into(),
             kind: SourceKind::Screen,
