@@ -864,6 +864,16 @@ pub fn sanitize_title(raw: &str) -> String {
         }
     }
 
+    // SUPERSEDED DURING EXECUTION — this collapse rule is WRONG and the
+    // landed code in src-tauri/screen/src/staging.rs does not use it.
+    // Traced against this task's own test, it yields "A-B" for the input
+    // "  A ::  B . " where the test asserts "A - B": the first dash in a
+    // run pops the preceding space, and nothing ever restores it. The
+    // landed version classifies the whole run instead (mixed
+    // whitespace+dash -> " - ", dash-only -> "-", whitespace-only -> " "),
+    // which satisfies all six sanitize cases including "a:b" -> "a-b".
+    // Kept here only so the deviation is traceable.
+    //
     // Collapse runs of separators and whitespace so "A ::  B" reads as
     // "A - B" rather than "A --  B".
     let mut collapsed = String::with_capacity(out.len());
