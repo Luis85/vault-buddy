@@ -2196,3 +2196,34 @@ not regress:
   ticket/debounce logic correct incl. short-query invalidation; Tasks'
   per-row busy set serializes writes; the transcription job map is bounded
   with terminal-only eviction — all covered by tests.
+
+### GAP-108 · Medium · `sanitize_title` does not neutralize Windows reserved device names
+`src-tauri/screen/src/staging.rs` `sanitize_title` maps reserved *characters*
+(`: \ / ? * " < > |`) and collapses separator runs, but leaves the reserved
+*device names* untouched: `sanitize_title("CON")` returns `"CON"`.
+
+Win32 reserves `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9` and `LPT1`–`LPT9`
+**with or without an extension** — `CON.mp4` is as unopenable as `CON`. Vault
+Buddy ships only on Windows, so a user who titles a screen capture "CON" (or
+"nul", the match is case-insensitive) gets a capture that cannot create its
+own staged file. The failure surfaces at `File::create` inside the capture
+session, i.e. after the user has already started recording.
+
+Found by the Task 2 review (phase 2). Not the implementer's error: the case is
+absent from the plan's own Step 2 test list, so it is a plan omission rather
+than a deviation.
+
+Two related path-safety items belong with it:
+
+- `reserve_base` and `write_sidecar` do not re-assert that `base` contains no
+  path separators; they trust the caller sanitized first. The rest of this
+  codebase re-asserts containment at the actual write site (the tasks and
+  capture domains both do), so this is a defence-in-depth gap rather than a
+  live bug while the only caller is the sanitizing one.
+- Two distinct titles can collide onto one sanitized base (`"a:b"` and
+  `"a/b"` both become `"a-b"`). That one IS handled, by `reserve_base`'s
+  ` (N)` suffix retry — recorded here only so a future reader does not
+  re-discover it as a bug.
+
+Fix alongside the write-site hardening in the task that owns the capture
+session's filesystem writes, where both checks land at the same chokepoint.
