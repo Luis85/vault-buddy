@@ -6,10 +6,10 @@ publish = false
 
 [features]
 default = []
-# Phase 2's gating spike (spec 6.4). OFF by default: with it off this crate
-# still has no `windows` dependency and every phase 1 gate is unchanged.
-# Enabling it pulls in Media Foundation and only compiles on Windows.
-fmp4-spike = ["dep:windows"]
+# Spec 6.4's gating spike, RESOLVED 2026-09-19 and kept re-runnable. It no
+# longer pulls a dependency in (the `windows` crate is now a real Windows
+# dependency of this crate), so this is just a switch on the module.
+fmp4-spike = []
 
 [dependencies]
 vault_buddy_core = { path = "../core" }
@@ -27,16 +27,14 @@ serde_json = "1"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-# Optional and spike-only. `windows` 0.62 is already in the workspace
-# lockfile transitively via tauri, so this pins no new version and adds
-# nothing to a default build.
-windows = { version = "0.62", optional = true, features = [
+# 0.62 is already in the workspace lockfile transitively via tauri, so this
+# pins no new version. windows-capture 2.0.1 requires ^0.62.2, the same one.
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
 ] }
 
-# windows-capture and the `windows` crate are deliberately NOT here
-# yet. They arrive in phase 2, after the fragmented-MP4 spike decides the
-# staged container format. Everything in this crate today except the
-# fmp4-spike feature is pure and compiles on any platform.
+# windows-capture is deliberately NOT here yet. It arrives when the actual
+# frame-acquisition engine (Task 5+) lands; this task only needs the
+# fragmented-MP4 sink, which uses `windows` directly.

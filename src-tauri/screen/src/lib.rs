@@ -9,6 +9,7 @@ pub mod clock;
 pub mod engine;
 pub mod mp4_boxes;
 pub mod select;
+pub mod sink;
 pub mod staging;
 
 // Phase 2's gating spike (spec 6.4). Windows-only and feature-gated, so it
@@ -29,6 +30,11 @@ pub enum ScreenError {
     /// No usable H.264 encoder, or Media Foundation is unavailable.
     EncoderUnavailable,
     Io(String),
+    /// The capture could not be written — sink creation, a sample write, or
+    /// finalize failed. Carries the OS message.
+    Sink(String),
+    /// A capture was requested while one is already running.
+    AlreadyCapturing,
 }
 
 impl std::fmt::Display for ScreenError {
@@ -38,6 +44,8 @@ impl std::fmt::Display for ScreenError {
             ScreenError::SourceGone => write!(f, "the capture source is no longer available"),
             ScreenError::EncoderUnavailable => write!(f, "no usable video encoder was found"),
             ScreenError::Io(e) => write!(f, "screen capture I/O error: {e}"),
+            ScreenError::Sink(e) => write!(f, "screen capture could not be written: {e}"),
+            ScreenError::AlreadyCapturing => write!(f, "a capture is already running"),
         }
     }
 }
@@ -75,6 +83,10 @@ mod tests {
             ScreenError::EncoderUnavailable.to_string(),
             "no usable video encoder was found"
         );
+        assert_eq!(
+            ScreenError::AlreadyCapturing.to_string(),
+            "a capture is already running"
+        );
     }
 
     // `Io`, unlike the fixed variants above, deliberately DOES carry and
@@ -88,5 +100,16 @@ mod tests {
         assert!(ScreenError::Io("disk full".into())
             .to_string()
             .contains("disk full"));
+    }
+
+    // `Sink`, like `Io`, deliberately carries and renders OS-supplied text:
+    // a sink failure the user can act on ("no H.264 encoder") is useless
+    // without the message. Pinned separately so the fixed/interpolating
+    // split above stays a deliberate distinction rather than an accident.
+    #[test]
+    fn sink_variant_interpolates_the_underlying_message() {
+        assert!(ScreenError::Sink("MF_E_TOPO_CODEC_NOT_FOUND".into())
+            .to_string()
+            .contains("MF_E_TOPO_CODEC_NOT_FOUND"));
     }
 }
