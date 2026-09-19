@@ -4,8 +4,25 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+# Phase 2's gating spike (spec 6.4). OFF by default: with it off this crate
+# still has no `windows` dependency and every phase 1 gate is unchanged.
+# Enabling it pulls in Media Foundation and only compiles on Windows.
+fmp4-spike = ["dep:windows"]
+
 [dependencies]
 vault_buddy_core = { path = "../core" }
+
+[target.'cfg(windows)'.dependencies]
+# Optional and spike-only. `windows` 0.62 is already in the workspace
+# lockfile transitively via tauri, so this pins no new version and adds
+# nothing to a default build.
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+] }
 
 # NOTE: no `log` dependency yet. Nothing in this crate logs during phase 1,
 # and `cargo machete` (a rust-core CI gate) fails on a declared-but-unused

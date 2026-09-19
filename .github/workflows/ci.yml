@@ -211,6 +211,17 @@ jobs:
       - name: tests (transcribe crate, whisper-vulkan feature, Windows)
         run: cargo test -p vault_buddy_transcribe --features whisper-vulkan
         working-directory: src-tauri
+      # Phase 2's gating spike (spec 6.4): does Media Foundation's
+      # IMFSinkWriter produce fragmented MP4, and is a capture that never
+      # reached Finalize still playable? Media Foundation is Windows-only,
+      # so this runner is the only place the question can be answered
+      # empirically. --nocapture because the SPIKE[...] lines ARE the
+      # result: they report the observed box layout and decoded sample
+      # counts. The feature is off by default, so no other job or build is
+      # affected by it.
+      - name: fMP4 spike (screen crate, Windows-only, spec 6.4)
+        run: cargo test -p vault_buddy_screen --features fmp4-spike -- --nocapture --test-threads=1
+        working-directory: src-tauri
       - name: Upload Windows installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

@@ -7,7 +7,13 @@
 
 pub mod clock;
 pub mod engine;
+pub mod mp4_boxes;
 pub mod select;
+
+// Phase 2's gating spike (spec 6.4). Windows-only and feature-gated, so it
+// is absent from every default build; see the module docs for how to run it.
+#[cfg(all(windows, feature = "fmp4-spike"))]
+pub mod fmp4_spike;
 
 /// Every way a screen capture can fail, as a typed value the shell renders.
 /// Stringly-typed errors would let a user-supplied window title reach a UI
