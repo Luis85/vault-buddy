@@ -1,5 +1,6 @@
 mod capture_commands;
 mod capture_config_commands;
+mod capture_guard;
 mod commands;
 // Test-only structural pin (Task 6b, fix 2): no production code depends on
 // it, so it's excluded from non-test builds entirely rather than adding to
@@ -334,6 +335,7 @@ pub fn run() {
             None,
         ))
         .manage(capture_commands::CaptureState::default())
+        .manage(capture_guard::CaptureGuard::default())
         .manage(transcription::TranscriptionState::default())
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
