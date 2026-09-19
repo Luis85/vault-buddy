@@ -33,7 +33,7 @@ hoped-for outcome fails for unrelated reasons and tells you nothing.
 | The staged capture | `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\` — `<base>.mp4` after a clean stop, `.<base>.mp4.part` (hidden, dot-prefixed) while capturing or after a crash |
 | The sidecar | `<base>.json` beside it (source title/kind, recorded-at, duration, inputs) |
 | Frame stats, warnings, failures | `vault-buddy.log` (tray → *Open logs folder*). `screen capture: dropped a frame (…); N so far` — first drop then one in 300 — and `screen capture: finalizing after N dropped frame(s)` at teardown |
-| Live capture controls | The **tray / buddy right-click menu** (Stop / Pause / Resume). **Phase 2 ships no on-panel capture bar** — see "Known Phase-2 absences" below |
+| Live capture controls | `ScreenCaptureBar.vue` on the panel's **vault-list view**, beside the audio `RecordingBar` — elapsed (paused time excluded), source title, Pause / Resume / Stop, an inline warning line, and a dropped-frame chip that appears only once frames have dropped. The **tray / buddy right-click menu** drives the same Stop / Pause / Resume |
 
 ## Covered by Phase 2
 
@@ -58,13 +58,13 @@ return for each capture (the stop wait is bounded at 30 s and reports
 
 ## Known Phase-2 absences (do not file these as failures)
 
-- **No on-panel screen capture bar.** `ScreenCaptureBar.vue` (plan Task 10)
-  did not land in Phase 2. The store (`src/stores/screenCapture.ts`) holds
-  the live state — elapsed, paused, `fps`, `dropped`, warnings — and nothing
-  renders it. Pause / Resume / Stop are driven from the tray and buddy
-  right-click menus, which `tray.rs` routes to the screen domain, and the
-  dropped-frame count for item 10 comes from the **log**, not the UI. See
-  docs/Gaps.md GAP-118.
+- **No live `fps` readout.** `ScreenCaptureBar.vue` (plan Task 10) landed —
+  it renders elapsed, paused state, the source title, warnings and the
+  **dropped-frame count**, so item 10's drop figure can be read off the bar
+  as well as the log. The `fps` value the `screen:frames` event carries is
+  deliberately **not** shown: a rate is not an anomaly, and spec §17.3's
+  signal is the drop count. For item 10, take the fps readings from
+  `vault-buddy.log` as the table says.
 - **Three deliberate picker deviations from the spec** — no per-device audio
   level bars (§7.2), no Region tab, and the "Screen or window" chooser hint
   where §7.1 says "Screen, window, or region". Each is recorded and reasoned

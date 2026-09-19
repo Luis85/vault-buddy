@@ -337,6 +337,56 @@ describe("screenCapture store events", () => {
     ]);
   });
 
+  it("marks a stop in flight and only clears it when the capture really ends", async () => {
+    // Finalize is unbounded and `stop_screen_capture` can return
+    // `stillSaving` while the session is still tearing down, so the flag
+    // cannot clear on the command's own reply — it has to survive until
+    // `screen:stopped` reports the capture gone. The bar's Stop button reads
+    // this, and a flag that cleared early would re-arm it against a session
+    // that is already finalizing.
+    let settle: ((v: { stillSaving: boolean }) => void) | null = null;
+    mockIPC((cmd) => {
+      if (cmd === "stop_screen_capture") {
+        return new Promise<{ stillSaving: boolean }>((r) => (settle = r));
+      }
+      return undefined;
+    });
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.applyStatus(RUNNING);
+    expect(store.stopping).toBe(false);
+    const inFlight = store.stop();
+    expect(store.stopping).toBe(true);
+    settle!({ stillSaving: true });
+    await inFlight;
+    // The command has answered; the capture has not ended yet.
+    expect(store.stopping).toBe(true);
+    emit("screen:stopped", {
+      base: "b",
+      path: "C:/staging/b.mp4",
+      durationMs: 1,
+      sourceTitle: "Screen 1",
+      width: 8,
+      height: 8,
+    });
+    expect(store.stopping).toBe(false);
+  });
+
+  it("re-arms Stop when the stop itself was refused", async () => {
+    // A refusal means this window's picture was wrong, not that a finalize
+    // is running. Leaving the flag set would strand the bar with a dead Stop
+    // button for as long as the capture kept running.
+    mockIPC((cmd) => {
+      if (cmd === "screen_capture_status") return RUNNING;
+      throw new Error("No screen capture is running.");
+    });
+    const store = useScreenCaptureStore();
+    store.applyStatus(RUNNING);
+    await store.stop();
+    expect(store.status).toBe("capturing");
+    expect(store.stopping).toBe(false);
+  });
+
   it("reconciles with Rust when a pause/resume/stop is refused", async () => {
     // These commands re-check their preconditions under the state mutex, so a
     // refusal means this window's picture is already wrong (a capture that
@@ -487,6 +537,12 @@ describe("screenCapture store events", () => {
     expect(store.status).toBe("idle");
     expect(store.fps).toBe(0);
     expect(store.dropped).toBe(0);
+    // Same rule, same arm, for the in-flight stop flag: a capture that ends
+    // through applyStatus rather than reset() would otherwise hand the next
+    // capture's bar a Stop button that is already disabled.
+    store.$patch({ status: "capturing", startedAtMs: 0, stopping: true });
+    store.applyStatus(IDLE);
+    expect(store.stopping).toBe(false);
   });
 
   it("records advisory frame stats without touching capture state", async () => {

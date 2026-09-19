@@ -297,7 +297,7 @@ actually subscribe.
 | `screen:stopped` | The staged capture `{base, path, durationMs, sourceTitle, width, height}` — emitted on the clean stop AND on a self-finalize (the source closed) | screenCapture store |
 | `screen:failed` | `{message, retainedPath}` — `retainedPath` is the `.part` a stop that failed AFTER writing real footage deliberately left behind, carried as data so the UI can offer that (still playable) file | screenCapture store |
 | `screen:warning` | `{message}` — spec §14: a vanished source or audio device warns, the capture finalizes cleanly. Toasted only when it arrives outside a live capture | screenCapture store |
-| `screen:frames` | `{fps, dropped}` ~2 Hz, advisory & lossy (the audio domain's `capture:level` posture) | screenCapture store (no renderer yet — GAP-118) |
+| `screen:frames` | `{fps, dropped}` ~2 Hz, advisory & lossy (the audio domain's `capture:level` posture) | screenCapture store → `ScreenCaptureBar`'s dropped chip (`dropped > 0` only; `fps` stays log-only, a rate is not an anomaly) |
 | `mcp:status` | MCP server state `{state, port?, message?}` on every transition | McpSettings (panel) |
 | `mcp:write` | An MCP client's successful vault write `{kind, title, vaultName}` | useBuddyAnnouncements (buddy window ONLY — exactly-once) |
 
@@ -847,9 +847,20 @@ companion note. Do not add one here.
   store mirrors Rust state from the seven `screen:*` events and re-reads
   `screen_capture_status` rather than trusting event arrival order. Three
   picker surfaces deliberately fall short of the spec in this phase
-  (GAP-111), and the during-capture bar did not land — the store's live
-  state currently has no renderer, so Pause/Resume/Stop run from the tray
-  and buddy menus (GAP-118).
+  (GAP-111). `ScreenCaptureBar.vue` renders the store's live state on the
+  panel's LIST view beside `RecordingBar` (the two domains cannot run at
+  once, so it is a sibling, never a stack) — elapsed via the store's own
+  `elapsedMs` so the paused-time arithmetic has ONE implementation, the
+  source title, an inline `screen:warning` (which is why the store withholds
+  that toast while a capture is live), a `dropped` chip only once frames
+  have actually dropped, and Pause/Resume/Stop. Stop and Pause are both
+  disabled while the store's `stopping` flag is set: a stop can answer
+  `stillSaving` while finalize is still running, so the flag clears when the
+  capture really ends — or when the stop was refused, which means nothing is
+  finalizing — never on the command's own reply. The tray and buddy menus
+  drive the same three verbs (`tray.rs` routes them by `CaptureGuard::
+  active()`), so the bar is a surface, not the only way to control a
+  capture.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
 

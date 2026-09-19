@@ -41,6 +41,14 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
      * exists precisely so that file is still playable. */
     retainedPath: null as string | null,
     /**
+     * A stop has been asked for and the capture has not ended yet. Finalize
+     * is unbounded — `stop_screen_capture` can answer `stillSaving` while the
+     * session is still tearing down — so this cannot clear on the command's
+     * reply; it clears when the capture is actually gone (every route to
+     * idle) or when the stop was refused, which means nothing is finalizing.
+     */
+    stopping: false,
+    /**
      * Bumped by every transition this store applies locally. A `resync()`
      * captures it before awaiting and discards its (by then stale) answer if
      * it changed — otherwise a status read issued just before a
@@ -85,6 +93,7 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       if (this.status === "idle") {
         this.fps = 0;
         this.dropped = 0;
+        this.stopping = false;
       }
       this.vaultId = s.vaultId;
       this.sourceTitle = s.sourceTitle;
@@ -104,6 +113,7 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       this.pausedSinceMs = null;
       this.fps = 0;
       this.dropped = 0;
+      this.stopping = false;
     },
     applyStopped(staged: StagedCapture) {
       this.reset();
@@ -254,11 +264,16 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
      * `stillSaving` reply means the bounded wait expired while finalize was
      * still running, NOT that anything failed. */
     async stop() {
+      this.stopping = true;
       try {
         await invoke<{ stillSaving: boolean }>("stop_screen_capture");
       } catch (e) {
         logWarning(`stop_screen_capture failed: ${String(e)}`);
         useNotificationsStore().error(String(e));
+        // A refusal means nothing is finalizing, so Stop must be offered
+        // again — cleared BEFORE the resync, which may itself land on idle
+        // and clear it anyway, and must not be able to re-set it.
+        this.stopping = false;
         await this.resync();
       }
     },

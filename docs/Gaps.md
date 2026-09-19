@@ -2409,8 +2409,9 @@ which is not a fix:** the drop is counted and surfaced three ways — a
 (~2 Hz), and `screen capture: finalizing after N dropped frame(s)` at
 teardown. Spec §17.3 deliberately leaves the RESPONSE (drop to 30 fps? warn
 the user?) to be decided from real measurements rather than guessed, which is
-what checklist item 10 produces. Note the counter is only fully visible in
-the log today — see GAP-118.
+what checklist item 10 produces. The running total is visible in the UI as of
+2026-09-19 (`ScreenCaptureBar.vue`'s dropped chip, GAP-118); the per-drop
+log lines and the teardown total remain the fuller record.
 
 ### GAP-115 · Medium · Phase 2 has no staging recovery: a crashed capture's `.mp4.part` is never swept
 `src-tauri/src/lib.rs` (`setup` wires `capture_commands::run_recovery` and
@@ -2474,7 +2475,7 @@ synthetic input; a sink-level smoke test in that shape could run on
 `windows-app` and would cover sink creation and finalize without needing a
 screen. Frame acquisition and the WGC callback remain out of reach.
 
-### GAP-118 · Medium · The screen capture store's live state has no renderer: Phase 2 ships no capture bar
+### GAP-118 · ~~Medium~~ FIXED 2026-09-19 · The screen capture store's live state had no renderer: Phase 2 shipped no capture bar
 `src/stores/screenCapture.ts` (holds `status`, `startedAtMs`,
 `pausedTotalMs`, `pausedSinceMs`, `fps`, `dropped`, `warning`) with no
 component consuming any of it — `ScreenCaptureBar.vue`, the plan's Task 10
@@ -2498,3 +2499,28 @@ reading the existing store (elapsed excluding paused time, Pause/Resume,
 Stop with an in-flight guard, and the dropped-frame badge shown only once
 `dropped > 0`), plus `tests/screenCaptureBar.test.ts`. The store side is
 done and tested; this is a presentational component and its wiring.
+
+**FIXED 2026-09-19, on exactly those terms.** Plan Task 10 landed — it had
+been skipped by the dispatcher (Task 8 → 9 → 11) and is filled in here, which
+is why it sits out of order in the history. `src/components/
+ScreenCaptureBar.vue` reads the store and renders on the list view beside
+`RecordingBar` (`ActionPanel.vue`, gated `view === 'list' &&
+screenCapture.status !== 'idle'`), so `ScreenSourcePicker.vue`'s
+`store.showList()` now lands on the surface its comment always claimed:
+elapsed via `store.elapsedMs(now)` (paused time excluded — the Rust clock
+excludes it by construction, and the bar delegates rather than re-deriving
+it), Pause/Resume, Stop, the source title, an inline `screen:warning` line —
+the store deliberately withholds that toast while a capture is live *because*
+this line now exists — and a `dropped` chip shown only once `dropped > 0`.
+`tests/screenCaptureBar.test.ts` covers all six. Stop's in-flight guard is a
+new `stopping` flag on the store (Task 9 left it out because nothing consumed
+it yet): set when `stop()` is asked for, cleared only when the capture really
+ends (every route to idle) or when the stop was REFUSED, since a refusal
+means nothing is finalizing and Stop must be offered again — `stop_screen_
+capture` can answer `stillSaving` while the session is still tearing down, so
+clearing on the command's own reply would re-arm Stop against a live
+finalize. **One residual, deliberate:** `fps` is still rendered nowhere. It is
+a rate, not an anomaly; §17.3's signal is the drop COUNT, and the Windows
+verification checklist's item 10 already reads the fps values from
+`vault-buddy.log` by design. GAP-114's mitigation is no longer blunted — the
+dropped count is now visible in the UI as that entry assumed.
