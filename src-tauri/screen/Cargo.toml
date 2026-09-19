@@ -13,6 +13,18 @@ fmp4-spike = ["dep:windows"]
 
 [dependencies]
 vault_buddy_core = { path = "../core" }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# NOTE: no `chrono` dependency yet. Task 2's `StagedSidecar::recorded_at` is
+# a plain `String` (the timestamp is formatted by whichever task produces
+# it), so nothing here calls into chrono; `cargo machete` (a rust-core CI
+# gate) fails on a declared-but-unused dependency. Add it back in the task
+# that first formats/parses a timestamp with it.
+
+[dev-dependencies]
+tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 # Optional and spike-only. `windows` 0.62 is already in the workspace
@@ -24,11 +36,7 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_System_Com",
 ] }
 
-# NOTE: no `log` dependency yet. Nothing in this crate logs during phase 1,
-# and `cargo machete` (a rust-core CI gate) fails on a declared-but-unused
-# dependency. Phase 2's engine adds it back when it has something to log.
-#
 # windows-capture and the `windows` crate are deliberately NOT here
 # yet. They arrive in phase 2, after the fragmented-MP4 spike decides the
-# staged container format. Everything in this crate today is pure and
-# compiles on any platform.
+# staged container format. Everything in this crate today except the
+# fmp4-spike feature is pure and compiles on any platform.

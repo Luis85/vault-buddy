@@ -9,6 +9,7 @@ pub mod clock;
 pub mod engine;
 pub mod mp4_boxes;
 pub mod select;
+pub mod staging;
 
 // Phase 2's gating spike (spec 6.4). Windows-only and feature-gated, so it
 // is absent from every default build; see the module docs for how to run it.
