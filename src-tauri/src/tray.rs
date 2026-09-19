@@ -14,8 +14,10 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 /// on the buddy, and any future hide path must route through here to
 /// inherit the guard.
 pub fn hide_buddy(app: &AppHandle) {
-    if crate::capture_commands::recording_blocks_shutdown(app) {
-        log::info!("hide ignored: recording in progress");
+    if crate::capture_commands::recording_blocks_shutdown(app)
+        || crate::screen_commands::capture_blocks_shutdown(app)
+    {
+        log::info!("hide ignored: a capture is in progress");
         return;
     }
     for label in ["panel", "bubble", "main"] {
@@ -34,12 +36,15 @@ pub fn quit(app: &AppHandle) {
     // would freeze the event loop (dead tray, dead buddy) for the whole
     // encode. Park the wait on a worker thread and let it drive the exit
     // once the save has landed; the menu callback returns immediately.
-    if crate::capture_commands::recording_blocks_shutdown(app) {
+    if crate::capture_commands::recording_blocks_shutdown(app)
+        || crate::screen_commands::capture_blocks_shutdown(app)
+    {
         let app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("shutdown-finalize".into())
             .spawn(move || {
                 crate::capture_commands::finalize_if_recording(&app);
+                crate::screen_commands::finalize_if_capturing(&app);
                 finish_quit(&app);
             });
         if let Err(e) = spawned {

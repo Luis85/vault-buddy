@@ -5798,6 +5798,7 @@ dependencies = [
  "vault_buddy_capture",
  "vault_buddy_core",
  "vault_buddy_mcp",
+ "vault_buddy_screen",
  "vault_buddy_transcribe",
  "windows-sys 0.61.2",
  "winreg 0.52.0",
