@@ -1120,7 +1120,7 @@ One at a time; restore byte-identically and re-confirm green after each.
 | `let src_row = row * stride + ox * 4;` (drop `oy`) | `a_crop_reads_the_quadrant_its_origin_names` |
 | `let src_row = (oy + row) * stride;` (drop `ox`) | `a_crop_reads_the_quadrant_its_origin_names` |
 | Swap `ox` and `oy` in `src_row` | `a_crop_reads_the_quadrant_its_origin_names` |
-| `let src_row = (ox + row) * stride + oy * 4;` | `an_odd_crop_origin_is_allowed_and_reads_the_right_pixels` |
+| `let src_row = (ox + row) * stride + oy * 4;` | **NOT this test** — it uses the SYMMETRIC origin `(1, 1)`, so swapping two equal values is a no-op. Verified in execution by the implementer and confirmed by the reviewer. The swap IS caught by `a_crop_reads_the_quadrant_its_origin_names`, whose `(2, 0)` and `(0, 2)` cases are asymmetric. Expect the kill there. |
 | Drop the `right_edge_bytes` guard | `a_crop_running_past_the_row_is_refused` |
 | `let needed = u64::from(height) * stride as u64;` (drop `src_y`) | `a_crop_running_past_the_last_row_is_refused` |
 | `usable_frame` ignores `crop_x`/`crop_y` (revert to the size-only form) | `a_region_is_judged_by_its_far_edge_not_its_size` |
