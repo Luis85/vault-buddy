@@ -767,7 +767,11 @@ mod tests {
         tx.send(SourceMsg::Samples(vec![0.1f32; 4410])).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         session.pause();
-        std::thread::sleep(Duration::from_millis(1_100));
+        // 1_800 not 1_100: same truncation trap the sibling pause test
+        // above documents, so this asserts measured >= 1_000 ms. 1_100 left
+        // ~100 ms -- half the margin already PROVEN to flake there, and it
+        // duly failed in CI. ~800 ms matches the fix made there.
+        std::thread::sleep(Duration::from_millis(1_800));
         // pause never blocks shutdown: stop while paused saves normally
         let outcome = session.stop().unwrap();
         assert!(outcome.mp3.exists());
