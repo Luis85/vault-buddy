@@ -15,8 +15,17 @@
 //!
 //! The heavy lifting — ffmpeg, the vault write, the note — lives in
 //! `export_worker`, on a named `screen-export` thread.
+//!
+//! This module owns the export LIFECYCLE and, with it, ALL FIVE of the
+//! feature's events: every one goes through the single `emit` below, which
+//! warns rather than discarding a failed send, and a structural test pins
+//! that at one call site. Everything about a staged capture as an OBJECT —
+//! listing, discarding, and the Obsidian hand-off for a saved one — lives
+//! in `staged_commands`, which is the same surface split across two files
+//! because one would sit well over the Rust LOC cap. `screen:discarded` is
+//! emitted from here on that module's behalf for exactly the reason above.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -100,18 +109,48 @@ pub(crate) fn timeline_from_sidecar(
     Timeline { segments: parsed }
 }
 
-/// `export` hands whole percents (it throttles on them, so the number that
-/// passes the gate and the number the user sees are the same number); the
-/// event carries the fraction spec §8.3 names.
+/// The number `screen:exportProgress` carries.
+///
+/// Extracted from the emitter so a Rust test can pin the SHAPE. `export`
+/// throttles on whole percents, so the number that passes the gate and the
+/// number the user sees are the same number — but the event carries the
+/// FRACTION spec §8.3 names, and 0..100 where 0..1 is expected renders a
+/// progress bar that is full from the first tick and stays there. That is a
+/// one-token error the compiler has no opinion about.
+///
+/// It cannot call `select::progress_fraction`: that one takes two
+/// millisecond counts, not a percent, and re-deriving a fraction from a
+/// percent is all this is.
+pub(crate) fn progress_payload_fraction(percent: u64) -> f64 {
+    percent as f64 / 100.0
+}
+
+/// Emit `event`, and SAY SO when it fails.
+///
+/// The single `app.emit` call site in this module (a structural test pins
+/// that, and scans this very prefix for the discarded-result idiom — so
+/// spelling that idiom out even in prose would fail it). AGENTS.md's
+/// diagnostics invariant forbids a swallowed error, and a discarded emit
+/// result is the most invisible kind there is: the editor simply never
+/// learns the export finished, its bar sits at whatever the last progress
+/// tick said, and nothing in the log explains it.
+fn emit(app: &AppHandle, event: &str, payload: serde_json::Value) {
+    if let Err(e) = app.emit(event, payload) {
+        log::warn!("screen export: could not emit {event}: {e}");
+    }
+}
+
 pub(crate) fn emit_export_progress(app: &AppHandle, base: &str, percent: u64) {
-    let _ = app.emit(
+    emit(
+        app,
         "screen:exportProgress",
-        serde_json::json!({ "base": base, "fraction": percent as f64 / 100.0 }),
+        serde_json::json!({ "base": base, "fraction": progress_payload_fraction(percent) }),
     );
 }
 
 fn emit_exported(app: &AppHandle, summary: &ExportSummary) {
-    let _ = app.emit(
+    emit(
+        app,
         "screen:exported",
         serde_json::json!({
             "base": summary.base,
@@ -121,6 +160,30 @@ fn emit_exported(app: &AppHandle, summary: &ExportSummary) {
             "warning": summary.warning,
         }),
     );
+}
+
+fn emit_export_cancelled(app: &AppHandle, base: &str) {
+    emit(
+        app,
+        "screen:exportCancelled",
+        serde_json::json!({ "base": base }),
+    );
+}
+
+fn emit_export_failed(app: &AppHandle, base: &str, message: &str) {
+    emit(
+        app,
+        "screen:exportFailed",
+        serde_json::json!({ "base": base, "message": message }),
+    );
+}
+
+/// Not in the spec, and added deliberately. Without it a discarded capture
+/// leaves `lastStaged` pointing at a base that is no longer on disk, so the
+/// panel keeps offering **Edit** on it and `open_capture_editor` →
+/// `load_staged_capture` fails with a banner the user cannot act on.
+pub(crate) fn emit_discarded(app: &AppHandle, base: &str) {
+    emit(app, "screen:discarded", serde_json::json!({ "base": base }));
 }
 
 /// Export the staged capture `base` and save it into its vault.
@@ -185,30 +248,39 @@ pub async fn export_and_save_capture(app: AppHandle, base: String) -> Result<(),
             Ok(())
         }
         Ok(Err(ExportFailure::Cancelled)) => {
-            let _ = app.emit(
-                "screen:exportCancelled",
-                serde_json::json!({ "base": base }),
-            );
+            emit_export_cancelled(&app, &base);
             Ok(())
         }
         Ok(Err(ExportFailure::Failed(message))) => {
-            let _ = app.emit(
-                "screen:exportFailed",
-                serde_json::json!({ "base": base, "message": message }),
-            );
+            emit_export_failed(&app, &base, &message);
             Err(message)
         }
         // The worker thread died without sending — a panic inside it. The
         // staged capture is untouched, so the honest answer is "try again".
         Err(_) => {
             let message = "The export stopped unexpectedly.".to_string();
-            let _ = app.emit(
-                "screen:exportFailed",
-                serde_json::json!({ "base": base, "message": message }),
-            );
+            emit_export_failed(&app, &base, &message);
             Err(message)
         }
     }
+}
+
+/// Stop the running export.
+///
+/// SYNC: it takes one mutex, sets one flag and drops it — no I/O, so the
+/// documented rule keeps it off the blocking pool. `Ok` even when nothing is
+/// running: a Cancel click racing the export's own completion is not an
+/// error the user should be shown.
+#[tauri::command]
+pub fn cancel_export(app: AppHandle) -> Result<(), String> {
+    match lock_ignoring_poison(&app.state::<ExportState>().0).as_ref() {
+        Some(active) => {
+            log::info!("screen export: cancel requested for {}", active.base);
+            active.cancel.store(true, Ordering::Relaxed);
+        }
+        None => log::info!("screen export: cancel with no export running; ignoring"),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -345,5 +417,49 @@ mod tests {
             body.contains("is_safe_base(&base)"),
             "export_and_save_capture must refuse an unsafe base in its own body"
         );
+    }
+
+    #[test]
+    fn the_progress_payload_carries_a_fraction_not_a_percent() {
+        assert_eq!(progress_payload_fraction(0), 0.0);
+        assert_eq!(progress_payload_fraction(50), 0.5);
+        assert_eq!(progress_payload_fraction(100), 1.0);
+        // The bug this exists for: a bar that is full from the first tick
+        // and stays there, because 0..100 went where 0..1 was expected.
+        assert!(progress_payload_fraction(1) < 0.5);
+    }
+
+    // Every one of the five export events goes through the one emitter that
+    // logs a failed send. AGENTS.md's diagnostics invariant forbids a
+    // swallowed error, and a `let _ = app.emit(..)` is the most invisible
+    // kind there is: the editor simply never learns the export finished, its
+    // bar sits at the last progress tick, and nothing in the log says why.
+    #[test]
+    fn every_export_event_is_emitted_through_the_one_warning_emitter() {
+        let src = production_src();
+        assert!(
+            !src.contains("let _ = app.emit"),
+            "an export event is emitted with its failure swallowed"
+        );
+        assert_eq!(
+            src.matches("app.emit(").count(),
+            1,
+            "every event must go through the single emitter that warns on failure"
+        );
+        for event in [
+            "screen:exportProgress",
+            "screen:exported",
+            "screen:exportCancelled",
+            "screen:exportFailed",
+            "screen:discarded",
+        ] {
+            // The QUOTED form, so the module's own prose about an event
+            // is not mistaken for a second emit of it.
+            assert_eq!(
+                src.matches(&format!("\"{event}\"")).count(),
+                1,
+                "{event} is emitted from more or fewer than one place"
+            );
+        }
     }
 }

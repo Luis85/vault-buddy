@@ -23,6 +23,7 @@ mod screen_capture_worker;
 mod screen_commands;
 mod screen_recovery;
 mod search_commands;
+mod staged_commands;
 mod task_commands;
 mod task_config_commands;
 mod transcription;
@@ -491,6 +492,10 @@ pub fn run() {
             editor_commands::load_staged_capture,
             editor_commands::save_capture_timeline,
             export_commands::export_and_save_capture,
+            export_commands::cancel_export,
+            staged_commands::discard_staged_capture,
+            staged_commands::list_staged_captures,
+            staged_commands::open_screen_capture,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to

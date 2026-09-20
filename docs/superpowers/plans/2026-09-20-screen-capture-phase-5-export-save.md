@@ -2517,6 +2517,8 @@ Message body: closes GAP-115; the ownership filter and the no-follow rule; named
 
 **Interfaces:**
 - Consumes: `export_and_save_capture { base }`, `cancel_export`, `discard_staged_capture { base }`, `open_screen_capture { id, path }`; the four `screen:export*` events.
+- **Note the Rust-side split.** Task 8 could not fit all five commands in `export_commands.rs` -- one file came to 989 nonblank against the 800 cap -- so the staged-capture surface lives in `src-tauri/src/staged_commands.rs` and the export lifecycle stays in `export_commands.rs`. The COMMAND NAMES are unchanged, so every `invoke` in Tasks 10 and 11 is unaffected; only a Rust-side reader needs to know there are two files. `screen:discarded` is still emitted through `export_commands`'s one warning-logging emitter, so the single-emitter invariant survives the split.
+- **`open_screen_capture` takes `(id, path)` and NO `AppHandle`.** An earlier draft of this plan's Interfaces block declared one; nothing in the body needs it, and an unused parameter fails `-D warnings`.
 - Produces: `ExportBar`'s props/emits, below.
 
 **`ExportBar.vue` is presentational — no `invoke`, no store.** `EditorRoot` is 300/500 nonblank lines and this task adds roughly 120; extracting the bar keeps both comfortably under cap and follows how `ScreenRegionPicker`/`ScreenAudioPicker` were already split out of `ScreenSourcePicker`.
@@ -2557,7 +2559,24 @@ Even though this phase's controls are buttons rather than inputs, write the guar
 
 3. **A cancelled export is not a failure.** `screen:exportCancelled` returns the bar to `idle` with no message and no banner. The staged capture and its timeline are kept (spec §14), the editor stays open, and the user can press Save again.
 
-4. **The success state offers Open, and `lastStaged` is already gone.** On `screen:exported` the bar shows "Saved to <vault>" with an **Open** button invoking `open_screen_capture`. The capture is no longer in staging, so Save and Discard are both hidden — leaving Save clickable would fire `export_and_save_capture` against a base whose sidecar was just deleted.
+4. **The success state offers Open, and `lastStaged` is already gone.** On `screen:exported` the bar shows "Saved to <vault>" with an **Open** button invoking `open_screen_capture`.
+
+   **Pass `notePath ?? videoPath`, not `videoPath`** — `screen:exported` carries both, and
+   `notePath` is null exactly when the vault has notes turned off. The note is the richer
+   destination (it embeds the video, the way the audio domain's note embeds the audio and
+   the transcript), and `capture_commands::open_recording_note` already makes that choice
+   for recordings; with notes off there is no note to open and the video is the only
+   answer. `staged_commands::capture_file_param` handles both: it drops the extension for
+   exactly-`.md` and keeps it otherwise.
+
+   The plan originally said to "mirror `open_recording` exactly". **Do not** — that was a
+   defect, found in Task 8, and the reason is subtler than it looks. `open_recording_note`
+   is not buggy: it calls `.with_extension("md")` to retarget to the NOTE before building
+   the URI, so its `uri::vault_relative_no_ext` is operating on a path that is already
+   `.md`. Mirroring it exactly would therefore have made this button open the note and
+   ONLY the note -- silently wrong beside a saved video, and outright broken with
+   `screen_create_note` off. The rule Task 8 implemented is `core::search`'s
+   (`search.rs:333`): strip the extension only for exactly-`.md`. The capture is no longer in staging, so Save and Discard are both hidden — leaving Save clickable would fire `export_and_save_capture` against a base whose sidecar was just deleted.
 
 - [ ] **Step 1: Write the failing tests in `tests/exportBar.test.ts`**
 
@@ -2906,6 +2925,8 @@ A docs task's failure mode is a **confident false statement** in the one file th
 9. **A fourth process-wide lock**, `ExportState`, beside `config_write_lock`, the per-file task lock and `CaptureGuard`. It stands outside the ordering rule the same way `CaptureGuard` does: taken, decided, dropped. Add it to the concurrency note.
 10. **`core::screen_capture_paths` in the repository map**, and the note that the one collision-suffix scheme lives in `capture_paths::candidate` and is `pub(crate)`, which is why the screen reservation lives in `core`.
 11. **Where state lives on disk** — the staging directory now has a recovery sweep and an export temp shape (`.<base>.export.mp4.part`).
+12. **The repository map and the IPC table must show TWO modules, not one.** Task 8 split the surface: `export_commands.rs` (the export lifecycle -- `ExportState`, the cancel flag, all five `screen:*` emitters, `export_and_save_capture`, `cancel_export`) and `staged_commands.rs` (a staged capture as an object -- `discard_staged_capture`, `list_staged_captures`, `open_screen_capture`). The seam is worth one sentence: lifecycle versus object.
+13. **Record the URI rule, because it differs from both siblings.** `open_screen_capture` does NOT use `uri::vault_relative_no_ext` the way `open_recording` and `open_task` do. Those two target a `.md` and strip the extension unconditionally; a saved capture may be opened as its `.mp4`, so `staged_commands::capture_file_param` strips only for exactly-`.md` -- `core::search`'s rule. AGENTS.md currently describes the no-ext form as though it were universal across the `open_*` family; it no longer is.
 
 - [ ] **Step 2: docs/Gaps.md**
 
