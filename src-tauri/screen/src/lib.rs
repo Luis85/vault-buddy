@@ -18,6 +18,11 @@ pub mod disk;
 // the shell cannot be cross-compiled to Windows on Linux, so an FFI call
 // written there would be type-checked by nothing until CI.
 pub mod exclusion;
+// The export's ffmpeg argument vectors and its -progress parsing. PURE, and
+// deliberately so: the route change from Media Foundation to a user-installed
+// ffmpeg moved the export's correctness out of untestable COM calls and into
+// this module, which is a plain function from an edit plan to an argv list.
+pub mod ffmpeg_args;
 // The WGC frame callback. Windows-only: it exists solely to feed
 // `session`'s mux, and everything it decides is decided by a pure function
 // in `session::pacing`.
