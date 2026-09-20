@@ -221,6 +221,18 @@ describe("EditorRoot", () => {
     expect(w.get('[data-testid="playhead"]').attributes("style")).toContain("60%");
   });
 
+  // Drive the element the way playback does: it advances on its own and
+  // reports each position through `timeupdate`. The playhead is a CONSEQUENCE
+  // of those reports, never something a test may park by hand — parking it
+  // manufactures a state real playback cannot reach, and both tests below
+  // used to do exactly that, which is why neither noticed that the preview
+  // could not cross a cut at all.
+  async function tick(w: ReturnType<typeof mount>, sourceSeconds: number) {
+    video(w).currentTime = sourceSeconds;
+    await w.get('[data-testid="preview-video"]').trigger("timeupdate");
+    return video(w).currentTime;
+  }
+
   it("seeks forward when playback runs into footage the edit removed", async () => {
     const w = await open({
       ...DETAIL,
@@ -231,11 +243,52 @@ describe("EditorRoot", () => {
         ],
       },
     });
-    // Source 5000 was cut out entirely, so it has no output time at all.
-    video(w).currentTime = 5;
-    await w.get('[data-testid="preview-video"]').trigger("timeupdate");
-    // The playhead is still at output 0, which is source 2000.
-    expect(video(w).currentTime).toBeCloseTo(2, 3);
+    // Inside the first segment: reported, not seeked.
+    expect(await tick(w, 3.9)).toBeCloseTo(3.9, 3);
+    // Playback runs past that segment's end into footage the edit removed.
+    // The seek target is the BOUNDARY's next side — the second segment's
+    // own source start — never the playhead, which is always still BEHIND
+    // the boundary and would seek backwards into the segment that just
+    // ended.
+    expect(await tick(w, 4.1)).toBeCloseTo(6, 3);
+  });
+
+  // The failure this pins is a LOOP, so one crossing cannot pin it: seeking
+  // backwards to the playhead looks like "a seek happened" to any assertion
+  // that only checks the element moved. Play on past the cut instead and
+  // require the second segment's footage to actually reach the strip.
+  it("plays on through a cut instead of looping at the boundary", async () => {
+    const w = await open({
+      ...DETAIL,
+      timeline: {
+        segments: [
+          { sourceStartMs: 2000, sourceEndMs: 4000 },
+          { sourceStartMs: 6000, sourceEndMs: 9000 },
+        ],
+      },
+    });
+    const outputs: string[] = [];
+    // 3.9 is in segment one; 4.1 is the removed footage; the element then
+    // carries on from wherever the handler put it.
+    for (const t of [3.9, 4.1]) {
+      await tick(w, t);
+      outputs.push(w.get('[data-testid="playhead"]').attributes("style") ?? "");
+    }
+    for (let i = 0; i < 3; i += 1) {
+      await tick(w, video(w).currentTime + 0.5);
+      outputs.push(w.get('[data-testid="playhead"]').attributes("style") ?? "");
+    }
+    // Source 7.5 is 1500ms into the second segment: output 3500 of 5000.
+    expect(video(w).currentTime).toBeCloseTo(7.5, 3);
+    expect(outputs[outputs.length - 1]).toContain("70%");
+    // And the playhead never went backwards. It does not MOVE on the
+    // crossing tick — the handler seeks the element and the strip catches up
+    // on the next report, which is the one-tick lag the boundary hitch in the
+    // caption under the video already admits to — but it must never retreat,
+    // and it must end past where the cut was.
+    const left = outputs.map((s) => Number(/left: ([\d.]+)%/.exec(s)?.[1] ?? NaN));
+    for (let i = 1; i < left.length; i += 1) expect(left[i]).toBeGreaterThanOrEqual(left[i - 1]);
+    expect(left[left.length - 1]).toBeGreaterThan(left[0]);
   });
 
   it("stops playing rather than reporting a position the strip cannot draw", async () => {
@@ -245,13 +298,43 @@ describe("EditorRoot", () => {
     });
     await w.get('[data-testid="preview-toggle"]').trigger("click");
     expect(w.get('[data-testid="preview-toggle"]').text()).toBe("Pause");
-    // Park the playhead past the end of the output, then report a source
-    // moment that is not in the edit either.
-    await w.get('[data-testid="preview-scrub"]').setValue("2000");
-    video(w).currentTime = 9;
-    await w.get('[data-testid="preview-video"]').trigger("timeupdate");
+    // Reached by PLAYBACK, not by a scrub: the last footage in the edit,
+    // then one tick past it. There is no next segment, so the output has
+    // genuinely ended and the only honest answer is to stop.
+    await tick(w, 3.9);
+    await tick(w, 4.1);
     expect(video(w).paused).toBe(true);
     expect(w.get('[data-testid="preview-toggle"]').text()).toBe("Play");
+  });
+
+  // The seek guard's own half of the contract. `timeupdate` feeds the
+  // watcher its own reported position back, so an equality-free re-seek
+  // would stall playback on every tick — the failure the tolerance exists
+  // to prevent. Removing the guard left the whole suite green, because
+  // every other test only ever proves that it seeks when it MUST.
+  it("does not re-seek the element to the position it just reported", async () => {
+    const w = await open({
+      ...DETAIL,
+      timeline: { segments: [{ sourceStartMs: 2000, sourceEndMs: 9000 }] },
+    });
+    const el = video(w);
+    let position = 2.5;
+    let writes = 0;
+    Object.defineProperty(el, "currentTime", {
+      configurable: true,
+      get: () => position,
+      set: (v: number) => {
+        writes += 1;
+        position = v;
+      },
+    });
+    // Two ordinary ticks, each well within the 250ms tolerance of where the
+    // element already is.
+    await w.get('[data-testid="preview-video"]').trigger("timeupdate");
+    position = 2.6;
+    await w.get('[data-testid="preview-video"]').trigger("timeupdate");
+    expect(writes).toBe(0);
+    expect(position).toBe(2.6);
   });
 
   it("plays and pauses the same element", async () => {

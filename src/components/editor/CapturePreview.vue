@@ -13,7 +13,12 @@
 import { ref, watch } from "vue";
 
 import type { TimelineDto } from "../../types";
-import { outputDurationMs, toOutputMs, toSourceMs } from "../../utils/timelineGeometry";
+import {
+  outputDurationMs,
+  segmentAtOutputMs,
+  toOutputMs,
+  toSourceMs,
+} from "../../utils/timelineGeometry";
 import AppButton from "../ui/AppButton.vue";
 
 const props = defineProps<{ src: string; timeline: TimelineDto; outputMs: number }>();
@@ -51,7 +56,28 @@ function onTimeUpdate() {
     emit("update:outputMs", out);
     return;
   }
-  const next = toSourceMs(props.timeline, props.outputMs);
+  // Seek to the BOUNDARY's far side, never to `props.outputMs`. The playhead
+  // is fed by this handler, so at a crossing it is always the LAST valid
+  // output position — a tick behind the boundary, never at or past it.
+  // `toSourceMs`-ing it therefore lands back inside the segment that just
+  // ended: play, hit the boundary, seek backwards to the playhead, play a
+  // quarter-second, seek backwards again. The preview could not reach a
+  // second segment at all, and a trimmed tail looped instead of stopping.
+  //
+  // So ask which segment the playhead is in, take that segment's END on the
+  // OUTPUT clock — the cumulative length through it — and map THAT. It is
+  // the first output moment the ended segment does not contain, so it is the
+  // next one's start, and `null` there means the output genuinely ended.
+  // Deliberately not "the lowest `sourceStartMs` above the current source
+  // position": that reads the SOURCE order, and a reordered timeline plays
+  // its blocks in output order, so it would jump to whichever block happens
+  // to sit later in the recording rather than to the one the user put next.
+  // Both steps are `timelineGeometry`'s own functions — this mapping already
+  // exists twice (docs/Gaps.md GAP-136) and must not gain a third copy.
+  const i = segmentAtOutputMs(props.timeline, props.outputMs);
+  const boundary =
+    i === null ? null : outputDurationMs({ segments: props.timeline.segments.slice(0, i + 1) });
+  const next = boundary === null ? null : toSourceMs(props.timeline, boundary);
   if (next === null) {
     el.pause();
     playing.value = false;
