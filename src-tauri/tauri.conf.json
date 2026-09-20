@@ -51,6 +51,17 @@
         "skipTaskbar": true,
         "shadow": false,
         "focus": false
+      },
+      {
+        "label": "overlay",
+        "title": "Vault Buddy — Select Region",
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "focus": true
       }
     ],
     "security": {

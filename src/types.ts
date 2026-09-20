@@ -352,12 +352,35 @@ export interface Recording {
  * picker never re-derives it and the two can never disagree. */
 export interface CaptureSourceInfo {
   id: string;
-  kind: "screen" | "window";
+  kind: "screen" | "window" | "region";
   title: string;
   detail: string;
   width: number;
   height: number;
   isPrimary: boolean;
+}
+
+/** What `RegionRoot` hands back for one drag. All four geometry values are
+ * LOGICAL (CSS) pixels relative to the overlay's own viewport, which is the
+ * target monitor's origin — Rust converts to physical with that monitor's
+ * own scale factor (`core::screen_geometry::to_physical`). `dpr` is
+ * `window.devicePixelRatio`, sent so Rust can LOG a disagreement with the
+ * monitor's scale factor; it is never used to scale. */
+export interface RegionPick {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  dpr: number;
+}
+
+/** `select_capture_region`'s reply. `null` means the user cancelled. */
+export interface RegionSelection {
+  sourceId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** `screen_capture_status`' reply and the `screen:started` payload
