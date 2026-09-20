@@ -374,7 +374,15 @@ export interface RegionPick {
   dpr: number;
 }
 
-/** `select_capture_region`'s reply. `null` means the user cancelled. */
+/** `select_capture_region`'s reply. `null` means the user cancelled.
+ *
+ * Declared ahead of its consumer: the Rust command it describes is phase 3
+ * task 5 and the picker that reads it is task 7, so nothing can import it
+ * yet. Suppressed rather than parked behind a raised `deadCodeIssues`
+ * ceiling, because the suppression is self-enforcing in a way the ceiling is
+ * not: fallow counts a STALE suppression as an issue, so the moment task 7
+ * imports this type the ratchet fails until the line below is deleted. */
+// fallow-ignore-next-line unused-type
 export interface RegionSelection {
   sourceId: string;
   x: number;

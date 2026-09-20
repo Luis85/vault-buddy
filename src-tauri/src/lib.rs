@@ -314,10 +314,11 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
-                // The panel and bubble are transient — positioned fresh beside
-                // the buddy every time — so persisting their positions is
-                // pointless (it only wrote garbage coords to the state file).
-                .with_denylist(&["panel", "bubble"])
+                // Every window but the buddy is transient — positioned fresh
+                // while hidden every time it is shown — so persisting their
+                // positions is pointless (it only wrote garbage coords to the
+                // state file). One list, next to the other window walks.
+                .with_denylist(&crate::tray::POSITION_DENYLIST)
                 // The plugin's implicit restore of the buddy lands a beat AFTER
                 // the visible window is first painted at the OS default — the
                 // startup "buddy jumps from the default corner to home" bug.

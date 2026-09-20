@@ -506,13 +506,20 @@ Invariants:
   structurally cannot see (native faults, kills, power loss) — every
   graceful exit path (tray/buddy quit, Alt+F4 close, update install) must
   stamp `diagnostics::mark_clean_shutdown()`. All hide paths funnel through
-  `tray::hide_buddy`, which hides all three windows (`panel`, `bubble`,
-  `main`) and no-ops mid-capture — the buddy is the capture indicator for
-  BOTH kinds, so the guard is `capture_commands::recording_blocks_shutdown
-  || screen_commands::capture_blocks_shutdown`. The quit path carries the
-  same pair: its `shutdown-finalize` worker finalizes the audio recording
-  AND the screen capture before `finish_quit`, so neither can be stranded by
-  an exit.
+  `tray::hide_buddy`, which hides EVERY window and no-ops mid-capture — the
+  buddy is the capture indicator for BOTH kinds, so the guard is
+  `capture_commands::recording_blocks_shutdown ||
+  screen_commands::capture_blocks_shutdown`. "Every window" is
+  `tray::ALL_WINDOW_LABELS`, the ONE list both this hide walk and
+  `finish_quit`'s destroy walk read (`POSITION_DENYLIST`, the window-state
+  plugin's list, is that same set minus the buddy) — a unit test derives it
+  from `tauri.conf.json`, because the overlay was once added to the config
+  and to none of those lists: quit then failed WebView2's
+  `Chrome_WidgetWin_0` unregister every time, and hide-to-tray would have
+  stranded a full-monitor always-on-top window with the buddy gone. The quit
+  path carries the same pair: its `shutdown-finalize` worker finalizes the
+  audio recording AND the screen capture before `finish_quit`, so neither can
+  be stranded by an exit.
 
 ## The vault domain (core crate + `vaults` store)
 

@@ -7,6 +7,22 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::capture_guard::{CaptureGuard, CaptureKind};
 
+/// Every window label in `tauri.conf.json`, in the order the hide and quit
+/// paths walk them — the buddy (`main`) LAST, so the accessory windows never
+/// outlive the thing they hang off. Both walks below mean "every window",
+/// and a window added to the config but not to a walk reappears as the two
+/// bugs those walks exist to prevent (an overlay that survives hide-to-tray;
+/// a webview left alive at exit that fails WebView2's class unregister), so
+/// a test below derives this list from the config instead of trusting it.
+pub const ALL_WINDOW_LABELS: [&str; 4] = ["panel", "bubble", "overlay", "main"];
+
+/// Windows the window-state plugin must NOT persist a position for: every
+/// one except the buddy. The panel, bubble and overlay are all positioned
+/// fresh — while hidden — every time they are shown, so a restored position
+/// is junk that only buys a startup restore and a `Moved` handler holding the
+/// plugin's cache lock.
+pub const POSITION_DENYLIST: [&str; 3] = ["panel", "bubble", "overlay"];
+
 /// Hide the companion (and its panel/bubble); the tray "Show / Hide" brings
 /// the buddy back.
 ///
@@ -22,7 +38,7 @@ pub fn hide_buddy(app: &AppHandle) {
         log::info!("hide ignored: a capture is in progress");
         return;
     }
-    for label in ["panel", "bubble", "main"] {
+    for label in ALL_WINDOW_LABELS {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
@@ -84,11 +100,11 @@ fn finish_quit(app: &AppHandle) {
             log::error!("quit: saving window state failed: {e}");
         }
         // Destroy EVERY webview before exiting so WebView2 can unregister the
-        // shared `Chrome_WidgetWin_0` window class. All three windows share
-        // that class; leaving even one alive fails the unregister with
+        // shared `Chrome_WidgetWin_0` window class. ALL of them share that
+        // class; leaving even one alive fails the unregister with
         // ERROR_CLASS_HAS_WINDOWS (1412), logged as
         // "Failed to unregister class Chrome_WidgetWin_0" on shutdown.
-        for label in ["panel", "bubble", "main"] {
+        for label in ALL_WINDOW_LABELS {
             if let Some(window) = app2.get_webview_window(label) {
                 let _ = window.destroy();
             }
@@ -287,6 +303,108 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every window label `tauri.conf.json` declares, in config order.
+    fn configured_labels() -> Vec<String> {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        conf["app"]["windows"]
+            .as_array()
+            .expect("app.windows")
+            .iter()
+            .map(|w| w["label"].as_str().expect("label").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_hide_and_quit_walk_covers_every_configured_window() {
+        // The bug this pins, twice over. `hide_buddy` is THE hide chokepoint:
+        // a window missing from it survives hide-to-tray, so tray -> Hide
+        // would leave a full-monitor, always-on-top, undecorated overlay up
+        // with the buddy gone. And `finish_quit` must DESTROY every webview
+        // or WebView2 cannot unregister the shared `Chrome_WidgetWin_0`
+        // class -- ERROR_CLASS_HAS_WINDOWS (1412) on every single quit.
+        // Derived from the config rather than restated, so window number
+        // five fails here instead of shipping both bugs again.
+        let mut configured = configured_labels();
+        let mut walked: Vec<String> = ALL_WINDOW_LABELS.iter().map(|s| s.to_string()).collect();
+        configured.sort();
+        walked.sort();
+        assert_eq!(
+            walked, configured,
+            "every window in tauri.conf.json must be hidden and destroyed"
+        );
+        // The buddy goes last: it is the visible anchor, and the accessory
+        // windows should never outlive it on screen.
+        assert_eq!(ALL_WINDOW_LABELS.last(), Some(&"main"));
+    }
+
+    #[test]
+    fn every_transparent_window_disables_its_shadow() {
+        // A drop shadow on a transparent, undecorated window paints a frame
+        // around something that is supposed to have none. The buddy, panel
+        // and bubble all turn it off; the overlay shipped without the field
+        // (Tauri defaults it ON) purely because spec 5.2's config block omits
+        // it. Nobody can verify this on Linux, so pin it in the config.
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        for window in conf["app"]["windows"].as_array().expect("app.windows") {
+            if window["transparent"] == serde_json::Value::Bool(true) {
+                assert_eq!(
+                    window["shadow"],
+                    serde_json::Value::Bool(false),
+                    "window {} is transparent but leaves `shadow` at Tauri's default",
+                    window["label"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_buddy_persists_a_position() {
+        // The window-state plugin restores POSITION for any window NOT on
+        // its denylist and installs a `Moved` handler that takes the
+        // plugin's cache mutex -- the lock at the origin of the documented
+        // drag-crash deadlock. Every window but the buddy is positioned
+        // fresh while hidden, so persisting anything for them writes junk
+        // coordinates and buys a startup restore that exists to be
+        // overwritten.
+        let expected: Vec<&str> = ALL_WINDOW_LABELS
+            .iter()
+            .copied()
+            .filter(|l| *l != "main")
+            .collect();
+        assert_eq!(POSITION_DENYLIST.to_vec(), expected);
+        // ...and the builder actually uses the constant, rather than a
+        // literal list that would drift from it again.
+        let lib = include_str!("lib.rs");
+        assert!(
+            lib.contains("with_denylist(&crate::tray::POSITION_DENYLIST)"),
+            "lib.rs must feed the window-state plugin POSITION_DENYLIST"
+        );
+    }
+
+    #[test]
+    fn no_window_walk_restates_the_label_list() {
+        // Structural, because the failure mode is a SECOND list left behind:
+        // the overlay was added to tauri.conf.json and to three hard-coded
+        // walks it never reached. Both walks in this file must read the one
+        // constant.
+        let src = include_str!("tray.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let walks = production.matches("in ALL_WINDOW_LABELS").count();
+        assert_eq!(
+            walks, 2,
+            "expected the hide and quit walks to iterate ALL_WINDOW_LABELS; found {walks}"
+        );
+        // The two constants are the only places a label may be spelled out.
+        let spellings = production.matches("\"bubble\"").count();
+        assert_eq!(
+            spellings, 2,
+            "window labels belong in ALL_WINDOW_LABELS / POSITION_DENYLIST and \
+             nowhere else in tray.rs; found {spellings} spellings of \"bubble\""
+        );
+    }
 
     #[test]
     fn a_live_screen_capture_routes_the_tray_controls_to_the_screen_domain() {

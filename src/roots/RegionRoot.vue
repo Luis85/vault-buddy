@@ -19,6 +19,12 @@ import type { RegionPick } from "../types";
  * a webview knows its `devicePixelRatio` but not which monitor Rust picked,
  * and two sources of truth for the scale is exactly the bug this feature is
  * most likely to have.
+ *
+ * This root deliberately wires NO Pinia store, and that is not an omission:
+ * AGENTS.md's per-window `init()` rule exists because a store that mirrors
+ * Rust state is dead in any webview that never subscribed. This root mirrors
+ * no Rust state and listens to no event — it only PRODUCES one answer, via
+ * `resolve_region_selection` — so there is nothing to wire per window.
  */
 
 /** Below this, on either axis, a drag is a stray click rather than a
@@ -63,6 +69,14 @@ function report(rect: RegionPick | null) {
 }
 
 function onDown(e: PointerEvent) {
+  // Primary button only. A right- or middle-press is a menu gesture, not a
+  // selection; AGENTS.md documents that the buddy drag re-checks the logical
+  // primary button for the same reason.
+  if (e.button !== 0) return;
+  // After the one answer has gone, a fresh press would paint a live rubber
+  // band that can never report — a band that lies for as long as Rust takes
+  // to hide the overlay.
+  if (resolvedOnce.value) return;
   startX.value = e.clientX;
   startY.value = e.clientY;
   curX.value = e.clientX;
@@ -88,6 +102,16 @@ function onUp(e: PointerEvent) {
   report({ x, y, width, height, dpr: window.devicePixelRatio });
 }
 
+/** The pointer was taken away from us (an OS gesture, a lost capture). Without
+ * this the band stays painted and `dragging` stays true with nothing ever
+ * resolving, so the overlay sits there until Rust's own bounded wait expires.
+ * Gated on `dragging` so a stray cancel outside a drag cannot answer for the
+ * user. */
+function onCancel() {
+  if (!dragging.value) return;
+  report(null);
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape") return;
   e.preventDefault();
@@ -108,6 +132,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
     @pointerdown="onDown"
     @pointermove="onMove"
     @pointerup="onUp"
+    @pointercancel="onCancel"
   >
     <div
       v-if="dragging"
@@ -119,6 +144,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         data-testid="region-readout"
         class="absolute left-0 top-full mt-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-fg"
       >
+        <!-- ASCII `x`, not the multiplication sign spec 5.2 spells the
+             readout with: `list_capture_sources` already renders a monitor's
+             size as `{width}x{height}` (screen/src/source.rs) and Task 7's
+             `regionLabel.ts` matches that. One spelling across the feature
+             beats matching the spec's prose in this one place. -->
         {{ Math.round(box.width) }} x {{ Math.round(box.height) }}
       </span>
     </div>
