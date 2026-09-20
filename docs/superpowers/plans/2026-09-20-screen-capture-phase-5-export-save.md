@@ -4,9 +4,9 @@
 
 **Goal:** A staged screen capture can be exported and saved into an Obsidian vault as a playable `.mp4` plus a companion note — the **ninth sanctioned vault write**, and the first time this feature touches a vault at all. An unedited capture takes a no-re-encode remux fast path; an edited one is decoded, restamped span-by-span and re-encoded, with progress and cancellation. Interrupted work is recovered, and a staged capture can be resumed or discarded.
 
-**Architecture:** Media Foundation reads the staged fragmented MP4 back through an `IMFSourceReader` and writes a **standard** MP4 through `MFCreateMPEG4MediaSink`. Two modes share one reader: **passthrough** (no output media type set, so MF hands back the compressed H.264/AAC samples untouched) drives `Timeline::is_untouched`'s fast path; **decoded** (NV12 + PCM16 output types set, so MF inserts its own decoders) drives the edited path, whose span order and output timestamps come from the already-written, already-tested pure `screen::select::plan`. Everything a Linux runner can hold — the span arithmetic, the restamping, the vault naming and reservation, the note rendering, the disk-space estimate, the user-facing wording — lives in pure modules; the `cfg(windows)` arms only move bytes between them.
+**Architecture:** Export shells out to a **user-installed ffmpeg**, detected and never bundled — the precedent the Document Import domain set for Pandoc, and for the same reasons the design spec §3 gave when it declined to ship a large copyleft binary inside an MIT light-installer app. An unedited capture is remuxed with `-c copy`: no decode, no re-encode, no quality loss. An edited one is a single `filter_complex` pass of `trim`/`atrim` + `concat`, built from the ordered spans the already-tested pure `screen::select::plan` produces. Media Foundation keeps the capture side untouched — it is already built, shipping, and where it is strongest — so the app uses each stack where it earns its place. The decisive consequence is testability: the export's correctness becomes a **pure function from a plan to an argument vector**, and CI installs ffmpeg so the phase carries the first executable end-to-end proof anywhere in this feature that a cut lands where the editor said it would.
 
-**Tech Stack:** Rust (`vault_buddy_screen`, `vault_buddy_core`, the Tauri shell), Windows Media Foundation (`IMFSourceReader`, `MFCreateMPEG4MediaSink`, `IMFSinkWriter`), Vue 3 + Pinia + Tailwind 4, Vitest + happy-dom.
+**Tech Stack:** Rust (`vault_buddy_screen`, `vault_buddy_core`, the Tauri shell), a user-installed **ffmpeg/ffprobe** driven as a child process, Vue 3 + Pinia + Tailwind 4, Vitest + happy-dom. **No new Rust dependency** — the process machinery is extracted from the Pandoc integration that already exists.
 
 ## Global Constraints
 
@@ -29,7 +29,8 @@ Every task's requirements implicitly include this section.
 - **Manual Windows verification is DEFERRED** until after the final phase, by the user's standing decision. Tasks write checklist rows; nobody runs them and nobody is asked to.
 - **Every spawned thread is named** (`std::thread::Builder`). No swallowed errors — anything caught-and-hidden goes through `log::warn!`/`log::error!` or `src/logging.ts`.
 - **The shared fixture table is SIZE-GUARDED in four places, and adding a row breaks all four.** `core/src/timeline.rs` asserts `cases.len()` in `shared_fixture_table_maps_output_time_to_source_time` and an `applied` count in `shared_fixture_table_agrees_on_whole_and_on_the_operations`; `tests/timelineFixtures.test.ts` asserts `table.cases` and `ops` lengths. They exist because a table that silently shrinks proves nothing. **Re-point them, never delete them**, and run BOTH languages after touching `tests/fixtures/timeline-cases.json`. Task 1 found this the hard way: following the plan literally left the branch red with two Rust failures the task's own gate list did not surface.
-- **`sink.rs` carries two structural self-scans** over its own pre-`#[cfg(test)]` prefix: it must never contain `.Flush(` and never contain `metadata(`. Task 4 adds code to that file and must not trip either.
+- **ffmpeg is USER-INSTALLED and detected, never bundled.** Same posture and the same reasoning as Pandoc (design spec §3, and the Document Import spec's precedent): a ~100 MB copyleft binary does not belong inside an MIT light-installer app, and not distributing it keeps its licence the user's business. **Add no Rust dependency for it** — the process machinery is an extraction of code this repo already ships.
+- **Media Foundation keeps the capture side and gains nothing here.** Do not touch `sink.rs`, `frames.rs`, `source.rs` or `session/`. `sink.rs`'s two structural self-scans (its pre-`#[cfg(test)]` prefix must contain neither `.Flush(` nor `metadata(`) still hold and this phase must not trip them.
 - **`screen_commands.rs` carries three more structural scans**: exactly one `release(CaptureKind::Screen)` in its production prefix and exactly zero in `screen_capture_worker.rs`; the monitor clears before it emits; the exclusion clear lives inside `clear_active_screen`. New export code must not add a `CaptureKind::Screen` release anywhere (see Task 7 — export deliberately does **not** claim `CaptureGuard`).
 
 ## THE RECURRING FIXTURE FLAW — thirteen occurrences across four phases
@@ -40,12 +41,19 @@ A fixture that trips **more than one guard**, or that asserts a value captured *
 
 Every task below carries a **Mutation table**. Run every row. A row that stays green is a finding, not a formality — report it rather than deleting the row.
 
-## The honest limit of this phase
+## The honest limit of this phase — and what the route change bought
 
-`reader.rs`, `sink::StandardSink` and `export.rs`'s `cfg(windows)` arms will execute in **no automated test on any platform** — not on Linux (no Media Foundation), not on Windows CI (no way to assert a decoded frame is the right frame). That is GAP-117's class, and this phase adds the largest instance of it yet. Two consequences the task boundaries are drawn around:
+Under the Media Foundation design this section said that `reader.rs`, `StandardSink` and the export's `cfg(windows)` arms would execute in **no automated test on any platform**, and that the manual checklist was the feature's only real gate. **That is no longer true of the export**, and the difference is the whole reason for the route:
 
-1. **Push every decision that is not a COM call into a pure module.** The span order, the restamping arithmetic, the progress fraction, the vault path, the reserved name, the note bytes, the disk estimate, and every user-facing message are all Linux-testable and all live outside the `cfg(windows)` arms. What remains inside is "call `ReadSample`, hand the bytes to a function that was tested".
-2. **The manual checklist is this phase's real gate.** Task 12 adds rows 29–36. They are the only place "the exported file actually plays in Obsidian, and shows the cuts the editor showed" is ever checked.
+- The span order, the restamping, the vault naming, the note bytes, the disk estimate, the ffmpeg arguments and the progress parsing are all pure and Linux-tested.
+- Task 6 installs ffmpeg in CI and runs a **real round trip**: synthesize a clip, apply a timeline, probe the output's duration. A cut landing in the wrong place now fails a test instead of waiting for a human with a Windows machine.
+
+What remains genuinely unproven, stated plainly:
+
+1. **The capture side is unchanged and still untestable.** `sink`, `source`, `session`, `frames` and `exclusion` are Media Foundation and execute nowhere. GAP-117 stands in full; this phase neither widens nor narrows it.
+2. **`GetDiskFreeSpaceExW`'s Windows arm** (Task 3) is type-checked and nothing more.
+3. **ffmpeg's own behaviour on Windows against a real staged fMP4.** CI proves the arguments and the round trip on Linux against a synthesized clip; it does not prove that Media Foundation's fragmented output remuxes cleanly through a Windows ffmpeg build. That is checklist row 29's job and it is the single highest-value manual row in the phase.
+4. **The gating moment.** A user who has recorded and edited a capture and has no ffmpeg cannot save it. Task 11 surfaces that at Record Screen — before the recording, not after it — so the discovery never happens at the payoff. Capture and editing keep working without ffmpeg; only saving is gated.
 
 ## File Structure
 
@@ -58,9 +66,12 @@ Every task below carries a **Mutation table**. Run every row. A row that stays g
 | `src-tauri/core/src/screen_capture_paths.rs` | **New.** The ninth vault write's naming: pairwise `.mp4` + `.md` reservation, and the commit-with-suffix-retry loop. In `core` because the one collision-suffix minter (`capture_paths::candidate`) is `pub(crate)` to that crate. |
 | `src-tauri/core/src/screen_capture_config.rs` | **Modify.** Gains `export_size_estimate_bytes` — the pure half of the disk-pressure check. |
 | `src-tauri/screen/src/disk.rs` | **New.** `free_bytes(&Path)`: `GetDiskFreeSpaceExW` on Windows, `Unsupported` elsewhere. |
-| `src-tauri/screen/src/sink.rs` | **Modify.** `StandardSink` beside `FragmentedSink`: `MFCreateMPEG4MediaSink`, plus a passthrough constructor that adopts media types handed to it rather than declaring its own. |
-| `src-tauri/screen/src/reader.rs` | **New.** `SourceReader` over a staged `.mp4`: open, describe, seek, read one sample. Two modes — decoded (NV12/PCM16) and passthrough (native compressed types). |
-| `src-tauri/screen/src/export.rs` | **New.** The two export paths, the cancel poll, the progress callback. Its outcome type and every user-facing string are pure. |
+| `src-tauri/src/external_tool.rs` | **New.** The tool-agnostic half of the Pandoc integration, extracted: `run_capturing` (timeout kill, bounded drain, output cap), `tool_command` (`CREATE_NO_WINDOW`), registry-fresh PATH, candidate ordering. Both integrations consume it. |
+| `src-tauri/src/pandoc.rs` | **Modify.** Keeps only what is about Pandoc; shrinks by roughly 350 lines. |
+| `src-tauri/src/ffmpeg.rs` | **New.** ffmpeg/ffprobe resolution, version and H.264-encoder capability probing, `probe_source`, and the `detect_ffmpeg` / `set_ffmpeg_path` commands. |
+| `src-tauri/screen/src/ffmpeg_args.rs` | **New and PURE.** Where the export's correctness now lives: the `-c copy` remux args, the `trim`/`atrim` + `concat` filter graph, exact millisecond→seconds formatting, and `-progress` parsing. |
+| `src-tauri/screen/src/export.rs` | **New.** Spawns ffmpeg, streams progress, cancels by killing the child, and carries the real end-to-end tests CI can run. |
+| `.github/workflows/ci.yml` | **Modify.** `rust-core` installs ffmpeg so the round-trip tests are never silently skipped. |
 | `src-tauri/src/export_commands.rs` | **New.** `export_and_save_capture`, `cancel_export`, `discard_staged_capture`, `list_staged_captures`, `open_screen_capture`; `ExportState` and the one `clear_active_export` chokepoint. |
 | `src-tauri/src/export_worker.rs` | **New.** The `screen-export` named thread: export to a staging temp, commit into the vault, write the note, and only then delete the staged capture. |
 | `src-tauri/src/screen_recovery.rs` | **New.** `run_screen_recovery`, wired into `setup` after `run_import_recovery`. |
@@ -440,7 +451,7 @@ Everything here is Linux-testable against a `tempfile::tempdir()`, and it is the
 - Modify: `src-tauri/core/src/lib.rs` (one `pub mod` line, alphabetical: after `screen_capture_config`)
 
 **Interfaces:**
-- Consumes: `capture_paths::{candidate, rename_noreplace, safe_recording_root, assert_path_inside_vault}`; `capture_note::write_note_collision_safe`.
+- Consumes: `capture_paths::{candidate, rename_noreplace}` — **and only those.** `safe_recording_root`, `assert_path_inside_vault` and `capture_note::write_note_collision_safe` belong to Task 7's caller, not to this module; importing them here is dead code and fails clippy.
 - Produces, for Task 7:
   ```rust
   pub struct ScreenCaptureNames { pub base: String, pub final_mp4: PathBuf, pub note_md: PathBuf }
@@ -681,12 +692,27 @@ pub fn reserve_final_screen(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
 /// source returns `Ok(())` by design — do NOT "fix" that into an error here,
 /// or this loop spins forever: the destination now exists, so every retry
 /// reads as a fresh collision.
+/// BOUNDED, deliberately diverging from the audio twin
+/// (`capture::recovery::rename_into_reserved`, an unbounded `loop`). That
+/// one is safe only because its `reserve_final` predicate provably covers
+/// the `.mp3` the move targets, so a collision always advances the suffix --
+/// but nothing enforces that, and it is one deleted conjunct away from an
+/// infinite spin. This path is new and in Task 7 it runs on the named
+/// `screen-export` worker thread, where a spin wedges the export slot with
+/// no error, no log line and no way out. The ceiling is unreachable in any
+/// real workload: a retry costs an attempt only when a move actually LOST a
+/// race, never once per existing suffix, because `reserve_screen_names`
+/// walks a whole run of taken names inside a single call. It also keeps the
+/// suite from HANGING under mutation M2, which this branch's verification
+/// method depends on.
+const MAX_COMMIT_ATTEMPTS: u32 = 10_000;
+
 pub fn commit_screen_capture(
     from: &Path,
     dir: &Path,
     base: &str,
 ) -> Result<(PathBuf, PathBuf), String> {
-    loop {
+    for _ in 0..MAX_COMMIT_ATTEMPTS {
         let (mp4, note) = reserve_final_screen(dir, base);
         match rename_noreplace(from, &mp4) {
             Ok(()) => return Ok((mp4, note)),
@@ -697,6 +723,10 @@ pub fn commit_screen_capture(
             Err(e) => return Err(format!("the exported video could not be moved into the vault: {e}")),
         }
     }
+    Err(format!(
+        "the exported video could not be moved into the vault: gave up after \
+         {MAX_COMMIT_ATTEMPTS} attempts to find a free name for {base:?}"
+    ))
 }
 ```
 
@@ -714,14 +744,18 @@ Expected: `test result: ok. 10 passed`.
 
 | # | Mutation | Must fail |
 | --- | --- | --- |
-| M1 | `reserve_screen_names`: drop `&& !note_md.exists()` | `a_taken_note_alone_pushes_the_video_onto_the_next_suffix` |
-| M2 | `reserve_screen_names`: drop `!final_mp4.exists() &&` | `a_taken_video_alone_pushes_the_note_onto_the_next_suffix` AND `reservation_walks_past_a_run_of_taken_suffixes` |
-| M3 | `commit_screen_capture`: `rename_noreplace` → `std::fs::rename` | `committing_never_overwrites_an_existing_file` (PRECIOUS is gone) |
-| M4 | `commit_screen_capture`: hoist `reserve_final_screen` OUT of the loop | not caught by the suite as written — **this is expected**; note it in the report. It needs a concurrent creator, which a single-threaded test cannot stage. The `continue` arms are what make the loop meaningful; M5 covers them. |
-| M5 | `commit_screen_capture`: turn the `AlreadyExists` arm into `Err(...)` | `committing_never_overwrites_an_existing_file` — but check WHICH way: on Linux `rename_noreplace` hard-links first, so confirm it goes red rather than assuming. If it stays green, say so. |
-| M6 | `commit_screen_capture`: return `(mp4, dir.join(format!("{base}.md")))` — the note named from the REQUESTED base | `the_note_path_is_derived_from_the_landed_video_not_the_requested_base` |
-| M7 | `candidate(base, attempt)` → `format!("{base} ({attempt})")` inline | nothing fails — **expected.** Record it: the suffix scheme's single-sourcing is a convention this module cannot self-enforce. Task 12 adds a note to AGENTS.md instead. |
-| M8 | `mp4_file_name`: return `format!("{base}.MP4")` | `the_video_file_name_is_the_base_plus_mp4` |
+| M1 | `reserve_screen_names`: drop `&& !note_md.exists()` | `a_taken_note_alone_pushes_the_video_onto_the_next_suffix` (+2 more) |
+| M2 | `reserve_screen_names`: drop `!final_mp4.exists() &&` | `a_taken_video_alone_…` and `reservation_walks_past_a_run_of_taken_suffixes`. **WARNING: against an UNBOUNDED retry loop this mutation HANGS instead** — it spins `committing_never_overwrites_an_existing_file` and `the_note_path_…` forever, because the mutated predicate stops covering the name the move targets so every retry re-mints the same taken name. Run every row under `timeout 60 … ; echo "exit=$? (124 == hung)"`. |
+| M3 | `commit_screen_capture`: `rename_noreplace` → `std::fs::rename` | `concurrent_commits_on_one_base_never_lose_a_file`. **Measured: the single-threaded fixtures do NOT catch this** — see the note below. |
+| M4 | `commit_screen_capture`: hoist `reserve_final_screen` OUT of the loop | `concurrent_commits_on_one_base_never_lose_a_file` |
+| M5 | `commit_screen_capture`: turn the `AlreadyExists` arm into `Err(...)` | `concurrent_commits_on_one_base_never_lose_a_file`. **Measured: not caught by the single-threaded fixtures either.** |
+| M6 | note named from the REQUESTED base | `the_note_path_is_derived_from_the_landed_video_not_the_requested_base` |
+| M7 | replace `candidate(base, attempt)` with a FAITHFUL inline copy (`if attempt == 1 { base.to_string() } else { format!("{base} ({attempt})") }`) | nothing — **expected.** Single-sourcing the suffix scheme is a convention this module cannot self-enforce; Task 12's AGENTS.md note is the remedy. Do NOT use a bare `format!("{base} ({attempt})")`: that drops `candidate`'s `attempt == 1` special case, so it is a behaviour change (8 tests red) rather than a convention probe. |
+| M8 | `mp4_file_name`: return `.MP4` | `the_video_file_name_is_the_base_plus_mp4` |
+
+**Why the single-threaded fixtures cannot catch M3 or M5, and what closes it.** This is the fourteenth occurrence of the recurring fixture flaw, and it landed in the fixture this plan itself calls *"THE property this whole module exists for"*. In `committing_never_overwrites_an_existing_file` the thing that saves `PRECIOUS` is the **reservation's `exists()` check**, not the move: the reservation has already pushed the destination to `Demo (2).mp4`, so `std::fs::rename` never points at `Demo.mp4`. The loop body runs exactly **once** in every single-threaded test, so neither `continue` arm is ever reached, and properties 2 and 3 above — *the move is the arbiter* and *never `std::fs::rename`* — were asserted by nothing. Measured: under M3 all ten original tests print `ok`.
+
+The closing test is `concurrent_commits_on_one_base_never_lose_a_file`: eight threads with distinct payloads meet at a `std::sync::Barrier` so several reserve the same free base **before** any of them moves, then all call `commit_screen_capture` on one base; it asserts eight distinct landed paths and eight intact payloads. The asymmetry is what makes it safe: correct code passes under every interleaving, because `rename_noreplace` never replaces and each retry mints a fresh suffix — so it cannot produce a false failure — while the mutation is caught whenever the race lands (measured 30/30 caught, 0/30 false failures). It also closes M4, which an earlier draft of this plan wrote off as untestable; a barrier-synchronised test stages exactly the concurrent creator that was claimed impossible.
 
 - [ ] **Step 6: Gates and commit**
 
@@ -1007,1179 +1041,566 @@ Message body: why the probe returns `Option` and not `Result` — an unmeasurabl
 
 ---
 
-### Task 4: `StandardSink` — the non-fragmented MP4 writer, in two flavours
+### Task 4: One external-tool layer, and finding ffmpeg with it
 
-The staged capture is a **fragmented** MP4 because a crash mid-recording must still leave a playable file (spec §6.4, measured). The exported file has the opposite requirement: it is finished before anyone sees it, and it should be the ordinary, maximally-compatible thing a player and Obsidian's embedded Chromium expect. So export writes through `MFCreateMPEG4MediaSink` — the same construction chain as `FragmentedSink`, one function name different, which is exactly the shape the existing sink's own comment at `sink.rs:383-385` points out.
-
-Two constructors, because the two export paths need different input types:
-
-- **`create`** declares NV12 video and PCM audio inputs, exactly like `FragmentedSink::create`, and MF inserts its encoders. This is the **edited** path's sink.
-- **`create_passthrough`** is handed the media types the source reader reported and declares them as BOTH the output and the input type. When the input subtype equals the output subtype, MF inserts no transform: the compressed samples go from the demuxer to the muxer untouched. This is the **fast path's** sink, and it is what makes "no quality loss, near instant" true rather than aspirational.
+The Document Import domain already solved "detect a user-installed tool, never bundle it" and paid for the lessons: a stale override shadowing a newer install, a PATH that does not see a just-installed binary until the app restarts, a probe that wedges forever, a child process that pops a console window and steals focus. `src-tauri/src/pandoc.rs` is 637 lines and roughly 350 of its production lines are **not about Pandoc at all**. This task extracts those and gives ffmpeg the same treatment.
 
 **Files:**
-- Modify: `src-tauri/screen/src/sink.rs`
+- Create: `src-tauri/src/external_tool.rs`
+- Modify: `src-tauri/src/pandoc.rs` (consume the extraction; delete the moved copies)
+- Create: `src-tauri/src/ffmpeg.rs`
+- Modify: `src-tauri/src/lib.rs` (two `mod` lines, two `generate_handler!` entries)
+- Modify: `src-tauri/core/src/document_import_config.rs` **or** wherever the app-global `pandoc_path` override lives — add the sibling `ffmpeg_path` (find it; do not guess)
 
-**Interfaces:**
-- Consumes: the private helpers already in `sink.rs` — `MfRuntime`, `video_output_type`, `video_input_type`, `audio_output_type`, `audio_input_type`, `to_hns`, `sink_err`, `VIDEO_STREAM`, `AUDIO_STREAM`, `VideoFormat`, `AudioFormat`.
-- Produces, for Tasks 5–6:
-  ```rust
-  pub use imp::StandardSink;
-  impl StandardSink {
-      pub fn create(path: &Path, video: VideoFormat, audio: Option<AudioFormat>) -> Result<StandardSink, ScreenError>;
-      #[cfg(windows)]
-      pub fn create_passthrough(path: &Path, video: &IMFMediaType, audio: Option<&IMFMediaType>) -> Result<StandardSink, ScreenError>;
-      pub fn write_video(&mut self, bytes: &[u8], ts: Duration, duration: Duration) -> Result<(), ScreenError>;
-      pub fn write_audio(&mut self, bytes: &[u8], ts: Duration, duration: Duration) -> Result<(), ScreenError>;
-      pub fn finalize(self) -> Result<(), ScreenError>;
-  }
-  ```
-
-**Note the signature difference from `FragmentedSink`:** `write_audio` here takes `&[u8]`, not `&[i16]`. The capture path always has PCM16 in hand; export's passthrough mode has an opaque AAC frame. One byte-oriented method serves both, and it removes the `from_raw_parts` reinterpretation from this path entirely.
-
-**Two rules this file enforces on itself — do not trip them.** `sink.rs`'s own `production_src()` scans assert its pre-`#[cfg(test)]` prefix contains neither `.Flush(` nor `metadata(`. Both apply to everything added here. `Flush` is documented to **drop** pending samples; only `Finalize` drains. Extend both scans' doc comments to say they now cover two sinks.
-
-- [ ] **Step 1: Write the failing tests**
-
-Append to `sink.rs`'s existing `#[cfg(test)] mod tests`:
-
+**Interfaces — produces:**
 ```rust
-    // The Linux compile gate must DEGRADE, never panic — the same contract
-    // FragmentedSink's stub carries, and the reason the stub exists at all.
-    #[cfg(not(windows))]
-    #[test]
-    fn the_non_windows_standard_sink_reports_unsupported_rather_than_panicking() {
-        let path = std::path::Path::new("unused.mp4");
-        let video = VideoFormat { width: 1280, height: 720, fps: 30, bitrate_bps: 2_000_000 };
-        assert_eq!(StandardSink::create(path, video, None).unwrap_err(), ScreenError::Unsupported);
-    }
+// external_tool.rs — everything here is tool-agnostic
+pub(crate) enum Capture { Stdout, Stderr }
+pub(crate) fn run_capturing(cmd: Command, timeout: Duration, capture: Capture) -> std::io::Result<(bool, String)>;
+pub(crate) fn tool_command(program: &str) -> Command;   // CREATE_NO_WINDOW on Windows
+pub(crate) const fn child_creation_flags() -> u32;
+pub(crate) fn augmented_path() -> Option<String>;
+pub(crate) fn merged_path(base: &str, extra: &[String]) -> String;
+pub(crate) fn path_executables(stem: &str) -> Vec<String>;  // was path_pandoc_executables
+pub(crate) fn candidate_order(override_path: Option<&str>, path_execs: &[String]) -> Vec<String>;
+pub(crate) fn candidates_for(stem: &str, override_path: Option<&str>) -> Vec<String>;
 
-    // The standard sink is the EXPORT target and the fragmented one is the
-    // CAPTURE target. Getting these the wrong way round produces a staged
-    // file that cannot survive a crash and an exported file that is
-    // needlessly fragmented -- and neither shows a symptom until hardware.
-    #[test]
-    fn each_sink_declares_the_media_sink_its_purpose_requires() {
-        let src = production_src();
-        let frag_at = src
-            .find("pub fn create(path: &Path, video: VideoFormat, audio: Option<AudioFormat>)")
-            .expect("FragmentedSink::create is present");
-        let std_at = src
-            .find("impl StandardSink")
-            .expect("StandardSink is present");
-        let frag_call = src.find("MFCreateFMPEG4MediaSink").expect("fragmented sink call");
-        let std_call = src.find("MFCreateMPEG4MediaSink(").expect("standard sink call");
-        assert!(
-            frag_call < std_at,
-            "MFCreateFMPEG4MediaSink must sit in the FragmentedSink impl, before StandardSink"
-        );
-        assert!(
-            std_call > std_at,
-            "MFCreateMPEG4MediaSink must sit inside the StandardSink impl"
-        );
-        assert!(frag_at < std_at);
-        // And exactly one of each, so neither sink can quietly grow the
-        // other's constructor.
-        assert_eq!(src.matches("MFCreateFMPEG4MediaSink(").count(), 1);
-        assert_eq!(src.matches("MFCreateMPEG4MediaSink(").count(), 1);
-    }
+// ffmpeg.rs
+pub(crate) struct FfmpegTools {
+    pub ffmpeg: String,
+    pub ffprobe: String,
+    pub version: (u32, u32),
+    /// The H.264 encoder to pass to `-c:v`, chosen from what this build has.
+    pub h264_encoder: String,
+}
+pub(crate) fn parse_ffmpeg_version(stdout: &str) -> Option<(u32, u32)>;
+pub(crate) fn pick_h264_encoder(encoders_stdout: &str) -> Option<String>;
+pub(crate) fn resolve_working_ffmpeg() -> Option<FfmpegTools>;
+pub(crate) fn probe_source(tools: &FfmpegTools, path: &Path) -> Result<SourceFacts, String>;
 
-    // Both scans now cover two sinks; a new Flush anywhere in this file is
-    // the bug that destroyed two spike runs' footage.
-    #[test]
-    fn neither_sink_calls_flush() {
-        assert!(!production_src().contains(".Flush("));
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceFacts { pub width: u32, pub height: u32, pub has_audio: bool }
+pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts>;
+
+#[tauri::command] pub async fn detect_ffmpeg(app: AppHandle) -> FfmpegStatusDto;
+#[tauri::command] pub async fn set_ffmpeg_path(app: AppHandle, path: Option<String>) -> Result<FfmpegStatusDto, String>;
 ```
 
-**`assert_eq!(…count(), 1)` on `MFCreateMPEG4MediaSink(` is deliberate and will be wrong unless you check:** `fmp4_spike.rs` also calls it, but that is a different file and `production_src()` reads only `sink.rs`. Confirm with `grep -c "MFCreateMPEG4MediaSink(" src-tauri/screen/src/sink.rs` after implementing; expect exactly 1.
+#### The four decisions here, each with its reason
+
+1. **Extract rather than copy.** `run_capturing`'s four tests encode failures nobody would guess: a hung `--version` must be killed at the timeout; a *descendant* that inherits the pipe makes `read_to_end` never see EOF even after `try_wait` returns, so the drain must be bounded; and a child that floods stdout must not grow the buffer without limit. A second copy for ffmpeg would re-earn all three. Move the tests with the code.
+
+2. **`tool_command` keeps `CREATE_NO_WINDOW`, and this is load-bearing, not cosmetic.** The app is `windows_subsystem = "windows"` in release, so it owns no console; spawning a child with default flags allocates a **new console window that flashes and takes foreground focus**, which blurs the panel and trips its focus-out auto-hide. That shipped once already as "opening Buddy settings flashes a terminal and closes the panel". ffmpeg is spawned far more often than Pandoc and for far longer. The existing test asserting `child_creation_flags() == 0x0800_0000` on Windows and `0` elsewhere moves with it.
+
+3. **ffmpeg needs a capability axis Pandoc never had.** Pandoc asks only "is it new enough". ffmpeg must also answer **"can it encode H.264"**, because the fast path (`-c copy`) needs no encoder at all while an edited export does, and minimal LGPL builds ship without `libx264`. `pick_h264_encoder` reads `ffmpeg -hide_banner -encoders` and picks the first available of `libx264`, `h264_mf` (the Media Foundation wrapper, present in the common Windows builds), `h264_nvenc`, `h264_qsv`, `h264_amf`. A build with none can still remux; the edited path refuses with a message naming what is missing.
+
+4. **Resolve `ffprobe` beside `ffmpeg`, from the same directory first.** A machine can have both on PATH from different installs. Prefer the sibling next to the resolved `ffmpeg`, fall back to PATH. Mismatched versions are not an error — we use ffprobe only for width/height/has-audio.
+
+- [ ] **Step 1: Write the failing tests in `src-tauri/src/ffmpeg.rs`**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_version_from_a_real_banner_line() {
+        assert_eq!(parse_ffmpeg_version("ffmpeg version 6.1.1-3ubuntu5 Copyright (c)"), Some((6, 1)));
+        assert_eq!(parse_ffmpeg_version("ffmpeg version n7.0-latest-win64-gpl"), Some((7, 0)));
+        assert_eq!(parse_ffmpeg_version("ffmpeg version 2024-01-01-git-abc123 Copyright"), None);
+        assert_eq!(parse_ffmpeg_version("pandoc 3.1.9"), None);
+        assert_eq!(parse_ffmpeg_version(""), None);
+    }
+
+    // The ORDER is the decision: libx264 is the quality baseline, h264_mf is
+    // what a GPL-free Windows build has, and the hardware encoders are last
+    // because a busy GPU silently drops frames.
+    #[test]
+    fn picks_the_best_available_h264_encoder_in_a_fixed_order() {
+        let all = " V..... libx264   H.264\n V..... h264_mf   H.264\n V..... h264_nvenc H.264\n";
+        assert_eq!(pick_h264_encoder(all).as_deref(), Some("libx264"));
+        let no_x264 = " V..... h264_mf   H.264\n V..... h264_nvenc H.264\n";
+        assert_eq!(pick_h264_encoder(no_x264).as_deref(), Some("h264_mf"));
+        let hw_only = " V..... h264_nvenc H.264\n";
+        assert_eq!(pick_h264_encoder(hw_only).as_deref(), Some("h264_nvenc"));
+    }
+
+    // A minimal LGPL build with no H.264 encoder at all must be REPORTED, not
+    // guessed at: it can still remux an untouched capture, and only the
+    // edited path has to refuse. Returning a default here would produce an
+    // ffmpeg invocation that fails with an unreadable error much later.
+    #[test]
+    fn a_build_with_no_h264_encoder_reports_none_rather_than_defaulting() {
+        assert_eq!(pick_h264_encoder(" V..... vp9 VP9\n A..... aac AAC\n"), None);
+        assert_eq!(pick_h264_encoder(""), None);
+    }
+
+    // `libx264rgb` and `h264_v4l2m2m` both CONTAIN an encoder name we accept.
+    // Matching on a substring would pick a codec the args builder did not
+    // mean, so the scan must match the whole token in the name column.
+    #[test]
+    fn a_longer_encoder_name_that_contains_ours_is_not_mistaken_for_it() {
+        assert_eq!(pick_h264_encoder(" V..... libx264rgb H.264 RGB\n"), None);
+        assert_eq!(pick_h264_encoder(" V..... h264_mfx  something\n"), None);
+    }
+
+    #[test]
+    fn reads_width_height_and_the_presence_of_an_audio_track_from_ffprobe() {
+        // -show_entries stream=width,height,codec_type -of default=nw=1
+        let both = "codec_type=video\nwidth=1920\nheight=1080\ncodec_type=audio\n";
+        assert_eq!(parse_probe_output(both), Some(SourceFacts { width: 1920, height: 1080, has_audio: true }));
+    }
+
+    // A silent capture is legal (spec 6.5) and must probe cleanly, not fail.
+    #[test]
+    fn a_capture_with_no_audio_track_probes_as_silent_rather_than_failing() {
+        let video_only = "codec_type=video\nwidth=1280\nheight=720\n";
+        assert_eq!(parse_probe_output(video_only), Some(SourceFacts { width: 1280, height: 720, has_audio: false }));
+    }
+
+    // No video stream means this is not a capture we can export, and a
+    // zero-size default would reach the encoder as an invalid frame size.
+    #[test]
+    fn a_file_with_no_video_stream_probes_as_none() {
+        assert_eq!(parse_probe_output("codec_type=audio\n"), None);
+        assert_eq!(parse_probe_output(""), None);
+        assert_eq!(parse_probe_output("width=1920\n"), None);
+    }
+
+    #[test]
+    fn an_odd_or_zero_dimension_is_refused_rather_than_reaching_the_encoder() {
+        // H.264 4:2:0 requires even dimensions; ffmpeg would fail with an
+        // unreadable error deep in the filter graph.
+        assert_eq!(parse_probe_output("codec_type=video\nwidth=0\nheight=1080\n"), None);
+        assert_eq!(parse_probe_output("codec_type=video\nwidth=1921\nheight=1080\n"), None);
+    }
+}
+```
+
+And in `external_tool.rs`, MOVE (do not rewrite) `pandoc.rs`'s existing tests for `run_capturing` (all four), `child_creation_flags`, `merged_path` and `candidate_order`, renaming only what the extraction renames. Add one:
+
+```rust
+    // path_executables is now generic. A stem must match the executable name
+    // exactly, or a directory holding `ffmpeg-gui.exe` would be offered as
+    // ffmpeg.
+    #[test]
+    fn an_executable_matches_its_stem_exactly_and_not_as_a_prefix() {
+        assert!(matches_stem("ffmpeg", "ffmpeg"));
+        assert!(matches_stem("ffmpeg", "ffmpeg.exe"));
+        assert!(!matches_stem("ffmpeg", "ffmpeg-gui.exe"));
+        assert!(!matches_stem("ffmpeg", "myffmpeg"));
+        assert!(!matches_stem("pandoc", "pandoc-citeproc"));
+    }
+```
 
 - [ ] **Step 2: Run and watch them fail**
 
 ```
-cd src-tauri && cargo test -p vault_buddy_screen sink 2>&1 | tail -20
+cd /home/user/vault-buddy/src-tauri && cargo test -p vault-buddy --lib ffmpeg 2>&1 | tail -20
 ```
 
-Expected: `cannot find type StandardSink`, and `each_sink_declares_…` panicking on `StandardSink is present`.
+- [ ] **Step 3: Extract `external_tool.rs`**
 
-- [ ] **Step 3: Implement the non-Windows arm**
+Move, verbatim where possible: `Capture`, `run_capturing`, `DRAIN_GRACE`, `CAPTURE_CAP`, `PROBE_TIMEOUT`, `child_creation_flags`, `merged_path`, both `registry_path_entries` arms, `augmented_path`, `candidate_order`. Rename `pandoc_command` → `tool_command` and `path_pandoc_executables` → `path_executables(stem: &str)`, factoring the name test into `matches_stem(stem, file_name) -> bool`. Add `candidates_for(stem, override_path)` = `candidate_order(override_path, &path_executables(stem))` plus the bare stem, which is `pandoc_candidates` generalized.
 
-Inside `#[cfg(not(windows))] mod imp`, beside `FragmentedSink`:
+`pandoc.rs` keeps only what is about Pandoc: `parse_pandoc_version`, `sandbox_supported`, `probe_pandoc`, `resolve_working_pandoc`, `pandoc_args`, `STRIP_IMAGES_*`, `CONVERT_TIMEOUT`. It gains `use crate::external_tool::{…}`.
 
-```rust
-    /// The export target's stub. Same contract as `FragmentedSink`'s: it
-    /// must DEGRADE rather than panic, because Linux is this crate's
-    /// compile gate and every one of these methods is reachable there from
-    /// a test that does not know it is on the wrong platform.
-    pub struct StandardSink;
+**This is a refactor of working, shipped code.** Its whole safety argument is that the moved tests move with it and still pass. Run `cargo test -p vault-buddy --lib pandoc` before and after and report both counts; they must match.
 
-    impl StandardSink {
-        pub fn create(
-            _path: &Path,
-            _video: VideoFormat,
-            _audio: Option<AudioFormat>,
-        ) -> Result<StandardSink, ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
+- [ ] **Step 4: Implement `ffmpeg.rs`**
 
-        pub fn write_video(
-            &mut self,
-            _bytes: &[u8],
-            _ts: Duration,
-            _duration: Duration,
-        ) -> Result<(), ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
+`parse_ffmpeg_version` reads the `ffmpeg version <major>.<minor>` banner, tolerating a leading `n` (`n7.0-...`) and returning `None` for a date-stamped build with no numeric version — those are git snapshots and we would rather fall through to the next candidate than trust a parse.
 
-        pub fn write_audio(
-            &mut self,
-            _bytes: &[u8],
-            _ts: Duration,
-            _duration: Duration,
-        ) -> Result<(), ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
+`pick_h264_encoder` splits each line on whitespace and compares the **second token** (the name column) with `==`, never `contains`.
 
-        pub fn finalize(self) -> Result<(), ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
-    }
+`probe_source` runs, through `run_capturing` with `PROBE_TIMEOUT`:
 ```
-
-- [ ] **Step 4: Implement the Windows arm**
-
-Inside `#[cfg(windows)] mod imp`, after `FragmentedSink`'s impl. Add `IMFMediaType` to that module's imports if it is not already there.
-
-```rust
-    /// The EXPORT target: a standard, non-fragmented MP4.
-    ///
-    /// Why the opposite container choice from `FragmentedSink`, ten lines
-    /// away: a CAPTURE must survive being killed mid-write, so it pays for
-    /// fragmentation (spec 6.4 measured 280/300 frames recovered from a
-    /// crashed fMP4 against 0/300 from a crashed standard MP4). An EXPORT is
-    /// finished before anyone sees it and then lives in the user's vault, so
-    /// it should be the ordinary thing every player and Obsidian's embedded
-    /// Chromium handle best. One function name is the whole difference.
-    pub struct StandardSink {
-        writer: IMFSinkWriter,
-        has_audio: bool,
-        /// Dropped last, after the writer: MFShutdown must not run while a
-        /// Media Foundation object is still alive.
-        _mf: MfRuntime,
-    }
-
-    impl StandardSink {
-        /// The EDITED path's sink: declares NV12 video and PCM audio inputs,
-        /// so MF inserts its encoders, exactly like the capture sink.
-        pub fn create(
-            path: &Path,
-            video: VideoFormat,
-            audio: Option<AudioFormat>,
-        ) -> Result<StandardSink, ScreenError> {
-            video.validate()?;
-            if let Some(a) = audio {
-                a.validate()?;
-            }
-            let mf = MfRuntime::start().map_err(|e| sink_err("MFStartup", e))?;
-            let video_out = video_output_type(video).map_err(|e| sink_err("video output type", e))?;
-            let audio_out = match audio {
-                Some(a) => Some(audio_output_type(a).map_err(|e| sink_err("audio output type", e))?),
-                None => None,
-            };
-            let writer = Self::writer_for(path, &video_out, audio_out.as_ref())?;
-            let video_in = video_input_type(video).map_err(|e| sink_err("video input type", e))?;
-            Self::set_input(&writer, VIDEO_STREAM, &video_in)?;
-            if let Some(a) = audio {
-                let audio_in = audio_input_type(a).map_err(|e| sink_err("audio input type", e))?;
-                Self::set_input(&writer, AUDIO_STREAM, &audio_in)?;
-            }
-            unsafe { writer.BeginWriting() }.map_err(|e| sink_err("BeginWriting", e))?;
-            Ok(StandardSink {
-                writer,
-                has_audio: audio.is_some(),
-                _mf: mf,
-            })
-        }
-
-        /// The FAST path's sink: adopts the reader's own media types as BOTH
-        /// the output and the input type.
-        ///
-        /// That equality is the whole mechanism. When a sink writer's input
-        /// subtype matches its output subtype, MF inserts no transform, so
-        /// the demuxer's compressed H.264 and AAC samples reach the muxer
-        /// untouched — no decode, no re-encode, no quality loss, and a
-        /// remux that runs at disk speed. Passing a DIFFERENT input type
-        /// here silently turns the fast path into a transcode that still
-        /// produces a correct-looking file, which is why Task 6's caller
-        /// hands over the reader's types rather than rebuilding them.
-        pub fn create_passthrough(
-            path: &Path,
-            video: &IMFMediaType,
-            audio: Option<&IMFMediaType>,
-        ) -> Result<StandardSink, ScreenError> {
-            let mf = MfRuntime::start().map_err(|e| sink_err("MFStartup", e))?;
-            let writer = Self::writer_for(path, video, audio)?;
-            Self::set_input(&writer, VIDEO_STREAM, video)?;
-            if let Some(a) = audio {
-                Self::set_input(&writer, AUDIO_STREAM, a)?;
-            }
-            unsafe { writer.BeginWriting() }.map_err(|e| sink_err("BeginWriting", e))?;
-            Ok(StandardSink {
-                writer,
-                has_audio: audio.is_some(),
-                _mf: mf,
-            })
-        }
-
-        fn writer_for(
-            path: &Path,
-            video_out: &IMFMediaType,
-            audio_out: Option<&IMFMediaType>,
-        ) -> Result<IMFSinkWriter, ScreenError> {
-            let byte_stream = unsafe {
-                MFCreateFile(
-                    MF_ACCESSMODE_WRITE,
-                    MF_OPENMODE_DELETE_IF_EXIST,
-                    MF_FILEFLAGS_NONE,
-                    &HSTRING::from(path.to_string_lossy().as_ref()),
-                )
-            }
-            .map_err(|e| sink_err("MFCreateFile", e))?;
-            // STANDARD, not fragmented. See this type's doc comment.
-            let sink: IMFMediaSink =
-                unsafe { MFCreateMPEG4MediaSink(&byte_stream, Some(video_out), audio_out) }
-                    .map_err(|e| sink_err("MFCreateMPEG4MediaSink", e))?;
-            unsafe { MFCreateSinkWriterFromMediaSink(&sink, None) }
-                .map_err(|e| sink_err("MFCreateSinkWriterFromMediaSink", e))
-        }
-
-        fn set_input(
-            writer: &IMFSinkWriter,
-            stream: u32,
-            ty: &IMFMediaType,
-        ) -> Result<(), ScreenError> {
-            unsafe { writer.SetInputMediaType(stream, ty, None) }.map_err(|e| {
-                if e.code() == MF_E_TOPO_CODEC_NOT_FOUND {
-                    ScreenError::EncoderUnavailable
-                } else {
-                    sink_err("SetInputMediaType", e)
-                }
-            })
-        }
-
-        pub fn write_video(
-            &mut self,
-            bytes: &[u8],
-            ts: Duration,
-            duration: Duration,
-        ) -> Result<(), ScreenError> {
-            self.write(VIDEO_STREAM, bytes, ts, duration)
-        }
-
-        /// Byte-oriented, unlike `FragmentedSink::write_audio`'s `&[i16]`:
-        /// the edited path has PCM16 in hand and the fast path has an opaque
-        /// AAC frame, and one method serves both without reinterpreting a
-        /// slice.
-        pub fn write_audio(
-            &mut self,
-            bytes: &[u8],
-            ts: Duration,
-            duration: Duration,
-        ) -> Result<(), ScreenError> {
-            if !self.has_audio {
-                return Ok(());
-            }
-            self.write(AUDIO_STREAM, bytes, ts, duration)
-        }
-
-        fn write(
-            &mut self,
-            stream: u32,
-            bytes: &[u8],
-            ts: Duration,
-            duration: Duration,
-        ) -> Result<(), ScreenError> {
-            // Mirrors FragmentedSink::write exactly, including the empty
-            // early-out: MFCreateMemoryBuffer(0) followed by a copy from a
-            // null pointer is undefined behaviour.
-            if bytes.is_empty() {
-                return Ok(());
-            }
-            let len = u32::try_from(bytes.len())
-                .map_err(|_| ScreenError::Sink("sample larger than 4 GiB".into()))?;
-            unsafe {
-                let buffer =
-                    MFCreateMemoryBuffer(len).map_err(|e| sink_err("MFCreateMemoryBuffer", e))?;
-                let mut dst: *mut u8 = std::ptr::null_mut();
-                buffer
-                    .Lock(&mut dst, None, None)
-                    .map_err(|e| sink_err("IMFMediaBuffer::Lock", e))?;
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
-                buffer
-                    .Unlock()
-                    .map_err(|e| sink_err("IMFMediaBuffer::Unlock", e))?;
-                buffer
-                    .SetCurrentLength(len)
-                    .map_err(|e| sink_err("SetCurrentLength", e))?;
-                let sample = MFCreateSample().map_err(|e| sink_err("MFCreateSample", e))?;
-                sample
-                    .AddBuffer(&buffer)
-                    .map_err(|e| sink_err("AddBuffer", e))?;
-                sample
-                    .SetSampleTime(to_hns(ts))
-                    .map_err(|e| sink_err("SetSampleTime", e))?;
-                sample
-                    .SetSampleDuration(to_hns(duration))
-                    .map_err(|e| sink_err("SetSampleDuration", e))?;
-                self.writer
-                    .WriteSample(stream, &sample)
-                    .map_err(|e| sink_err("WriteSample", e))?;
-            }
-            Ok(())
-        }
-
-        /// There is NO Flush here and there must never be one — see this
-        /// module's rules. Only Finalize drains.
-        pub fn finalize(self) -> Result<(), ScreenError> {
-            unsafe { self.writer.Finalize() }.map_err(|e| sink_err("Finalize", e))
-        }
-    }
+<ffprobe> -v error -select_streams v:0 -show_entries stream=width,height,codec_type \
+          -select_streams a -show_entries stream=codec_type \
+          -of default=noprint_wrappers=1 <path>
 ```
+**Verify this invocation against the installed ffprobe during implementation** and correct both the args and `parse_probe_output`'s fixtures if the real output differs — the fixtures above are written from the documented `default=noprint_wrappers=1` shape, and a plan that guessed an MF signature wrong in Task 3 has already earned that caution. Record the real output in the commit body.
 
-Add the re-export beside the existing one, and widen both rule doc comments:
+`resolve_working_ffmpeg` walks `candidates_for("ffmpeg", override)`, probes `-version`, keeps the FIRST candidate that parses a version, then resolves `ffprobe` from that binary's own directory before PATH, then probes `-encoders` once. A candidate that runs but reports no H.264 encoder is still returned — `h264_encoder` is an `Option<String>` on the struct in that case, and only the edited path refuses.
 
-```rust
-pub use imp::{FragmentedSink, StandardSink};
-```
+Wire `detect_ffmpeg` / `set_ffmpeg_path` as async commands mirroring `detect_pandoc` / `set_pandoc_path` exactly, including the config write under `capture_config::config_write_lock()`.
 
-- [ ] **Step 5: Run the tests and both clippy targets**
+- [ ] **Step 5: Gates**
 
 ```
-cd src-tauri && cargo test -p vault_buddy_screen sink 2>&1 | tail -5
-cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets -- -D warnings; echo "exit=$?"
-cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings; echo "exit=$?"
-grep -c "MFCreateMPEG4MediaSink(" screen/src/sink.rs
+cd /home/user/vault-buddy/src-tauri && cargo test -p vault-buddy --lib 2>&1 | tail -5
+cd /home/user/vault-buddy/src-tauri && cargo fmt --check; echo "exit=$?"
+cd /home/user/vault-buddy/src-tauri && cargo clippy --workspace --all-targets -- -D warnings; echo "exit=$?"
+cd /home/user/vault-buddy && npm run check:loc; echo "exit=$?"
 ```
 
-The Windows-target clippy is the ONLY check that any of Step 4 compiles. Expect to iterate here: `MFCreateMPEG4MediaSink`'s third parameter's optionality and `IMFMediaType`'s reference form in `windows` 0.62.2 may differ from the sketch. **Fix against the compiler's message and record the real signature in the commit body** — do not guess and move on, and do not add a second `windows` version to this crate (that trap is documented in AGENTS.md).
+`pandoc.rs` shrinks by roughly 350 lines; `check:loc`'s baseline for it, if any, may now be **stale**, which the guard reports as a failure. Hand-edit the single value down; a shrink is always allowed and never needs a justification.
 
 - [ ] **Step 6: Mutation table**
 
 | # | Mutation | Must fail |
 | --- | --- | --- |
-| M1 | `StandardSink::writer_for`: `MFCreateMPEG4MediaSink` → `MFCreateFMPEG4MediaSink` | `each_sink_declares_the_media_sink_its_purpose_requires` (the count and the position both) |
-| M2 | Add `let _ = unsafe { self.writer.Flush(VIDEO_STREAM) };` before `Finalize` | `neither_sink_calls_flush` AND the pre-existing `the_sink_never_calls_flush` |
-| M3 | Non-Windows `StandardSink::create`: `panic!("unsupported")` | `the_non_windows_standard_sink_reports_unsupported_rather_than_panicking` |
-| M4 | Non-Windows `StandardSink::create`: `Ok(StandardSink)` | the same test (`unwrap_err` panics) |
-| M5 | `create_passthrough`: pass `video_input_type(...)` instead of the reader's `video` as the input type | **not caught by any test on any platform** — expected, and the reason the doc comment spells the mechanism out. Record it; Task 12 adds a checklist row for the observable symptom (a fast-path export that takes as long as a re-encode). |
-| M6 | `write`: drop the `bytes.is_empty()` early-out | not caught (no Windows test) — record it. |
+| M1 | `pick_h264_encoder`: `contains` instead of `==` on the name token | `a_longer_encoder_name_that_contains_ours_is_not_mistaken_for_it` |
+| M2 | `pick_h264_encoder`: return `Some("libx264")` when nothing matches | `a_build_with_no_h264_encoder_reports_none_rather_than_defaulting` |
+| M3 | `pick_h264_encoder`: reverse the preference order | `picks_the_best_available_h264_encoder_in_a_fixed_order` |
+| M4 | `parse_probe_output`: default `has_audio` to `true` | `a_capture_with_no_audio_track_probes_as_silent_rather_than_failing` |
+| M5 | `parse_probe_output`: return `Some` with `width: 0` when absent | `a_file_with_no_video_stream_probes_as_none` |
+| M6 | `parse_probe_output`: drop the even-dimension check | `an_odd_or_zero_dimension_is_refused_rather_than_reaching_the_encoder` |
+| M7 | `matches_stem`: use `starts_with` | `an_executable_matches_its_stem_exactly_and_not_as_a_prefix` |
+| M8 | `child_creation_flags`: return `0` on Windows | the moved `…_spawned_headless_on_windows_only` test |
+| M9 | `run_capturing`: remove the bounded drain | the moved descendant-holds-the-pipe test — **confirm it still fails after the move**; a moved test that stopped covering its subject is the whole risk of this refactor |
 
-M5 and M6 are the honest ones: this file has no executable test on any platform, and the mutation table's job here is to make that visible rather than to imply coverage that does not exist.
+M9 is the row that validates the extraction itself. Run it.
 
-- [ ] **Step 7: Gates and commit**
+- [ ] **Step 7: Commit**
 
-```
-cd src-tauri && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings; echo "exit=$?"
-cd src-tauri && cargo test -p vault_buddy_screen 2>&1 | tail -3
-cd /home/user/vault-buddy && npm run check:loc; echo "exit=$?"
-```
-
-`sink.rs` is 740 lines against the 800 cap and this task adds roughly 190. **It will breach.** Do NOT raise the baseline. Split first: move the Windows `imp` module's media-type builders (`video_output_type`, `video_input_type`, `audio_output_type`, `audio_input_type`, and the AAC bitrate helpers, which are already shared-arm and already tested) into a new `src-tauri/screen/src/sink_types.rs`, re-exported into `sink::imp` with `use crate::sink_types::*;`. That is a genuine extraction — one file describes the formats, one drives the writers — and it keeps both under cap with the tests following the code they test. Report the resulting line counts.
-
-```bash
-git add src-tauri/screen/src/sink.rs src-tauri/screen/src/sink_types.rs src-tauri/screen/src/lib.rs
-git commit -F /tmp/msg.txt
-```
-
-Message body: why export writes a standard MP4 where capture writes a fragmented one (opposite requirements, one function name apart); what makes passthrough a passthrough (input subtype equal to output subtype, so MF inserts no transform); and that the media-type builders were extracted rather than the LOC ceiling raised.
+Body: the extraction and why each moved piece earned its tests; that ffmpeg adds an encoder-capability axis Pandoc never had and why a missing encoder is reported rather than defaulted; and the real ffprobe invocation if it differed from the plan.
 
 ---
 
-### Task 5: `screen::reader` — reading the staged capture back
+### Task 5: The export's arguments — where the correctness now lives
 
-The one Media Foundation read path in this repo today is ~35 lines inside `fmp4_spike.rs`, gated behind `#![cfg(all(windows, feature = "fmp4-spike"))]` and absent from every default build. It counts samples and nothing else: it never sets an output media type, never reads audio, never reads a timestamp, and never seeks. **Phase 5 builds the read side from scratch**; the spike is a reference to copy from, not a dependency.
-
-**Files:**
-- Create: `src-tauri/screen/src/reader.rs`
-- Modify: `src-tauri/screen/src/lib.rs` (one `pub mod reader;` line, alphabetically after `pub mod mp4_boxes;`)
-
-**Interfaces:**
-- Consumes: `ScreenError`; `mp4_boxes::scan` for the precondition check.
-- Produces, for Task 6:
-  ```rust
-  pub struct SourceDescription {
-      pub width: u32,
-      pub height: u32,
-      pub fps: u32,
-      pub duration_ms: u64,
-      pub has_audio: bool,
-      pub audio_sample_rate: u32,
-      pub audio_channels: u16,
-  }
-
-  pub enum Track { Video, Audio }
-
-  pub struct Sample {
-      pub track: Track,
-      pub bytes: Vec<u8>,
-      pub source_ms: u64,
-      pub duration_ms: u64,
-  }
-
-  pub enum ReadOutcome { Sample(Sample), EndOfStream }
-
-  pub struct SourceReader { /* private */ }
-
-  impl SourceReader {
-      pub fn open_decoded(path: &Path) -> Result<SourceReader, ScreenError>;
-      pub fn open_passthrough(path: &Path) -> Result<SourceReader, ScreenError>;
-      pub fn describe(&self) -> Result<SourceDescription, ScreenError>;
-      pub fn seek_ms(&mut self, source_ms: u64) -> Result<(), ScreenError>;
-      pub fn read_next(&mut self) -> Result<ReadOutcome, ScreenError>;
-      #[cfg(windows)]
-      pub fn native_types(&self) -> Result<(IMFMediaType, Option<IMFMediaType>), ScreenError>;
-  }
-  ```
-
-**Why `read_next` returns one interleaved `Sample` rather than a per-track reader:** `IMFSourceReader::ReadSample` with `MF_SOURCE_READER_ANY_STREAM` hands back whichever track's next sample comes first in decode order, which is exactly the order a sink writer wants. Two separate readers over one file would mean two demuxers, two seek positions, and a manual interleave — and getting the interleave wrong produces a file that plays but stutters, with nothing to catch it.
-
-**Why seeking is on the reader and not the plan:** `SetCurrentPosition` on a compressed stream snaps BACKWARD to the previous keyframe; the reader then delivers samples from there. The exporter must therefore **discard** samples whose timestamp falls before the span it asked for, and Task 6 does exactly that. Do not try to make the reader hide it — a reader that silently swallowed pre-roll would have to decode to know what to swallow, which the passthrough mode cannot do.
-
-**Three pure things live here and are tested on Linux:**
-
-```rust
-pub fn hns_to_ms(hns: i64) -> u64;
-pub fn ms_to_hns(ms: u64) -> i64;
-pub fn unreadable_source_message(path: &Path, scan: &crate::mp4_boxes::Scan) -> Option<String>;
-```
-
-`unreadable_source_message` is the `diagnose.rs` pattern applied to this module: the wording a user sees when a staged file cannot be exported is decided and tested where Linux can reach it, not composed inside a `cfg(windows)` arm that nothing can ever run.
-
-- [ ] **Step 1: Write the failing tests in `src-tauri/screen/src/reader.rs`**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::mp4_boxes;
-
-    fn bx(kind: &str, payload: &[u8]) -> Vec<u8> {
-        let size = (8 + payload.len()) as u32;
-        let mut out = size.to_be_bytes().to_vec();
-        out.extend_from_slice(kind.as_bytes());
-        out.extend_from_slice(payload);
-        out
-    }
-
-    #[test]
-    fn media_foundation_time_round_trips_through_milliseconds() {
-        assert_eq!(hns_to_ms(0), 0);
-        assert_eq!(hns_to_ms(10_000), 1);
-        assert_eq!(hns_to_ms(10_000_000), 1_000);
-        assert_eq!(ms_to_hns(1_000), 10_000_000);
-        for ms in [0u64, 1, 999, 1_000, 123_456] {
-            assert_eq!(hns_to_ms(ms_to_hns(ms)), ms);
-        }
-    }
-
-    // MF hands back a signed time and a sample can legitimately carry a
-    // negative one (a decoder's pre-roll). Clamping to 0 keeps it out of the
-    // u64 arithmetic every restamp downstream does; wrapping would make one
-    // frame land 584 million years into the output.
-    #[test]
-    fn a_negative_media_foundation_time_clamps_to_zero_rather_than_wrapping() {
-        assert_eq!(hns_to_ms(-1), 0);
-        assert_eq!(hns_to_ms(i64::MIN), 0);
-    }
-
-    #[test]
-    fn a_healthy_fragmented_file_has_no_complaint() {
-        let mut bytes = bx("ftyp", b"isom");
-        bytes.extend(bx("moov", b"...."));
-        bytes.extend(bx("moof", b"...."));
-        bytes.extend(bx("mdat", b"...."));
-        let scan = mp4_boxes::scan(&bytes);
-        assert_eq!(unreadable_source_message(std::path::Path::new("a.mp4"), &scan), None);
-    }
-
-    #[test]
-    fn a_file_with_no_moov_names_the_problem_and_the_file() {
-        let bytes = bx("ftyp", b"isom");
-        let scan = mp4_boxes::scan(&bytes);
-        let msg = unreadable_source_message(std::path::Path::new("Demo.mp4"), &scan)
-            .expect("a moov-less file must be refused");
-        assert!(msg.contains("Demo.mp4"), "message names no file: {msg}");
-        assert!(msg.to_lowercase().contains("incomplete"), "unexpected wording: {msg}");
-    }
-
-    // A capture killed mid-write leaves a truncated tail. That file is
-    // PLAYABLE by design (spec 6.4) and must still export, so a truncated
-    // scan is NOT a refusal -- it is a warning the caller may surface.
-    #[test]
-    fn a_truncated_file_is_not_refused_because_a_crashed_capture_still_holds_footage() {
-        let mut bytes = bx("ftyp", b"isom");
-        bytes.extend(bx("moov", b"...."));
-        bytes.extend(bx("moof", b"...."));
-        bytes.extend_from_slice(&[0, 0, 1]); // a partial box header
-        let scan = mp4_boxes::scan(&bytes);
-        assert!(matches!(scan.end, mp4_boxes::ScanEnd::Truncated { .. }));
-        assert_eq!(unreadable_source_message(std::path::Path::new("a.mp4"), &scan), None);
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn the_non_windows_reader_reports_unsupported_rather_than_panicking() {
-        let p = std::path::Path::new("unused.mp4");
-        assert_eq!(SourceReader::open_decoded(p).unwrap_err(), ScreenError::Unsupported);
-        assert_eq!(SourceReader::open_passthrough(p).unwrap_err(), ScreenError::Unsupported);
-    }
-}
-```
-
-- [ ] **Step 2: Run and watch them fail**
-
-Add `pub mod reader;` to `lib.rs`, then:
-
-```
-cd src-tauri && cargo test -p vault_buddy_screen reader 2>&1 | tail -20
-```
-
-Expected: `cannot find function hns_to_ms` / `unreadable_source_message`, `cannot find type SourceReader`.
-
-- [ ] **Step 3: Implement the pure half**
-
-```rust
-//! Reading a staged capture back, so it can be exported (spec 8.3 step 1).
-//!
-//! Two modes over ONE `IMFSourceReader`:
-//!
-//! * `open_decoded` sets NV12 and PCM16 output types, so Media Foundation
-//!   inserts its own decoders and hands back raw frames the edited path can
-//!   restamp and re-encode.
-//! * `open_passthrough` sets no output type at all, so MF hands back the
-//!   compressed H.264 and AAC samples untouched. Paired with
-//!   `sink::StandardSink::create_passthrough` this is the fast path: a
-//!   remux at disk speed with no quality loss.
-//!
-//! SEEKING IS LOSSY AND THAT IS EXPOSED, NOT HIDDEN.
-//! `IMFSourceReader::SetCurrentPosition` snaps BACKWARD to the keyframe at
-//! or before the requested time, so the first samples after a seek belong
-//! to the span before the one that was asked for. The exporter drops them
-//! by timestamp (see `export.rs`). A reader that swallowed them itself
-//! would have to decode to know which to swallow, which the passthrough
-//! mode cannot do -- so the caller owns the rule and one implementation of
-//! it serves both modes.
-
-use std::path::Path;
-
-/// Media Foundation counts in 100-nanosecond units.
-const HNS_PER_MS: i64 = 10_000;
-
-/// Milliseconds from an MF timestamp. A NEGATIVE time clamps to zero: MF
-/// can hand back a decoder's pre-roll with a negative stamp, and a `as u64`
-/// on that would land the frame 584 million years into the output.
-pub fn hns_to_ms(hns: i64) -> u64 {
-    if hns <= 0 {
-        return 0;
-    }
-    (hns / HNS_PER_MS) as u64
-}
-
-/// An MF timestamp from milliseconds. Saturates rather than wrapping.
-pub fn ms_to_hns(ms: u64) -> i64 {
-    i64::try_from(ms).unwrap_or(i64::MAX).saturating_mul(HNS_PER_MS)
-}
-
-/// Why this staged file cannot be exported, or `None` when it can be tried.
-///
-/// The `diagnose.rs` pattern: the wording a user actually reads is decided
-/// and tested HERE, on Linux, rather than composed inside a `cfg(windows)`
-/// arm that no test on any platform executes.
-///
-/// A TRUNCATED file is deliberately NOT refused. Spec 6.4's whole point is
-/// that a capture killed mid-write still holds playable footage; refusing
-/// to export it would throw away the recording the crash-safe container
-/// exists to preserve.
-pub fn unreadable_source_message(path: &Path, scan: &crate::mp4_boxes::Scan) -> Option<String> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-    if !scan.has_moov() {
-        return Some(format!(
-            "{name} is incomplete and cannot be exported: it has no index. \
-             The recording may not have finished writing."
-        ));
-    }
-    None
-}
-```
-
-- [ ] **Step 4: Implement the non-Windows arm and the shared types**
-
-```rust
-/// Which track a sample came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Track {
-    Video,
-    Audio,
-}
-
-/// One sample, with its position on the SOURCE timeline.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sample {
-    pub track: Track,
-    pub bytes: Vec<u8>,
-    pub source_ms: u64,
-    pub duration_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadOutcome {
-    Sample(Sample),
-    EndOfStream,
-}
-
-/// What the staged file turned out to contain. The exporter builds its
-/// output format from THIS rather than from the sidecar, because the
-/// sidecar is hand-editable and the file is the truth about its own pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceDescription {
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-    pub duration_ms: u64,
-    pub has_audio: bool,
-    pub audio_sample_rate: u32,
-    pub audio_channels: u16,
-}
-
-#[cfg(not(windows))]
-mod imp {
-    use super::*;
-    use crate::ScreenError;
-
-    /// The Linux compile gate. Statically constructible but never usable —
-    /// it must DEGRADE rather than panic, the contract every `cfg(windows)`
-    /// surface in this crate carries.
-    pub struct SourceReader;
-
-    impl SourceReader {
-        pub fn open_decoded(_path: &Path) -> Result<SourceReader, ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
-        pub fn open_passthrough(_path: &Path) -> Result<SourceReader, ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
-        pub fn describe(&self) -> Result<SourceDescription, ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
-        pub fn seek_ms(&mut self, _source_ms: u64) -> Result<(), ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
-        pub fn read_next(&mut self) -> Result<ReadOutcome, ScreenError> {
-            Err(ScreenError::Unsupported)
-        }
-    }
-}
-
-pub use imp::SourceReader;
-```
-
-- [ ] **Step 5: Implement the Windows arm**
-
-Write `#[cfg(windows)] mod imp` with the same public shape. The construction chain, copied from `fmp4_spike.rs:254-290` and extended:
-
-1. `MfRuntime::start()` — this crate's `sink.rs` has one but it is **private to `sink::imp`**. Give `reader.rs` its own; `fmp4_spike.rs` already sets that precedent (it carries a second copy too). Do NOT make `sink`'s public just to share it — `MFStartup`/`MFShutdown` are refcounted, and two independent pairs is the documented-correct usage.
-2. `MFCreateSourceReaderFromURL(&HSTRING::from(path…), None)`.
-3. **Decoded mode only:** `SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, None, &nv12_type)` and `SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, None, &pcm_type)` where each type carries only major type + subtype, letting MF fill the rest. **Passthrough mode sets neither** — that absence IS the passthrough.
-4. `SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, true)`.
-5. `describe()` reads `GetCurrentMediaType` for each stream: `MF_MT_FRAME_SIZE` unpacked (high 32 bits width, low 32 height — `diagnose::unpack_dims` already does exactly this unpack and is tested, so use it), `MF_MT_FRAME_RATE` (numerator over denominator, rounded), `MF_MT_AUDIO_SAMPLES_PER_SECOND`, `MF_MT_AUDIO_NUM_CHANNELS`; duration from `GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, &MF_PD_DURATION)` through `hns_to_ms`. An absent audio stream sets `has_audio: false` and leaves the two audio fields at 0 — it must not be an error, because a zero-device capture is legal (spec §6.5).
-6. `seek_ms` builds a `PROPVARIANT` holding `ms_to_hns(source_ms)` and calls `SetCurrentPosition(&GUID_NULL, &pv)`.
-7. `read_next` calls `ReadSample(MF_SOURCE_READER_ANY_STREAM, 0, Some(&mut stream_index), Some(&mut flags), Some(&mut ts), Some(&mut sample))`; `MF_SOURCE_READERF_ENDOFSTREAM` → `ReadOutcome::EndOfStream`; a `None` sample with non-zero flags → recurse/loop (a stream tick); otherwise `ConvertToContiguousBuffer` → `Lock` → copy → `Unlock`, and `GetSampleDuration` for the duration. Map `stream_index` to `Track` by comparing against the indices `MF_SOURCE_READER_FIRST_VIDEO_STREAM` / `FIRST_AUDIO_STREAM` resolved at open time.
-8. `native_types()` returns the current media types for both streams — what `StandardSink::create_passthrough` adopts.
-
-Every failure maps through a local `reader_err(context, e) -> ScreenError::Sink(...)` mirroring `sink_err`, except a file that cannot be opened at all, which is `ScreenError::Io`.
-
-- [ ] **Step 6: Run the tests and both clippy targets**
-
-```
-cd src-tauri && cargo test -p vault_buddy_screen reader 2>&1 | tail -5
-cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets -- -D warnings; echo "exit=$?"
-cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings; echo "exit=$?"
-```
-
-Expect several iterations on the Windows target. `PROPVARIANT` construction and the `ReadSample` out-parameter shapes are the two most likely to differ from the sketch in `windows` 0.62.2. **Record the real signatures in the commit body** so the next reader does not re-derive them.
-
-- [ ] **Step 7: Mutation table**
-
-| # | Mutation | Must fail |
-| --- | --- | --- |
-| M1 | `hns_to_ms`: drop the `hns <= 0` guard, use `(hns / HNS_PER_MS) as u64` | `a_negative_media_foundation_time_clamps_to_zero_rather_than_wrapping` |
-| M2 | `hns_to_ms`: `HNS_PER_MS` = 1_000 | `media_foundation_time_round_trips_through_milliseconds` |
-| M3 | `ms_to_hns`: `.saturating_mul` → `*` | not caught (no overflow fixture) — **add one** rather than accepting it: `assert_eq!(ms_to_hns(u64::MAX), i64::MAX)`. Re-run and confirm it now goes red. |
-| M4 | `unreadable_source_message`: refuse a `Truncated` scan too | `a_truncated_file_is_not_refused_because_a_crashed_capture_still_holds_footage` |
-| M5 | `unreadable_source_message`: return `None` unconditionally | `a_file_with_no_moov_names_the_problem_and_the_file` |
-| M6 | `unreadable_source_message`: drop the file name from the message | the same test's `msg.contains("Demo.mp4")` |
-| M7 | Non-Windows `open_passthrough`: `Ok(SourceReader)` | `the_non_windows_reader_reports_unsupported_rather_than_panicking` |
-| M8 | Passthrough mode: also call `SetCurrentMediaType` | not caught on any platform — record it. This is the same untestable seam as Task 4's M5, and the two together are what the checklist row measures. |
-
-- [ ] **Step 8: Gates and commit**
-
-```
-cd src-tauri && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings; echo "exit=$?"
-cd src-tauri && cargo test -p vault_buddy_screen 2>&1 | tail -3
-cd src-tauri && cargo machete .; echo "exit=$?"
-cd /home/user/vault-buddy && npm run check:loc; echo "exit=$?"
-```
-
-```bash
-git add src-tauri/screen/src/reader.rs src-tauri/screen/src/lib.rs
-git commit -F /tmp/msg.txt
-```
-
-Message body: the two modes and what distinguishes them; that a backward seek's pre-roll is the CALLER's to drop and why a reader cannot hide it; that a truncated staged file still exports because that is what the fragmented container was chosen for; and the real MF signatures if they differed from the plan.
-
----
-
-### Task 6: `screen::export` — the two paths, the cancel poll, the progress
-
-This is where `select::plan` and `Timeline::is_untouched` finally get their production caller. The module is deliberately thin around a pure core: **`sample_action` is where "the exported file matches the preview the user approved" actually lives**, and it is a pure function of a span and a timestamp, tested on Linux.
+This is the task the whole route change was for. Under Media Foundation the export's correctness lived in COM calls that execute in no test on any platform. Here it is a **pure function from a plan to an argument vector**, and it is tested on Linux like every other pure module in this crate.
 
 **Files:**
-- Create: `src-tauri/screen/src/export.rs`
-- Modify: `src-tauri/screen/src/lib.rs` (`pub mod export;`, and one new `ScreenError` variant)
+- Create: `src-tauri/screen/src/ffmpeg_args.rs`
+- Modify: `src-tauri/screen/src/lib.rs` (`pub mod ffmpeg_args;`)
 
-**Interfaces:**
-- Consumes: `select::{plan, PlanSpan, plan_output_duration_ms, progress_percent}`; `reader::{SourceReader, Sample, Track, ReadOutcome, SourceDescription}`; `sink::{StandardSink, VideoFormat, AudioFormat}`; `vault_buddy_core::timeline::Timeline`; `vault_buddy_core::screen_capture_config::{ScreenQuality, bitrate_bps}`; `vault_buddy_core::throttle::EmitThrottle`.
-- Produces, for Task 7:
-  ```rust
-  pub enum SampleAction { Skip, Write { output_ms: u64 }, SpanComplete }
-  pub fn sample_action(span: &PlanSpan, source_ms: u64) -> SampleAction;
-  pub fn export_refusal(timeline: &Timeline) -> Option<String>;
+**Interfaces — produces, for Task 6:**
+```rust
+pub struct EncodeSettings { pub width: u32, pub height: u32, pub fps: u32, pub quality: ScreenQuality, pub h264_encoder: String, pub has_audio: bool }
 
-  pub struct ExportRequest<'a> {
-      pub source: &'a Path,
-      pub dest: &'a Path,
-      pub timeline: &'a Timeline,
-      pub quality: ScreenQuality,
-  }
-  pub struct ExportOutcome {
-      pub output_duration_ms: u64,
-      pub width: u32,
-      pub height: u32,
-      pub remuxed: bool,
-  }
-  pub fn export(
-      req: ExportRequest<'_>,
-      cancel: &AtomicBool,
-      on_progress: &mut dyn FnMut(u64),
-  ) -> Result<ExportOutcome, ScreenError>;
-  ```
+pub fn remux_args(source: &Path, dest: &Path) -> Vec<String>;
+pub fn reencode_args(source: &Path, dest: &Path, spans: &[PlanSpan], settings: &EncodeSettings) -> Vec<String>;
+pub fn filter_complex(spans: &[PlanSpan], has_audio: bool) -> String;
+pub fn ms_to_ffmpeg_seconds(ms: u64) -> String;
+pub fn parse_progress_line(line: &str) -> Option<ProgressTick>;
 
-**THE SPEC IS WRONG ABOUT CANCELLATION AND THIS TASK CORRECTS IT.** Spec §8.3 step 5 says "cancellation is a polled atomic checked **per span**". For an *edited* export that is fine — spans are short. But the **fast path's plan is one span covering the whole recording**, so a per-span poll makes the one export a user is most likely to fire off unattended — "record an hour, glance at it, save" — completely uncancellable. Poll **per sample** instead. A `Relaxed` atomic load costs nothing beside the memcpy that accompanies every sample, and it makes Cancel mean the same thing on both paths. Record this deviation in the commit body and in Task 12's spec reconciliation note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressTick { OutTimeUs(u64), Done }
+```
 
-**`ScreenError` gains one variant.** `Cancelled`, a FIXED variant carrying no caller data — so it must be added to `lib.rs`'s `fixed_variants_render_a_constant_message_with_no_caller_data` test, which asserts exactly that property of every fixed variant. Display: `"the export was cancelled"`.
+#### Three traps this task exists to design out
+
+1. **`out_time_ms` in ffmpeg's `-progress` output is NOT milliseconds.** It is a long-standing quirk that the field reports **microseconds**, the same value as `out_time_us`. A parser that reads `out_time_ms` as milliseconds reports progress 1000× too fast, so the bar hits 100% almost immediately and then sits there for the rest of the export — which looks like a hang on exactly the long exports progress exists for. `parse_progress_line` reads `out_time_us` **only**, and a test forbids it from accepting `out_time_ms`. **Verify the real field names against the installed ffmpeg in Task 6 and report what you saw**; the test protects us whichever way the quirk has settled.
+
+2. **Times must be formatted exactly, not floated.** `trim=start=4.5` from a `f64` risks `4.4999999999999996` in some locales and formats. `ms_to_ffmpeg_seconds` builds the string with integer arithmetic (`{s}.{ms:03}`), so 4500 ms is always `"4.500"`.
+
+3. **A zero-length span must never reach the filter graph.** `trim=start=4:end=4` produces an empty stream and `concat` then fails with an error that names none of this. `select::plan` already drops them; `filter_complex` asserts the invariant rather than assuming it, because the two are in different crates and only one of them is tested against the editor's fixtures.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `src-tauri/screen/src/export.rs` with the module doc and this test module only:
-
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vault_buddy_core::timeline::Timeline;
     use crate::select::plan;
-    use vault_buddy_core::timeline::{Segment, Timeline};
 
-    fn span(start: u64, end: u64, out: u64) -> PlanSpan {
-        PlanSpan { source_start_ms: start, source_end_ms: end, output_start_ms: out }
-    }
-
-    // A backward seek lands on the keyframe BEFORE the span, so the reader
-    // delivers samples that belong to footage the user cut. Writing them
-    // would put deleted content back into the export -- the same class of
-    // failure the null-timeline rule was removed to prevent, arriving by a
-    // different door.
-    #[test]
-    fn a_sample_before_the_span_is_seek_preroll_and_is_skipped() {
-        let s = span(4_000, 6_000, 1_000);
-        assert!(matches!(sample_action(&s, 0), SampleAction::Skip));
-        assert!(matches!(sample_action(&s, 3_999), SampleAction::Skip));
+    fn settings(has_audio: bool) -> EncodeSettings {
+        EncodeSettings { width: 1920, height: 1080, fps: 30, quality: ScreenQuality::Balanced,
+                         h264_encoder: "libx264".into(), has_audio }
     }
 
     #[test]
-    fn a_sample_inside_the_span_is_written_at_its_restamped_time() {
-        let s = span(4_000, 6_000, 1_000);
-        assert!(matches!(sample_action(&s, 4_000), SampleAction::Write { output_ms: 1_000 }));
-        assert!(matches!(sample_action(&s, 5_999), SampleAction::Write { output_ms: 2_999 }));
+    fn milliseconds_format_as_exact_decimal_seconds() {
+        assert_eq!(ms_to_ffmpeg_seconds(0), "0.000");
+        assert_eq!(ms_to_ffmpeg_seconds(4_500), "4.500");
+        assert_eq!(ms_to_ffmpeg_seconds(1), "0.001");
+        assert_eq!(ms_to_ffmpeg_seconds(61_002), "61.002");
     }
 
-    // The span's own end is NOT in it (half-open, matching to_source_ms and
-    // restamp). Reaching it means this span is finished, which is a
-    // different instruction from "skip this sample": one advances the plan,
-    // the other reads another sample from the same span. Conflating them
-    // either drops a whole span or loops forever on one.
+    // THE fast path. -c copy is what makes it lossless and near-instant; an
+    // args builder that silently emitted an encoder here would produce a
+    // correct-looking file after a full transcode, which is the exact
+    // failure the Media Foundation design could not test for at all.
     #[test]
-    fn the_spans_far_edge_completes_it_rather_than_skipping_the_sample() {
-        let s = span(4_000, 6_000, 1_000);
-        assert!(matches!(sample_action(&s, 6_000), SampleAction::SpanComplete));
-        assert!(matches!(sample_action(&s, 9_999), SampleAction::SpanComplete));
+    fn the_remux_copies_streams_and_never_names_an_encoder() {
+        let args = remux_args(Path::new("in.mp4"), Path::new("out.mp4"));
+        let joined = args.join(" ");
+        assert!(joined.contains("-c copy"), "remux must copy: {joined}");
+        assert!(!joined.contains("libx264"), "remux must not encode: {joined}");
+        assert!(!joined.contains("-filter_complex"), "remux must not filter: {joined}");
+        assert!(joined.contains("+faststart"), "the index must move to the front for playback");
     }
 
     #[test]
-    fn the_three_actions_are_exhaustive_and_disjoint_across_a_source() {
-        let s = span(4_000, 6_000, 1_000);
-        let mut skips = 0;
-        let mut writes = 0;
-        let mut completes = 0;
-        for source_ms in 0u64..8_000 {
-            match sample_action(&s, source_ms) {
-                SampleAction::Skip => skips += 1,
-                SampleAction::Write { .. } => writes += 1,
-                SampleAction::SpanComplete => completes += 1,
-            }
-        }
-        assert_eq!(skips, 4_000);
-        assert_eq!(writes, 2_000);
-        assert_eq!(completes, 2_000);
+    fn a_single_span_trims_video_and_audio_and_concatenates_one_of_each() {
+        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
+        let f = filter_complex(&spans, true);
+        assert!(f.contains("[0:v]trim=start=4.000:end=9.000,setpts=PTS-STARTPTS[v0]"), "{f}");
+        assert!(f.contains("[0:a]atrim=start=4.000:end=9.000,asetpts=PTS-STARTPTS[a0]"), "{f}");
+        assert!(f.contains("[v0][a0]concat=n=1:v=1:a=1[outv][outa]"), "{f}");
     }
 
-    // Walking a real reordered plan the way `export` does: every span's
-    // output range must be contiguous with the previous one's, or the file
-    // stutters (a gap) or the muxer rejects it (an overlap).
+    // The ORDER of the concat inputs is the reorder. Emitting them in source
+    // order instead of plan order produces a file whose blocks play in the
+    // wrong sequence -- valid, playable, and not what the user approved.
     #[test]
-    fn walking_a_reordered_plan_produces_contiguous_output_times() {
+    fn spans_are_concatenated_in_plan_order_not_source_order() {
         let t = Timeline::whole(9_000).split_at(3_000).split_at(6_000).reorder(0, 2);
         let spans = plan(&t);
-        let mut written: Vec<u64> = Vec::new();
-        for s in &spans {
-            for source_ms in (s.source_start_ms..s.source_end_ms).step_by(1_000) {
-                match sample_action(s, source_ms) {
-                    SampleAction::Write { output_ms } => written.push(output_ms),
-                    other => panic!("expected Write inside the span, got {other:?}"),
-                }
-            }
-        }
-        assert_eq!(written, vec![0, 1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000]);
+        let f = filter_complex(&spans, false);
+        let i0 = f.find("trim=start=3.000").expect("first plan span");
+        let i1 = f.find("trim=start=6.000").expect("second plan span");
+        let i2 = f.find("trim=start=0.000").expect("the moved span");
+        assert!(i0 < i1 && i1 < i2, "spans emitted out of plan order: {f}");
+        assert!(f.contains("[v0][v1][v2]concat=n=3:v=1:a=0[outv]"), "{f}");
     }
 
+    // A silent capture is legal (spec 6.5). Emitting atrim for a file with
+    // no audio track makes ffmpeg fail with "Stream specifier ':a' matches
+    // no streams", which names nothing the user did.
+    #[test]
+    fn a_silent_capture_emits_no_audio_filters_and_no_audio_output_pad() {
+        let spans = plan(&Timeline::whole(5_000));
+        let f = filter_complex(&spans, false);
+        assert!(!f.contains("atrim"), "{f}");
+        assert!(!f.contains("[outa]"), "{f}");
+        assert!(f.contains("a=0"), "{f}");
+    }
+
+    #[test]
+    fn the_encode_maps_the_filter_outputs_and_carries_the_quality_bitrate() {
+        let spans = plan(&Timeline::whole(9_000).split_at(4_000).delete(0));
+        let args = reencode_args(Path::new("in.mp4"), Path::new("out.mp4"), &spans, &settings(true));
+        let joined = args.join(" ");
+        assert!(joined.contains("-map [outv]"), "{joined}");
+        assert!(joined.contains("-map [outa]"), "{joined}");
+        assert!(joined.contains("-c:v libx264"), "{joined}");
+        assert!(joined.contains("-c:a aac"), "{joined}");
+        // One-second keyframe interval, matching what the capture declared.
+        assert!(joined.contains("-g 30"), "{joined}");
+        let expected = vault_buddy_core::screen_capture_config::bitrate_bps(
+            ScreenQuality::Balanced, 1920, 1080, 30);
+        assert!(joined.contains(&format!("-b:v {expected}")), "{joined}");
+    }
+
+    #[test]
+    fn a_silent_encode_maps_only_video_and_names_no_audio_codec() {
+        let spans = plan(&Timeline::whole(5_000));
+        let args = reencode_args(Path::new("in.mp4"), Path::new("out.mp4"), &spans, &settings(false));
+        let joined = args.join(" ");
+        assert!(joined.contains("-map [outv]"), "{joined}");
+        assert!(!joined.contains("[outa]"), "{joined}");
+        assert!(!joined.contains("-c:a"), "{joined}");
+    }
+
+    // Every argument is a separate argv entry. Building one string with
+    // spaces makes ffmpeg see a single unknown option, and a source path
+    // containing a space becomes two arguments.
+    #[test]
+    fn a_path_with_spaces_and_quotes_survives_as_one_argument() {
+        let src = Path::new("/tmp/2026-09-20 1432 Figma \"design\".mp4");
+        let args = remux_args(src, Path::new("/tmp/out.mp4"));
+        assert!(args.iter().any(|a| a == "/tmp/2026-09-20 1432 Figma \"design\".mp4"),
+                "source path was split or escaped: {args:?}");
+    }
+
+    #[test]
+    fn progress_is_read_from_out_time_us_and_the_end_marker() {
+        assert_eq!(parse_progress_line("out_time_us=4000000"), Some(ProgressTick::OutTimeUs(4_000_000)));
+        assert_eq!(parse_progress_line("progress=end"), Some(ProgressTick::Done));
+        assert_eq!(parse_progress_line("progress=continue"), None);
+        assert_eq!(parse_progress_line("frame=100"), None);
+        assert_eq!(parse_progress_line(""), None);
+    }
+
+    // ffmpeg's `out_time_ms` field reports MICROseconds, not milliseconds --
+    // a long-standing quirk. Reading it as milliseconds makes the bar reach
+    // 100% a thousand times too early and then sit there for the rest of a
+    // long export, which is precisely the case progress exists for.
+    #[test]
+    fn out_time_ms_is_refused_because_its_name_lies_about_its_units() {
+        assert_eq!(parse_progress_line("out_time_ms=4000000"), None);
+    }
+
+    #[test]
+    fn a_negative_or_unparseable_progress_value_is_ignored_rather_than_wrapping() {
+        assert_eq!(parse_progress_line("out_time_us=N/A"), None);
+        assert_eq!(parse_progress_line("out_time_us=-1"), None);
+        assert_eq!(parse_progress_line("out_time_us="), None);
+    }
+
+    // select::plan already drops zero-length spans, but it lives in another
+    // module and only one of the two is tested against the editor's shared
+    // fixtures. trim=start=4:end=4 yields an empty stream and concat then
+    // fails naming none of this.
+    #[test]
+    fn a_zero_length_span_is_refused_rather_than_emitted() {
+        let bad = [PlanSpan { source_start_ms: 4_000, source_end_ms: 4_000, output_start_ms: 0 }];
+        assert!(std::panic::catch_unwind(|| filter_complex(&bad, false)).is_err());
+    }
+}
+```
+
+- [ ] **Steps 2–4: Run failing, implement, run passing**
+
+`filter_complex` builds one `trim`/`atrim` pair per span, numbered by plan index, then one `concat=n=<N>:v=1:a=<0|1>`. `reencode_args` wraps it with `-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -i <src> -filter_complex <graph> -map [outv] (-map [outa]) -c:v <encoder> -preset medium -b:v <bitrate> -pix_fmt yuv420p -g <fps> (-c:a aac -b:a 192k) -movflags +faststart -y <dest>`. Every element is its own `String`.
+
+`ms_to_ffmpeg_seconds(ms)` = `format!("{}.{:03}", ms / 1000, ms % 1000)`.
+
+- [ ] **Step 5: Mutation table**
+
+| # | Mutation | Must fail |
+| --- | --- | --- |
+| M1 | `remux_args`: emit `-c:v libx264` instead of `-c copy` | `the_remux_copies_streams_and_never_names_an_encoder` |
+| M2 | `filter_complex`: iterate spans sorted by `source_start_ms` | `spans_are_concatenated_in_plan_order_not_source_order` |
+| M3 | `filter_complex`: always emit `atrim` and `a=1` | `a_silent_capture_emits_no_audio_filters_and_no_audio_output_pad` |
+| M4 | `filter_complex`: swap `start`/`end` in the trim | `a_single_span_trims_video_and_audio_…` |
+| M5 | `ms_to_ffmpeg_seconds`: `format!("{}", ms as f64 / 1000.0)` | `milliseconds_format_as_exact_decimal_seconds` (`4.5` vs `4.500`, and `0.001`) |
+| M6 | `parse_progress_line`: also accept `out_time_ms` | `out_time_ms_is_refused_because_its_name_lies_about_its_units` |
+| M7 | `parse_progress_line`: `unwrap_or(0)` on a bad value | `a_negative_or_unparseable_progress_value_is_ignored…` |
+| M8 | `reencode_args`: join everything into one `String` | `a_path_with_spaces_and_quotes_survives_as_one_argument` |
+| M9 | `reencode_args`: drop `-g <fps>` | `the_encode_maps_the_filter_outputs_and_carries_the_quality_bitrate` |
+| M10 | `filter_complex`: drop the zero-length assertion | `a_zero_length_span_is_refused_rather_than_emitted` |
+
+- [ ] **Step 6: Gates and commit**
+
+Body: this is where the export's correctness now lives and why that is the point of the route; the three traps designed out (the `out_time_ms` units lie, float-formatted times, zero-length spans); and that every argument is a separate argv entry.
+
+---
+
+### Task 6: Running it — the export, its progress, and the first real end-to-end test
+
+**Files:**
+- Create: `src-tauri/screen/src/export.rs`
+- Modify: `src-tauri/screen/src/lib.rs` (`pub mod export;`, plus the `Cancelled` and `ToolMissing` error variants)
+- Modify: `.github/workflows/ci.yml` (install ffmpeg in `rust-core`)
+
+**Interfaces — produces, for Task 7:**
+```rust
+pub struct ExportRequest<'a> {
+    pub ffmpeg: &'a Path,
+    pub source: &'a Path,
+    pub dest: &'a Path,
+    pub timeline: &'a Timeline,
+    pub source_duration_ms: u64,
+    pub settings: EncodeSettings,
+}
+pub struct ExportOutcome { pub output_duration_ms: u64, pub remuxed: bool }
+pub fn export_refusal(timeline: &Timeline, settings: &EncodeSettings) -> Option<String>;
+pub fn export(req: ExportRequest<'_>, cancel: &AtomicBool, on_progress: &mut dyn FnMut(u64)) -> Result<ExportOutcome, ScreenError>;
+```
+
+#### Five decisions
+
+1. **`is_untouched` is evaluated against the SIDECAR's duration, never ffprobe's.** The timeline was built by the editor from the sidecar's `duration_ms`; ffprobe will report a slightly different number for the same file, because container duration and encoder timing disagree by a frame or two. Using ffprobe's would make an untouched capture read as edited and silently drop to a full re-encode — slow, lossy, and invisible. `source_duration_ms` on the request is the sidecar's, and a comment says why.
+
+2. **Cancellation kills the child.** No polled atomic inside a decode loop, because there is no decode loop any more: the cancel flag is checked between progress reads and on wake, and the response is `Child::kill()` followed by deleting `dest`. This is strictly more reliable than the Media Foundation design's per-sample poll and it removes the spec §8.3 per-span/per-sample question entirely.
+
+3. **The runner streams `-progress pipe:1` rather than using `run_capturing`.** `run_capturing` is for bounded probes; an export can legitimately run for many minutes and must report as it goes. Read stdout line by line, feed each to `parse_progress_line`, convert `OutTimeUs` to a percent against the planned output duration, and gate emits through `core::throttle::EmitThrottle::new(2)`.
+
+4. **There is no export timeout.** A two-hour 4K recording legitimately takes a long time, and killing a child that is still writing into a temp would look identical to a crash. The user's Cancel is the bound. Say so in a comment so nobody adds one.
+
+5. **A refusal is a refusal, not a failed run.** `export_refusal` covers both the empty timeline (Task 5's rule, measured against the plan) **and** an edited export on a build with no H.264 encoder. The second is why `EncodeSettings::h264_encoder` is checked here rather than at spawn time: the message names the missing capability instead of surfacing ffmpeg's own error.
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
     #[test]
     fn an_empty_timeline_is_refused_with_a_message_naming_what_to_do() {
-        let msg = export_refusal(&Timeline::default()).expect("an empty timeline must be refused");
-        assert!(msg.to_lowercase().contains("nothing"), "unexpected wording: {msg}");
+        let msg = export_refusal(&Timeline::default(), &settings(true)).expect("refused");
+        assert!(msg.to_lowercase().contains("nothing"), "{msg}");
     }
 
-    #[test]
-    fn a_timeline_with_footage_is_not_refused() {
-        assert_eq!(export_refusal(&Timeline::whole(5_000)), None);
-        let trimmed = Timeline::whole(9_000).split_at(3_000).delete(0);
-        assert_eq!(export_refusal(&trimmed), None);
-    }
-
-    // A timeline whose only segments are zero-length holds no footage even
-    // though it is not `is_empty()`. select::plan drops those spans, so the
-    // export would produce a zero-byte file with no error -- refuse it
-    // against the PLAN, not against the segment count.
     #[test]
     fn a_timeline_of_only_zero_length_segments_is_refused_too() {
         let t = Timeline { segments: vec![Segment { source_start_ms: 500, source_end_ms: 500 }] };
         assert!(!t.is_empty(), "the fixture must not trip is_empty as well");
-        assert!(export_refusal(&t).is_some());
+        assert!(export_refusal(&t, &settings(true)).is_some());
     }
 
-    #[cfg(not(windows))]
+    // The fast path needs NO encoder, so a build without one must still be
+    // able to save an untouched capture. Refusing both would tell a user
+    // with a minimal ffmpeg that they cannot save at all, which is false.
     #[test]
-    fn exporting_on_an_unsupported_platform_degrades_rather_than_panicking() {
-        use std::sync::atomic::AtomicBool;
-        let t = Timeline::whole(1_000);
-        let cancel = AtomicBool::new(false);
-        let mut seen: Vec<u64> = Vec::new();
-        let err = export(
-            ExportRequest {
-                source: std::path::Path::new("in.mp4"),
-                dest: std::path::Path::new("out.mp4"),
-                timeline: &t,
-                quality: ScreenQuality::Balanced,
-            },
-            &cancel,
-            &mut |pct| seen.push(pct),
-        )
-        .unwrap_err();
-        assert_eq!(err, ScreenError::Unsupported);
+    fn a_build_with_no_encoder_refuses_an_edited_export_but_not_an_untouched_one() {
+        let mut s = settings(true);
+        s.h264_encoder = String::new();
+        let edited = Timeline::whole(9_000).split_at(4_000).delete(0);
+        let msg = export_refusal(&edited, &s).expect("an edited export needs an encoder");
+        assert!(msg.to_lowercase().contains("h.264") || msg.to_lowercase().contains("encoder"), "{msg}");
+        assert_eq!(export_refusal(&Timeline::whole(9_000), &s), None);
     }
 
     #[test]
     fn the_cancelled_error_renders_a_constant_message() {
         assert_eq!(ScreenError::Cancelled.to_string(), "the export was cancelled");
     }
-}
 ```
 
-`SampleAction` needs `#[derive(Debug)]` for the `{other:?}` in `walking_a_reordered_plan_…`.
-
-- [ ] **Step 2: Run and watch them fail**
-
-Add `pub mod export;` to `lib.rs`.
-
-```
-cd src-tauri && cargo test -p vault_buddy_screen export 2>&1 | tail -20
-```
-
-Expected: `cannot find function sample_action` / `export_refusal` / `export`, `no variant Cancelled`.
-
-- [ ] **Step 3: Add the `Cancelled` variant**
-
-In `src-tauri/screen/src/lib.rs`, add to `ScreenError` after `AlreadyCapturing`:
+Plus the **real end-to-end tests**, gated so they skip cleanly where ffmpeg is absent:
 
 ```rust
-    /// The user cancelled an in-progress export. A distinct variant rather
-    /// than an `Io`/`Sink` string because the caller must NOT treat it as a
-    /// failure: spec 14 says a cancelled export keeps the staged capture and
-    /// its timeline, and the editor stays open with no error banner.
-    Cancelled,
-```
+    fn ffmpeg_on_path() -> Option<PathBuf> { /* which ffmpeg, else None */ }
 
-Display arm: `ScreenError::Cancelled => write!(f, "the export was cancelled"),`
+    /// Synthesize a 6-second test clip with a visible counter and a tone, so
+    /// a cut can be checked by reading the OUTPUT's duration rather than by
+    /// trusting the arguments we built.
+    fn make_fixture(ffmpeg: &Path, dir: &Path) -> PathBuf { /* testsrc + sine, 6s */ }
 
-Add `ScreenError::Cancelled` to the list in `fixed_variants_render_a_constant_message_with_no_caller_data` — the test asserts every fixed variant renders a constant, and a variant missing from it silently weakens that invariant.
+    fn probe_duration_ms(ffmpeg: &Path, path: &Path) -> u64 { /* ffprobe */ }
 
-- [ ] **Step 4: Implement the pure core**
-
-```rust
-//! Exporting a staged capture to a finished MP4 (spec 8.3).
-//!
-//! TWO PATHS, one predicate.
-//!
-//! * `Timeline::is_untouched(source_duration_ms)` -> **remux**. The reader
-//!   runs in passthrough mode and the sink adopts its media types, so the
-//!   compressed samples are copied from demuxer to muxer with no decode and
-//!   no re-encode. "Record, glance, save" never pays for a transcode.
-//! * Anything else -> **re-encode**. `select::plan` gives the ordered spans
-//!   and each one's output start; the reader seeks to each span in turn and
-//!   `sample_action` decides, per sample, whether it is seek pre-roll to
-//!   discard, footage to restamp and write, or the signal that the span is
-//!   finished.
-//!
-//! NEVER key the fast path on the sidecar's timeline field being absent.
-//! The editor writes a timeline on every edit and never writes null, so
-//! "absent" means "never edited in this build", not "unedited" -- a
-//! resumed edit would take the fast path and put the user's cut footage
-//! back into the file, silently. `is_untouched` is the single authority.
-//!
-//! CANCELLATION IS POLLED PER SAMPLE, not per span as spec 8.3 says. The
-//! fast path's plan is ONE span covering the whole recording, so a
-//! per-span poll would make the longest, most unattended export the one
-//! that cannot be cancelled at all. A Relaxed load per sample costs
-//! nothing beside the memcpy that accompanies it.
-
-use crate::select::{plan, plan_output_duration_ms, progress_percent, PlanSpan};
-use crate::ScreenError;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use vault_buddy_core::screen_capture_config::ScreenQuality;
-use vault_buddy_core::timeline::Timeline;
-
-/// What to do with one sample the reader handed back while a span is open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SampleAction {
-    /// Before the span: `SetCurrentPosition` snapped back to the previous
-    /// keyframe, so this is footage the user cut. Discard it and read on.
-    Skip,
-    /// Inside the span: write it at this OUTPUT timestamp.
-    Write { output_ms: u64 },
-    /// At or past the span's (half-open) end: advance to the next span.
-    SpanComplete,
-}
-
-/// The single rule the edited export's correctness rests on.
-///
-/// Half-open at the far edge, matching `PlanSpan::restamp` and
-/// `Timeline::to_source_ms`. `Skip` and `SpanComplete` are deliberately
-/// different instructions even though both mean "do not write this sample":
-/// one reads another sample from the SAME span, the other moves to the
-/// next. Conflating them either loops forever on one span or drops a span
-/// whole.
-pub fn sample_action(span: &PlanSpan, source_ms: u64) -> SampleAction {
-    if source_ms < span.source_start_ms {
-        return SampleAction::Skip;
+    // THE test this whole route change was for: the first executable proof
+    // anywhere in this feature that an edit lands where the editor said it
+    // would. Every prior phase's equivalent claim rested on a manual
+    // checklist row nobody has run.
+    #[test]
+    fn an_edited_export_produces_a_file_of_the_planned_length() {
+        let Some(ffmpeg) = ffmpeg_on_path() else { return };
+        // 6 s source, delete the first 2 s -> a 4 s output.
+        // assert the probed duration is within one frame of 4000 ms
     }
-    match span.restamp(source_ms) {
-        Some(output_ms) => SampleAction::Write { output_ms },
-        None => SampleAction::SpanComplete,
+
+    #[test]
+    fn an_untouched_export_remuxes_to_the_same_length_without_re_encoding() {
+        let Some(ffmpeg) = ffmpeg_on_path() else { return };
+        // same duration, and markedly faster than the re-encode above
     }
-}
 
-/// Why this timeline cannot be exported, or `None` when it can.
-///
-/// Measured against the PLAN, not against `Timeline::is_empty`: a timeline
-/// whose only segments are zero-length is not empty, but `select::plan`
-/// drops every one of them, so the export would write a valid container
-/// holding no footage and report success.
-pub fn export_refusal(timeline: &Timeline) -> Option<String> {
-    if plan(timeline).is_empty() {
-        return Some(
-            "There is nothing left to save — every part of this recording has been deleted. \
-             Undo a delete, or discard the capture."
-                .to_string(),
-        );
+    #[test]
+    fn a_reordered_export_is_as_long_as_the_sum_of_its_spans() {
+        let Some(ffmpeg) = ffmpeg_on_path() else { return };
     }
-    None
-}
 
-/// What the exporter was asked to do.
-pub struct ExportRequest<'a> {
-    /// The staged `.mp4`.
-    pub source: &'a Path,
-    /// A temp inside the staging directory. NEVER a path in a vault — the
-    /// vault write is the shell's, and it moves this file in only once the
-    /// export has finished (spec 8.3's never-lose rule).
-    pub dest: &'a Path,
-    pub timeline: &'a Timeline,
-    pub quality: ScreenQuality,
-}
-
-/// What the exported file turned out to be. `width`/`height` come from the
-/// SOURCE FILE, not the sidecar: the sidecar is hand-editable and the file
-/// is the truth about its own pixels, and these numbers go into the
-/// companion note's `resolution` key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExportOutcome {
-    pub output_duration_ms: u64,
-    pub width: u32,
-    pub height: u32,
-    /// True when the fast path ran. Surfaced so the caller can log which
-    /// path a capture took without inferring it from a duration.
-    pub remuxed: bool,
-}
-```
-
-- [ ] **Step 5: Implement `export` — the platform split**
-
-The non-Windows arm is one line, and it must come before the `cfg(windows)` body so the Linux test in Step 1 compiles:
-
-```rust
-#[cfg(not(windows))]
-pub fn export(
-    _req: ExportRequest<'_>,
-    _cancel: &AtomicBool,
-    _on_progress: &mut dyn FnMut(u64),
-) -> Result<ExportOutcome, ScreenError> {
-    Err(ScreenError::Unsupported)
-}
-```
-
-The Windows arm:
-
-```rust
-#[cfg(windows)]
-pub fn export(
-    req: ExportRequest<'_>,
-    cancel: &AtomicBool,
-    on_progress: &mut dyn FnMut(u64),
-) -> Result<ExportOutcome, ScreenError> {
-    use crate::reader::SourceReader;
-    // The precondition check the wording lives in reader.rs for.
-    let bytes = std::fs::read(req.source).map_err(|e| ScreenError::Io(e.to_string()))?;
-    let scan = crate::mp4_boxes::scan(&bytes);
-    if let Some(message) = crate::reader::unreadable_source_message(req.source, &scan) {
-        return Err(ScreenError::Io(message));
+    #[test]
+    fn cancelling_an_export_leaves_no_output_behind() {
+        let Some(ffmpeg) = ffmpeg_on_path() else { return };
+        // set the flag from another thread, assert dest does not exist
     }
-    drop(bytes);
-
-    let probe = SourceReader::open_passthrough(req.source)?;
-    let desc = probe.describe()?;
-    drop(probe);
-
-    if req.timeline.is_untouched(desc.duration_ms) {
-        remux(req, desc, cancel, on_progress)
-    } else {
-        reencode(req, desc, cancel, on_progress)
-    }
-}
 ```
 
-`remux` opens `SourceReader::open_passthrough`, takes `native_types()`, builds `StandardSink::create_passthrough`, and copies every sample through unchanged with its own timestamp — there is no restamping, because an untouched timeline IS the identity mapping. It polls `cancel` per sample and reports `progress_percent(sample.source_ms, desc.duration_ms)`.
+**A skipped test must be visible, not silent.** Print a line when `ffmpeg_on_path()` is `None` so a local run says why, and make CI install ffmpeg so it is never skipped there.
 
-`reencode` builds `VideoFormat { width: desc.width, height: desc.height, fps: desc.fps, bitrate_bps: bitrate_bps(req.quality, desc.width, desc.height, desc.fps) }` and, when `desc.has_audio`, an `AudioFormat` from the description; opens `SourceReader::open_decoded` and `StandardSink::create`; then for each `PlanSpan` in `plan(req.timeline)`:
+- [ ] **Step 2: Install ffmpeg in CI**
 
+In `.github/workflows/ci.yml`'s `rust-core` job, before the cargo steps:
+```yaml
+      - name: Install ffmpeg (the export's end-to-end tests)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 ```
-reader.seek_ms(span.source_start_ms)?
-loop {
-    if cancel.load(Ordering::Relaxed) { return Err(ScreenError::Cancelled); }
-    match reader.read_next()? {
-        ReadOutcome::EndOfStream => break,
-        ReadOutcome::Sample(s) => match sample_action(span, s.source_ms) {
-            SampleAction::Skip => continue,
-            SampleAction::SpanComplete => break,
-            SampleAction::Write { output_ms } => {
-                let ts = Duration::from_millis(output_ms);
-                let dur = Duration::from_millis(s.duration_ms.max(1));
-                match s.track {
-                    Track::Video => sink.write_video(&s.bytes, ts, dur)?,
-                    Track::Audio => sink.write_audio(&s.bytes, ts, dur)?,
-                }
-                written_output_ms = written_output_ms.max(output_ms);
-                if throttle.should_emit(progress_percent(written_output_ms, total), false) {
-                    on_progress(progress_percent(written_output_ms, total));
-                }
-            }
-        },
-    }
-}
-```
+Do NOT rely on the runner image happening to carry it. Report the installed version from the job log in your hand-back.
 
-Three details a reviewer will look for, so get them right the first time:
-
-- **`s.duration_ms.max(1)`.** Every MF input sample needs a valid time AND a **non-zero duration**: a zero duration makes `ProcessOutput` throw a divide-by-zero. This is a documented MF bug, it is already recorded in this increment's ledger as a landmine, and the clamp is what avoids it.
-- **EVERY error path deletes `dest`.** `export` owns the temp it was told to write; on any `Err` — `Cancelled`, a sink failure, a reader failure — it removes `dest` before returning, best-effort with a `log::warn!`. A half-written temp left behind is staging litter, and worse, a later reader could mistake it for a finished export. Task 7 keeps the same rule for a failure that happens AFTER the export returns (a failed vault commit), and the reasoning is written up there.
-- **Emit a terminal progress tick.** After the span loop, `on_progress(progress_percent(total, total))` — i.e. 100 — via `should_emit(.., true)`, so the UI never freezes at 98%.
-
-`finalize()` the sink LAST, and return `ExportOutcome { output_duration_ms: total, width: desc.width, height: desc.height, remuxed: false }`.
-
-- [ ] **Step 6: Run the tests and both clippy targets**
-
-```
-cd src-tauri && cargo test -p vault_buddy_screen export 2>&1 | tail -5
-cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets -- -D warnings; echo "exit=$?"
-cd src-tauri && cargo clippy -p vault_buddy_screen --all-targets --target x86_64-pc-windows-msvc -- -D warnings; echo "exit=$?"
-```
-
-- [ ] **Step 7: Mutation table**
+- [ ] **Steps 3–5: Implement, run, mutate**
 
 | # | Mutation | Must fail |
 | --- | --- | --- |
-| M1 | `sample_action`: drop the `source_ms < span.source_start_ms` arm (fall through to `restamp`) | `a_sample_before_the_span_is_seek_preroll_and_is_skipped` — **and check WHICH way it fails**: `restamp` returns `None` for a pre-span sample, so the mutant reports `SpanComplete`, which silently drops the whole span. If this row stays green the three-way split is not being measured. |
-| M2 | `sample_action`: swap `Skip` and `SpanComplete` | `a_sample_before_the_span…` AND `the_spans_far_edge_completes_it…` |
-| M3 | `sample_action`: `Write { output_ms: source_ms }` (forget the restamp) | `a_sample_inside_the_span_is_written_at_its_restamped_time` AND `walking_a_reordered_plan_produces_contiguous_output_times` |
-| M4 | `export_refusal`: test `timeline.is_empty()` instead of `plan(..).is_empty()` | `a_timeline_of_only_zero_length_segments_is_refused_too` |
-| M5 | `export_refusal`: return `None` always | `an_empty_timeline_is_refused_with_a_message_naming_what_to_do` |
-| M6 | `export`: `if !req.timeline.is_untouched(..)` (paths swapped) | not caught on Linux — record it. The observable symptom is an edited export that comes back uncut; Task 12 adds the checklist row. |
-| M7 | `export`: key the fast path on the sidecar timeline being `None` instead | **not expressible here** — `export` takes a `&Timeline`, never an `Option`. That is deliberate: the trap is designed out of the signature rather than guarded against. Note it; Task 7's caller is where the `Option` is resolved, and its test covers it. |
-| M8 | `reencode`: drop `.max(1)` from the sample duration | not caught — record it, and confirm the comment naming the MF divide-by-zero is present. |
-| M9 | `ScreenError::Cancelled` display → `format!("cancelled: {}", ...)` with caller data | `fixed_variants_render_a_constant_message_with_no_caller_data` |
+| M1 | key the fast path on `timeline.segments.is_empty()` instead of `is_untouched` | `an_untouched_export_remuxes…` / `an_edited_export_produces…` |
+| M2 | pass ffprobe's duration to `is_untouched` instead of the sidecar's | **write a unit test for this** — it is decision 1 and nothing above pins it |
+| M3 | `export_refusal`: check `is_empty()` rather than the plan | `a_timeline_of_only_zero_length_segments_is_refused_too` |
+| M4 | `export_refusal`: refuse an untouched export with no encoder | `a_build_with_no_encoder_refuses_an_edited_export_but_not_an_untouched_one` |
+| M5 | on cancel, kill the child but leave `dest` | `cancelling_an_export_leaves_no_output_behind` |
+| M6 | drop the terminal 100% emit | add a test asserting the last reported percent is 100 |
+| M7 | swap the two paths | `an_edited_export_produces_a_file_of_the_planned_length` |
 
-M7 is the row worth reading twice: the strongest guard in this task is a type, not a test.
+M2 and M6 are written as instructions: the plan does not yet pin them and you are to close that.
 
-- [ ] **Step 8: Gates and commit**
+- [ ] **Step 6: Gates and commit**
 
-```
-cd src-tauri && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings; echo "exit=$?"
-cd src-tauri && cargo test -p vault_buddy_screen 2>&1 | tail -3
-cd src-tauri && cargo llvm-cov -p vault_buddy_core -p vault_buddy_capture -p vault_buddy_transcribe -p vault_buddy_screen --fail-under-lines 94 2>&1 | tail -5; echo "exit=$?"
-cd /home/user/vault-buddy && npm run check:loc; echo "exit=$?"
-```
-
-Coverage is the one at risk here: `export.rs` adds a large `cfg(windows)` body that no test reaches. It does not count on Linux (it is not compiled), so the floor should hold — **verify, do not assume**, and report the measured percentage.
-
-```bash
-git add src-tauri/screen/src/export.rs src-tauri/screen/src/lib.rs
-git commit -F /tmp/msg.txt
-```
-
-Message body: the two paths and the one predicate; that cancellation polls per sample rather than per span, and that this deliberately departs from spec 8.3 because the fast path is one span; that a cancelled export deletes its own temp; and that `export` takes a `&Timeline` so the absent-means-untouched trap cannot be expressed.
+Report the measured wall-clock of the remux vs the re-encode of the same fixture — that difference is the fast path's only observable proof, and it is now measurable in CI rather than only on hardware.
 
 ---
-
 ### Task 7: The export command, the `screen-export` worker, and the ninth vault write
 
 Everything before this task was machinery. This is the task that writes into a user's vault for the ninth time in the app's life.
