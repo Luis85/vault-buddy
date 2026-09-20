@@ -457,6 +457,11 @@ mod tests {
         assert!(!is_safe_base("a/b"));
         assert!(!is_safe_base("a\\b"));
         assert!(!is_safe_base(".."));
+        // Interior dots are ORDINARY. `sanitize_title` maps the reserved
+        // characters but never touches `.`, so a window titled "Saving..."
+        // stages under a base carrying them; refusing it made that capture
+        // permanently unopenable, unexportable and undiscardable.
+        assert!(is_safe_base("2026-09-20 1432 Saving... please wait - Figma"));
         assert!(!is_safe_base(""));
         // A leading dot is how our own in-progress `.part` files are named;
         // the editor must never be pointed at one.
@@ -559,7 +564,6 @@ fn is_safe_base(base: &str) -> bool {
         && !base.starts_with('.')
         && !base.contains('/')
         && !base.contains('\\')
-        && !base.contains("..")
         && base.chars().all(|c| !c.is_control())
 }
 
@@ -696,8 +700,7 @@ Run Task 1 Step 6's full gate list. Then:
 
 | Mutation | Must fail |
 | --- | --- |
-| `is_safe_base` drops the `contains("..")` check | `a_base_that_could_escape_staging_is_refused` |
-| `is_safe_base` drops the `starts_with('.')` check | same |
+| `is_safe_base` drops the `starts_with('.')` check | `a_base_that_could_escape_staging_is_refused` |
 | `is_safe_base` returns `true` unconditionally | same |
 | `detail_from_sidecar` sets `timeline: None` always | `a_saved_timeline_round_trips_into_the_detail` |
 | `detail_from_sidecar` swaps `width`/`height` | `the_detail_carries_an_asset_url_not_a_disk_path` |
