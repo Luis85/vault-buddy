@@ -121,6 +121,8 @@ vault-buddy/
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
 │   │                           #   region_commands.rs (the overlay's selection lifecycle),
 │   │                           #   editor_commands.rs (the editor's open/load/save surface),
+│   │                           #   shutdown_gate.rs (the ONE composition of all three
+│   │                           #     shutdown predicates, read by quit, Alt+F4 and the updater) +
 │   │                           #   export_shutdown.rs (the export's quit predicate + the
 │   │                           #     bounded cancel both quit workers run first) +
 │   │                           #   export_commands.rs (the export LIFECYCLE + all 5 events) +
@@ -267,6 +269,8 @@ Five OS windows, one frontend bundle, one Rust process:
    │  region_commands.rs ── overlay show / answer / cleanup for region selection          │
    │  editor_commands.rs ── editor show + base stash; staged load / timeline save         │
    │  export_commands.rs ── export lifecycle + ExportState + all 5 screen:export* emits   │
+   │  shutdown_gate.rs ── the ONE composition of all three shutdown predicates,          │
+   │                    read by quit, Alt+F4 and the updater's refusing prepare step    │
    │  export_shutdown.rs ── the export's view of SHUTDOWN: the quit predicate +           │
    │                    the bounded cancel both quit workers run first                    │
    │  export_worker/ ── screen-export thread: ffmpeg → NINTH vault write → note (its      │
@@ -2949,8 +2953,18 @@ Invariants — each exists because a review found the failure it prevents:
 ## Updater flow (`src/stores/updates.ts`, `UpdateView.vue`, `UpdateSettings.vue`)
 
 Check → download (panel stays open so spinner/errors are visible) →
-`close_panel` (hide the panel window) → `prepare_update_install` (Rust saves
-the buddy position and stamps a clean shutdown) → `install()` → `relaunch()`.
+`close_panel` (hide the panel window) → `prepare_update_install` → `install()`
+→ `relaunch()`. **The prepare step can REFUSE** (GAP-160): it returns
+`Result<(), String>` and, when `shutdown_gate::shutdown_is_blocked` says a
+recording, a screen capture or an export is live, it returns `Err` BEFORE
+closing the panel, saving the buddy position or stamping a clean shutdown —
+otherwise the updater would exit through a `.part` or through the ninth vault
+write, orphaning its ffmpeg child. Only when it returns `Ok` has Rust saved
+the position and stamped the marker. The store must NOT swallow that error
+(it once called this command `.catch(() => {})`, which would have installed
+anyway and protected nothing): a refusal aborts before `install()`, reopens
+the panel on the update view with the message, and keeps `available` so Retry
+works once the user stops what is running.
 The buddy window never shifts, so there is no home position to restore. On
 failure the panel reopens on the dedicated update view (`requestView("update")`)
 via `toggle_panel`, `available` is kept so the install button stays visible for

@@ -3805,7 +3805,7 @@ by standing decision. Land it with a Windows check, not inside an unrelated PR.
 > the evidence trail and `screen_recovery` clears the export temp next launch.
 
 `src-tauri/src/tray.rs` (`quit`) and `src-tauri/src/window_close.rs`
-(`handle_main_close`) both gate solely on
+(`handle_main_close`) both gated solely on
 `capture_commands::recording_blocks_shutdown || screen_commands::capture_blocks_shutdown`.
 Measured: every `ExportState` reference in the shell outside `export_commands.rs`
 is in `screen_recovery/{mod,decide}.rs`, `staged_commands.rs` and `lib.rs`'s
@@ -3817,7 +3817,8 @@ window is destroyed and `app2.exit(0)` runs while the `screen-export` thread is
 mid-`commit_into_vault`. Because that commit is video → note → staged-removal,
 the process can die between the video's landing and the note, and
 `Prepared::created_dirs` never reaches `rollback_export_dir`. The updater's
-`std::process::exit` route has the same exposure.
+`std::process::exit` route had the same exposure — that is GAP-160, now
+fixed; since then all three doors read `shutdown_gate::shutdown_is_blocked`.
 
 Worse, the ffmpeg child is a separate process: nothing kills it on the way out,
 so it keeps writing `.<base>.export.mp4.part` into staging after the app is gone.
@@ -3904,7 +3905,7 @@ direction — it produces false alarms, not false confidence. Recorded so the
 next author does not discover the gap by shipping through it.
 
 
-### GAP-160 · Medium · The updater exits the process through a live recording, screen capture or export, gating on nothing at all
+### GAP-160 · ~~Medium~~ FIXED 2026-09-20 · The updater exits the process through a live recording, screen capture or export, gating on nothing at all
 
 `src-tauri/src/commands.rs`, `prepare_update_install`. The updater flow is
 check → download → `close_panel` → `prepare_update_install` → `install()` →
@@ -3930,3 +3931,30 @@ window-thread invariant has to be honoured — marshal the save back via
 finalizes/cancels and then drives the install. Either way the three predicates
 belong in one helper so a fourth exit path cannot miss one, the way this one
 did.
+
+> **Fixed.** `prepare_update_install` now REFUSES when any of the three is
+> live, before `close_panel`, `save_window_state` or `mark_clean_shutdown` —
+> so a refused install never latches crash detection off, nor hides the panel
+> the message is read in. It stays SYNC: the fix shape above offered "make the
+> prepare step async … or arm a worker", and **neither was taken**, because
+> async re-opens the very deadlock the paragraph above forbids. Refusing is
+> also right on the merits — unlike a tray quit the user is present, having
+> just clicked Install and restart.
+>
+> **The other half was the real fix.** The store called it as
+> `invoke("prepare_update_install").catch(() => {})`, so a Rust refusal would
+> have been swallowed and `install()` would have run anyway: the Rust change
+> alone would have looked complete and protected nothing. The catch is gone,
+> the install aborts, and `rearm_crash_detection` is guarded on having
+> actually prepared.
+>
+> The three predicates now compose in one `shutdown_gate`, and both quit doors
+> were re-pointed onto it; their structural pin was re-pointed rather than
+> deleted and is now stronger — it fails if `hide_buddy` grows EITHER
+> spelling.
+>
+> **Residuals:** a narrow TOCTOU between the gate returning `Ok` and
+> `install()` running — the same gap the tray and Alt+F4 doors have between
+> their gate and `finish_quit`, not closable by any lock this app could hold
+> across a process-replacing install; and a refusal rendering through the
+> `error` phase, since the machine has no `refused` state.
