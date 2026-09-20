@@ -44,6 +44,19 @@ pub struct StagedCaptureSummaryDto {
     pub width: u32,
     pub height: u32,
     pub edited: bool,
+    /// Rebuilt by `screen_recovery` after an interrupted session, so it knows
+    /// neither its vault nor its duration and CANNOT be saved (the export
+    /// refuses an empty `vault_id` outright). The sweep writes the marker
+    /// into the sidecar's flattened catch-all; surfacing it is what stops
+    /// this list offering a save that provably cannot succeed.
+    pub recovered: bool,
+}
+
+/// Is this sidecar one `screen_recovery` rebuilt? A `true` BOOLEAN, never a
+/// truthy anything: the sidecar is hand-editable, and `"recovered": "no"`
+/// must not read as a claim in either direction.
+pub(crate) fn summary_is_recovered(extra: &serde_json::Map<String, serde_json::Value>) -> bool {
+    extra.get("recovered") == Some(&serde_json::Value::Bool(true))
 }
 
 /// Does this staged capture carry an edit? The SAME predicate the export
@@ -57,6 +70,23 @@ pub(crate) fn summary_is_edited(
     timeline: Option<serde_json::Value>,
     source_duration_ms: u64,
 ) -> bool {
+    // A source whose duration is UNKNOWN cannot be compared against "the
+    // whole", so it is not edited — unknown is not an edit. A recovered
+    // capture's sidecar records `duration_ms: 0` because nothing on disk
+    // remembers it, and `Timeline::whole(0)` is the EMPTY timeline, which
+    // `is_untouched` never matches: without this arm every single recovered
+    // capture was listed as "edited · 0:00".
+    //
+    // Deliberately NOT fixed in `Timeline::is_untouched`. That predicate is
+    // the export fast path's, held byte-for-byte against a TypeScript twin
+    // by `tests/fixtures/timeline-cases.json` (docs/Gaps.md GAP-136), and
+    // it is answering its own question correctly: an empty timeline really
+    // is not the whole of anything. The divergence is unreachable there —
+    // `export_worker::prepare` refuses a recovered capture before a timeline
+    // is ever consulted — so this stays a property of the SUMMARY.
+    if source_duration_ms == 0 {
+        return false;
+    }
     !timeline_from_sidecar(timeline, source_duration_ms).is_untouched(source_duration_ms)
 }
 
@@ -177,6 +207,7 @@ fn summary_from_sidecar(s: &staging::StagedSidecar) -> StagedCaptureSummaryDto {
         width: s.width,
         height: s.height,
         edited: summary_is_edited(s.timeline.clone(), s.duration_ms),
+        recovered: summary_is_recovered(&s.extra),
     }
 }
 
@@ -333,6 +364,58 @@ mod tests {
             ),
             5_000
         ));
+    }
+
+    // REGRESSION (fix wave): a capture recovered by `screen_recovery` after
+    // an interrupted session carries `duration_ms: 0` — nothing on disk
+    // records the duration once the sidecar is gone. `Timeline::whole(0)` is
+    // the EMPTY timeline and an empty timeline is never `is_untouched`, so
+    // the naive predicate answered TRUE and every recovered capture was
+    // listed as "edited · 0:00". Unknown is not edited.
+    #[test]
+    fn a_capture_whose_source_duration_is_unknown_is_not_reported_as_edited() {
+        assert!(!summary_is_edited(None, 0));
+        // ...and not by accident of the timeline being absent either.
+        assert!(!summary_is_edited(
+            Some(serde_json::json!({ "segments": [] })),
+            0
+        ));
+    }
+
+    // A recovered capture must SAY it is recovered: the `recovered: true`
+    // marker `screen_recovery::minimal_sidecar` writes lives in the
+    // sidecar's flattened catch-all, and the DTO used to drop it — so the
+    // one surface the recovery sweep exists to feed hid the only fact the
+    // user needs (that this capture no longer knows its vault and cannot be
+    // saved).
+    #[test]
+    fn a_recovered_capture_is_marked_recovered_in_the_summary() {
+        let mut s = sidecar_fixture();
+        assert!(!summary_from_sidecar(&s).recovered, "an ordinary capture");
+        s.extra
+            .insert("recovered".into(), serde_json::Value::Bool(true));
+        assert!(summary_from_sidecar(&s).recovered);
+        // A non-boolean value (the sidecar is hand-editable) is not a claim.
+        s.extra
+            .insert("recovered".into(), serde_json::Value::String("yes".into()));
+        assert!(!summary_from_sidecar(&s).recovered);
+    }
+
+    fn sidecar_fixture() -> staging::StagedSidecar {
+        staging::StagedSidecar {
+            base: "2026-09-20 1432 Demo".into(),
+            vault_id: "v1".into(),
+            source_title: "Demo".into(),
+            source_kind: "screen".into(),
+            inputs: Vec::new(),
+            duration_ms: 5_000,
+            paused_ms: 0,
+            width: 1920,
+            height: 1080,
+            recorded_at: "2026-09-20T14:32:00Z".into(),
+            timeline: None,
+            extra: serde_json::Map::new(),
+        }
     }
 
     #[test]

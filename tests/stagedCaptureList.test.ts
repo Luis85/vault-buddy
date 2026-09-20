@@ -29,6 +29,7 @@ function capture(over: Partial<StagedCaptureSummary> = {}): StagedCaptureSummary
     width: 1920,
     height: 1080,
     edited: false,
+    recovered: false,
     ...over,
   };
 }
@@ -151,6 +152,40 @@ describe("StagedCaptureList", () => {
     expect(w.get(discard("other")).attributes("disabled")).toBeDefined();
     expect(w.get(resume("2026-09-20 1000 Figma")).attributes("disabled")).toBeUndefined();
     expect(w.get(discard("2026-09-20 1000 Figma")).attributes("disabled")).toBeUndefined();
+  });
+
+  // REGRESSION (fix wave): a capture rebuilt by `screen_recovery` after an
+  // interrupted session knows neither its vault nor its duration, so it
+  // rendered as "edited · 0:00" beside a source title that was only its own
+  // base name — two falsehoods — while the ONE fact the user needs (that it
+  // was recovered, and cannot be saved) was dropped by the DTO.
+  it("says a recovered capture is recovered rather than claiming an edit", () => {
+    const w = list([capture({ recovered: true, durationMs: 0, outputDurationMs: 0 })]);
+    const text = w.get(row("2026-09-20 1000 Figma")).text();
+    expect(text).toContain("recovered");
+    expect(text).not.toContain("edited");
+    // ...and it does not claim a length it does not know.
+    expect(text).not.toContain("0:00");
+    expect(text).toContain("length unknown");
+  });
+
+  // Save refuses a recovered capture outright (`export_worker::prepare`:
+  // it carries no vault id), and the editor it would open has a zero-length
+  // timeline. Offering Resume is offering a dead end.
+  it("does not offer to resume a capture that can never be saved", () => {
+    const w = list([capture({ recovered: true, durationMs: 0, outputDurationMs: 0 })]);
+    expect(w.find(resume("2026-09-20 1000 Figma")).exists()).toBe(false);
+    // Discard is still offered — it is the only thing left to do with it.
+    expect(w.find(discard("2026-09-20 1000 Figma")).exists()).toBe(true);
+  });
+
+  // The paired negative: an ORDINARY capture keeps Resume and says nothing
+  // about recovery. Without it, a component that hid Resume for every row
+  // and printed "recovered" on all of them passes both tests above.
+  it("keeps resume and says nothing about recovery for an ordinary capture", () => {
+    const w = list([capture()]);
+    expect(w.find(resume("2026-09-20 1000 Figma")).exists()).toBe(true);
+    expect(w.get(row("2026-09-20 1000 Figma")).text()).not.toContain("recovered");
   });
 
   // The picker's own heading, tabs and Start button must not be pushed down

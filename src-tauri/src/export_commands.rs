@@ -295,11 +295,18 @@ mod tests {
             .expect("the production prefix")
     }
 
-    fn worker_src() -> &'static str {
-        include_str!("export_worker.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("the production prefix")
+    /// The export worker's production source. It became a DIRECTORY module
+    /// when the rollback fix pushed it past the Rust LOC cap, so both halves
+    /// are concatenated here — a scan that saw only one of them would stop
+    /// covering whatever moved into the other.
+    fn worker_src() -> String {
+        [
+            include_str!("export_worker/mod.rs"),
+            include_str!("export_worker/vault_dir.rs"),
+        ]
+        .iter()
+        .map(|src| src.split("#[cfg(test)]").next().unwrap_or(src))
+        .collect()
     }
 
     // Export must not claim the cross-domain capture guard: the one
@@ -308,7 +315,8 @@ mod tests {
     // pins it at exactly one. A claim here would need a second release site.
     #[test]
     fn export_reads_the_capture_guard_but_never_claims_or_releases_it() {
-        for src in [production_src(), worker_src()] {
+        let worker = worker_src();
+        for src in [production_src(), worker.as_str()] {
             assert!(
                 !src.contains("try_claim("),
                 "export must not claim CaptureGuard"

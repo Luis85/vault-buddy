@@ -3540,27 +3540,30 @@ normal. **Fix shape:** measure it first (checklist rows 29 and 30 are the
 opportunity), then decide whether the bar needs a rate or an ETA. Do not add
 one before there is a number.
 
-### GAP-147 · Low · `screen_recovery.rs` sits at exactly 800/800 nonblank lines, so the next line added to it breaches the Rust cap
-`src-tauri/src/screen_recovery.rs`, measured `grep -cve '^\s*$'` = **800**
-against `scripts/loc-baseline.json`'s `caps.rust` = 800. The LOC guard passes
-today and fails on the next added line.
+### GAP-147 · ~~Low~~ FIXED 2026-09-20 · `screen_recovery.rs` sat at exactly 800/800 nonblank lines, so the next line added to it breached the Rust cap
+Closed by the fix wave, which needed to add a line to it (GAP-149 below) and
+so paid the extraction this entry prescribed rather than taking the allowlist
+entry it warned about. `src-tauri/src/screen_recovery.rs` is now
+`screen_recovery/mod.rs` (**618** nonblank — the `read_dir` walk, the
+promote/delete actions and the retry loop) plus `screen_recovery/decide.rs`
+(**280** — `classify`, `owned`, `part_holds_footage`, `should_postpone`,
+`is_stale_at`, all pure, and the mp4-box test fixtures both halves share),
+split along exactly the seam the module's own doc already named. `lib.rs` is
+unchanged, because `mod screen_recovery;` resolves a directory module
+identically.
 
-The correct response is an extraction, NOT an allowlist entry. The file has a
-clean seam already — the pure decision half (`classify`, `owned`,
-`part_holds_footage`, `should_postpone`, `is_stale_at`) against the
-filesystem half (`scan_dir`, the promote/delete actions, the retry loop) — and
-it can become `screen_recovery/mod.rs` plus a sibling with **no change to
-`lib.rs`**, because `mod screen_recovery;` resolves a directory module
-identically. `scripts/loc-baseline.json` is shrink-only and nothing on this
-branch has been loosened; keep it that way.
+`src-tauri/src/export_worker.rs` hit the same wall in the same wave (the
+rollback fix, GAP-150 below, took it from 738 to 905) and took the same
+answer: `export_worker/mod.rs` (**676**) plus `export_worker/vault_dir.rs`
+(**264** — create-the-directory-contained, measure free space, roll it back).
+`export_commands.rs`'s `worker_src()` structural scan now concatenates BOTH
+halves, since a scan that saw only one would stop covering whatever moved
+into the other. `scripts/loc-baseline.json` was NOT touched: nothing has been
+loosened on this branch.
 
-**Failure scenario:** the next agent touching staging recovery adds one
-comment line, `npm run check:loc` goes red, and the path of least resistance
-is a new allowlist entry that grandfathers an 801-line file forever. **Fix
-shape:** split it before adding to it. (`src/types.ts` at 466/500 and
+Still worth knowing for the same reason: `src/types.ts` at 466/500 and
 `src/roots/EditorRoot.vue` at 470/500 are the frontend files closest to their
-own cap and are worth knowing about for the same reason, though neither is
-urgent.)
+own cap.
 
 ### GAP-148 · Low · Three deliberate departures from the screen-capture design spec, each shipped and each recorded here so the spec is not read as the implementation
 `docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` §8.3, §11
@@ -3591,3 +3594,138 @@ agent scans before working in an area.
 Not a defect list — each is a reasoned change — but a spec read as the
 implementation would get all three wrong. **Fix shape:** none. Re-check them
 if §8.3, §11 or §14 is ever edited.
+
+
+### GAP-149 · ~~Medium~~ FIXED 2026-09-20 · The companion note's embed was built from a scraped window title with no wikilink escaping, so a title containing `#`, `^`, `[` or `]` produced a silently dead embed
+`src-tauri/core/src/screen_note.rs` emitted `![[{mp4_file_name}]]`
+unconditionally, while `src-tauri/screen/src/staging.rs`'s `sanitize_title`
+maps only `: \ / ? * " < > |` and drops control characters. All four
+wikilink metacharacters survive into the base. A window titled
+`Issue #42 - GitHub - Mozilla Firefox` yielded
+`![[2026-09-20 1432 Issue #42 - GitHub - Mozilla Firefox.mp4]]`, which
+Obsidian splits at the `#` into a file named `2026-09-20 1432 Issue ` plus a
+heading — neither of which exists. The `.mp4` is correctly named and sits
+right beside the note; only the embed is dead, with no error anywhere.
+
+**Fixed in the NOTE, not in `sanitize_title`, and the choice is the
+interesting part.** Those four characters are perfectly legal in a Windows
+or POSIX file name, so mapping them in `sanitize_title` would rename every
+user's captures, throw away title fidelity (`C++ [Debug]`), and change the
+base a staged capture is ADDRESSED by — the identity `is_capture_base`, the
+sidecar's own `base` round-trip and `screen_recovery::classify` all key on.
+Only the note was wrong, so only the note changed:
+`screen_note::embed` falls back to a percent-encoded markdown embed
+(`![<escaped name>](<encoded stem>.mp4)`) exactly as `tasks::parent_link`
+already did for a List folder carrying the same characters. The character
+set and the label escape were extracted into the new
+`core::obsidian_link` and are now shared by both, so they cannot drift.
+
+### GAP-150 · ~~Medium~~ FIXED 2026-09-20 · A cancelled, refused or failed export left an empty `Screen Captures/YYYY/MM` in the user's vault forever
+`src-tauri/src/export_worker.rs` called `prepare_export_dir` (a
+`create_dir_all`) and only then `check_free_space`; `grep -n remove_dir` over
+`export_worker.rs`, `export_commands.rs` and `screen/src/export.rs` returned
+nothing at all. So a user **Cancel** — spec §14's ordinary way out, whose
+whole promise is "staged capture and timeline untouched" — plus a disk-space
+refusal, an ffmpeg failure and a commit failure each left an empty dated
+folder in somebody's notes permanently. AGENTS.md and the module doc both
+asserted the opposite ("every refusal is ordered ahead of any vault
+mutation").
+
+The `create` → `measure` ordering is CORRECT and stays: a directory that does
+not exist yet reports no free space at all. It was the claim that was wrong.
+`prepare_export_dir` now returns the ancestors it created — sampled BEFORE
+`create_dir_all`, the only moment the answer is knowable — and all three
+non-saving exits hand them to `rollback_export_dir`, which removes them
+deepest-first with `remove_dir`, **never `remove_dir_all`**: a directory that
+is not empty holds something this export did not put there, and the error
+`remove_dir` returns for it IS the guard. A directory the user already had is
+never in the created set at all. Both documents now say what the code does.
+
+### GAP-151 · ~~Medium~~ FIXED 2026-09-20 · A recovered capture was listed as `edited · 0:00` and offered Resume, although it can never be saved
+`src-tauri/src/screen_recovery`'s `minimal_sidecar` writes
+`duration_ms: 0, vault_id: ""` — nothing on disk records either once the real
+sidecar is gone — and marks the rebuild `recovered: true` in the sidecar's
+flattened catch-all. Two things then went wrong at once.
+`Timeline::whole(0)` is the EMPTY timeline and `is_untouched` never matches
+one, so `staged_commands::summary_is_edited(None, 0)` answered **true**;
+and `StagedCaptureSummaryDto` dropped `recovered` entirely. The result: the
+resume-or-discard list — the ONE surface the recovery sweep exists to feed —
+rendered `edited · 0:00` beside a source title that was only the base name,
+offered **Resume editing**, and hid the single fact the user needs, while
+`export_worker::prepare` refuses an empty `vault_id` outright.
+
+Fixed on both counts. `summary_is_edited` returns false for an unknown source
+duration (unknown is not an edit) — an arm deliberately kept OUT of
+`Timeline::is_untouched`, which is the export fast path's predicate and is
+held byte-for-byte against a TypeScript twin by
+`tests/fixtures/timeline-cases.json` (GAP-136), and where the divergence is
+unreachable because `prepare` refuses a recovered capture before a timeline
+is ever consulted. `StagedCaptureSummaryDto` carries `recovered` (a `true`
+BOOLEAN only, since the sidecar is hand-editable), the row reads
+"recovered · length unknown", and **Resume is not rendered at all** — Discard
+is the only honest action left.
+
+### GAP-152 · ~~Medium~~ FIXED 2026-09-20 · Staging recovery postponed on `CaptureGuard` alone and knew nothing about `ExportState`, so a live export's temp was protected only by the 60 s mtime window
+`src-tauri/src/screen_recovery.rs`'s `should_postpone(active) { active
+.is_some() }`, against `grep -n ExportState src-tauri/src/screen_recovery.rs`
+returning nothing. `sweep_staging_dir` classifies a stale
+`.<base>.export.mp4.part` as `Entry::ExportTemp` and deleted it
+unconditionally, justified in a comment as safe because "the staged capture
+it came from is still on disk" — which is equally true of a temp being
+written right now, so it was never the guard.
+
+The window does not hold: `ffmpeg_args::reencode_args` builds `trim`/`atrim`
++ `concat` with **no `-ss`**, so ffmpeg decodes from zero and emits no output
+packets until the first KEPT span. An edited export of a long recording that
+keeps only late footage writes its header at T0 and then nothing for minutes;
+its mtime never advances, so it reads stale at 60 s — and the recovery thread
+is alive for exactly that long, because a `pending` file keeps it retrying
+every 90 s for up to 24 h.
+
+`should_postpone(active, exporting)` now reads BOTH sources, the run loop
+passes `is_exporting(&app)` (one process-wide `ExportState` reservation, so a
+bool suffices), and the wrong comment on the delete arm is replaced with the
+real reasoning. The predicate is unit-tested and the CALL SITE is pinned by
+its own structural test, because a correct predicate handed a hardcoded
+`false` postpones nothing and the run loop needs a live `AppHandle`.
+
+**Residual, recorded rather than fixed:** on Windows the unlink would have
+failed anyway — ffmpeg's output handle is opened through the CRT without
+`FILE_SHARE_DELETE`, so both `DeleteFileW` and the `FileDispositionInfoEx`
+path `std::fs::remove_file` prefers return a sharing violation, and `delete`
+degrades to a `log::warn!`. That is luck rather than a guard, and it is
+reasoned from the Win32 sharing rules, not measured: no runner in this
+repository is Windows, and this path executes in no automated test anywhere
+(GAP-140's class).
+
+### GAP-153 · Medium · The AUDIO domain's note embed has GAP-149's exact bug, via `rename_capture`, and has shipped with it far longer
+Found while fixing GAP-149, out of that fix wave's scope, and recorded rather
+than fixed because it needs a decision GAP-149's did not.
+
+`src-tauri/core/src/capture_note.rs:138` emits `![[{mp3_file_name}]]` and
+`:167` emits `![[{stem}.transcript]]`, both unconditionally.
+`core/src/capture_paths.rs:99`'s own `sanitize_title` — a DIFFERENT function
+from `screen/src/staging.rs`'s, with a different character set — filters
+`/ \ < > : " | ? *` and control characters, and like the screen one it lets
+`#`, `^`, `[` and `]` through. Verified directly:
+`sanitize_title("Sprint #4 retro [draft]")` returns that string unchanged.
+
+A recording's base is safe **at start** (`capture_commands.rs:236` uses
+`cfg.mode.label()`, a fixed `"Meeting"`/`"Voice Note"`), so this is reachable
+only through `rename_capture`, where the title is typed by the user. Rename a
+meeting to `Sprint #4 retro` and the note's embed becomes
+`![[2026-07-04 1405 Sprint #4 retro.mp3]]`, which Obsidian splits at the `#`
+— a dead embed beside a correctly-named `.mp3`, no error anywhere. The
+transcript embed on the next line breaks identically.
+
+**Why it is not a copy of GAP-149's fix.** `capture_note::retarget_embed`
+rewrites the embed by matching the LITERAL line `![[{old}]]`, so a
+markdown-form embed would need that retarget to recognise both shapes or a
+rename would silently stop following the file — which is a worse failure than
+the dead link. And unlike a screen capture, an audio recording's note can
+already have been hand-edited by the user between the write and the rename.
+**Fix shape:** reuse `core::obsidian_link` (the module GAP-149 extracted, which
+already holds the character set and the label escape) in `render_note`, and
+teach `retarget_embed` both forms in the same change, with a round-trip test
+that renames a metacharacter title twice. Do not fix the writer without the
+retarget.

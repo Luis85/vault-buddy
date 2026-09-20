@@ -25,7 +25,7 @@ const props = defineProps<{
    * touching. */
   busyBase: string | null;
 }>();
-defineEmits<{ resume: [base: string]; discard: [base: string] }>();
+const emit = defineEmits<{ resume: [base: string]; discard: [base: string] }>();
 
 /**
  * Which row's Discard is armed — a BASE, never a boolean.
@@ -52,6 +52,28 @@ watch(
 );
 
 /**
+ * The armed-state derivations, and the Discard click itself, live HERE
+ * rather than as `armed === c.base ? … : …` expressions repeated across four
+ * attributes — the same reason `lengthLabel` below is composed in the script.
+ * Four copies of one comparison is four places to get the two-click confirm
+ * wrong, and the per-row markup is what pushes this component's template
+ * past the complexity ratchet.
+ */
+const isArmed = (base: string) => armed.value === base;
+
+/** First click arms this row; second click destroys the recording. */
+const onDiscardClick = (base: string) => {
+  if (isArmed(base)) emit("discard", base);
+  else armed.value = base;
+};
+
+const discardLabel = (base: string) => (isArmed(base) ? "Delete it" : "Discard");
+
+/** The chip is accent-toned only for an edit — a recovered capture carries
+ * no edit to highlight. */
+const lengthVariant = (c: StagedCaptureSummary) => (c.edited ? "accent" : "neutral");
+
+/**
  * The chip: what an export will PRODUCE for an edited capture, and simply
  * what was recorded otherwise — the two are equal when nothing was cut.
  *
@@ -59,8 +81,12 @@ watch(
  * per-row markup is what pushes this component's template past the
  * complexity ratchet; the rule is the same either way, and stated once.
  */
-const lengthLabel = (c: StagedCaptureSummary) =>
-  c.edited ? `edited · ${formatDuration(c.outputDurationMs)}` : formatDuration(c.durationMs);
+const lengthLabel = (c: StagedCaptureSummary) => {
+  // A recovered capture's sidecar was rebuilt from the file alone, which
+  // records no duration at all — so `0:00` would be a claim, not a length.
+  if (c.recovered) return "recovered · length unknown";
+  return c.edited ? `edited · ${formatDuration(c.outputDurationMs)}` : formatDuration(c.durationMs);
+};
 
 /**
  * The second line: the recorded length — worth saying only when an edit
@@ -103,7 +129,7 @@ const subLabel = (c: StagedCaptureSummary) =>
           <!-- The length the EXPORT will produce, which is what the user is
                deciding about. An unedited capture's two durations are equal,
                so this is also the recorded length wherever it matters. -->
-          <Chip :variant="c.edited ? 'accent' : 'neutral'">
+          <Chip :variant="lengthVariant(c)">
             {{ lengthLabel(c) }}
           </Chip>
         </div>
@@ -111,12 +137,18 @@ const subLabel = (c: StagedCaptureSummary) =>
           <span class="min-w-0 flex-1 truncate text-micro text-fg-subtle">
             {{ subLabel(c) }}
           </span>
+          <!-- Resume is offered only where it leads somewhere. A recovered
+               capture carries no vault id, so `export_worker::prepare`
+               refuses its Save outright and the editor would open on a
+               zero-length timeline: the only honest action left is Discard,
+               and the row already says where the file is. -->
           <AppButton
+            v-if="!c.recovered"
             :data-testid="`staged-resume-${c.base}`"
             size="sm"
             variant="secondary"
             :disabled="busyBase === c.base"
-            @click="$emit('resume', c.base)"
+            @click="emit('resume', c.base)"
           >
             Resume editing
           </AppButton>
@@ -125,12 +157,12 @@ const subLabel = (c: StagedCaptureSummary) =>
             size="sm"
             variant="danger"
             :disabled="busyBase === c.base"
-            @click="armed === c.base ? $emit('discard', c.base) : (armed = c.base)"
+            @click="onDiscardClick(c.base)"
           >
-            {{ armed === c.base ? "Delete it" : "Discard" }}
+            {{ discardLabel(c.base) }}
           </AppButton>
           <AppButton
-            v-if="armed === c.base"
+            v-if="isArmed(c.base)"
             :data-testid="`staged-keep-${c.base}`"
             size="sm"
             variant="ghost"

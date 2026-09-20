@@ -22,6 +22,21 @@
 //!    following a pre-existing symlink or junction and creating our
 //!    directories outside the vault; the POST check closes the swap-in race.
 //!
+//! **Almost every refusal is ordered ahead of any vault mutation, and the
+//! one that is not rolls itself back.** Everything `prepare` can refuse — a
+//! mismatched sidecar, a recovered capture, a missing vault, a missing
+//! video, no ffmpeg, an unencodable timeline — answers before a single
+//! directory is created. `check_free_space` cannot: a directory that does
+//! not exist yet reports no free space at all, so it has to measure the
+//! folder it is about to fill. So the ONE mutation an export makes ahead of
+//! its last refusal is `prepare_export_dir`'s `create_dir_all`, and every
+//! way out that is not a save — the space refusal, a user **Cancel** (spec
+//! §14's ordinary exit), an ffmpeg failure, a commit failure — hands
+//! `created_dirs` to `rollback_export_dir`, which removes ONLY the
+//! directories this export created and ONLY while they are still empty.
+//! Without that the ordinary Cancel left an empty `Screen Captures/YYYY/MM`
+//! in the user's notes permanently, for a save they explicitly called off.
+//!
 //! **Every failure deletes the export temp and keeps the staged capture — a
 //! deliberate departure from spec §14**, which says a failed vault write
 //! keeps the exported temp "with retry". A kept temp is a promise this
@@ -36,18 +51,20 @@ use std::sync::atomic::AtomicBool;
 
 use chrono::{Local, NaiveDate};
 use tauri::{AppHandle, Manager};
+use vault_buddy_core::capture_config;
 use vault_buddy_core::capture_note::write_note_collision_safe;
-use vault_buddy_core::capture_paths::{assert_path_inside_vault, capture_dir, safe_recording_root};
-use vault_buddy_core::screen_capture_config::{export_size_estimate_bytes, export_space_shortfall};
+use vault_buddy_core::capture_paths::{capture_dir, safe_recording_root};
 use vault_buddy_core::screen_capture_paths::commit_screen_capture;
 use vault_buddy_core::screen_note::{render_screen_note, ScreenNoteMeta};
 use vault_buddy_core::timeline::Timeline;
-use vault_buddy_core::{capture_config, vault_config::VaultCaptureConfig};
 use vault_buddy_screen::export::{export, export_refusal, ExportOutcome, ExportRequest};
 use vault_buddy_screen::ffmpeg_args::EncodeSettings;
-use vault_buddy_screen::{disk, staging, ScreenError};
+use vault_buddy_screen::{staging, ScreenError};
 
 use crate::export_commands::{cancel_flag, emit_export_progress, timeline_from_sidecar};
+
+mod vault_dir;
+use vault_dir::{check_free_space, prepare_export_dir, rollback_export_dir};
 
 /// How an export ended when it did not produce a saved capture.
 ///
@@ -84,6 +101,9 @@ struct Prepared {
     staged_mp4: PathBuf,
     temp: PathBuf,
     dir: PathBuf,
+    /// The directories `prepare_export_dir` created for this export, deepest
+    /// first. Empty when the dated folder was already there.
+    created_dirs: Vec<PathBuf>,
     vault_id: String,
     vault_name: String,
     sidecar: staging::StagedSidecar,
@@ -97,7 +117,11 @@ struct Prepared {
 
 pub(crate) fn export_blocking(app: &AppHandle, base: &str) -> Result<ExportSummary, ExportFailure> {
     let prepared = prepare(app, base).map_err(ExportFailure::Failed)?;
-    let outcome = run_export(app, &prepared)?;
+    // A cancel is an ordinary exit (spec §14) and an ffmpeg failure is not,
+    // but neither one saved anything, so both owe the vault the same rollback.
+    let outcome = run_export(app, &prepared).inspect_err(|_| {
+        rollback_export_dir(&prepared.created_dirs);
+    })?;
     let committed = commit_into_vault(CommitInputs {
         temp: &prepared.temp,
         dir: &prepared.dir,
@@ -118,6 +142,7 @@ pub(crate) fn export_blocking(app: &AppHandle, base: &str) -> Result<ExportSumma
         // The commit failed, so the bytes are still in the temp. Delete it:
         // see the module doc on why a kept temp is a promise we cannot keep.
         remove_export_temp(&prepared.temp);
+        rollback_export_dir(&prepared.created_dirs);
         ExportFailure::Failed(e)
     })?;
     log::info!(
@@ -213,12 +238,22 @@ fn prepare(app: &AppHandle, base: &str) -> Result<Prepared, String> {
         recorded_date(&sidecar.recorded_at),
         cfg.screen_capture_date_folders,
     );
-    prepare_export_dir(&vault_path, &dir)?;
-    // Measured after creation: a directory that does not exist yet reports
-    // no free space at all, and an unmeasurable volume never refuses.
-    check_free_space(&timeline, &settings, &cfg, &[&staging_dir, &dir])?;
+    // This is where the vault is first TOUCHED. Everything above refuses
+    // without creating anything; everything below either saves or hands its
+    // `created_dirs` to `rollback_export_dir`, so a save that does not
+    // happen leaves a user's notes exactly as it found them.
+    let created_dirs = prepare_export_dir(&vault_path, &dir)?;
+    // Measured after creation, deliberately: a directory that does not exist
+    // yet reports no free space at all, and an unmeasurable volume never
+    // refuses. So this ONE refusal is ordered behind a vault mutation, and
+    // it is the refusal that rolls it back.
+    if let Err(e) = check_free_space(&timeline, &settings, &cfg, &[&staging_dir, &dir]) {
+        rollback_export_dir(&created_dirs);
+        return Err(e);
+    }
 
     Ok(Prepared {
+        created_dirs,
         temp: staging_dir.join(staging::export_part_file_name(base)),
         base: base.to_string(),
         staging: staging_dir,
@@ -234,62 +269,6 @@ fn prepare(app: &AppHandle, base: &str) -> Result<Prepared, String> {
         extra_frontmatter: cfg.screen_extra_frontmatter.clone(),
         body_template: cfg.screen_body_template.clone(),
     })
-}
-
-/// Refuse a save that would fill a disk — on BOTH volumes it touches.
-///
-/// The temp is written into staging (`%LOCALAPPDATA%`) and only then lands
-/// in the vault, which is very often a different drive. Measuring one of
-/// them is measuring the wrong one half the time.
-fn check_free_space(
-    timeline: &Timeline,
-    settings: &EncodeSettings,
-    cfg: &VaultCaptureConfig,
-    dirs: &[&Path],
-) -> Result<(), String> {
-    let needed = export_size_estimate_bytes(
-        timeline.output_duration_ms(),
-        settings.width,
-        settings.height,
-        cfg.screen_fps,
-        cfg.screen_quality,
-    );
-    let shortfall = dirs
-        .iter()
-        .filter_map(|dir| export_space_shortfall(needed, disk::free_bytes(dir)))
-        .max();
-    match shortfall {
-        // An UNMEASURABLE volume yields None and never refuses: a failed
-        // probe must not read as "no space left".
-        None => Ok(()),
-        Some(short) => Err(format!(
-            "There is not enough free space to save this capture — about {} more is needed.",
-            human_mib(short)
-        )),
-    }
-}
-
-fn human_mib(bytes: u64) -> String {
-    let mib = bytes.div_ceil(1024 * 1024);
-    if mib >= 1024 {
-        format!("{:.1} GB", mib as f64 / 1024.0)
-    } else {
-        format!("{mib} MB")
-    }
-}
-
-/// The dated directory, asserted inside the vault BEFORE and AFTER creation.
-///
-/// PRE stops `create_dir_all` following a pre-existing symlink or junction
-/// and building our tree outside the vault; POST closes the window in which
-/// one is swapped in underneath us. The audio path checks only afterwards;
-/// this is the document-import discipline, which is stronger.
-fn prepare_export_dir(vault_path: &Path, dir: &Path) -> Result<(), String> {
-    assert_path_inside_vault(vault_path, dir)?;
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("Could not create the folder for this capture: {e}"))?;
-    assert_path_inside_vault(vault_path, dir)?;
-    Ok(())
 }
 
 fn run_export(app: &AppHandle, p: &Prepared) -> Result<ExportOutcome, ExportFailure> {
@@ -637,36 +616,6 @@ mod tests {
         );
     }
 
-    // The PRE-creation containment check, behaviourally: a symlinked
-    // captures folder must be refused WITHOUT our directory tree being
-    // built at the other end of it.
-    #[test]
-    fn a_symlinked_capture_folder_is_refused_before_anything_is_created() {
-        let vault = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let link = vault.path().join("Screen Captures");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
-        #[cfg(not(unix))]
-        std::os::windows::fs::symlink_dir(outside.path(), &link).unwrap();
-
-        let dir = link.join("2026").join("09");
-        let err = prepare_export_dir(vault.path(), &dir).expect_err("an escape must be refused");
-        assert!(err.contains("outside the vault"), "{err}");
-        assert!(
-            !outside.path().join("2026").exists(),
-            "create_dir_all ran through the symlink before the check"
-        );
-    }
-
-    #[test]
-    fn an_ordinary_dated_folder_inside_the_vault_is_created() {
-        let vault = tempfile::tempdir().unwrap();
-        let dir = vault.path().join("Screen Captures").join("2026").join("09");
-        prepare_export_dir(vault.path(), &dir).unwrap();
-        assert!(dir.is_dir());
-    }
-
     #[test]
     fn the_dated_folder_uses_the_captures_own_date_and_falls_back_to_today() {
         assert_eq!(
@@ -677,7 +626,7 @@ mod tests {
     }
 
     fn production_src() -> &'static str {
-        include_str!("export_worker.rs")
+        include_str!("mod.rs")
             .split("#[cfg(test)]")
             .next()
             .expect("the production prefix")
@@ -742,6 +691,21 @@ mod tests {
         );
     }
 
+    // Every way out of an export that is not a save rolls the directory
+    // back: the space refusal in `prepare`, the `run_export` failure arm
+    // (which is BOTH the user's Cancel and an ffmpeg failure) and the commit
+    // failure arm. A behavioural test covers what a rollback does; only this
+    // can see that a future fourth failure arm was given one.
+    #[test]
+    fn every_non_saving_exit_rolls_the_export_directory_back() {
+        let src = production_src();
+        assert_eq!(
+            src.matches("rollback_export_dir(&").count(),
+            3,
+            "an exit was added or removed without its rollback"
+        );
+    }
+
     // Video first, note second — `capture::session::finalize`'s order. A
     // note written first and a video commit that then failed would leave a
     // note in the vault embedding a file that is not there.
@@ -753,36 +717,5 @@ mod tests {
             .find("write_note_collision_safe(")
             .expect("the note write lives in the same function as the commit");
         assert!(video < note, "the note is written before the video commits");
-    }
-
-    // The dated directory is asserted inside the vault BEFORE create_dir_all
-    // (so a pre-existing symlink is not followed) and AFTER it (closing the
-    // swap-in race). The PRE half also has a behavioural test above; the
-    // POST half can only be pinned here, because the race it closes cannot
-    // be provoked deterministically.
-    #[test]
-    fn the_export_directory_is_asserted_inside_the_vault_before_and_after_creation() {
-        let src = production_src();
-        let start = src
-            .find("fn prepare_export_dir(")
-            .expect("prepare_export_dir");
-        let end = src[start..]
-            .find("\n}\n")
-            .map(|i| start + i)
-            .expect("its end");
-        let body = &src[start..end];
-        let create = body.find("create_dir_all(").expect("create_dir_all");
-        let asserts: Vec<usize> = body
-            .match_indices("assert_path_inside_vault(")
-            .map(|(i, _)| i)
-            .collect();
-        assert!(
-            asserts.iter().any(|&i| i < create),
-            "no containment assertion before create_dir_all"
-        );
-        assert!(
-            asserts.iter().any(|&i| i > create),
-            "no containment assertion after create_dir_all"
-        );
     }
 }

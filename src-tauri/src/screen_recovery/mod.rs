@@ -27,15 +27,25 @@
 //! A spawn failure LOGS and continues (`run_import_recovery`'s posture),
 //! never `.expect`-panics (`capture_commands::run_recovery`'s, which the
 //! ledger names as the worse precedent).
+//!
+//! **The seam.** Every pure decision lives in the sibling `decide` module,
+//! the filesystem walk and the retry loop live here. The split is what the
+//! doc above already described; GAP-147 (this file at exactly 800/800
+//! nonblank lines) is what forced it to become two files. `lib.rs` is
+//! unchanged: `mod screen_recovery;` resolves a directory module identically.
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use tauri::{AppHandle, Manager};
-use vault_buddy_screen::{mp4_boxes, staging};
+use vault_buddy_core::sync_util::lock_ignoring_poison;
+use vault_buddy_screen::staging;
 
-use crate::capture_guard::{CaptureGuard, CaptureKind};
-use crate::editor_commands::is_safe_base;
+use crate::capture_guard::CaptureGuard;
+use crate::export_commands::ExportState;
+
+mod decide;
+use decide::{classify, is_stale_at, part_holds_footage, should_postpone, Entry};
 
 /// How old a file must be before recovery will touch it. **The same 60 s the
 /// audio sweep gets**, deliberately: spec §10 asks for one staleness rule
@@ -60,95 +70,6 @@ const MAX_RETRIES: u32 = 960;
 /// deliberate limit: a `.part` whose `moov`/first `moof` sat beyond this
 /// prefix would read as empty and be deleted — a shape `sink.rs` cannot make.
 const PART_SNIFF_LEN: u64 = 1024 * 1024;
-
-/// The infix an export temp carries (`.<base>.export.mp4.part`), so an
-/// abandoned one is never mistaken for a capture and PROMOTED. Imported,
-/// never respelled: two literals is how a temp quietly stops being swept.
-use vault_buddy_screen::staging::EXPORT_PART_INFIX;
-
-/// What a name in the staging directory is, decided by name alone:
-/// `.<base>.mp4.part` (a capture being written), `.<base>.export.mp4.part`
-/// (an export being written), `<base>.mp4` (a published staged capture),
-/// `<base>.json` (its sidecar) — and everything else, which is **never
-/// touched**, whatever it looks like.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Entry {
-    Part(String),
-    ExportTemp(String),
-    Staged(String),
-    Sidecar(String),
-    Foreign,
-}
-
-/// The ownership filter, and the only place a name becomes an action. The
-/// export-temp shape is checked BEFORE the plain part shape because
-/// `base_from_part(".Demo.export.mp4.part")` answers `Some("Demo.export")` — a
-/// perfectly safe base — so a plain-part-first order would classify every
-/// export temp as a promotable capture. The cost: a capture whose base
-/// genuinely ends in `.export` has its orphaned `.part` deleted as an export
-/// temp instead of promoted. The two are indistinguishable by name, and the
-/// other order would promote half-written transcodes for everyone.
-fn classify(file_name: &str) -> Entry {
-    if let Some(base) = staging::base_from_part(file_name) {
-        if let Some(stem) = base.strip_suffix(EXPORT_PART_INFIX) {
-            return owned(stem, Entry::ExportTemp);
-        }
-        return owned(&base, Entry::Part);
-    }
-    if let Some(stem) = file_name.strip_suffix(".mp4") {
-        return owned(stem, Entry::Staged);
-    }
-    if let Some(stem) = file_name.strip_suffix(".json") {
-        return owned(stem, Entry::Sidecar);
-    }
-    Entry::Foreign
-}
-
-/// Rule 1, the ownership filter: a name is ours only if it round-trips through
-/// the `staging` helpers AND passes BOTH checks below.
-/// **`is_capture_base` is not in the plan and is load-bearing.**
-/// `is_safe_base` answers "could this text safely become a path", a very
-/// different question from "did WE write this": a user's `.download.mp4.part`
-/// — the precise file `capture::recovery`'s own foreign-part test exists to
-/// protect — has a perfectly safe base and was DELETED by an
-/// is_safe_base-only filter (caught by
-/// `foreign_files_survive_a_sweep_that_demonstrably_ran`). Every base this app
-/// stages is `capture_paths::base_name` + `staging::reserve_base`, so the
-/// audio side's `YYYY-MM-DD HHmm <title>` check applies verbatim.
-/// `is_safe_base` stays in front of the path join as defence in depth.
-fn owned(stem: &str, make: fn(String) -> Entry) -> Entry {
-    if is_safe_base(stem) && vault_buddy_core::capture_paths::is_capture_base(stem) {
-        make(stem.to_string())
-    } else {
-        Entry::Foreign
-    }
-}
-
-/// Does this `.part` prefix hold footage worth promoting? BOTH halves are
-/// required: fragments with no `moov` have no index, so no player can decode
-/// them, and a `moov` with no `moof` is a bare header — promoting it would
-/// offer the user a zero-length "recording" that opens to nothing.
-fn part_holds_footage(prefix: &[u8]) -> bool {
-    let scan = mp4_boxes::scan(prefix);
-    scan.has_moov() && scan.fragment_count() > 0
-}
-
-/// Rule 3: never sweep while EITHER domain holds the guard — audio means the
-/// app is writing elsewhere, screen means a `.part` right here is live.
-fn should_postpone(active: Option<CaptureKind>) -> bool {
-    active.is_some()
-}
-
-/// Pure staleness, so the clock cases are testable without real mtimes — the
-/// `capture::recovery::is_stale_at` precedent including its skew branch: a
-/// live file's mtime tracks "now", so small skew reads as fresh, while a gap
-/// beyond the window means a clock jump stranded an orphan.
-fn is_stale_at(modified: SystemTime, now: SystemTime, stale_after: Duration) -> bool {
-    match now.duration_since(modified) {
-        Ok(age) => age >= stale_after,
-        Err(e) => e.duration() >= stale_after,
-    }
-}
 
 fn read_prefix(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -316,8 +237,12 @@ fn sweep_staging_dir(dir: &Path, now: SystemTime, stale_after: Duration) -> Swee
         }
         match &f.entry {
             Entry::Part(base) => promote_or_delete_part(f, dir, base, &mut sweep),
-            // Litter by definition: the staged capture it came from is
-            // still on disk, so nothing is lost by removing the temp.
+            // Abandoned by definition, and `should_postpone` is what makes
+            // that true: no export is reserved in this pass, so nothing is
+            // writing a temp here — and this one has been untouched for the
+            // staleness window on top of that. (The earlier reasoning,
+            // "the staged capture it came from is still on disk", is not
+            // the guard: it holds for a temp being written RIGHT NOW too.)
             Entry::ExportTemp(_) => delete(
                 f,
                 "abandoned export temp",
@@ -408,6 +333,13 @@ fn write_minimal_sidecar(dir: &Path, base: &str, modified: SystemTime, sweep: &m
     }
 }
 
+/// Is an export reserved right now? One process-wide reservation, so this is
+/// a bool rather than a base: ANY live export is writing a temp into the
+/// directory this sweep is about to walk.
+fn is_exporting(app: &AppHandle) -> bool {
+    lock_ignoring_poison(&app.state::<ExportState>().0).is_some()
+}
+
 /// Startup janitor for the screen-capture staging directory. One named
 /// background thread; a pass that leaves nothing pending ends it.
 pub fn run_screen_recovery(app: &AppHandle) {
@@ -421,8 +353,14 @@ pub fn run_screen_recovery(app: &AppHandle) {
             };
             let dir = staging::staging_dir(&local);
             let pass = || -> bool {
-                if should_postpone(app.state::<CaptureGuard>().active()) {
-                    log::info!("screen-recovery: postponed while a capture is active");
+                // Two sources, read one after the other and never nested:
+                // `CaptureGuard::active()` takes its mutex, answers and
+                // drops it before `is_exporting` takes `ExportState`'s, so
+                // this needs no lock-ordering rule to remember (the posture
+                // AGENTS.md records for the guard itself).
+                let active = app.state::<CaptureGuard>().active();
+                if should_postpone(active, is_exporting(&app)) {
+                    log::info!("screen-recovery: postponed while a capture or export is active");
                     return true; // pending → retry
                 }
                 if !dir.is_dir() {
@@ -448,145 +386,9 @@ pub fn run_screen_recovery(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use super::decide::fixtures::*;
     use super::*;
-
-    /// One top-level ISO-BMFF box: 4-byte big-endian size, 4-character type,
-    /// payload. `mp4_boxes::scan` walks exactly this.
-    fn bx(kind: &str, payload: &[u8]) -> Vec<u8> {
-        let size = (8 + payload.len()) as u32;
-        let mut out = size.to_be_bytes().to_vec();
-        out.extend_from_slice(kind.as_bytes());
-        out.extend_from_slice(payload);
-        out
-    }
-
-    /// A `.part` a player could open: an index plus one closed fragment.
-    fn footage() -> Vec<u8> {
-        let mut v = header_only();
-        v.extend(bx("moof", b"...."));
-        v.extend(bx("mdat", b"framedata"));
-        v
-    }
-
-    /// A bare fMP4 header: what a capture that died before its first
-    /// fragment closed leaves behind.
-    fn header_only() -> Vec<u8> {
-        let mut v = bx("ftyp", b"isom");
-        v.extend(bx("moov", b"...."));
-        v
-    }
-
-    const BASE: &str = "2026-09-20 1432 Demo";
-    const OTHER: &str = "2026-09-20 1500 Other";
-    const ORPHAN: &str = "2026-09-20 1330 Orphan";
-    const KEPT: &str = "2026-09-20 1340 Kept";
-
-    #[test]
-    fn only_our_own_names_are_recognised() {
-        let b = |e: fn(String) -> Entry| e(BASE.into());
-        assert_eq!(classify(".2026-09-20 1432 Demo.mp4.part"), b(Entry::Part));
-        assert_eq!(classify("2026-09-20 1432 Demo.mp4"), b(Entry::Staged));
-        assert_eq!(classify("2026-09-20 1432 Demo.json"), b(Entry::Sidecar));
-        // Minted by the helper the export worker itself uses.
-        assert_eq!(
-            classify(&staging::export_part_file_name(BASE)),
-            b(Entry::ExportTemp)
-        );
-        // Not ours by extension or shape. Every one has been a real file
-        // in somebody's temp directory; none may be deleted.
-        for foreign in [
-            "notes.txt",
-            "Demo.mkv",
-            "thumbs.db",
-            ".DS_Store",
-            "Demo.mp4.bak",
-            "report.json.bak",
-        ] {
-            assert_eq!(classify(foreign), Entry::Foreign, "{foreign} was claimed");
-        }
-    }
-
-    // Rows where `is_capture_base` is the SOLE decider: every base below is
-    // SAFE, so `is_safe_base` alone lets all of them through (see `owned`).
-    #[test]
-    fn a_file_that_is_not_named_like_one_of_our_captures_is_never_claimed() {
-        for foreign in [
-            ".download.mp4.part",
-            ".notes.export.mp4.part",
-            "Demo.mp4",
-            "Demo.json",
-            "2026-09-20 Demo.mp4", // a date but no HHmm
-            "2026-09-20 1432.mp4", // a prefix but no title, so no trailing space
-        ] {
-            assert_eq!(classify(foreign), Entry::Foreign, "{foreign} was claimed");
-        }
-    }
-
-    // An unsafe base must never be ours, or recovery becomes the one path
-    // acting on a name the guarded commands refuse.
-    #[test]
-    fn an_unsafe_base_is_foreign_even_in_our_own_name_shape() {
-        // The plan's three rows: true, but each trips BOTH halves of the
-        // filter, so alone they stay green with `is_safe_base` gone (M1).
-        assert_eq!(classify("../obsidian/obsidian.json"), Entry::Foreign);
-        assert_eq!(classify("COM1.mp4"), Entry::Foreign);
-        assert_eq!(classify(".mp4"), Entry::Foreign);
-        // Rows where `is_safe_base` is the SOLE decider: every base here is
-        // capture-shaped, so it sails through `is_capture_base`.
-        for unsafe_shaped in [
-            "2026-09-20 1432 ../../obsidian/obsidian.json",
-            ".2026-09-20 1432 a\\b.mp4.part",
-            "2026-09-20 1432 Demo .mp4", // trailing space: Windows strips it
-            "2026-09-20 1432 x:ads.mp4", // an NTFS alternate-data-stream marker
-            "2026-09-20 1432 Demo\u{7}.mp4", // a control character
-        ] {
-            assert_eq!(
-                classify(unsafe_shaped),
-                Entry::Foreign,
-                "{unsafe_shaped:?} was claimed"
-            );
-        }
-    }
-
-    #[test]
-    fn a_part_with_no_index_holds_no_footage_and_a_fragmented_one_does() {
-        assert!(part_holds_footage(&footage()));
-        assert!(!part_holds_footage(&bx("ftyp", b"isom")));
-        assert!(!part_holds_footage(&[]));
-        // Fragments but NO initialization index: no player can decode it,
-        // so `has_moov()` is not redundant with the fragment count
-        // (mutation M5 drops it and must redden here).
-        let mut fragments_only = bx("ftyp", b"isom");
-        fragments_only.extend(bx("moof", b"...."));
-        assert!(!part_holds_footage(&fragments_only));
-    }
-
-    // A moov with NO moof is a bare header: nothing recoverable, and
-    // promoting it would offer the user a zero-length "recording".
-    #[test]
-    fn a_part_with_an_index_but_no_fragment_holds_no_footage() {
-        assert!(!part_holds_footage(&header_only()));
-    }
-
-    #[test]
-    fn recovery_is_postponed_while_a_capture_is_running() {
-        assert!(should_postpone(Some(CaptureKind::Screen)));
-        assert!(should_postpone(Some(CaptureKind::Audio)));
-        assert!(!should_postpone(None));
-    }
-
-    #[test]
-    fn staleness_decision_handles_clock_skew() {
-        let now = SystemTime::now();
-        let hour = Duration::from_secs(3600);
-        assert!(is_stale_at(now - hour, now, STALE_AFTER));
-        assert!(!is_stale_at(now - Duration::from_secs(5), now, STALE_AFTER));
-        // Slightly ahead (coarse fs timestamps): fresh, because a LIVE
-        // capture's mtime tracks "now". Far ahead: a clock jump stranded it,
-        // so it must age in rather than wait for the wall clock.
-        assert!(!is_stale_at(now + Duration::from_secs(5), now, STALE_AFTER));
-        assert!(is_stale_at(now + hour, now, STALE_AFTER));
-    }
+    use vault_buddy_screen::staging::EXPORT_PART_INFIX;
 
     // The one staleness rule spec 10 asks for: a drift here would have two
     // janitors sweeping the same crash disagree about what "stale" means.
@@ -775,7 +577,7 @@ mod tests {
     // instead -- the `capture_exclusion` / `is_safe_base` precedent.
     #[test]
     fn the_promotion_move_is_non_replacing() {
-        let src = include_str!("screen_recovery.rs");
+        let src = include_str!("mod.rs");
         let production = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(production.contains("capture_paths::rename_noreplace(from, &mp4)"));
         // std::fs::rename REPLACES its destination on every platform.
@@ -850,6 +652,27 @@ mod tests {
         assert!(impostor.is_dir(), "{sweep:?}");
         assert!(impostor.join("inside.txt").is_file());
         assert!(sweep.actions.is_empty(), "{sweep:?}");
+    }
+
+    // REGRESSION (fix wave), the OTHER half of the export guard. The pure
+    // `should_postpone` test in `decide` cannot see this: a perfectly
+    // correct predicate called with a hardcoded `false` postpones nothing,
+    // and the run loop needs a live `AppHandle`, so there is no behavioural
+    // seam. Pinned structurally instead — the `capture_exclusion` precedent.
+    #[test]
+    fn the_recovery_pass_asks_both_the_capture_guard_and_the_export_state() {
+        let src = include_str!("mod.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the production prefix");
+        assert!(
+            src.contains("should_postpone(active, is_exporting(&app))"),
+            "the sweep no longer asks whether an export is writing a temp here"
+        );
+        assert!(
+            src.contains("lock_ignoring_poison(&app.state::<ExportState>().0).is_some()"),
+            "is_exporting no longer reads the export reservation"
+        );
     }
 
     #[test]

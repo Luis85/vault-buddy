@@ -500,7 +500,13 @@ export interface ExportFailure {
  * `edited` is Rust's own `Timeline::is_untouched` answer, not "the sidecar
  * has a timeline field" — the editor writes a timeline on every operation
  * and never writes null, so the field's mere presence marks every capture
- * the editor was ever OPENED on. */
+ * the editor was ever OPENED on. A capture whose source duration is unknown
+ * (`recovered`, below) is never `edited`: unknown is not an edit.
+ *
+ * `recovered` means `screen_recovery` rebuilt this capture's sidecar after
+ * an interrupted session. It therefore records neither the vault it belongs
+ * to nor its duration — nothing on disk remembers either — so Save refuses
+ * it outright (`export_worker::prepare`) and the row must not offer one. */
 export interface StagedCaptureSummary {
   base: string;
   vaultId: string;
@@ -511,4 +517,5 @@ export interface StagedCaptureSummary {
   width: number;
   height: number;
   edited: boolean;
+  recovered: boolean;
 }
