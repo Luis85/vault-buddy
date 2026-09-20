@@ -377,6 +377,69 @@ describe("EditorRoot", () => {
     expect(src).toBe(`http://asset.localhost/${encodeURIComponent(STAGED_MP4)}`);
   });
 
+  // Spec 8.2's shortcuts. The editor fills its own window, so there is no
+  // narrower focus target than `window` to bind them to.
+  it("undoes and redoes from the keyboard", async () => {
+    const w = await open();
+    await w.get('[data-testid="preview-scrub"]').setValue("4000");
+    await w.get('[data-testid="editor-split"]').trigger("click");
+    expect(segments(w)).toHaveLength(2);
+
+    // A bare `z` is a keystroke, not a shortcut: without the modifier gate
+    // typing into any future field in this window would rewrite the edit.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z" }));
+    await flushPromises();
+    expect(segments(w)).toHaveLength(2);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
+    await flushPromises();
+    expect(segments(w)).toHaveLength(1);
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true }),
+    );
+    await flushPromises();
+    expect(segments(w)).toHaveLength(2);
+  });
+
+  // Ctrl+Y is what half of Windows expects; Ctrl+Shift+Z is what spec 8.2
+  // names. Both are asserted because supporting one is not supporting the
+  // other, and the whole app ships on Windows.
+  it("redoes on Ctrl+Y as well", async () => {
+    const w = await open();
+    await w.get('[data-testid="preview-scrub"]').setValue("4000");
+    await w.get('[data-testid="editor-split"]').trigger("click");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
+    await flushPromises();
+    expect(segments(w)).toHaveLength(1);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "y", ctrlKey: true }));
+    await flushPromises();
+    expect(segments(w)).toHaveLength(2);
+  });
+
+  // The listener is on `window`, so an unmounted editor that kept listening
+  // would go on editing a timeline nobody can see — and, worse, go on
+  // WRITING it to the sidecar. That write is the observable: after the
+  // unmount there is no rendered strip left to count, which is exactly why
+  // an assertion on a segment count captured BEFORE the unmount proves
+  // nothing at all.
+  it("stops listening for shortcuts once unmounted", async () => {
+    const seen = mockEditor();
+    const w = mount(EditorRoot);
+    await flushPromises();
+    await w.get('[data-testid="preview-scrub"]').setValue("4000");
+    await w.get('[data-testid="editor-split"]').trigger("click");
+    await flushPromises();
+    const saves = () => seen.filter((c) => c.cmd === "save_capture_timeline").length;
+    expect(saves()).toBe(1);
+
+    w.unmount();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
+    await flushPromises();
+    // A surviving listener undoes the split and persists the result.
+    expect(saves()).toBe(1);
+  });
+
   // I-7. Spec 10 promises "saved on each edit, so a crash loses at most the
   // last one". When the sidecar write fails that promise is off and only the
   // user can act on it, so it cannot stay a log line — but it also must not

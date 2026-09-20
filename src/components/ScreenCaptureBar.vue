@@ -1,13 +1,47 @@
 <script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
 import { computed } from "vue";
 
 import { useNowTicker } from "../composables/useNowTicker";
+import { logWarning } from "../logging";
+import { useNotificationsStore } from "../stores/notifications";
 import { useScreenCaptureStore } from "../stores/screenCapture";
 import { formatDuration } from "../utils/formatDuration";
 import Chip from "./ui/Chip.vue";
 
 const store = useScreenCaptureStore();
+const notifications = useNotificationsStore();
 const now = useNowTicker();
+
+/** The finished capture this bar is offering, or `null` while one is
+ * running.
+ *
+ * Gated on `status` as well as on `lastStaged`, because the two are not
+ * redundant: `start()` clears the staged file only AFTER the status has gone
+ * live, and a stale one surviving any path into `capturing` would offer Edit
+ * on a file while another capture is being written. Conversely `lastStaged`
+ * alone is what makes this a FINISHED capture rather than a bar with nothing
+ * to point at — `applyStopped` resets to idle and then parks it, in that
+ * order, so idle-with-nothing-staged is the state nobody should see this bar
+ * in at all (`ActionPanel` does not render it there). */
+const staged = computed(() => (store.status === "idle" ? store.lastStaged : null));
+
+/** Phase 4's ONE way into the editor. Phase 5 replaces it with spec 10's
+ * staged-capture browser, which lists every staged capture rather than just
+ * the last one; this is deliberately not that browser. */
+async function openEditor() {
+  const capture = staged.value;
+  if (capture === null) return;
+  try {
+    await invoke("open_capture_editor", { base: capture.base });
+  } catch (e) {
+    // A refusal here is `is_safe_base` rejecting the name or the editor
+    // window being missing — both of which leave the click doing nothing
+    // visible, which AGENTS.md's diagnostics invariant does not allow.
+    logWarning(`open_capture_editor failed: ${String(e)}`);
+    notifications.error(String(e));
+  }
+}
 
 // The store owns the paused-time arithmetic (elapsedMs) so the bar and any
 // later reader cannot disagree about what "elapsed" means; the bar only
@@ -37,6 +71,13 @@ const busy = computed(() => store.stopping);
 const dotTone = computed(() =>
   store.paused ? "bg-amber-400" : "animate-pulse bg-recording",
 );
+// The wash follows the same three states the row does. A finished capture
+// keeping the recording red would say a capture is running, which is the
+// falsehood the whole `staged` branch exists to retire.
+const tone = computed(() => {
+  if (staged.value) return "bg-white/5";
+  return store.paused ? "bg-amber-500/15" : "bg-red-500/15";
+});
 </script>
 
 <template>
@@ -53,9 +94,33 @@ const dotTone = computed(() =>
        used. -->
   <div
     class="rounded-control px-2 py-1.5"
-    :class="store.paused ? 'bg-amber-500/15' : 'bg-red-500/15'"
+    :class="tone"
   >
-    <div class="flex items-center gap-2">
+    <!-- The finished state, which is NOT the live one wearing a different
+         label: a staged capture has no session left, so Pause and Stop would
+         address nothing. It replaces the row rather than joining it. -->
+    <div
+      v-if="staged"
+      data-testid="screen-ready"
+      class="flex items-center gap-2"
+    >
+      <span class="flex-1 truncate text-sm text-fg-secondary">
+        Recorded {{ staged.base }}
+      </span>
+      <button
+        type="button"
+        data-testid="screen-edit"
+        class="cursor-pointer rounded-control bg-white/10 px-2 py-1 text-xs font-semibold text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        aria-label="Edit this screen capture"
+        @click="openEditor"
+      >
+        Edit
+      </button>
+    </div>
+    <div
+      v-else
+      class="flex items-center gap-2"
+    >
       <span
         data-testid="screen-dot"
         class="h-2.5 w-2.5 shrink-0 rounded-full"

@@ -47,6 +47,14 @@ const { view } = storeToRefs(store);
 // The shared auto-save status, shown as a transient indicator beside the title
 // while in a settings view (Buddy or Vault settings).
 const saveStatus = useSettingsStatusStore();
+// The screen bar covers TWO states, not one: a live capture, and the staged
+// capture the last one left behind (phase 4's only way into the editor).
+// `applyStopped` resets the store to `idle` BEFORE parking `lastStaged`, so a
+// gate on `status !== "idle"` alone hides the bar at exactly the moment Edit
+// exists — the editor would be unreachable from the running app.
+const showScreenBar = computed(
+  () => screenCapture.status !== "idle" || screenCapture.lastStaged !== null,
+);
 const isSettingsView = computed(
   () => view.value === "settings" || view.value === "captureSettings",
 );
@@ -269,13 +277,14 @@ watch(
       @pause="capture.pause()"
       @resume="capture.resume()"
     />
-    <!-- The screen domain's own live bar, beside the audio one. The two
-         cannot run at once (the shared CaptureKind guard), so this is a
+    <!-- The screen domain's own bar, beside the audio one. The two capture
+         kinds cannot run at once (the shared CaptureKind guard), so this is a
          sibling, never a stack. Without it ScreenSourcePicker's start
          navigates to a view that shows nothing about the capture it just
-         began (docs/Gaps.md GAP-118). -->
+         began (docs/Gaps.md GAP-118) — and, since phase 4, the finished
+         capture's Edit action would have nowhere to render either. -->
     <ScreenCaptureBar
-      v-if="view === 'list' && screenCapture.status !== 'idle'"
+      v-if="view === 'list' && showScreenBar"
       class="mb-2"
     />
     <TranscriptionSummary

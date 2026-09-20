@@ -2227,20 +2227,38 @@ Found by the Task 2 review (phase 2). Not the implementer's error: the case is
 absent from the plan's own Step 2 test list, so it is a plan omission rather
 than a deviation.
 
+**Still open after phase 4, and the boundary of what phase 4 closed matters.**
+Phase 4 introduced `staging::is_reserved_device_stem` — a public,
+case-insensitive, any-extension predicate over `CON`/`PRN`/`AUX`/`NUL`/
+`COM1`–`COM9`/`LPT1`–`LPT9` — and `editor_commands::is_safe_base` consumes it,
+so no name arriving from the frontend can become a device path. Phase 4 also
+gave `write_sidecar` a structural containment check (it compares the joined
+path's `parent()` against the staging dir, which catches a separator, a `..`
+and a Windows drive prefix in one comparison). **Neither of those is this
+entry.** `sanitize_title` and `reserve_base` — the NAMING path, where a
+window title first becomes a base — still do not consult
+`is_reserved_device_stem`: `sanitize_title("CON")` is still `"CON"`, so a
+capture of a window titled that still fails at `File::create`, after the user
+has started recording. The list exists now; the naming path simply does not
+read it.
+
 Two related path-safety items belong with it:
 
-- `reserve_base` and `write_sidecar` do not re-assert that `base` contains no
-  path separators; they trust the caller sanitized first. The rest of this
-  codebase re-asserts containment at the actual write site (the tasks and
-  capture domains both do), so this is a defence-in-depth gap rather than a
-  live bug while the only caller is the sanitizing one.
+- `reserve_base` still does not re-assert that `base` contains no path
+  separators; it trusts the caller sanitized first, and unlike `write_sidecar`
+  it was not hardened. It only probes `.exists()`, so this remains
+  defence-in-depth rather than a live bug while the only caller is the
+  sanitizing one.
 - Two distinct titles can collide onto one sanitized base (`"a:b"` and
   `"a/b"` both become `"a-b"`). That one IS handled, by `reserve_base`'s
   ` (N)` suffix retry — recorded here only so a future reader does not
   re-discover it as a bug.
 
-Fix alongside the write-site hardening in the task that owns the capture
-session's filesystem writes, where both checks land at the same chokepoint.
+**Fix shape:** have `sanitize_title` rename rather than merely refuse — the
+open question this entry has always carried is what `"CON"` should BECOME
+(`"CON_"`? `"Capture"`?), which is why it belongs with the capture session's
+write-site hardening and not with the editor's input validation, where
+refusing is the right answer and is already done.
 
 ### GAP-109 · Medium · A reused HWND can resolve to a different live window than the one picked
 `src-tauri/screen/src/source.rs`, `resolve`'s `SourceId::Window` arm validates
@@ -2462,14 +2480,26 @@ without ever collecting.
 capture *source* — is implemented, though **by TITLE rather than by HWND**,
 which is a fourth unrecorded deviation from that section: `our_window_titles`
 collects `WebviewWindow::title()` strings and `source.rs` drops any
-enumerated window whose title matches one exactly. It is inert today — all
-four windows are `skipTaskbar: true`, which tao implements as
-`WS_EX_TOOLWINDOW`, and `windows-capture`'s `Window::is_valid()` already
-rejects those, so the filter never fires — but it becomes load-bearing in
-**Phase 4**, whose spec'd `editor` window is `skipTaskbar: false` and will
-therefore enumerate. A title match is also, in principle, capable of hiding a
-USER's window that happens to carry the exact same string. Phase 4 must not
-assume an HWND filter exists.
+enumerated window whose title matches one exactly.
+
+**This has now MATERIALIZED (phase 4), and the filter held.** It was inert
+through phases 2–3 — the four companion windows are `skipTaskbar: true`,
+which tao implements as `WS_EX_TOOLWINDOW`, and `windows-capture`'s
+`Window::is_valid()` already rejects those, so the comparison never ran. The
+`editor` window is `skipTaskbar: false` (verified in `tauri.conf.json`), so
+it enumerates, and the title filter is now the only thing standing between
+the picker and offering Vault Buddy's own editor as a source. Two things make
+it hold with no change: `our_window_titles` walks `app.webview_windows()` at
+call time rather than reading a hardcoded list, so the editor is covered
+automatically; and the editor's title is a static string in
+`tauri.conf.json` with no `set_title` call anywhere in the repo, so the
+EXACT match cannot go stale under a runtime suffix (a title carrying the open
+capture's name would have broken it — do not add one without replacing this
+filter first).
+
+**What remains open is the filter's SHAPE, not its coverage.** A title match
+is still, in principle, capable of hiding a USER's window that happens to
+carry the identical string.
 
 **Phase 3's `WDA_EXCLUDEFROMCAPTURE` does NOT close this entry.** Spec §5.3's
 separate rule — never appear *in* a recording — IS implemented as of `714bbb7`
@@ -2488,13 +2518,12 @@ config-derived label test a complete source and a one-shot apply at capture
 start sufficient. If Phase 4 builds its `editor` window on demand instead,
 BOTH halves go blind at once: the test never checks a window it cannot see in
 the config, and an editor opened DURING a capture is never excluded and
-appears in the footage. **Failure scenario:** Phase 4's `editor` window is spec'd
-`skipTaskbar: false`, so it really enumerates — and a title filter drops it
-only while its title string matches exactly, so an editor whose title carries
-the document name (or any runtime suffix) is offered to the user as a capture
-source, and capturing it recurses. The converse costs the user instead: any
-window of THEIRS whose title happens to equal one of ours is silently missing
-from the Window tab, with nothing to explain the absence. Note this is the
+appears in the footage. **Failure scenario:** any window of THEIRS whose title
+happens to equal one of ours is silently missing from the Window tab, with
+nothing to explain the absence. And in the other direction, a later change
+that gives the editor a dynamic title — the open capture's name in the
+titlebar is the obvious one — silently stops matching, so the editor is
+offered as a capture source and capturing it recurses. Note this is the
 SOURCE half only; the PIXEL half is closed, and on a supported build the buddy
 appearing in the footage IS a failure — file it against verification row 16,
 not here. **Fix
@@ -2985,3 +3014,89 @@ not fit, which also gets phase 5's parse done in the one place that already
 reads the file. Deliberately NOT done in the P4 fix wave: it changes the wire
 contract's meaning for a case no shipped code can produce, and phase 5 has to
 parse that field into a `Timeline` regardless.
+
+### GAP-135 · Medium · `core::timeline` has no serde derives, so the editor's on-disk timeline shape is an unenforced convention
+`src-tauri/core/src/timeline.rs` (`Segment`, `Timeline` — `#[derive(Debug,
+Clone, Copy, PartialEq, Eq)]` and `#[derive(Debug, Clone, PartialEq, Eq,
+Default)]`; no `Serialize`, no `Deserialize`, no `rename_all`) against
+`src/types.ts`'s `SegmentDto { sourceStartMs, sourceEndMs }` and
+`src-tauri/src/editor_commands.rs`'s `save_capture_timeline`, whose `timeline`
+parameter is an opaque `serde_json::Value` it stores verbatim.
+
+Phase 4 ships the editor with the segment algebra implemented TWICE: in
+`core::timeline` (Rust, unit-tested, uncalled) and in
+`src/utils/timelineGeometry.ts` + `src/composables/useEditorTimeline.ts`
+(TypeScript, what actually runs). The TypeScript side writes camelCase keys;
+the Rust struct's fields are `source_start_ms` / `source_end_ms`. Nothing
+connects the two — not a derive, not a test, not a type. The staging sidecar
+round-trips today only because Rust never parses the field at all.
+
+**Failure scenario:** Phase 5 adds `#[derive(Deserialize)]` to `Timeline` to
+read the sidecar for the export, forgets `#[serde(rename_all =
+"camelCase")]`, and every timeline the shipped editor has ever written fails
+to deserialize. Whether that surfaces as an error or as an exported whole
+recording (the untouched fast path, silently resurrecting cut footage)
+depends on how the failure is handled — and the second is the likelier
+reading of `Option<Timeline>`. **Fix shape:** derive
+`Serialize`/`Deserialize` with `rename_all = "camelCase"` on both types NOW,
+and add a test that round-trips a literal JSON string spelled the way
+`useEditorTimeline` writes it — a literal, not a re-serialize, so the test
+fails if the names change on either side. GAP-134's fix (parse the field in
+`load_from_staging_dir`) needs this first and should carry it.
+
+### GAP-136 · Medium · The output-to-source mapping exists twice, in two languages, and nothing checks that the two agree
+`src-tauri/core/src/timeline.rs`'s `Timeline::to_source_ms` and
+`src/utils/timelineGeometry.ts`'s `toSourceMs` (plus their siblings —
+`output_duration_ms`/`outputDurationMs`, and `split_at`/`reorder`/`delete`,
+which live in `useEditorTimeline.ts` on the TypeScript side). Both implement
+spec §8.1's segment algebra; each has its own unit tests; no fixture is
+shared and no test runs both. The TypeScript side also has `toOutputMs`, the
+inverse the preview needs, which the Rust side does not have at all.
+
+They coexist for a real reason — the preview has to map the playhead in the
+webview, and the export has to map it in Rust — so this is not a delete-one
+gap. The risk is that they DRIFT, and the drift is invisible: phase 5's
+export plans on the Rust one while the user watches the TypeScript one, so a
+disagreement about a boundary (the half-open `[start, end)` convention, or
+which segment owns the instant a cut lands on) means the exported file does
+not match the preview the user approved. Two concrete places they could
+already differ: `useEditorTimeline.splitAt` rounds its input with
+`Math.round` before choosing a segment, which `Timeline::split_at` has no
+equivalent of (its input is already `u64`); and `segmentAtOutputMs`'s strict
+`<` is load-bearing on the TS side in a way `to_source_ms`'s early return
+mirrors only by construction. **Failure scenario:** a user cuts a moment out,
+the preview skips it, the exported file still contains it — or the export
+lands one frame off at every cut — with every test in the repo green.
+**Fix shape:** one shared fixture table (a JSON file of
+`{timeline, outputMs, expectedSourceMs}` rows) read by a Rust test and a
+Vitest test alike, added when phase 5 gives the Rust side a production caller
+— that is the moment the disagreement becomes reachable, and the moment the
+fixture has two real implementations to hold apart.
+
+### GAP-137 · Medium · The asset protocol's staging-only scope is a security boundary pinned by no test
+`src-tauri/tauri.conf.json` — `app.security.assetProtocol = { "enable": true,
+"scope": ["$APPLOCALDATA/screen-captures/*"] }` — against
+`src/roots/EditorRoot.vue`'s `convertFileSrc(detail.assetPath, "asset")`.
+
+That one scope line is what keeps the editor webview from reading arbitrary
+files through `asset.localhost`. It is enforced by Tauri on every request, so
+nothing on the frontend side can widen it — which is exactly why widening it
+is a one-line config edit with no failing test to stop it. The codebase pins
+its other config-derived invariants (`ALL_WINDOW_LABELS`, `COMPANION_LABELS`,
+`POSITION_DENYLIST` and `EXCLUDED_LABELS` all have tests that read
+`tauri.conf.json` and fail on drift); this one does not, and it is the only
+one whose loosening is an information-disclosure escalation rather than a
+cosmetic bug.
+
+**Failure scenario:** a later phase needs to preview something outside
+staging — an exported file in a vault, a thumbnail cache — and widens the
+scope to `$APPLOCALDATA/*` or adds a vault path. Every test stays green, and
+from that moment any script running in the editor webview (or any future
+window, since the scope is app-wide, not per-window) can read every file
+under that root and exfiltrate it: the user's notes, in the vault case.
+**Fix shape:** a Rust unit test in `src-tauri/src/` that parses
+`tauri.conf.json` and asserts `assetProtocol.scope` is EXACTLY
+`["$APPLOCALDATA/screen-captures/*"]` — an equality assertion, not a
+`contains`, so an added entry fails too. The existing config-derived
+window-label tests in `tray.rs` are the shape to copy, including the message
+that tells the next reader what the assertion is protecting.

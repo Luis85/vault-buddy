@@ -799,4 +799,33 @@ describe("ActionPanel save indicator", () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="screen-elapsed"]').exists()).toBe(false);
   });
+
+  it("offers the finished capture's Edit action on the list view", async () => {
+    // The reachability half of the entry point. `applyStopped` resets the
+    // store to `idle` and THEN parks the staged file, so a bar gated on
+    // `status !== "idle"` alone renders nothing at the one moment the Edit
+    // action exists — the editor would be unreachable from the running app
+    // with every ScreenCaptureBar test still green, because those mount the
+    // bar directly and never see this gate (the same blindness GAP-118's
+    // test above was written for).
+    const store = useVaultsStore();
+    store.vaults = sampleVaults;
+    store.loaded = true;
+    const wrapper = mount(ActionPanel);
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(false);
+    useScreenCaptureStore().applyStopped({
+      base: "cap one",
+      path: "C:/staging/cap one.mp4",
+      durationMs: 30_000,
+      sourceTitle: "Screen 1",
+      width: 1920,
+      height: 1080,
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(true);
+    // ...and only on the list view, like the live bar it replaces.
+    store.openSearch();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="screen-edit"]').exists()).toBe(false);
+  });
 });

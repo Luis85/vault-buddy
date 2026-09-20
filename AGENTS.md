@@ -86,28 +86,33 @@ here is deliberately only the shipped increments.
 ```
 vault-buddy/
 ├── AGENTS.md / CLAUDE.md / CONTEXT.md / README.md
-├── index.html                  # single HTML entry — all four windows load it
+├── index.html                  # single HTML entry — all five windows load it
 ├── package.json / vite.config.ts / tsconfig.json
 ├── .github/workflows/          # ci.yml, release.yml, bump-version.yml
 ├── .claude/                    # vendored superpowers skills + SessionStart hook
 ├── docs/                       # see the documentation map above
 ├── scripts/                    # bump-version.mjs, setup-linux-deps.sh, make-icon.mjs
-├── src/                        # Vue 3 frontend — ONE bundle, four window roots
+├── src/                        # Vue 3 frontend — ONE bundle, five window roots
 │   ├── main.ts                 # mounts rootFor(window label)
-│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot + rootFor() map
+│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot / EditorRoot + rootFor() map
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
+│   │   └── editor/             # CapturePreview + TimelineStrip (the editor window's surface)
 │   ├── stores/                 # Pinia: vaults, capture, updates, settings, notifications
-│   ├── composables/            # settings sync, startup update check, bubble, announcements
-│   └── utils/                  # highlight, recentSearches, formatDuration
+│   ├── composables/            # settings sync, startup update check, bubble, announcements,
+│   │                           #   tasks helpers, useEditorTimeline (undo/redo + persist-on-edit)
+│   └── utils/                  # highlight, recentSearches, formatDuration, timelineGeometry
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
-│   ├── tauri.conf.json         # the 4 windows, updater endpoint, version
-│   ├── capabilities/           # single default capability (all 4 windows)
+│   ├── tauri.conf.json         # the 5 windows, updater endpoint, version,
+│   │                           #   assetProtocol scope (staging only — a security boundary)
+│   ├── capabilities/           # single default capability (all 5 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
 │   │                           #   transcription.rs, task_commands.rs, task_config_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
 │   │                           #   region_commands.rs (the overlay's selection lifecycle),
+│   │                           #   editor_commands.rs (the editor's open/load/save surface),
+│   │                           #   window_close.rs (CloseRequested routing),
 │   │                           #   capture_exclusion.rs (WDA_EXCLUDEFROMCAPTURE apply/clear),
 │   │                           #   capture_guard.rs (cross-domain capture exclusion),
 │   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
@@ -214,7 +219,7 @@ launched the app on the CI runner and never exited.
 
 ## Architecture overview
 
-Four OS windows, one frontend bundle, one Rust process:
+Five OS windows, one frontend bundle, one Rust process:
 
 ```
    ┌───────────────────────────── Rust shell (src-tauri/src) ─────────────────────────────┐
@@ -228,15 +233,17 @@ Four OS windows, one frontend bundle, one Rust process:
    │  mcp_commands.rs ── embedded MCP server lifecycle + settings (vault_buddy_mcp crate) │
    │  document_commands.rs ── pandoc detect/convert, import recovery, doc settings        │
    │  region_commands.rs ── overlay show / answer / cleanup for region selection          │
+   │  editor_commands.rs ── editor show + base stash; staged load / timeline save         │
+   │  window_close.rs ── CloseRequested routing (buddy quit path; editor X → hide)        │
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
-   └──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────────┘
-          │                  │                  │                  │  IPC commands + events
-   ┌──────┴──────┐    ┌──────┴──────┐    ┌──────┴──────┐    ┌──────┴──────┐
-   │ main (88²)  │    │ panel       │    │ bubble      │    │ overlay     │
-   │ BuddyRoot   │    │ PanelRoot   │    │ BubbleRoot  │    │ RegionRoot  │
-   │ character,  │    │ ActionPanel │    │ greeting /  │    │ rubber band │
-   │ drag, dots  │    │ all views   │    │ announce    │    │ (1 monitor) │
-   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+   └─────┬────────────┬────────────┬────────────┬──────────────┬──────────────────────────┘
+         │            │            │            │              │  IPC commands + events
+   ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌─────┴────┐ ┌───────┴──────┐
+   │main (88²)│ │panel     │ │bubble    │ │overlay   │ │editor 960×640│
+   │BuddyRoot │ │PanelRoot │ │BubbleRoot│ │RegionRoot│ │EditorRoot    │
+   │character,│ │ActionPnl │ │greeting /│ │rubber    │ │preview +     │
+   │drag, dots│ │all views │ │announce  │ │band (1×) │ │strip         │
+   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘
       each webview = own Pinia; cross-window sync = Tauri events + localStorage `storage`
 
    pure logic lives below the shell:
@@ -263,10 +270,15 @@ Four OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 81 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+All 85 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
 Keep this table in sync when adding/removing commands — and COUNT the
 `generate_handler![…]` list rather than adding to the previous number: this
-sentence has been wrong twice (73 when it was 79, then 79 when it was 81).
+sentence has been wrong twice (73 when it was 79, then 79 when it was 81),
+and the count below was measured, not incremented:
+
+```bash
+awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
+```
 
 | Defined in | Commands |
 | --- | --- |
@@ -282,6 +294,7 @@ sentence has been wrong twice (73 when it was 79, then 79 when it was 81).
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
 | `screen_commands.rs` | The screen-capture CAPTURE-lifecycle surface (the later-phase commands — the editor and the config setters — are deliberately absent; region select landed in phase 3, in its own `region_commands.rs` below). `list_capture_sources` *(async — WGC/WinRT enumeration takes hundreds of ms, GAP-22's reasoning for `list_audio_devices`; degrades to an empty list rather than an error)*, `start_screen_capture` *(async — source re-resolve, cpal endpoint opening, sink creation and staging-directory I/O all block, and the start waits on a 15 s ready handshake)*, `stop_screen_capture` *(async — the wait is bounded at 30 s of mux teardown + fMP4 finalize + the publish rename, wider than audio's 15 s; returns typed `stillSaving` on expiry, mirroring `stop_capture`)*, `pause_screen_capture`, `resume_screen_capture`, `screen_capture_status` *(all three sync: each takes the reservation mutex for O(1) work and sends on an unbounded channel, so none can block the main thread — the same posture as the audio siblings)*. Mutual exclusion with the audio domain lives in `CaptureGuard` (spec §7.3), claimed before the reservation and freed from exactly one chokepoint, `clear_active_screen` — both facts pinned by structural tests |
 | `region_commands.rs` | The overlay's selection lifecycle (spec §5.2), split out of `screen_commands.rs` because it is a WINDOW-lifecycle concern — it touches no `CaptureGuard`, no `ScreenCaptureState` and no session. `select_capture_region` *(async — it waits for a human to draw a rectangle; on the main thread that would freeze the very event loop that dispatches the overlay's own pointer events. Bounded at 120 s so a webview that never answers cannot strand a full-screen invisible always-on-top window, and its overlay-show handshake is bounded at 5 s separately)*, `resolve_region_selection` *(sync — O(1) under a mutex plus one unbounded-channel send, the posture of the screen domain's own sync siblings)* |
+| `editor_commands.rs` | The capture editor's surface (spec §8, §11), its own module because opening the editor takes TWO commands. `open_capture_editor` *(sync — it shows and focuses a window, so it is main-thread-only; it therefore STASHES the base name rather than reading the capture, because a sync command must not touch disk — the `begin_document_import`/`take_pending_import` split, for the same reason. It emits `editor:open` to the editor window alone, BEFORE `show()`, and rolls the stash back on either failure so a later drain can never open a capture the user was just told failed)*, `take_editor_request` *(sync — the one-shot drain of that stash)*, `load_staged_capture` *(async — reads the staging sidecar and confirms the `.mp4` is on disk, off the main thread; it also REFUSES a sidecar whose own `base` disagrees with the file name it was read from, since that field is hand-editable and becomes the identity the editor later saves under)*, `save_capture_timeline` *(async — an fsync'd, temp-then-replacing sidecar rewrite on EVERY edit, spec §10's "a crash loses at most the last operation")*. The three that take a `base` from the frontend gate it through `is_safe_base` — no separator, no leading/trailing dot, no trailing space, no `:` (a drive prefix or an NTFS ADS marker), no control character and no Windows reserved device stem — before it becomes a path; an INTERIOR `..` is deliberately allowed, because within one path component it traverses nowhere and refusing it stranded real captures from windows titled "Saving... please wait". A structural test scans this file and fails if any command taking a base stops refusing an unsafe one, and asserts the whole command list so a NEW command has to be considered |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -289,8 +302,9 @@ item events are handled in `lib.rs`.
 
 ### Events (Rust → webviews)
 
-All emitted app-wide (`app.emit`) with ONE exception, `region:begin`, noted
-below; listeners noted are the windows that actually subscribe.
+All emitted app-wide (`app.emit`) with TWO exceptions, `region:begin` and
+`editor:open`, noted below; listeners noted are the windows that actually
+subscribe.
 
 | Event | Meaning | Listened to by |
 | --- | --- | --- |
@@ -310,7 +324,8 @@ below; listeners noted are the windows that actually subscribe.
 | `screen:failed` | `{message, retainedPath}` — `retainedPath` is the `.part` a stop that failed AFTER writing real footage deliberately left behind, carried as data so the UI can offer that (still playable) file | screenCapture store |
 | `screen:warning` | `{message}` — spec §14: a vanished source or audio device warns, the capture finalizes cleanly. Toasted only when it arrives outside a live capture | screenCapture store |
 | `screen:frames` | `{fps, dropped}` ~2 Hz, advisory & lossy (the audio domain's `capture:level` posture) | screenCapture store → `ScreenCaptureBar`'s dropped chip (`dropped > 0` only; `fps` stays log-only, a rate is not an anomaly) |
-| `region:begin` | The overlay is about to be shown for a NEW selection. **The one event emitted to a single window** (`emit_to("overlay", …)`, not `app.emit`): it re-arms a one-shot latch that exists in exactly one webview and means nothing anywhere else. Emitted from INSIDE the same main-thread closure as `set_size`, immediately BEFORE `show()` — a hidden window takes no pointer input and the webview's task queue is FIFO, so the re-arm cannot lose the race to the user's first pointerdown. A failed emit is a hard error, not a `let _ =`: an un-armed overlay IS a full-screen scrim that ignores every click and Escape for the whole 120 s wait | RegionRoot (overlay) |
+| `region:begin` | The overlay is about to be shown for a NEW selection. **The FIRST of the two events emitted to a single window** (`emit_to("overlay", …)`, not `app.emit`; `editor:open` below is the other): it re-arms a one-shot latch that exists in exactly one webview and means nothing anywhere else. Emitted from INSIDE the same main-thread closure as `set_size`, immediately BEFORE `show()` — a hidden window takes no pointer input and the webview's task queue is FIFO, so the re-arm cannot lose the race to the user's first pointerdown. A failed emit is a hard error, not a `let _ =`: an un-armed overlay IS a full-screen scrim that ignores every click and Escape for the whole 120 s wait | RegionRoot (overlay) |
+| `editor:open` | A staged capture is about to be opened in the editor. **The SECOND event emitted to a single window** (`emit_to("editor", …)`, the `region:begin` shape): it says "re-read the stash", it carries no state, and it means nothing in any other webview. It exists because draining `take_editor_request` from `onMounted` alone is not enough — `window_close.rs` answers the editor's own X with `prevent_close()` + `hide()`, so that webview mounts exactly ONCE per process: open capture A, close the editor, open capture B, and without this event the window comes back up still showing A while B sits in the stash forever (`editor_commands.rs`'s module doc, at length). Emitted BEFORE `show()`, and a failed emit ROLLS THE STASH BACK and errors rather than leaving a request a later drain would silently open | EditorRoot (editor) |
 | `mcp:status` | MCP server state `{state, port?, message?}` on every transition | McpSettings (panel) |
 | `mcp:write` | An MCP client's successful vault write `{kind, title, vaultName}` | useBuddyAnnouncements (buddy window ONLY — exactly-once) |
 
@@ -355,11 +370,13 @@ below; listeners noted are the windows that actually subscribe.
 
 ## The window system (most invariant-heavy area)
 
-Four separate always-on-top transparent windows, so the buddy window never
-resizes. The old design was one window that grew from 88×88 to hold the
-panel; WebView2 repaints its stale last frame at the new bounds for a frame
-on resize, flashing the buddy to a corner. Splitting the concerns removed the
-resize entirely:
+Five windows. FOUR of them are the always-on-top transparent companions, so
+the buddy window never resizes. The old design was one window that grew from
+88×88 to hold the panel; WebView2 repaints its stale last frame at the new
+bounds for a frame on resize, flashing the buddy to a corner. Splitting the
+concerns removed the resize entirely. The fifth, `editor`, is deliberately
+none of those things — an ordinary decorated, resizable application window —
+and the rules below say so where they differ:
 
 - **`main`** — the buddy, fixed 88×88, the only window the user drags and the
   only one whose position is persisted. It never changes size, so it is
@@ -401,6 +418,29 @@ resize entirely:
   The overlay is hidden and REUSED, never reloaded, so its component state
   survives between selections — which is why `region:begin` exists (see the
   Events table).
+- **`editor`** — the capture editor (spec §5.1, §8), 960×640, created hidden.
+  The odd one out in every respect, and each difference is load-bearing:
+  - It is **not transparent, not always-on-top, `decorations: true`,
+    `resizable: true` and `skipTaskbar: false`** — a real application window
+    the user alt-tabs to and sizes, not a companion pinned to the buddy. So it
+    is **never positioned-while-hidden**: it opens where the OS puts it at its
+    configured size, and there is no placement math to get wrong. It is in
+    `POSITION_DENYLIST` for that same reason — a restored position would be
+    junk that only buys a startup restore and a `Moved` handler contending for
+    the window-state plugin's cache lock.
+  - It is **exempt from `tray::hide_buddy`**: the hide walk reads
+    `COMPANION_LABELS`, which is `ALL_WINDOW_LABELS` minus the editor. Hiding
+    it from the OUTSIDE would strand an in-progress edit off-screen with no
+    way back — the GAP-82 class, applied to a window that can hold work. The
+    user clicking the editor's own titlebar X is a different thing entirely:
+    that IS an explicit instruction about that one window, and
+    `window_close.rs` answers it with `prevent_close()` + `hide()`.
+  - It **is** destroyed by `finish_quit`, which walks `ALL_WINDOW_LABELS`: a
+    live WebView2 window at process exit fails the `Chrome_WidgetWin_0` class
+    unregister, every time.
+  - Because it is hidden and reused rather than destroyed, its webview mounts
+    exactly ONCE per process — which is why `editor:open` exists (see the
+    Events table), the editor's counterpart to `region:begin`.
 
 `panel`, `bubble` and `overlay` are *positioned while hidden, then shown* — a
 moved-only window has no stale-frame flash. (The overlay is also RESIZED while
@@ -549,28 +589,45 @@ Invariants:
   structurally cannot see (native faults, kills, power loss) — every
   graceful exit path (tray/buddy quit, Alt+F4 close, update install) must
   stamp `diagnostics::mark_clean_shutdown()`. All hide paths funnel through
-  `tray::hide_buddy`, which hides EVERY window and no-ops mid-capture — the
-  buddy is the capture indicator for BOTH kinds, so the guard is
-  `capture_commands::recording_blocks_shutdown ||
-  screen_commands::capture_blocks_shutdown`. "Every window" is
-  `tray::ALL_WINDOW_LABELS`, the ONE list both this hide walk and
-  `finish_quit`'s destroy walk read (`POSITION_DENYLIST`, the window-state
-  plugin's list, is that same set minus the buddy) — a unit test derives it
-  from `tauri.conf.json`, because the overlay was once added to the config
-  and to none of those lists: quit then failed WebView2's
-  `Chrome_WidgetWin_0` unregister every time, and hide-to-tray would have
-  stranded a full-monitor always-on-top window with the buddy gone. Read
-  "the ONE list" as covering the hide and destroy walks only: there is a
-  FOURTH window-label list, `capture_exclusion::EXCLUDED_LABELS`, and it is a
-  deliberate sibling rather than drift. It is semantically its own set (a
-  later window could legitimately need destroying on quit without needing to
-  be hidden from a recording, or the reverse), and it is pinned to
-  `tauri.conf.json` by its own pair of tests in both directions — every
-  declared window is excluded, and no excluded label names a window that does
-  not exist — so the two lists cannot silently diverge. The quit
-  path carries the same pair: its `shutdown-finalize` worker finalizes the
-  audio recording AND the screen capture before `finish_quit`, so neither can
-  be stranded by an exit.
+  `tray::hide_buddy`, which hides every COMPANION window and no-ops
+  mid-capture — the buddy is the capture indicator for BOTH kinds, so the
+  guard is `capture_commands::recording_blocks_shutdown ||
+  screen_commands::capture_blocks_shutdown`.
+
+  **There are FOUR window-label lists, and they are four on purpose.** The
+  hide walk and the destroy walk used to share one, `ALL_WINDOW_LABELS`;
+  Phase 4 split that in two because the editor has to be destroyed on quit
+  but must NOT be hidden with the companions (an outside hide strands an
+  in-progress edit off-screen — see the editor's own bullet above). So:
+  - `tray::ALL_WINDOW_LABELS` — every declared window; `finish_quit`'s
+    destroy walk. A live WebView2 window at exit fails the
+    `Chrome_WidgetWin_0` class unregister.
+  - `tray::COMPANION_LABELS` — `ALL_WINDOW_LABELS` minus `editor`; the
+    hide-to-tray walk.
+  - `tray::POSITION_DENYLIST` — `ALL_WINDOW_LABELS` minus `main`; the windows
+    whose position the window-state plugin must not persist.
+  - `capture_exclusion::EXCLUDED_LABELS` — every declared window, kept out of
+    a recording's pixels by `WDA_EXCLUDEFROMCAPTURE`. It coincides with
+    `ALL_WINDOW_LABELS` today and is still its own set: a later window could
+    legitimately need destroying on quit without needing to be hidden from a
+    recording, or the reverse.
+
+  None of these may drift, and none of them is maintained by memory: unit
+  tests derive each from `tauri.conf.json` — `ALL_WINDOW_LABELS` and
+  `COMPANION_LABELS` directly, `POSITION_DENYLIST` transitively through
+  `ALL_WINDOW_LABELS`, `EXCLUDED_LABELS` in BOTH directions — with an
+  explicit assertion that `COMPANION_LABELS` does NOT contain `editor`, and
+  another that `lib.rs` feeds the window-state plugin the constant rather
+  than a literal list that drifted from it once already.
+
+  That discipline exists because the overlay was once added to the config
+  and to none of the lists: quit then failed the `Chrome_WidgetWin_0`
+  unregister every time, and hide-to-tray would have stranded a
+  full-monitor always-on-top window with the buddy gone.
+
+  The quit path carries the same pair: its `shutdown-finalize` worker
+  finalizes the audio recording AND the screen capture before `finish_quit`,
+  so neither can be stranded by an exit.
 
 ## The vault domain (core crate + `vaults` store)
 
@@ -812,16 +869,20 @@ found the failure it prevents:
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
 
-### Screen capture (phases 2–3) — `src-tauri/screen/` + `screen_commands.rs` / `screen_capture_worker.rs` / `region_commands.rs` / `capture_exclusion.rs` + `screenCapture` store
+### Screen capture (phases 2–4) — `src-tauri/screen/` + `screen_commands.rs` / `screen_capture_worker.rs` / `region_commands.rs` / `capture_exclusion.rs` / `editor_commands.rs` / `window_close.rs` + `screenCapture` store
 
 The second capture provider: record a chosen monitor, window or REGION of a
 monitor, with any number of selected audio devices mixed into one stereo
 track, into a crash-survivable file. Spec:
 `docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md`
-(phasing in §13). **Phases 2–3 write NOTHING into a vault** — a staged capture
-lives entirely outside every vault and the ninth sanctioned vault write does
-not exist yet; it arrives in Phase 5 along with the editor's export and the
-companion note. Do not add one here.
+(phasing in §13). **Phases 2–4 write NOTHING into a vault** — a staged capture
+lives entirely outside every vault, the editor edits it in place in staging,
+and the ninth sanctioned vault write does not exist yet; it arrives in Phase 5
+along with the editor's export and the companion note. Do not add one here.
+Verify that structurally rather than from this sentence: nothing under
+`src-tauri/src/editor_commands.rs` resolves a vault path at all — every write
+it makes goes through `staging::write_sidecar` into
+`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`.
 
 - **Three threads, and why there are three.** Spec §6.1 lists two; the code
   runs three because `IMFSample` is a COM interface pointer and is not
@@ -942,15 +1003,25 @@ companion note. Do not add one here.
   The audio domain shares the tail ordering but has no self-finalize path,
   which is why this was reachable only here.
 - **Our own windows are filtered out of the picker by TITLE, not HWND**
-  (spec §7.2 says HWND). Inert today — all four windows are
-  `skipTaskbar: true`, which tao implements as `WS_EX_TOOLWINDOW`, and
-  `windows-capture`'s `Window::is_valid()` already rejects those, so the
-  title filter never fires. It becomes load-bearing in Phase 4, whose spec'd
-  `editor` window is `skipTaskbar: false`: do not assume an HWND filter
-  exists (GAP-116). Phase 3's `WDA_EXCLUDEFROMCAPTURE` does NOT supersede
-  this: the affinity keeps our windows out of a recording's PIXELS, while
-  this filter is about our windows being offered as SOURCES. Two rules, two
-  spec sections, neither closing the other.
+  (spec §7.2 says HWND), and as of Phase 4 that filter is LIVE rather than
+  theoretical (GAP-116). It was inert through phases 2–3: the four companion
+  windows are all `skipTaskbar: true`, which tao implements as
+  `WS_EX_TOOLWINDOW`, and `windows-capture`'s `Window::is_valid()` already
+  rejects those, so nothing ever reached the title comparison. The `editor`
+  window is `skipTaskbar: false` (verified in `tauri.conf.json`), so it
+  really enumerates, and the title filter is now the only thing keeping Vault
+  Buddy from offering its own editor as a capture source. **The mechanism
+  holds without a change**: `our_window_titles` walks
+  `app.webview_windows()` at call time rather than reading a hardcoded list,
+  so the editor is covered automatically, and its title is a static config
+  string — nothing calls `set_title` anywhere in this repo, so the exact
+  match cannot go stale under a runtime suffix. What remains open is the
+  filter's SHAPE, not its coverage: a title match can in principle hide a
+  USER's window that happens to carry the identical string, which is why
+  GAP-116 stays open for an HWND filter. `WDA_EXCLUDEFROMCAPTURE` does NOT
+  supersede any of this: the affinity keeps our windows out of a recording's
+  PIXELS, while this filter is about our windows being offered as SOURCES.
+  Two rules, two spec sections, neither closing the other.
 - **Region capture is an ID, not a parameter (phase 3).** A region is a
   `SourceId::Region { monitor, rect }` — `region:<display>,<x>,<y>,<w>,<h>`,
   PHYSICAL pixels relative to that monitor's own origin — so
@@ -1017,17 +1088,59 @@ companion note. Do not add one here.
   docs/Gaps.md GAP-124. Windows 10 before 2004 has no
   `WDA_EXCLUDEFROMCAPTURE`: the call logs a warning and the capture proceeds
   with the buddy in frame, by design.
-- **Three Phase-1 modules have no production caller yet** — `core::timeline`
-  and `screen::select` (Phases 4/5) and `core::screen_note` (Phase 5's vault
-  write), plus `screen::mp4_boxes`, reachable only from the feature-gated
-  `fmp4_spike`. `core::screen_geometry` is no longer among them: phase 3 gave
-  it two production callers, `region_commands::region_from_pick`
-  (`to_physical` + `clamp_to_frame`) and `source::resolve`'s Region arm
-  (`clamp_to_frame`, via `region_dims`). All are unit-tested and count toward
-  the coverage floor; none is dead code to delete. Five of the seven
-  `screen_*` `vault_config` fields are likewise parsed, serialized and
-  merge-preserved but read by nothing until Phase 6.
+- **Three Phase-1 modules STILL have no production caller after phase 4** —
+  `core::timeline`, `screen::select` and `core::screen_note`, plus
+  `screen::mp4_boxes`, reachable only from the feature-gated `fmp4_spike`.
+  `core::screen_geometry` left that list in phase 3 (two callers:
+  `region_commands::region_from_pick` and `source::resolve`'s Region arm);
+  `core::timeline` did NOT, and the reason matters more than the fact.
+  **Phase 4's editor implements the segment algebra in TypeScript**
+  (`src/utils/timelineGeometry.ts` + `useEditorTimeline.ts`), and
+  `save_capture_timeline` carries the result through as an opaque
+  `serde_json::Value` it never parses. So the timeline is now TWO
+  implementations of one idea in two languages, and no test anywhere runs
+  both — `core::timeline` is the one Phase 5's export will plan on, while the
+  one the user watches is the other (docs/Gaps.md GAP-135, GAP-136). All are
+  unit-tested and count toward the coverage floor; none is dead code to
+  delete. Five of the seven `screen_*` `vault_config` fields are likewise
+  parsed, serialized and merge-preserved but read by nothing until Phase 6.
 
+- **The editor (phase 4) — `editor_commands.rs` + `EditorRoot.vue`.** A
+  staged capture is opened in its own window, cut into segments, and saved
+  back into its own staging sidecar. Four facts a later phase must not get
+  wrong:
+  - **The asset protocol's scope is a security boundary, not a detail.** The
+    preview plays the staged `.mp4` through `convertFileSrc(…, "asset")`, and
+    `tauri.conf.json`'s `assetProtocol.scope` is exactly
+    `["$APPLOCALDATA/screen-captures/*"]`. That one line is what stops the
+    editor webview reading arbitrary files off the disk through
+    `asset.localhost`. Widening it to `$APPLOCALDATA/*`, or to a vault path,
+    would be a real escalation, and **no test pins it** (docs/Gaps.md
+    GAP-137). Nothing on the frontend side can widen it, which is why
+    `StagedCaptureDetail.assetPath` carrying a full absolute path is not a
+    leak: the scope is enforced by Tauri on every request regardless.
+  - **The preview is NOT authoritative and is NOT gapless.** It is one
+    `<video>` element seeking around a single source file, so a cut shows as
+    a seek rather than a splice — spec §8.2 accepts that. The exported file
+    is Phase 5's business; what is on screen is an approximation of it.
+  - **Phase 4 writes nothing into a vault.** Every write goes to the staging
+    sidecar through `staging::write_sidecar` (temp + fsync + replacing
+    rename), on EVERY edit, so spec §10's "a crash loses at most the last
+    operation" holds. A failed write raises an inline banner rather than a
+    log line alone: the edit stays on screen and undo still works, but the
+    crash-safety promise is off and only the user can act on it.
+  - **Phase 5 hand-off — key the export fast path on `is_untouched`, NOT on
+    `Option::is_none()`.** The editor writes the timeline on every edit and
+    NEVER writes `null`, so after the first edit the sidecar always carries
+    one. It used to clear the field whenever the timeline matched the one the
+    editor opened with, under "absent means untouched" — which is true only
+    for a capture opened unedited, and on spec §10's Resume silently told the
+    exporter that a previously-edited recording had never been touched. The
+    single authority for "untouched" is
+    `core::timeline::Timeline::is_untouched(source_duration_ms)`, which needs
+    a duration the frontend is never given. Do not re-derive it in
+    TypeScript; there are already two implementations of this mapping and
+    nothing checks them against each other (docs/Gaps.md GAP-136).
 - **Frontend.** `RecordMode.vue`'s chooser → `ScreenSourcePicker.vue`
   (Screen / Window / Region tabs — the Region tab is the presentational
   `ScreenRegionPicker.vue`, which lists the monitors as *targets* for
@@ -1074,7 +1187,18 @@ companion note. Do not add one here.
   send — never on the command's own reply. The tray and buddy menus
   drive the same three verbs (`tray.rs` routes them by `CaptureGuard::
   active()`), so the bar is a surface, not the only way to control a
-  capture.
+  capture. **Since phase 4 the bar covers a SECOND state**, and `ActionPanel`
+  renders it for both: when nothing is capturing but `lastStaged` is set, the
+  live row is replaced by a finished row naming the capture plus an **Edit**
+  button — `invoke("open_capture_editor", { base })`, today's ONE way into
+  the editor (Phase 5 replaces it with spec §10's staged-capture browser).
+  The two-state gate is not cosmetic: `applyStopped` calls `reset()` — which
+  sets `status` to `idle` — and THEN parks `lastStaged`, so the panel's own
+  `v-if` has to read `status !== "idle" || lastStaged !== null` or the bar is
+  absent at exactly the moment Edit exists, and the editor is unreachable
+  from the running app with every bar-level test still green. Pause and Stop
+  are not rendered in the finished state at all: that session is gone, so
+  both would address nothing.
 
 ## The document-import domain (`core/src/document_import.rs` + `src-tauri/src/document_commands.rs` + `DocumentImportSettings.vue` / `ImportVaultPicker.vue`)
 
@@ -2413,18 +2537,23 @@ Each window loads the same bundle and mounts a different root by its label:
 `main.ts` reads `getCurrentWindow().label` and `rootFor(label)`
 (`src/roots/index.ts`, a pure map, unit-tested) picks the component —
 `main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`,
-`overlay` → `RegionRoot`, any
+`overlay` → `RegionRoot`, `editor` → `EditorRoot`, any
 unexpected label → `BuddyRoot`. The roots are thin: `BuddyRoot` hosts
 `CompanionCharacter` and invokes `toggle_panel`/`close_panel`; `PanelRoot`
 hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
 `BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss;
 `RegionRoot` paints the rubber band and answers with
 `resolve_region_selection` (a rectangle, or `null` for Escape / a click with
-no drag / a degenerate box). **`RegionRoot` installs no store** — it is the
-one root that mirrors no Rust state, which is why it is the one root that
-needs no per-window `init()` wiring; the only event it listens to is
-`region:begin`, and that re-arms its own one-shot latch rather than carrying
-state. Each
+no drag / a degenerate box); `EditorRoot` hosts the capture editor's preview
+and strip, and binds spec §8.2's Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y on `window`
+(the editor fills its own window, so there is no narrower focus target) —
+removed on unmount, because a surviving `window` listener would go on editing
+AND persisting a timeline nobody can see. **`RegionRoot` and `EditorRoot`
+install no store** — they are the TWO roots that mirror no Rust state, which
+is why they are the two that need no per-window `init()` wiring. Each listens
+to exactly one event, and neither event carries state: `region:begin` re-arms
+the overlay's one-shot latch, `editor:open` tells the editor to re-read the
+Rust-owned stash (`take_editor_request`). Each
 window is its own webview with its own Pinia stores, so any store that mirrors
 Rust state must be wired up per window: **both** `BuddyRoot` and `PanelRoot`
 call `capture.init()` (or the panel never sees `capture:*` events — dead level
@@ -2497,7 +2626,8 @@ views and the list view; see the document-import domain), `screenCapture`
 `idle | capturing | paused` rather than the audio store's two booleans, plus
 `sourceTitle`, `startedAtMs`, `pausedTotalMs`/`pausedSinceMs`, the advisory
 `fps`/`dropped`, `warning`, `retainedPath`, `vaultId`, and `lastStaged` (the
-finished capture's staged `.mp4`, for the phase-4 editor); driven by the
+finished capture's staged `.mp4`, which since phase 4 is what the capture
+bar's **Edit** action opens); driven by the
 seven `screen:*` events with a `seq` ticket so a stale reply never
 overwrites a newer locally-applied transition, and seeded/reconciled from
 `screen_capture_status`), and

@@ -137,15 +137,47 @@ function onRedo() {
   editor.value?.redo();
 }
 
+/** Spec 8.2's shortcuts.
+ *
+ * Ctrl+Y as well as Ctrl+Shift+Z: the spec names the latter, half of Windows
+ * expects the former, and supporting both costs one clause. Bound on
+ * `window` because the editor FILLS its own window — there is no narrower
+ * focus target to scope to, and the strip and preview are the only
+ * interactive surfaces in it.
+ *
+ * The modifier gate is not ceremony: an ungated `z` would rewrite the edit
+ * from any keystroke, including one typed into a field a later phase adds
+ * (spec 10's Save dialog is exactly that). */
+function onKeydown(e: KeyboardEvent) {
+  if (!e.ctrlKey && !e.metaKey) return;
+  const key = e.key.toLowerCase();
+  if (key === "z" && !e.shiftKey) {
+    e.preventDefault();
+    onUndo();
+  } else if ((key === "z" && e.shiftKey) || key === "y") {
+    e.preventDefault();
+    onRedo();
+  }
+}
+
 let unlistenOpen: (() => void) | undefined;
 
 onMounted(async () => {
+  // Registered synchronously, ahead of the awaits below: a `listen` that
+  // never resolves must not cost the user their keyboard.
+  window.addEventListener("keydown", onKeydown);
   // Subscribed BEFORE the first drain, so a request arriving while that
   // drain is in flight is not lost.
   unlistenOpen = await listen("editor:open", () => void openRequested());
   await openRequested();
 });
-onBeforeUnmount(() => unlistenOpen?.());
+onBeforeUnmount(() => {
+  unlistenOpen?.();
+  // The listener is on `window`, which outlives this component. Leaving it
+  // behind would keep an unmounted editor editing — and PERSISTING, through
+  // the composable this closure still holds — a timeline nobody can see.
+  window.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <template>

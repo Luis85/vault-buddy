@@ -94,15 +94,25 @@ exists to find.
 
 ## Covered by Phase 4
 
-Phase 4 builds the editor window. These rows are **written now and runnable
-only once Phase 4's entry point lands** (the Record Screen surface that calls
-`open_capture_editor` — plan Task 7): until then nothing in the app opens the
-editor, so there is no way to reach them by hand. They are recorded here
-rather than in *NOT reachable yet* because the code they test exists and is
-what a reviewer would otherwise assume the automated gates cover.
+Phase 4 builds the editor window. **The entry point has now landed** (Task 7):
+after a screen capture stops, the capture bar on the panel's list view shows
+the finished capture with an **Edit** button, and that is what calls
+`open_capture_editor`. Every row below is therefore reachable by hand. (There
+is still no staged-capture browser — only the capture that finished most
+recently in this app run is offered. That is Phase 5. To reach an older
+staged file, record a short new one.)
 
-Row 19 is the one that cannot be reached any other way. Every other thing
-the editor does is arithmetic a Vitest fixture can drive against a fake
+Rows 22–28 were added with the entry point. They cover what no automated
+gate on any platform can: the editor is the first window of ours that is
+`skipTaskbar: false`, decorated, resizable, hidden-not-destroyed on its own
+close, destroyed on quit, excluded from a recording's pixels, and NOT taken
+by hide-to-tray — seven properties of a real OS window, none of which a
+Vitest fixture or a Linux `cargo test` can observe. The Rust-side tests that
+exist for them read `tauri.conf.json` and scan source text; they prove the
+LISTS are right, never that Windows behaves as the lists assume.
+
+Row 19 stays the sharpest of the arithmetic-adjacent rows. Everything else
+the editor computes is arithmetic a Vitest fixture can drive against a fake
 capture; **loading the video is not** — it needs a real staged file, a real
 asset-protocol request and a real scope check, which exist on Windows and
 nowhere else. It is also the row that would have caught P-5, where
@@ -116,6 +126,13 @@ failing with no error anywhere in the app.
 | 19 | **The preview actually loads its video** (spec §8.2, the asset protocol) | Stage a capture (any row 1–3 recording will do), open it in the editor, and **look at the video frame before touching anything**. Expected: the first frame of the recording is visible and **Play** plays it with audio. **Record: whether a frame appeared at all**, and — in the editor window's DevTools (`F12`) — the `<video>` element's resolved `src` plus any failed request on the Network tab. A blank black frame with a `net::ERR_*` or a 403 on an `asset.localhost` request is the failure this row exists to find; so is a `src` that is a bare file name rather than a full `…\screen-captures\<base>.mp4` path. | |
 | 20 | **An edit survives closing and reopening the editor** (spec §10 Resume, C-1) | Open a staged capture, scrub to ~4 s, **Split**, select the FIRST block, **Delete** — the first 4 s are now cut. Close the editor window. Open the SAME capture again: it must come back showing the trimmed timeline, not the whole recording. Now make any edit and press **Undo**. **Record: what `<base>.json`'s `timeline` field holds afterwards** (open it in a text editor — it is beside the `.mp4` in the staging dir). Expected: the trim, i.e. one segment starting at ~4000. A `timeline` that is absent or `null` there is the C-1 erasure: the edit is still on screen, but the file says the capture was never touched, and Phase 5's fast path would export the whole recording. | |
 | 21 | **A failed save is visible** (spec §10 disk pressure, I-7) | Hard to stage honestly; run it only if it is cheap on the machine at hand — make the staging directory unwritable (deny your own user Write on `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`), then make an edit in an already-open editor. Expected: an amber banner above the preview saying the edit could not be saved, the edit still on screen, and the editor still usable. **Record whether the banner appeared**, and restore the permission afterwards. | |
+| 22 | **The editor opens on a real capture, as a real window** (Task 7's entry point) | Record ~30 s, Stop, and wait for the capture bar to change from *Recording* to the finished row naming the capture. Click **Edit**. **Record:** whether the window opens at all; whether it has a normal title bar and can be resized and maximised; whether it appears in the taskbar and in Alt+Tab (it must — it is the only window of ours that is `skipTaskbar: false`); and whether the video plays. A window that opens but shows a black frame is row 19's failure, not this one. | |
+| 23 | **The editor's own X hides it rather than quitting anything** (`window_close.rs`, I-1/I-2) | With the editor open and the buddy running, click the editor's titlebar **X**. **Record:** whether the app is still running, whether the buddy is still on screen, and whether clicking **Edit** again brings the editor back **showing the same capture** (it must — the window is hidden and reused, never destroyed, which is what `editor:open` exists for). Then stage a SECOND capture and click **Edit**: the editor must come back showing the NEW capture, not the old one. That second half is the one thing no test on any platform reaches. | |
+| 24 | **Hide to tray does not take the editor** (`COMPANION_LABELS`) | With the editor open and a capture loaded in it, tray → **Show / Hide**. **Record:** whether the buddy and the panel disappear, and whether the editor stays. The editor must stay — hiding it from the outside would strand an in-progress edit off-screen with no way back. Then tray → **Show / Hide** again and confirm the buddy returns without disturbing the editor. | |
+| 25 | **Quit destroys the editor** (`ALL_WINDOW_LABELS`, `Chrome_WidgetWin_0`) | With the editor open, tray → **Quit**. **Record:** whether the process really exits (check Task Manager — not just that the windows vanished), and whether `vault-buddy.log` carries `Failed to unregister class Chrome_WidgetWin_0`. It must not. A live WebView2 window at exit fails that unregister every time, which is the whole reason the editor is on the destroy list but not the hide list. | |
+| 26 | **The editor is not in its own recording** (spec §5.3, and GAP-116's other half) | Start a capture of the whole screen with the editor open and plainly in frame. **Record:** whether the editor is visible to you during the capture (it must be) and whether it appears in the played-back file (it must not). This is the first excluded window that is NOT `skipTaskbar`, so it is the first real test of `capture_exclusion`. **While the picker is open, also check the Window tab**: Vault Buddy's editor must NOT be offered as a capture source — it is the first window of ours that enumerates at all, so this is the first time the title filter actually runs (GAP-116). | |
+| 27 | **Split, delete, reorder, undo, redo — and the keyboard** (spec §8.1, §8.2) | On a ~30 s capture: scrub and **Split** twice, **Delete** a middle block, drag a block to reorder it, then **Ctrl+Z** all the way back to the whole recording and **Ctrl+Shift+Z** (and separately **Ctrl+Y**) forward again. **Record:** whether the strip and the preview agree after every step (scrub to a moment and check the frame is the one the strip says), whether **Undo** is ever disabled while an edit is still visible on screen, and whether a split on an exact block boundary is correctly a no-op that does NOT consume an undo step. | |
+| 28 | **Edits survive a crash** (spec §10, save-on-every-edit) | Open a staged capture, **Split** twice, then kill the process from Task Manager (**End task**) — do not close the editor first. Relaunch, record a throwaway capture to get the bar back… or, quicker, read `<base>.json` in the staging dir directly. **Record:** how many segments the `timeline` field holds. Expected: three — both splits, because every edit is written through immediately. Anything fewer means the sidecar write is not landing per-edit and spec §10's "a crash loses at most the last operation" does not hold. | |
 
 ## Known absences (do not file these as failures)
 
@@ -156,8 +173,17 @@ failing with no error anywhere in the app.
 - **There is no keyboard-only way to draw a region** (docs/Gaps.md GAP-127).
   The overlay reads pointer events only; Escape cancels, but nothing selects.
   Row 14 is a pointer test by necessity, not by preference.
+- **The editor writes nothing into a vault either, and there is no Save.**
+  Phase 4 edits the staged capture in place, in
+  `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. Export, the vault
+  write and the companion note are all Phase 5; the editor says so in its own
+  footer. Do not file "I edited it and nothing appeared in Obsidian".
+- **Only the most recently finished capture can be opened.** The Edit action
+  reads the store's `lastStaged`, which a restart clears and a new capture
+  replaces. Spec §10's staged-capture browser is Phase 5 (docs/Gaps.md
+  GAP-115).
 - **The stop notification says "Screen capture ready", not "saved", on
-  purpose.** Phases 2–3 write nothing into any vault. If you go looking in
+  purpose.** Phases 2–4 write nothing into any vault. If you go looking in
   Obsidian for a captured file you will not find one — the file is in
   `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. That is the
   documented state, not a failure.
@@ -170,7 +196,7 @@ only into a phase's own table above, never into a tick here.
 
 | Item | Arrives in |
 | --- | --- |
-| The Record Screen entry point that opens the editor, and with it rows 19–21 above | Phase 4, plan Task 7 |
+| Opening a staged capture that is NOT the most recent one (the resume-or-discard browser) | Phase 5 |
 | Export exactness (cut boundaries, reordered segments) | Phase 5 |
 | The untouched-timeline fast path (remux rather than re-encode) | Phase 5 |
 | The vault write, the companion note, and playback of the saved note inside Obsidian | Phase 5 |

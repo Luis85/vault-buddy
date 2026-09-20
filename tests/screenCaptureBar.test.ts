@@ -1,10 +1,23 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ScreenCaptureBar from "../src/components/ScreenCaptureBar.vue";
+import { useNotificationsStore } from "../src/stores/notifications";
 import { useScreenCaptureStore } from "../src/stores/screenCapture";
+
+/** The `screen:stopped` payload the store parks in `lastStaged` — the one
+ * handle anything has on the footage until phase 5's staged-capture browser
+ * lands. */
+const STAGED = {
+  base: "cap one",
+  path: "C:/staging/cap one.mp4",
+  durationMs: 30_000,
+  sourceTitle: "Screen 1",
+  width: 1920,
+  height: 1080,
+};
 
 describe("ScreenCaptureBar", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -187,6 +200,72 @@ describe("ScreenCaptureBar", () => {
     const paused = w.get('[data-testid="screen-dot"]').classes();
     expect(paused).toEqual(expect.arrayContaining(["h-2.5", "w-2.5", "bg-amber-400"]));
     expect(paused).not.toContain("animate-pulse");
+  });
+
+  // THE ENTRY POINT. `open_capture_editor` had no caller at all until this
+  // action existed, so the whole editor was unreachable from the running app.
+  it("opens the editor on the capture that just finished", async () => {
+    const calls: Record<string, unknown>[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, ...(args as object) });
+      return undefined;
+    });
+    const store = useScreenCaptureStore();
+    store.$patch({ status: "idle", lastStaged: STAGED });
+    const w = mount(ScreenCaptureBar);
+    await w.get('[data-testid="screen-edit"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "open_capture_editor")).toMatchObject({
+      base: "cap one",
+    });
+  });
+
+  // The Edit action is about a FINISHED capture. Offering it mid-recording
+  // would invite a click that opens an editor on a file still being written.
+  // `lastStaged` is deliberately POPULATED here: a gate that read only that
+  // field — the obvious mutation — would pass against a null one.
+  it("offers no Edit action while a capture is running", async () => {
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    store.$patch({
+      status: "capturing",
+      sourceTitle: "S",
+      startedAtMs: 0,
+      lastStaged: STAGED,
+    });
+    const w = mount(ScreenCaptureBar);
+    expect(w.find('[data-testid="screen-edit"]').exists()).toBe(false);
+    // ...and the live controls are still the ones on screen.
+    expect(w.find('[data-testid="screen-stop"]').exists()).toBe(true);
+  });
+
+  // The finished state is not the live one wearing a different label: a bar
+  // still offering Pause/Stop on a capture that has already been staged
+  // sends control messages to a session that no longer exists.
+  it("retires the live controls once the capture is staged", async () => {
+    mockIPC(() => undefined);
+    useScreenCaptureStore().$patch({ status: "idle", lastStaged: STAGED });
+    const w = mount(ScreenCaptureBar);
+    expect(w.find('[data-testid="screen-stop"]').exists()).toBe(false);
+    expect(w.find('[data-testid="screen-pause"]').exists()).toBe(false);
+    expect(w.get('[data-testid="screen-ready"]').text()).toContain("cap one");
+  });
+
+  // A refused open (`is_safe_base` rejecting the name, or the editor window
+  // being missing) must not be a click that does nothing: AGENTS.md's
+  // diagnostics invariant says nothing may be caught and hidden.
+  it("surfaces a refused open instead of swallowing it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "open_capture_editor") throw new Error("That capture name is not one of ours.");
+      return undefined;
+    });
+    useScreenCaptureStore().$patch({ status: "idle", lastStaged: STAGED });
+    const w = mount(ScreenCaptureBar);
+    await w.get('[data-testid="screen-edit"]').trigger("click");
+    await flushPromises();
+    expect(useNotificationsStore().items.map((i) => i.message).join(" ")).toContain(
+      "not one of ours",
+    );
   });
 
   it("disables Stop while a stop is already in flight", async () => {
