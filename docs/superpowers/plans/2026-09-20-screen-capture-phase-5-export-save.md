@@ -28,6 +28,7 @@ Every task's requirements implicitly include this section.
   ```
 - **Manual Windows verification is DEFERRED** until after the final phase, by the user's standing decision. Tasks write checklist rows; nobody runs them and nobody is asked to.
 - **Every spawned thread is named** (`std::thread::Builder`). No swallowed errors — anything caught-and-hidden goes through `log::warn!`/`log::error!` or `src/logging.ts`.
+- **The shared fixture table is SIZE-GUARDED in four places, and adding a row breaks all four.** `core/src/timeline.rs` asserts `cases.len()` in `shared_fixture_table_maps_output_time_to_source_time` and an `applied` count in `shared_fixture_table_agrees_on_whole_and_on_the_operations`; `tests/timelineFixtures.test.ts` asserts `table.cases` and `ops` lengths. They exist because a table that silently shrinks proves nothing. **Re-point them, never delete them**, and run BOTH languages after touching `tests/fixtures/timeline-cases.json`. Task 1 found this the hard way: following the plan literally left the branch red with two Rust failures the task's own gate list did not surface.
 - **`sink.rs` carries two structural self-scans** over its own pre-`#[cfg(test)]` prefix: it must never contain `.Flush(` and never contain `metadata(`. Task 4 adds code to that file and must not trip either.
 - **`screen_commands.rs` carries three more structural scans**: exactly one `release(CaptureKind::Screen)` in its production prefix and exactly zero in `screen_capture_worker.rs`; the monitor clears before it emits; the exclusion clear lives inside `clear_active_screen`. New export code must not add a `CaptureKind::Screen` release anywhere (see Task 7 — export deliberately does **not** claim `CaptureGuard`).
 
@@ -50,10 +51,10 @@ Every task below carries a **Mutation table**. Run every row. A row that stays g
 
 | File | Responsibility |
 | --- | --- |
-| `src-tauri/screen/src/select.rs` | **Modify.** Gains `PlanSpan::restamp`, `plan_output_duration_ms`, `progress_fraction`. Pure; the export's whole ordering and timestamp story. |
+| `src-tauri/screen/src/select.rs` | **Modify.** Gains `PlanSpan::restamp`, `plan_output_duration_ms`, `progress_percent` (what the throttle gates on) and `progress_fraction` (derived from it). Pure; the export's whole ordering and timestamp story. |
 | `src-tauri/core/src/timeline.rs` | **Modify (tests only).** Two new shared-fixture assertions covering `is_untouched`, the rule the fast path keys on. |
 | `tests/fixtures/timeline-cases.json` | **Modify.** Gains an `isUntouched` field per case plus two cases that separate "untouched" from "one segment". |
-| `src/utils/timelineGeometry.ts` | **Modify.** Gains `isUntouched(timeline, durationMs)` so the shared table can run the rule through both languages. |
+| ~~`src/utils/timelineGeometry.ts`~~ | ~~Gains `isUntouched`.~~ **STRUCK before implementation — do not add this.** It contradicted Task 1 Step 7, which is the correct half: `6944ac0` deliberately rejected putting a second copy of `is_untouched` one IPC hop from the Rust original, and AGENTS.md is emphatic against exactly this shape ("the ONE list", `archivedMatcher` "never a second membership rule"). Rust owns the rule; the Vitest side asserts only that every shared case DECLARES `isUntouched` rows, so a new case cannot silently skip it. If a later task "notices the gap", this is the gap and it is deliberate. |
 | `src-tauri/core/src/screen_capture_paths.rs` | **New.** The ninth vault write's naming: pairwise `.mp4` + `.md` reservation, and the commit-with-suffix-retry loop. In `core` because the one collision-suffix minter (`capture_paths::candidate`) is `pub(crate)` to that crate. |
 | `src-tauri/core/src/screen_capture_config.rs` | **Modify.** Gains `export_size_estimate_bytes` — the pure half of the disk-pressure check. |
 | `src-tauri/screen/src/disk.rs` | **New.** `free_bytes(&Path)`: `GetDiskFreeSpaceExW` on Windows, `Unsupported` elsewhere. |

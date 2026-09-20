@@ -5,7 +5,12 @@
     "tests in src-tauri/core/src/timeline.rs -- both by this exact path, so",
     "moving this file breaks a Rust build (include_str!) and a Vitest run.",
     "Why it exists, and what each row pins, is documented in those two files.",
-    "toSourceMs rows are [outputMs, expectedSourceMs]; null means past the end."
+    "toSourceMs rows are [outputMs, expectedSourceMs]; null means past the end.",
+    "isUntouched rows are [sourceDurationMs, expected] for Timeline::is_untouched",
+    "-- the predicate phase 5's export fast path keys on. RUST ASSERTS THESE;",
+    "the Vitest side deliberately does NOT reimplement the rule (6944ac0 chose",
+    "not to put a second copy of it one IPC hop from the original) and asserts",
+    "only that every case declares the field, so a new case cannot skip it."
   ],
   "whole": [
     {
@@ -62,7 +67,21 @@
             "sourceEndMs": 6000
           }
         ]
-      }
+      },
+      "isUntouched": [
+        [
+          6000,
+          true
+        ],
+        [
+          5999,
+          false
+        ],
+        [
+          12000,
+          false
+        ]
+      ]
     },
     {
       "name": "three contiguous cuts",
@@ -154,7 +173,13 @@
             "sourceEndMs": 2000
           }
         ]
-      }
+      },
+      "isUntouched": [
+        [
+          6000,
+          false
+        ]
+      ]
     },
     {
       "name": "reordered out of source order",
@@ -194,6 +219,12 @@
           6000,
           null
         ]
+      ],
+      "isUntouched": [
+        [
+          6000,
+          false
+        ]
       ]
     },
     {
@@ -225,6 +256,12 @@
         [
           2000,
           null
+        ]
+      ],
+      "isUntouched": [
+        [
+          6000,
+          false
         ]
       ]
     },
@@ -262,6 +299,12 @@
           4000,
           null
         ]
+      ],
+      "isUntouched": [
+        [
+          6000,
+          false
+        ]
       ]
     },
     {
@@ -272,6 +315,110 @@
         [
           0,
           null
+        ]
+      ],
+      "isUntouched": [
+        [
+          6000,
+          false
+        ]
+      ]
+    },
+    {
+      "name": "one segment that does not start at zero is NOT untouched",
+      "segments": [
+        {
+          "sourceStartMs": 1000,
+          "sourceEndMs": 6000
+        }
+      ],
+      "outputDurationMs": 5000,
+      "toSourceMs": [
+        [
+          0,
+          1000
+        ],
+        [
+          4999,
+          5999
+        ],
+        [
+          5000,
+          null
+        ]
+      ],
+      "splitAt": {
+        "outputMs": 2000,
+        "segments": [
+          {
+            "sourceStartMs": 1000,
+            "sourceEndMs": 3000
+          },
+          {
+            "sourceStartMs": 3000,
+            "sourceEndMs": 6000
+          }
+        ]
+      },
+      "isUntouched": [
+        [
+          6000,
+          false
+        ],
+        [
+          5000,
+          false
+        ]
+      ]
+    },
+    {
+      "name": "one segment covering the whole source is untouched at that duration only",
+      "segments": [
+        {
+          "sourceStartMs": 0,
+          "sourceEndMs": 10000
+        }
+      ],
+      "outputDurationMs": 10000,
+      "toSourceMs": [
+        [
+          0,
+          0
+        ],
+        [
+          9999,
+          9999
+        ],
+        [
+          10000,
+          null
+        ]
+      ],
+      "splitAt": {
+        "outputMs": 4000,
+        "segments": [
+          {
+            "sourceStartMs": 0,
+            "sourceEndMs": 4000
+          },
+          {
+            "sourceStartMs": 4000,
+            "sourceEndMs": 10000
+          }
+        ]
+      },
+      "isUntouched": [
+        [
+          10000,
+          true
+        ],
+        [
+          9999,
+          false
+        ],
+        [
+          10001,
+          false
         ]
       ]
     }

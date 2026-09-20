@@ -350,7 +350,7 @@ mod tests {
         // A table nothing iterates proves nothing, and one that silently
         // shrinks to a single row proves almost nothing. The TypeScript half
         // asserts the same count against the same file.
-        assert_eq!(cases.len(), 6, "the shared table lost or gained a case");
+        assert_eq!(cases.len(), 8, "the shared table lost or gained a case");
         for case in cases {
             let name = case["name"].as_str().expect("name");
             let t = Timeline {
@@ -425,6 +425,56 @@ mod tests {
         }
         // Without this, a table whose operation rows were all renamed or
         // dropped would pass by asserting nothing at all.
-        assert_eq!(applied, 4, "the shared table lost an operation row");
+        assert_eq!(applied, 6, "the shared table lost an operation row");
+    }
+
+    // The predicate phase 5's export fast path keys on. It lives in the
+    // SHARED table rather than a Rust-only fixture so a later frontend
+    // change that reshapes a case cannot quietly stop exercising it.
+    #[test]
+    fn shared_fixture_table_pins_is_untouched() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/timeline-cases.json"))
+                .expect("fixture table parses");
+        let cases = table["cases"].as_array().expect("cases is an array");
+        assert!(!cases.is_empty(), "the fixture table is empty");
+        let mut checked = 0usize;
+        for case in cases {
+            let name = case["name"].as_str().unwrap_or("<unnamed>");
+            let timeline = Timeline {
+                segments: case["segments"]
+                    .as_array()
+                    .expect("segments is an array")
+                    .iter()
+                    .map(|s| Segment {
+                        source_start_ms: s["sourceStartMs"].as_u64().expect("sourceStartMs"),
+                        source_end_ms: s["sourceEndMs"].as_u64().expect("sourceEndMs"),
+                    })
+                    .collect(),
+            };
+            let rows = case["isUntouched"]
+                .as_array()
+                .unwrap_or_else(|| panic!("case {name:?} declares no isUntouched rows"));
+            assert!(
+                !rows.is_empty(),
+                "case {name:?} has an empty isUntouched list"
+            );
+            for row in rows {
+                let duration = row[0].as_u64().expect("sourceDurationMs");
+                let expected = row[1].as_bool().expect("expected");
+                assert_eq!(
+                    timeline.is_untouched(duration),
+                    expected,
+                    "case {name:?} at source duration {duration}"
+                );
+                checked += 1;
+            }
+        }
+        // Vacuity guard: if a refactor ever makes `rows` empty everywhere,
+        // the loop above passes while asserting nothing.
+        assert!(
+            checked >= 10,
+            "only {checked} isUntouched rows were checked"
+        );
     }
 }

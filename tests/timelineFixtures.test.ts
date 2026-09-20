@@ -43,6 +43,7 @@ import rawTable from "./fixtures/timeline-cases.json";
   segments: SegmentDto[];
   outputDurationMs: number;
   toSourceMs: [number, number | null][];
+  isUntouched: [number, boolean][];
   splitAt?: { outputMs: number; segments: SegmentDto[] };
   delete?: { index: number; segments: SegmentDto[] };
   reorder?: { from: number; to: number; segments: SegmentDto[] };
@@ -102,9 +103,9 @@ describe("the shared timeline fixture table", () => {
   // a single row proves almost nothing. The Rust half asserts the same counts
   // against the same file, so a row deleted on one side reddens both.
   it("covers every case the Rust twin reads from the same file", () => {
-    expect(table.cases).toHaveLength(6);
+    expect(table.cases).toHaveLength(8);
     expect(table.whole).toHaveLength(2);
-    expect(ops).toHaveLength(4);
+    expect(ops).toHaveLength(6);
   });
 
   it.each(table.whole)("seeds an unedited capture of $durationMs ms", (row) => {
@@ -120,6 +121,23 @@ describe("the shared timeline fixture table", () => {
     expect(outputDurationMs(t)).toBe(c.outputDurationMs);
     for (const [outputMs, expected] of c.toSourceMs) {
       expect({ outputMs, source: toSourceMs(t, outputMs) }).toEqual({ outputMs, source: expected });
+    }
+  });
+
+  // DELIBERATELY NOT a behaviour assertion. `is_untouched` has ONE
+  // implementation and it is Rust's (core/src/timeline.rs); 6944ac0 rejected
+  // putting a second copy in TypeScript one IPC hop from the original, and
+  // this file must not smuggle one back in. What it CAN do without owning
+  // the rule is stop a new case from silently skipping it.
+  it("every shared case declares isUntouched rows for the Rust side to assert", () => {
+    expect(table.cases.length).toBeGreaterThan(0);
+    for (const c of table.cases) {
+      expect(Array.isArray(c.isUntouched), `${c.name} declares isUntouched`).toBe(true);
+      expect(c.isUntouched.length, `${c.name} has rows`).toBeGreaterThan(0);
+      for (const [duration, expected] of c.isUntouched) {
+        expect(typeof duration, `${c.name} duration is a number`).toBe("number");
+        expect(typeof expected, `${c.name} expectation is a boolean`).toBe("boolean");
+      }
     }
   });
 
