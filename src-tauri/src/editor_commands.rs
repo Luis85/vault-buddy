@@ -460,40 +460,67 @@ mod tests {
     }
 
     // T-2: `is_safe_base` is well tested as a function above, but its
-    // APPLICATION was not -- removing the guard from both command bodies
-    // left the whole shell test suite green, because `AppHandle` makes a
-    // unit test of the commands themselves impossible. The
+    // APPLICATION was not -- removing the guard from a command body left
+    // the whole shell test suite green, because `AppHandle` makes a unit
+    // test of the commands themselves impossible. The
     // `capture_exclusion`/`clear_active_screen` precedent: scan this file's
-    // own production source and fail if either command body stops calling
-    // `is_safe_base`.
+    // own production source and fail if a command stops calling it.
+    //
+    // The scan is GENERIC over the commands rather than hardcoded to the
+    // ones that existed when it was written, because the hardcoded version
+    // failed exactly once it mattered: it named three commands and checked
+    // the last of them against a slice running to end-of-file, so when a
+    // fourth base-taking command was appended with its own guard, THAT
+    // guard satisfied the assertion about `load_staged_capture` -- the test
+    // stayed green with the load path unguarded (mutation-proven). Each
+    // body is now bounded by its own column-0 closing brace, so a guard in
+    // one command can never stand in for another's, and a command added
+    // later is scanned without anybody remembering to widen this.
     #[test]
-    fn both_commands_guard_the_base_with_is_safe_base() {
+    fn every_command_taking_a_base_guards_it_with_is_safe_base() {
         let src = include_str!("editor_commands.rs");
         let production = src.split("#[cfg(test)]").next().unwrap_or(src);
 
-        let open_fn = production
-            .find("pub fn open_capture_editor(")
-            .expect("open_capture_editor must exist in production source");
-        let take_fn = production
-            .find("pub fn take_editor_request(")
-            .expect("take_editor_request must exist in production source");
-        let load_fn = production
-            .find("pub async fn load_staged_capture(")
-            .expect("load_staged_capture must exist in production source");
-        assert!(
-            open_fn < take_fn && take_fn < load_fn,
-            "this scan assumes the commands are declared in this order; update the offsets \
-             if they are reordered"
-        );
+        let mut checked: Vec<&str> = Vec::new();
+        for (offset, _) in production.match_indices("#[tauri::command]") {
+            let rest = &production[offset..];
+            // `cargo fmt` closes every top-level item with a brace in
+            // column 0 and indents everything inside one, so this is an
+            // exact body boundary -- unlike a slice to the next command,
+            // which would swallow any helper declared between them.
+            let body = match rest.find("\n}\n") {
+                Some(i) => &rest[..i + 3],
+                None => rest,
+            };
+            let signature = &body[..body.find('{').unwrap_or(body.len())];
+            let name = signature
+                .split("fn ")
+                .nth(1)
+                .and_then(|s| s.split('(').next())
+                .expect("a #[tauri::command] must declare a function");
+            if !signature.contains("base: String") {
+                continue;
+            }
+            assert!(
+                body.contains("is_safe_base(&base)"),
+                "{name} accepts a base from the frontend but does not refuse \
+                 an unsafe one before it becomes a path"
+            );
+            checked.push(name);
+        }
 
-        let guard = "is_safe_base(&base)";
-        assert!(
-            production[open_fn..take_fn].contains(guard),
-            "open_capture_editor must refuse an unsafe base before stashing it"
-        );
-        assert!(
-            production[load_fn..].contains(guard),
-            "load_staged_capture must refuse an unsafe base before it becomes a path"
+        // Without this the scan would pass vacuously on a file whose
+        // commands had all drifted out of the shape it matches -- the
+        // failure mode a source scan is most prone to.
+        assert_eq!(
+            checked,
+            [
+                "open_capture_editor",
+                "load_staged_capture",
+                "save_capture_timeline"
+            ],
+            "the set of commands taking a base changed; confirm the new one \
+             guards it, then update this list"
         );
     }
 
