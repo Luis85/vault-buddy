@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { defineStore } from "pinia";
 
 import { logWarning } from "../logging";
-import type { ScreenCaptureStatus, StagedCapture } from "../types";
+import type { ExportResult, ScreenCaptureStatus, StagedCapture } from "../types";
 import { useNotificationsStore } from "./notifications";
 
 /** The view's three-valued capture state. Rust reports `capturing` and
@@ -128,6 +128,31 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
       this.dropped = 0;
       this.stopping = false;
     },
+    /**
+     * The staged capture `base` is no longer in the staging directory — it
+     * was exported into a vault, or discarded.
+     *
+     * The SECOND clear site for `lastStaged`, and safe to add beside the
+     * first because it is keyed on IDENTITY rather than on lifecycle: it
+     * fires only for the capture that genuinely no longer exists. The events
+     * behind it are app-wide, so an unkeyed clear would throw away the only
+     * handle anything holds on a DIFFERENT capture's footage.
+     *
+     * It deliberately does NOT bump `seq`. An export finishes long after its
+     * capture ended and is not a capture-lifecycle transition, so bumping
+     * would make an in-flight `start()` or `resync()` discard a reply that
+     * is still true.
+     *
+     * Without it the panel's capture bar keeps offering Edit on a base that
+     * is gone, and `open_capture_editor` -> `load_staged_capture` answers
+     * with a banner the user cannot act on. Rust emits `screen:discarded`
+     * for exactly this (`export_commands::emit_discarded`).
+     */
+    forgetStaged(base: string) {
+      if (this.lastStaged?.base === base) {
+        this.lastStaged = null;
+      }
+    },
     applyStopped(staged: StagedCapture) {
       this.reset();
       this.lastStaged = staged;
@@ -199,6 +224,12 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
         if (this.status === "idle") {
           useNotificationsStore().warning(event.payload.message);
         }
+      });
+      await listen<ExportResult>("screen:exported", (event) => {
+        this.forgetStaged(event.payload.base);
+      });
+      await listen<{ base: string }>("screen:discarded", (event) => {
+        this.forgetStaged(event.payload.base);
       });
       await listen<{ fps: number; dropped: number }>("screen:frames", (event) => {
         this.fps = event.payload.fps;

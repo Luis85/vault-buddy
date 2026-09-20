@@ -757,4 +757,122 @@ describe("ScreenSourcePicker", () => {
     expect(w.find('[data-testid="screen-error"]').exists()).toBe(false);
     expect(regionRow(w).text()).toContain("1280x720 at (320, 180)");
   });
+
+  // --- Staged captures: resume or discard, shown first (spec 10) ---
+
+  /** One row of `list_staged_captures`, as Rust's `StagedCaptureSummaryDto`
+   * serialises it. */
+  const STAGED_ROW = {
+    base: "2026-09-20 1000 Figma",
+    vaultId: "v1",
+    sourceTitle: "Figma",
+    durationMs: 60_000,
+    outputDurationMs: 60_000,
+    recordedAt: "2026-09-20T10:00:00Z",
+    width: 1920,
+    height: 1080,
+    edited: false,
+  };
+
+  /** `mockSources` answers `list_staged_captures` with `undefined`, which is
+   * the "no staged captures" path; these cases need the populated one. */
+  function mockStaged(
+    rows: unknown[] = [STAGED_ROW],
+    extra: (cmd: string, args: unknown) => unknown = () => undefined,
+  ) {
+    const calls: Array<{ cmd: string; args: unknown }> = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "list_staged_captures") return rows;
+      return extra(cmd, args);
+    });
+    return calls;
+  }
+
+  it("shows staged captures above the source tabs, not below or behind one", async () => {
+    mockStaged();
+    const w = await mountPicker();
+    // Positional, not merely present: the spec says shown FIRST. A fourth
+    // tab, or a block appended after the picker, would satisfy "exists".
+    const html = w.html();
+    expect(html).toContain('data-testid="staged-list"');
+    expect(html.indexOf('data-testid="staged-list"')).toBeLessThan(
+      html.indexOf('role="tablist"'),
+    );
+  });
+
+  it("shows no staged block at all when nothing is staged", async () => {
+    mockStaged([]);
+    const w = await mountPicker();
+    expect(w.find('[data-testid="staged-list"]').exists()).toBe(false);
+    expect(w.find('[data-testid="tab-screen"]').exists()).toBe(true);
+  });
+
+  it("still lets a new capture be started while staged captures are listed", async () => {
+    // The list is an offer, not a modal: a staged capture must not block the
+    // thing the user opened this view to do.
+    const calls = mockStaged([STAGED_ROW], (cmd) =>
+      cmd === "start_screen_capture" ? STARTED : undefined,
+    );
+    const w = await mountPicker();
+    await w.get('[data-testid="source-screen:1"]').trigger("click");
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeUndefined();
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    expect(calls.some((c) => c.cmd === "start_screen_capture")).toBe(true);
+    expect(useVaultsStore().view).toBe("list");
+  });
+
+  it("resumes a staged capture through the one command that opens the editor", async () => {
+    // `open_capture_editor` is what the capture bar's Edit button already
+    // invokes. Two ways into the editor would be two things to keep in step.
+    const calls = mockStaged();
+    const w = await mountPicker();
+    await w.get(`[data-testid="staged-resume-${STAGED_ROW.base}"]`).trigger("click");
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "open_capture_editor")).toEqual([
+      { cmd: "open_capture_editor", args: { base: STAGED_ROW.base } },
+    ]);
+  });
+
+  it("discards a staged capture and re-reads the list afterwards", async () => {
+    const calls = mockStaged([STAGED_ROW], (cmd) =>
+      cmd === "discard_staged_capture" ? null : undefined,
+    );
+    const w = await mountPicker();
+    const base = STAGED_ROW.base;
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "discard_staged_capture")).toEqual([
+      { cmd: "discard_staged_capture", args: { base } },
+    ]);
+    // Re-read, not a local splice: the discard also clears any abandoned
+    // export temp, and only the backend knows what actually survived.
+    expect(calls.filter((c) => c.cmd === "list_staged_captures")).toHaveLength(2);
+  });
+
+  it("surfaces a refused discard and keeps the capture listed", async () => {
+    // `discard_staged_capture` really does refuse — a base being exported
+    // right now, or one that is not ours. The message is user-facing, and a
+    // row silently vanishing from the list would claim a delete that did not
+    // happen.
+    const calls = mockStaged([STAGED_ROW], (cmd) => {
+      if (cmd === "discard_staged_capture") {
+        throw new Error("That capture is being saved right now.");
+      }
+      return undefined;
+    });
+    const w = await mountPicker();
+    const base = STAGED_ROW.base;
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="screen-error"]').text()).toContain("being saved right now");
+    expect(w.find(`[data-testid="staged-row-${base}"]`).exists()).toBe(true);
+    // Nothing to re-read: the list on screen is still true.
+    expect(calls.filter((c) => c.cmd === "list_staged_captures")).toHaveLength(1);
+  });
 });

@@ -571,4 +571,79 @@ describe("screenCapture store events", () => {
     // of it would report the same fact twice.
     expect(useNotificationsStore().items).toHaveLength(0);
   });
+
+  // A staged capture that has been exported into a vault, or discarded, is
+  // GONE from the staging directory. `lastStaged` is the panel capture bar's
+  // only handle on that footage and its Edit button invokes
+  // `open_capture_editor` on it, so leaving it set offers Edit on a base
+  // `load_staged_capture` can only refuse with a banner the user cannot act
+  // on. Rust emits `screen:discarded` for exactly this (export_commands's
+  // emit_discarded says so in as many words).
+  const STAGED = {
+    base: "2026-09-20 1000 Figma",
+    path: "C:/staging/2026-09-20 1000 Figma.mp4",
+    durationMs: 5000,
+    sourceTitle: "Figma",
+    width: 1920,
+    height: 1080,
+  };
+
+  it("clears lastStaged when that capture is exported", async () => {
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.lastStaged = { ...STAGED };
+    emit("screen:exported", {
+      base: STAGED.base,
+      videoPath: "V:/vault/Screen Captures/a.mp4",
+      notePath: null,
+      vaultId: "v1",
+      warning: null,
+    });
+    expect(store.lastStaged).toBeNull();
+  });
+
+  it("clears lastStaged when that capture is discarded", async () => {
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.lastStaged = { ...STAGED };
+    emit("screen:discarded", { base: STAGED.base });
+    expect(store.lastStaged).toBeNull();
+  });
+
+  // The events are app-wide. Clearing on a base we are not holding would
+  // throw away the handle on a DIFFERENT capture's footage — the exact
+  // failure the single existing clear site's staleness guard exists to
+  // prevent, reintroduced through a second clear that forgot to look.
+  it("keeps lastStaged when another capture is exported or discarded", async () => {
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.lastStaged = { ...STAGED };
+    emit("screen:discarded", { base: "something-else" });
+    expect(store.lastStaged?.base).toBe(STAGED.base);
+    emit("screen:exported", {
+      base: "something-else",
+      videoPath: "V:/vault/x.mp4",
+      notePath: null,
+      vaultId: "v1",
+      warning: null,
+    });
+    expect(store.lastStaged?.base).toBe(STAGED.base);
+  });
+
+  // Neither clear is a capture-lifecycle transition: the export happens long
+  // after the capture ended. Bumping `seq` here would make an in-flight
+  // `start()` discard its own reply as stale (and an in-flight `resync()`
+  // discard a true status), so the guard must be identity, not generation.
+  it("does not disturb the capture generation when it forgets a staged capture", async () => {
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.lastStaged = { ...STAGED };
+    const seq = store.seq;
+    emit("screen:discarded", { base: STAGED.base });
+    expect(store.seq).toBe(seq);
+  });
 });

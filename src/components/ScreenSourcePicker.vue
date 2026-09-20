@@ -5,9 +5,10 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useScreenCaptureStore } from "../stores/screenCapture";
 import { useVaultsStore } from "../stores/vaults";
-import type { CaptureSourceInfo, RegionSelection } from "../types";
+import type { CaptureSourceInfo, RegionSelection, StagedCaptureSummary } from "../types";
 import ScreenAudioPicker from "./ScreenAudioPicker.vue";
 import ScreenRegionPicker from "./ScreenRegionPicker.vue";
+import StagedCaptureList from "./StagedCaptureList.vue";
 import TabGroup from "./TabGroup.vue";
 import AppButton from "./ui/AppButton.vue";
 import Banner from "./ui/Banner.vue";
@@ -139,7 +140,76 @@ async function loadSources() {
   }
 }
 
-onMounted(() => void loadSources());
+/** Captures that were recorded but never saved or discarded (spec §10).
+ * Shown FIRST, above the tabs: this is how a user finds work they abandoned,
+ * and a tab would hide it behind a click. */
+const staged = ref<StagedCaptureSummary[]>([]);
+/** The one staged row whose discard is in flight. A base rather than a bool
+ * so the other rows stay usable. */
+const stagedBusy = ref<string | null>(null);
+
+/**
+ * Re-read the staged list.
+ *
+ * A VIEW, so it degrades exactly as its Rust half does — `list_staged_captures`
+ * answers an unreadable staging directory with an empty Vec rather than an
+ * error. Only a real list replaces the one on screen: a transient failure
+ * must not blank a list the user is reading (the `vaults` store's own rule),
+ * and it is never surfaced as a banner, because "nothing is staged" is the
+ * overwhelmingly common truth and a scan failure is not something the user
+ * can act on from here.
+ */
+async function loadStaged() {
+  try {
+    const rows = await invoke<StagedCaptureSummary[]>("list_staged_captures");
+    if (Array.isArray(rows)) staged.value = rows;
+  } catch (e) {
+    logWarning(`list_staged_captures failed: ${String(e)}`);
+  }
+}
+
+/** Resume editing. `open_capture_editor` is the SAME command the panel
+ * capture bar's Edit button invokes — one way into the editor, not two. */
+async function onResumeStaged(base: string) {
+  if (stagedBusy.value !== null) return;
+  error.value = null;
+  try {
+    await invoke("open_capture_editor", { base });
+  } catch (e) {
+    logWarning(`open_capture_editor failed: ${String(e)}`);
+    error.value = String(e);
+  }
+}
+
+/**
+ * Discard, already confirm-gated by the list (spec §10).
+ *
+ * `discard_staged_capture` genuinely refuses — a base being exported right
+ * now, or one that is not ours — and its message is user-facing, so a
+ * refusal surfaces in the same banner as every other failure here and the
+ * row STAYS. Only a successful discard re-reads the list, and it re-reads
+ * rather than splicing: the discard also clears any abandoned export temp,
+ * and only the backend knows what actually survived.
+ */
+async function onDiscardStaged(base: string) {
+  if (stagedBusy.value !== null) return;
+  stagedBusy.value = base;
+  error.value = null;
+  try {
+    await invoke("discard_staged_capture", { base });
+    await loadStaged();
+  } catch (e) {
+    logWarning(`discard_staged_capture failed: ${String(e)}`);
+    error.value = String(e);
+  } finally {
+    stagedBusy.value = null;
+  }
+}
+
+onMounted(() => {
+  void loadSources();
+  void loadStaged();
+});
 
 async function onStart() {
   if (selectedId.value === null || starting.value) return;
@@ -172,6 +242,12 @@ async function onStart() {
     >
       {{ error }}
     </Banner>
+    <StagedCaptureList
+      :captures="staged"
+      :busy-base="stagedBusy"
+      @resume="onResumeStaged"
+      @discard="onDiscardStaged"
+    />
     <TabGroup :tabs="[...TABS]">
       <template
         v-for="t in LIST_TABS"

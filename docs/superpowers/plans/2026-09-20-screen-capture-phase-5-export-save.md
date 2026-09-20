@@ -2793,6 +2793,43 @@ Report `EditorRoot.vue` and `ExportBar.vue`'s nonblank line counts against the 5
 
 ### Task 11: Resume or discard, shown first in Record Screen
 
+> **Defects found while executing this section.** Two are corrected below; the
+> rest are recorded here rather than rewritten into the text, so the record of
+> what the section actually said survives.
+>
+> - **The fixture list is blind to a shared `armed` flag -- the recurring flaw,
+>   again, and this one deletes user data.** A `StagedCaptureList` implemented
+>   with a single `armed = ref(false)` passes **all five** tests this section
+>   lists, verified one at a time, while arming EVERY row's Discard at once: one
+>   click on row A then one click on row B permanently deletes B. The arming
+>   state must be keyed on the BASE, and a test must pin that
+>   (`arms only the row that was clicked`). The section also omits a **disarm**
+>   test, which is the identical defect Task 10 found in `ExportBar` -- an armed
+>   confirm with no way out deletes the recording on the next stray click.
+> - **M1 is filed against the wrong file.** It reads "`StagedCaptureList`: render
+>   the list below the tabs", but the list's POSITION is decided in
+>   `ScreenSourcePicker.vue`'s template; the component has no say in it. The one
+>   mutation that pins the spec's word "first" has to be made in the picker.
+> - **No "age" helper exists and the section does not create one.** Spec 10 asks
+>   for source, duration AND age; `formatDuration` covers duration and nothing
+>   covers age. A `src/utils/relativeAge.ts` is required, beyond this section's
+>   Files block, and its `NaN` guard is load-bearing: `recordedAt` comes from the
+>   hand-editable staging sidecar, so a bare subtraction renders `"NaN ago"`.
+> - **`tests/screenSourcePicker.test.ts` has 21 `mockIPC` blocks and only 5 answer
+>   `list_staged_captures`.** A strict `staged.value = await invoke(...)` breaks
+>   every other one on `.length` of undefined during mount. Take the reply only
+>   when it really is a list -- the same degrade-don't-refuse posture
+>   `staged_commands::staged_summaries` documents on the Rust side, which also
+>   means a transient failure never blanks a list the user is reading.
+> - **The quality ratchet trips.** The row template comes in at 10 cyclomatic /
+>   23 cognitive and pushes `complexFunctions` 13 -> 14. Extract the per-row
+>   derivations into script; do not raise the baseline.
+> - **The section states no position on vault filtering.** `list_staged_captures`
+>   takes no vault argument and returns everything app-wide. Showing every staged
+>   capture is correct: until Phase 6's browser this list is the ONLY way to reach
+>   abandoned footage, and Save files into the capture's own recorded vault from
+>   its sidecar, never the picker's -- so nothing can be misfiled.
+
 Spec §10: "Opening Record Screen with staged captures present shows them first: each with its source, duration and age, offering *Resume editing* or *Discard*."
 
 **Files:**
@@ -2921,7 +2958,7 @@ A docs task's failure mode is a **confident false statement** in the one file th
    ```
    awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
    ```
-4. **The Events table gains five rows.** All five are `app.emit`; the table's opener names `region:begin` and `editor:open` as the only two exceptions, and that stays true — check it rather than assuming.
+4. **The Events table gains five rows.** Measured before Task 12 started: `AGENTS.md` contains **zero** occurrences of `screen:exported`, `screen:discarded`, `screen:exportProgress`, `screen:exportFailed`, `screen:exportCancelled`, `StagedCaptureList`, `staged_commands` or `export_commands` -- the events table stops at `screen:frames`. This is not a touch-up; none of Phase 5 is described in that file yet. The `screenCapture` store paragraph also still calls `lastStaged` the phase-4 Edit handle with one clear site; it now has two, the second keyed on identity rather than lifecycle, and deliberately does NOT bump `seq`. All five are `app.emit`; the table's opener names `region:begin` and `editor:open` as the only two exceptions, and that stays true — check it rather than assuming.
 5. **"What compiles where"** — the `screen` crate row gains `reader`, `export` and `disk` to its `cfg(windows)` list, and `select`'s pure list is unchanged but now has a production caller.
 6. **The three-orphans sentence is now wrong, and so is its `mp4_boxes` caveat.** It
    says `core::timeline`, `screen::select` and `core::screen_note` "STILL have no

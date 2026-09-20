@@ -484,3 +484,26 @@ export interface ExportFailure {
   base: string;
   message: string;
 }
+
+/** One row of `list_staged_captures` (`StagedCaptureSummaryDto`) — a capture
+ * that has been recorded but not yet saved into a vault or discarded.
+ *
+ * `durationMs` is what was RECORDED; `outputDurationMs` is what an export
+ * would PRODUCE. They differ exactly when the editor cut something out, and
+ * the second is the number the user is really deciding about.
+ *
+ * `edited` is Rust's own `Timeline::is_untouched` answer, not "the sidecar
+ * has a timeline field" — the editor writes a timeline on every operation
+ * and never writes null, so the field's mere presence marks every capture
+ * the editor was ever OPENED on. */
+export interface StagedCaptureSummary {
+  base: string;
+  vaultId: string;
+  sourceTitle: string;
+  durationMs: number;
+  outputDurationMs: number;
+  recordedAt: string;
+  width: number;
+  height: number;
+  edited: boolean;
+}
