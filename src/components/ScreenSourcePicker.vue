@@ -147,6 +147,12 @@ const staged = ref<StagedCaptureSummary[]>([]);
 /** The one staged row whose discard is in flight. A base rather than a bool
  * so the other rows stay usable. */
 const stagedBusy = ref<string | null>(null);
+/** Tells the list to drop its armed confirm when nothing else will. The list
+ * disarms whenever `staged` is reassigned, which covers a SUCCESSFUL discard
+ * (it re-reads); a REFUSED one deliberately re-reads nothing, so without this
+ * the armed row survives the refusal and the next single click deletes the
+ * recording unconfirmed. */
+const stagedDisarm = ref(0);
 
 /**
  * Re-read the staged list.
@@ -190,6 +196,11 @@ async function onResumeStaged(base: string) {
  * row STAYS. Only a successful discard re-reads the list, and it re-reads
  * rather than splicing: the discard also clears any abandoned export temp,
  * and only the backend knows what actually survived.
+ *
+ * A refusal therefore changes nothing the list can see — which is exactly
+ * why it has to disarm the row explicitly: the surviving row is still armed,
+ * and a second click on a control that just refused would be read as a
+ * retry, not as a confirmed delete.
  */
 async function onDiscardStaged(base: string) {
   if (stagedBusy.value !== null) return;
@@ -201,6 +212,7 @@ async function onDiscardStaged(base: string) {
   } catch (e) {
     logWarning(`discard_staged_capture failed: ${String(e)}`);
     error.value = String(e);
+    stagedDisarm.value += 1;
   } finally {
     stagedBusy.value = null;
   }
@@ -245,6 +257,7 @@ async function onStart() {
     <StagedCaptureList
       :captures="staged"
       :busy-base="stagedBusy"
+      :disarm-nonce="stagedDisarm"
       @resume="onResumeStaged"
       @discard="onDiscardStaged"
     />

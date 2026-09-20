@@ -232,6 +232,16 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
         this.forgetStaged(event.payload.base);
       });
       await listen<{ fps: number; dropped: number }>("screen:frames", (event) => {
+        // Gated exactly like the pause/resume handlers, and for a sharper
+        // reason: `screen-stats` is its OWN thread draining its own channel
+        // (screen_capture_worker.rs), unsynchronised with the
+        // `screen-capture-monitor` thread that emits `screen:stopped`, so a
+        // stats message queued before teardown really can be delivered after
+        // it. Ungated, the next capture's bar opens already reporting the
+        // previous capture's dropped frames — and `ScreenCaptureBar` renders
+        // the chip on `dropped > 0`, so it would claim dropped frames for
+        // footage that has none.
+        if (this.status === "idle") return;
         this.fps = event.payload.fps;
         this.dropped = event.payload.dropped;
       });
@@ -279,6 +289,13 @@ export const useScreenCaptureStore = defineStore("screenCapture", {
         // only handle anything has on the footage.
         if (seq !== this.seq) return;
         this.applyStatus(s);
+        // Belt to the idle gate on `screen:frames`: a late stats message
+        // delivered between this reply and the previous capture's terminal
+        // event would pass that gate, so a starting capture zeroes its own
+        // counters rather than inheriting whatever survived. `applyStatus`
+        // only clears them on its idle arm, and this one is `capturing`.
+        this.fps = 0;
+        this.dropped = 0;
         this.lastStaged = null;
       } catch (e) {
         this.error = String(e);

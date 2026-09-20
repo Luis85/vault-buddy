@@ -24,6 +24,14 @@ const props = defineProps<{
    * than a bare boolean so a discard cannot grey out the rows it is not
    * touching. */
   busyBase: string | null;
+  /** Bumped by the picker whenever a discard ENDED without the list changing
+   * — i.e. a refusal. `list_staged_captures` is deliberately not re-read
+   * there ("the list on screen is still true"), so `captures` keeps its
+   * identity and the watch below never fires; without this the refused row
+   * stays armed and the next single click deletes the recording with no
+   * second confirm. Optional so the picker is the only caller that has to
+   * know about it. */
+  disarmNonce?: number;
 }>();
 const emit = defineEmits<{ resume: [base: string]; discard: [base: string] }>();
 
@@ -41,11 +49,19 @@ const emit = defineEmits<{ resume: [base: string]; discard: [base: string] }>();
  */
 const armed = ref<string | null>(null);
 
-/** An armed confirm that cannot be disarmed is a trap. It drops when the
- * list is re-read underneath it as well as on "Keep it": after a discard or
- * a refusal the rows may not be the ones that were armed against. */
+/**
+ * An armed confirm that cannot be disarmed is a trap. It drops on "Keep it",
+ * when the list is re-read underneath it (a successful discard re-reads, so
+ * the rows are no longer the ones that were armed against), and on the
+ * picker's `disarmNonce`.
+ *
+ * Both triggers are needed, and the second is not redundant: a REFUSED
+ * discard leaves the same array on screen on purpose, so array identity
+ * alone would leave the row armed after the one outcome that keeps it
+ * visible.
+ */
 watch(
-  () => props.captures,
+  () => [props.captures, props.disarmNonce],
   () => {
     armed.value = null;
   },
@@ -87,6 +103,24 @@ const lengthLabel = (c: StagedCaptureSummary) => {
   if (c.recovered) return "recovered · length unknown";
   return c.edited ? `edited · ${formatDuration(c.outputDurationMs)}` : formatDuration(c.durationMs);
 };
+
+/**
+ * Where a recovered capture's video really is.
+ *
+ * `screen_recovery` promotes a `.part` to `<base>.mp4` in the staging
+ * directory ONLY after `mp4_boxes` confirms it holds real footage, so this
+ * file exists and plays — which is the whole point of the fragmented-MP4
+ * container. The row has to say so: a recovered capture carries no vault id,
+ * so Save is refused and Resume is not rendered, leaving Discard as the only
+ * BUTTON on a real recording.
+ *
+ * The literal `%LOCALAPPDATA%` form is what the user can paste into Explorer
+ * or the Run box; the DTO carries no absolute path, and no IPC command opens
+ * this folder (`commands::open_logs_folder` reveals its sibling), so the text
+ * itself is the affordance — hence `select-all` on the span.
+ */
+const STAGING_DIR = "%LOCALAPPDATA%\\com.vaultbuddy.desktop\\screen-captures";
+const stagedPath = (c: StagedCaptureSummary) => `${STAGING_DIR}\\${c.base}.mp4`;
 
 /**
  * The second line: the recorded length — worth saying only when an edit
@@ -140,8 +174,10 @@ const subLabel = (c: StagedCaptureSummary) =>
           <!-- Resume is offered only where it leads somewhere. A recovered
                capture carries no vault id, so `export_worker::prepare`
                refuses its Save outright and the editor would open on a
-               zero-length timeline: the only honest action left is Discard,
-               and the row already says where the file is. -->
+               zero-length timeline. That leaves Discard as the only button
+               on a real recording, which is why the row also states, below,
+               that the video survived and where it is — Discard must never
+               be the only thing this row tells the user. -->
           <AppButton
             v-if="!c.recovered"
             :data-testid="`staged-resume-${c.base}`"
@@ -171,6 +207,18 @@ const subLabel = (c: StagedCaptureSummary) =>
             Keep it
           </AppButton>
         </div>
+        <!-- The third line, recovered rows only: the file is real and
+             playable, and this is where it is. -->
+        <p
+          v-if="c.recovered"
+          class="mt-1 text-micro text-fg-muted"
+        >
+          The video is still on disk and plays:
+          <span
+            :data-testid="`staged-path-${c.base}`"
+            class="select-all break-all text-fg-secondary"
+          >{{ stagedPath(c) }}</span>
+        </p>
       </li>
     </ul>
   </section>

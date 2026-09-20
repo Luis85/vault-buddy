@@ -339,9 +339,15 @@ describe("ScreenSourcePicker", () => {
     mockIPC((cmd, a) => {
       if (cmd === "list_capture_sources") return SOURCES;
       if (cmd === "list_audio_devices") {
+        // Both fixtures carry surrounding whitespace ON PURPOSE. `cpal`
+        // reports an endpoint's name as the driver spells it, padding and
+        // all, and `start_screen_capture` opens each endpoint BY NAME — so a
+        // `.trim()` anywhere on this path matches no device and the capture
+        // records silence with nothing to show for it. Names without padding
+        // cannot tell a verbatim pass from a normalising one.
         return {
-          inputs: [{ name: "Microphone (Yeti)", isDefault: true }],
-          outputs: [{ name: "Speakers (Realtek)", isDefault: false }],
+          inputs: [{ name: "Microphone (Yeti) ", isDefault: true }],
+          outputs: [{ name: " Speakers (Realtek)", isDefault: false }],
         };
       }
       if (cmd === "start_screen_capture") {
@@ -367,13 +373,15 @@ describe("ScreenSourcePicker", () => {
     await w.get('[data-testid="screen-start"]').trigger("click");
     await flushPromises();
     // The ticked names travel VERBATIM — Rust matches them against what cpal
-    // reports, so any normalisation would silently record nothing.
+    // reports, so any normalisation would silently record nothing. The
+    // padding in the fixtures is what makes this assertion able to say so:
+    // it fails for a `.trim()` as well as for a `.toLowerCase()`.
     expect(args).toEqual([
       {
         id: "v1",
         sourceId: "window:1234",
-        inputs: ["Microphone (Yeti)"],
-        outputs: ["Speakers (Realtek)"],
+        inputs: ["Microphone (Yeti) "],
+        outputs: [" Speakers (Realtek)"],
       },
     ]);
     // The capture bar lives on the list view, like the audio domain's.
@@ -874,5 +882,30 @@ describe("ScreenSourcePicker", () => {
     expect(w.find(`[data-testid="staged-row-${base}"]`).exists()).toBe(true);
     // Nothing to re-read: the list on screen is still true.
     expect(calls.filter((c) => c.cmd === "list_staged_captures")).toHaveLength(1);
+  });
+
+  // FIX: and BECAUSE nothing is re-read, `captures` keeps its identity, so
+  // the list's disarm-on-relist watch never fires — the refused row stayed
+  // armed and the user's next SINGLE click destroyed the recording with no
+  // second confirm. An armed destructive control surviving a refusal is the
+  // trap the two-click gate exists to prevent.
+  it("disarms the refused row, so the next single click cannot delete it", async () => {
+    const calls = mockStaged([STAGED_ROW], (cmd) => {
+      if (cmd === "discard_staged_capture") {
+        throw new Error("That capture is being saved right now.");
+      }
+      return undefined;
+    });
+    const w = await mountPicker();
+    const base = STAGED_ROW.base;
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await flushPromises();
+    // Back to a one-click ARM, not a one-click delete.
+    expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(false);
+    await w.get(`[data-testid="staged-discard-${base}"]`).trigger("click");
+    await flushPromises();
+    expect(calls.filter((c) => c.cmd === "discard_staged_capture")).toHaveLength(1);
+    expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(true);
   });
 });

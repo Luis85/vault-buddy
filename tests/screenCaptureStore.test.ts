@@ -556,6 +556,44 @@ describe("screenCapture store events", () => {
     expect(store.status).toBe("capturing");
   });
 
+  // FIX: `screen:frames` was the ONE event handler with no idle gate, and it
+  // needs one for the same reason `screen:paused`/`screen:resumed` have it:
+  // `screen-stats` is a separate thread draining its own channel
+  // (screen_capture_worker.rs), unsynchronised with the `screen-capture-
+  // monitor` thread that emits `screen:stopped`, so a stats message queued
+  // before teardown can genuinely be delivered after it. Ungated, the next
+  // capture's bar opens already reporting the previous capture's dropped
+  // frames — a "12 dropped" chip for frames it has not dropped.
+  it("ignores frame stats that outlive their capture", async () => {
+    mockIPC(() => undefined);
+    const store = useScreenCaptureStore();
+    await store.init();
+    expect(store.status).toBe("idle");
+    emit("screen:frames", { fps: 29.5, dropped: 12 });
+    expect(store.dropped).toBe(0);
+    expect(store.fps).toBe(0);
+    // ...and specifically AFTER a capture ended, which is the real ordering.
+    store.$patch({ status: "capturing", vaultId: "v1", startedAtMs: 0 });
+    emit("screen:frames", { fps: 30, dropped: 12 });
+    emit("screen:stopped", { ...STAGED });
+    emit("screen:frames", { fps: 30, dropped: 12 });
+    expect(store.dropped).toBe(0);
+  });
+
+  // Belt to that brace: a stats message delivered in the window BEFORE the
+  // start's reply lands would beat the idle gate, so the start clears the
+  // counters itself rather than inheriting whatever survived.
+  it("opens a fresh capture's counters at zero", async () => {
+    mockIPC((cmd) => (cmd === "start_screen_capture" ? RUNNING : undefined));
+    const store = useScreenCaptureStore();
+    await store.init();
+    store.$patch({ fps: 30, dropped: 12 });
+    await store.start("v1", "screen:1", [], []);
+    expect(store.status).toBe("capturing");
+    expect(store.dropped).toBe(0);
+    expect(store.fps).toBe(0);
+  });
+
   it("surfaces a live warning without ending the capture", async () => {
     // Spec 14: a source that vanishes mid-capture warns and finalizes
     // cleanly. Treating the warning as a failure would tear the UI down while

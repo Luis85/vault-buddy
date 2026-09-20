@@ -188,6 +188,76 @@ describe("StagedCaptureList", () => {
     expect(w.get(row("2026-09-20 1000 Figma")).text()).not.toContain("recovered");
   });
 
+  // FIX (recovered-capture honesty): a crash-recovered capture is a REAL
+  // recording — `screen_recovery` promotes a `.part` only once `mp4_boxes`
+  // confirms it holds footage — but the row offered it as unknown-length with
+  // a two-click permanent Discard as its only action, and said nothing about
+  // the playable file. The one honest sentence in the feature
+  // (`export_worker::mod.rs`'s recovered-note body) sits behind a Save button
+  // this row never renders. Without this line the user's only readable option
+  // is to destroy the recording.
+  it("tells the user a recovered capture's video is on disk, and where", () => {
+    const w = list([capture({ recovered: true, durationMs: 0, outputDurationMs: 0 })]);
+    const text = w.get(row("2026-09-20 1000 Figma")).text();
+    // The FACT: the file survived and plays.
+    expect(text).toContain("still on disk");
+    expect(text).toContain("plays");
+    // The PLACE: the staging folder, and the file's own name inside it. The
+    // folder alone leaves the user reading a directory of bases they cannot
+    // match to this row.
+    expect(text).toContain("%LOCALAPPDATA%\\com.vaultbuddy.desktop\\screen-captures");
+    expect(text).toContain("2026-09-20 1000 Figma.mp4");
+  });
+
+  // The path has to be SELECTABLE — there is no IPC command that opens the
+  // staging folder (`open_logs_folder` reveals its sibling), so copying the
+  // text is the only way to reach the file from here. A truncating,
+  // unselectable span reads as decoration.
+  it("renders the recovered capture's path as selectable text", () => {
+    const w = list([capture({ recovered: true })]);
+    const path = w.get('[data-testid="staged-path-2026-09-20 1000 Figma"]');
+    expect(path.classes()).toContain("select-all");
+  });
+
+  // The paired negative: an ordinary capture can be saved from the editor, so
+  // naming a staging path there would advertise an internal folder as the
+  // place its recording lives.
+  it("says nothing about the staging folder for a capture that can still be saved", () => {
+    const w = list([capture()]);
+    expect(w.get(row("2026-09-20 1000 Figma")).text()).not.toContain("screen-captures");
+    expect(w.find('[data-testid="staged-path-2026-09-20 1000 Figma"]').exists()).toBe(false);
+  });
+
+  // FIX (unpinned disarm): deleting the disarm-on-relist watch entirely left
+  // every other case in this file green. An armed Discard that survives the
+  // list being re-read underneath it deletes whichever recording now occupies
+  // that base on the next single click.
+  it("disarms a row when the list is re-read underneath it", async () => {
+    const w = list([capture()]);
+    const base = "2026-09-20 1000 Figma";
+    await w.get(discard(base)).trigger("click");
+    expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(true);
+    // A NEW array with equal contents — exactly what `loadStaged` assigns.
+    await w.setProps({ captures: [capture()] });
+    expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(false);
+    await w.get(discard(base)).trigger("click");
+    expect(w.emitted("discard")).toBeUndefined();
+  });
+
+  // The refusal case the watch's comment CLAIMED to cover and could not: a
+  // refused discard leaves the very same array on screen ("the list on screen
+  // is still true"), so nothing re-keys and the row stayed armed. The picker
+  // bumps `disarmNonce` instead.
+  it("disarms a row when the picker bumps the disarm nonce", async () => {
+    const w = list([capture()]);
+    const base = "2026-09-20 1000 Figma";
+    await w.get(discard(base)).trigger("click");
+    await w.setProps({ disarmNonce: 1 });
+    expect(w.find(`[data-testid="staged-keep-${base}"]`).exists()).toBe(false);
+    await w.get(discard(base)).trigger("click");
+    expect(w.emitted("discard")).toBeUndefined();
+  });
+
   // The picker's own heading, tabs and Start button must not be pushed down
   // by an empty block on the overwhelmingly common path where nothing is
   // staged at all.
