@@ -3863,3 +3863,19 @@ GAP-55, 60, 90, 91, 92 (measured: 146 entries defined, 55 distinct ids cited
 across `.rs`/`.ts`/`.vue`). Those are task/document-domain entries closed and
 DELETED, whereas the screen era closes with a strikethrough and keeps the entry.
 Two conventions in one file.
+
+### GAP-159 · Low · `assert_every_exit_is_paired` has one documented false negative
+
+`src-tauri/src/structural_scan.rs`. The shared exit-pairing walk tracks brace
+depth and arms per block, which is what lets the idiomatic
+`.map_err(|e| { rollback(..); .. })?;` pass while still catching a bare
+`return Err(..)` on a sibling branch.
+
+Its one blind spot: a `}` and an unguarded `return Err(` **sharing a single
+line** are not distinguished, because the line is checked before its closing
+braces are applied. Written across two lines, the same code is caught.
+
+Both current call sites are otherwise STRICTER than the language elsewhere (an
+exit inside a closure ahead of the release also trips them), which is the safe
+direction — it produces false alarms, not false confidence. Recorded so the
+next author does not discover the gap by shipping through it.

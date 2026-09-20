@@ -1414,10 +1414,20 @@ write here, it belongs in `export_worker/` or it is a design change.
     directory that does not exist yet reports no free space at all, so it
     has to measure the folder it is about to fill. So the single vault
     mutation an export makes ahead of its last refusal is
-    `vault_dir::prepare_export_dir`'s `create_dir_all` — and every way out
-    that is not a save (the space refusal, a user **Cancel**, an ffmpeg
-    failure, a commit failure; three call sites, pinned by a structural
-    test) hands `Prepared::created_dirs` to `vault_dir::rollback_export_dir`.
+    `vault_dir::prepare_export_dir`'s `create_dir_all` — and it now ROLLS
+    ITSELF BACK, which is the half this paragraph used to miss. Every way
+    out that is not a save (the space refusal, a user **Cancel**, an ffmpeg
+    failure, a commit failure, AND `prepare_export_dir`'s own two
+    post-creation failures — a `create_dir_all` that fails part way, and
+    the POST containment assert, the one case that can strand directories
+    OUTSIDE the vault) hands its created directories to
+    `vault_dir::rollback_export_dir` — four production call sites, measured.
+    **The structural test no longer counts them**, and that is the point: a
+    count pins deletions and is blind to the omission it exists to catch,
+    so a fourth exit added without a rollback kept the number at three and
+    stayed green. It now walks the regions where the directories are
+    outstanding and requires every exit to be paired with a rollback on its
+    own branch, naming the offending line when one is not.
     That removes ONLY the directories this export created — sampled BEFORE
     `create_dir_all`, the only moment the answer is knowable — and ONLY
     while they are still empty, deepest first, via `remove_dir`, **never
