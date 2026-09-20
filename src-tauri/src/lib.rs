@@ -19,6 +19,7 @@ mod pandoc;
 mod region_commands;
 mod screen_capture_worker;
 mod screen_commands;
+mod screen_recovery;
 mod search_commands;
 mod task_commands;
 mod task_config_commands;
@@ -579,6 +580,7 @@ pub fn run() {
             schedule_show_bubble(app.handle());
             capture_commands::run_recovery(app.handle());
             document_commands::run_import_recovery(app.handle());
+            screen_recovery::run_screen_recovery(app.handle());
             transcription::run_transcription(app.handle());
             mcp_commands::start_if_enabled(app.handle());
             schedule_search_prewarm(app.handle());

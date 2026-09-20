@@ -115,7 +115,7 @@ pub struct StagedCaptureDetail {
 /// base with an interior `...` — a real capture that a `contains("..")`
 /// check would have refused forever, staged correctly and then never
 /// openable, exportable or discardable again.
-fn is_safe_base(base: &str) -> bool {
+pub(crate) fn is_safe_base(base: &str) -> bool {
     !base.is_empty()
         && !base.starts_with('.')
         && !base.ends_with('.')
