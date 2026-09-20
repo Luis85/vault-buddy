@@ -43,6 +43,12 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dwm",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    # SetWindowDisplayAffinity + WDA_EXCLUDEFROMCAPTURE (spec 5.3): keeping
+    # our own windows out of a screen recording. The shell cannot host this
+    # call -- it cannot be cross-compiled to Windows on Linux at all (ring
+    # needs MSVC's lib.exe), so a cfg(windows) FFI written there would have
+    # no local type-check whatsoever.
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # MIT, crates.io (verified against the registry: 2.0.1, not yanked), and it

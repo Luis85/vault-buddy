@@ -10,6 +10,10 @@
 pub mod clock;
 pub mod convert;
 pub mod diagnose;
+// Spec 5.3's WDA_EXCLUDEFROMCAPTURE. Here rather than in the shell because
+// the shell cannot be cross-compiled to Windows on Linux, so an FFI call
+// written there would be type-checked by nothing until CI.
+pub mod exclusion;
 // The WGC frame callback. Windows-only: it exists solely to feed
 // `session`'s mux, and everything it decides is decided by a pure function
 // in `session::pacing`.

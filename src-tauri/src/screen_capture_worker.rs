@@ -138,6 +138,15 @@ pub(crate) fn start_screen_capture_blocking(
         });
     }
 
+    // Spec 5.3: from here on the capture is committed, and every exit --
+    // including every failure below -- goes through `clear_active_screen`,
+    // which is the one place the exclusion is lifted. Applying it before
+    // the session opens means the first frames are already clean; it is
+    // fire-and-forget on the main thread, so a busy event loop can still
+    // let a frame or two of buddy through (docs/Gaps.md, recorded in
+    // task 8) rather than delaying the start.
+    crate::capture_exclusion::apply(app);
+
     // Live source-loss / device warnings: forwarded to the panel while
     // capturing (spec 14's screen:warning).
     let (warn_tx, warn_rx) = mpsc::channel::<String>();

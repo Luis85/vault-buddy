@@ -1,5 +1,6 @@
 mod capture_commands;
 mod capture_config_commands;
+mod capture_exclusion;
 mod capture_guard;
 mod commands;
 // Test-only structural pin (Task 6b, fix 2): no production code depends on

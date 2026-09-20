@@ -206,6 +206,14 @@ pub(crate) fn clear_active_screen(app: &AppHandle) {
     let state = app.state::<ScreenCaptureState>();
     *lock_ignoring_poison(&state.0) = None;
     app.state::<CaptureGuard>().release(CaptureKind::Screen);
+    // Spec 5.3's exclusion is lifted HERE and nowhere else, for the same
+    // reason the guard is: this is the one function every teardown path
+    // funnels through. Clearing an exclusion that was never applied (a
+    // start that failed before the commit point) sets WDA_NONE on windows
+    // that already had it, which is a no-op -- strictly safer than a
+    // conditional that could be wrong in the other direction and leave the
+    // user's windows hidden from every other app's recordings.
+    crate::capture_exclusion::clear(app);
     state.1.notify_all();
 }
 
