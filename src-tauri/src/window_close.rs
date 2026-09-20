@@ -48,23 +48,36 @@ fn handle_main_close(window: &Window, api: &CloseRequestApi) {
     let app = window.app_handle();
     if crate::capture_commands::recording_blocks_shutdown(app)
         || crate::screen_commands::capture_blocks_shutdown(app)
+        || crate::export_shutdown::export_blocks_shutdown(app)
     {
         // Alt+F4 / session shutdown bypass tray::quit — the recording must
         // still finalize, but that wait is unbounded and this callback runs
         // on the event loop: blocking would freeze the UI for the whole
         // encode. Hold this close, finalize on a worker thread, then
         // re-trigger it via the app handle.
+        //
+        // The export is the third term for the same reason it is one in
+        // `tray::quit`: it is the only one of the three mid-write into a
+        // vault, and its ffmpeg CHILD is a separate process nothing else on
+        // the way out would stop (GAP-155).
         api.prevent_close();
         let app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("close-finalize".into())
             .spawn(move || {
+                // FIRST: bounded at a few seconds and it kills a child
+                // process, where the two finalizes below are unbounded.
+                crate::export_shutdown::cancel_if_exporting(&app);
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
-                // Both domains are finalized, so
-                // recording_blocks_shutdown/capture_blocks_shutdown are now
-                // false and the re-triggered CloseRequested takes the else
-                // branch below (pass through to destruction) — no loop.
+                // All three are dealt with, so every predicate in the gate
+                // above is now false and the re-triggered CloseRequested
+                // takes the else branch below (pass through to destruction)
+                // — no loop. The export's is false either because the cancel
+                // unwound or because its bounded wait expired, which is why
+                // `cancel_if_exporting` proceeds on expiry rather than
+                // looping: an Alt+F4 that never closes is worse than an
+                // export abandoned after its bound.
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.close();
                 }

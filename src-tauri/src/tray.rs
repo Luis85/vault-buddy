@@ -42,6 +42,16 @@ pub const POSITION_DENYLIST: [&str; 4] = ["panel", "bubble", "overlay", "editor"
 /// inherit the guard.
 ///
 /// The editor is deliberately absent: see `COMPANION_LABELS`.
+///
+/// So is the EXPORT. This gate has the same two-predicate shape as `quit`
+/// below, which grew a third term for `export_shutdown::export_blocks_shutdown`
+/// — do not "unify" the two. The buddy is the RECORDING indicator, and hide is
+/// refused mid-capture so a recording can never run with nothing on screen
+/// saying so. An export needs no indicator: it renders its own progress in the
+/// editor window, which hide-to-tray does not touch. Blocking hide for the
+/// minutes an export runs would pin the app on screen during exactly the
+/// operation a user wants to walk away from. A structural test in
+/// `export_shutdown` pins this asymmetry in both directions.
 pub fn hide_buddy(app: &AppHandle) {
     if crate::capture_commands::recording_blocks_shutdown(app)
         || crate::screen_commands::capture_blocks_shutdown(app)
@@ -65,13 +75,26 @@ pub fn quit(app: &AppHandle) {
     // would freeze the event loop (dead tray, dead buddy) for the whole
     // encode. Park the wait on a worker thread and let it drive the exit
     // once the save has landed; the menu callback returns immediately.
+    //
+    // An in-flight EXPORT is the third thing this must not abandon, and the
+    // only one of the three that is mid-write into a vault: quitting under it
+    // used to run `finish_quit` immediately, destroying every window and
+    // calling exit(0) while the `screen-export` thread was committing video →
+    // note → staged-removal, and leaving the ffmpeg CHILD — a separate
+    // process — writing into staging after the app was gone (GAP-155).
     if crate::capture_commands::recording_blocks_shutdown(app)
         || crate::screen_commands::capture_blocks_shutdown(app)
+        || crate::export_shutdown::export_blocks_shutdown(app)
     {
         let app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("shutdown-finalize".into())
             .spawn(move || {
+                // FIRST: it kills a child process and is bounded at a few
+                // seconds, while the two finalizes below are unbounded — an
+                // export left running behind them would go on writing into
+                // the vault for as long as they take.
+                crate::export_shutdown::cancel_if_exporting(&app);
                 crate::capture_commands::finalize_if_recording(&app);
                 crate::screen_commands::finalize_if_capturing(&app);
                 finish_quit(&app);

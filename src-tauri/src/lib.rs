@@ -12,6 +12,7 @@ mod diagnostics;
 mod document_commands;
 mod editor_commands;
 mod export_commands;
+mod export_shutdown;
 mod export_worker;
 mod external_tool;
 mod ffmpeg;
