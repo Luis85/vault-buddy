@@ -43,12 +43,29 @@ const region = ref<RegionSelection | null>(null);
  * exactly one monitor — see the overlay's own reasoning — so the Region tab
  * lists the monitors as targets rather than guessing the primary. */
 const regionTargetId = ref<string | null>(null);
+/** The monitor the held region was actually cut from, snapshotted when it was
+ * selected. NOT the same thing as `regionTargetId`, which is only "which row
+ * is highlighted right now" and moves on any click: once the two diverge, a
+ * target-keyed label names the wrong monitor (the Rust/TS parity failure
+ * `utils/regionLabel.ts` exists to prevent), a target-keyed drop rule clears a
+ * valid region when some OTHER monitor goes, and leaves an armed region whose
+ * own monitor went — which Start then hands to `source::resolve` as
+ * `SourceGone`. Snapshotted rather than parsed back out of `region.sourceId`:
+ * that id's `region:<monitor>,x,y,w,h` shape is Rust's to define. */
+const regionMonitorId = ref<string | null>(null);
 const selectingRegion = ref(false);
 
 const rowsFor = (kind: string) =>
   sources.value.filter((s) => s.kind === kind);
+const hasSource = (id: string | null) => sources.value.some((s) => s.id === id);
 const screens = computed(() => rowsFor("screen"));
-const canStart = computed(() => selectedId.value !== null && !starting.value);
+// Also gated on a selection in flight: the overlay covers the target monitor
+// while this panel sits on another and stays clickable, so an ungated Start
+// would begin recording under the overlay AND navigate away, unmounting the
+// picker the pending drag has to resolve into.
+const canStart = computed(
+  () => selectedId.value !== null && !starting.value && !selectingRegion.value,
+);
 
 async function onSelectRegion() {
   if (regionTargetId.value === null || selectingRegion.value) return;
@@ -62,6 +79,9 @@ async function onSelectRegion() {
     // failure: leave whatever was selected before exactly as it was.
     if (picked) {
       region.value = picked;
+      // Snapshot the monitor WITH the region: everything that asks "which
+      // monitor is this region on" must read this, never the mutable target.
+      regionMonitorId.value = regionTargetId.value;
       selectedId.value = picked.sourceId;
     }
   } catch (e) {
@@ -69,6 +89,33 @@ async function onSelectRegion() {
     error.value = String(e);
   } finally {
     selectingRegion.value = false;
+  }
+}
+
+/**
+ * Drop every pointer the freshly-enumerated list no longer backs. Runs in
+ * dependency order — region, then target, then the armed selection — so a
+ * dropped region also disarms Start on the same pass.
+ */
+function dropVanished() {
+  // A region id is NEVER in `sources` — it is built from a selection, not
+  // enumerated — so the "drop what the list no longer offers" rule has to ask
+  // about the region's own MONITOR instead. Without this the region is cleared
+  // on every refresh and Start silently disarms itself. It asks about
+  // `regionMonitorId`, never the target pointer — see that ref.
+  if (region.value && !hasSource(regionMonitorId.value)) {
+    region.value = null;
+    regionMonitorId.value = null;
+  }
+  // The target pointer follows the same rule whether or not a region is held:
+  // left dangling it keeps "Select region…" enabled on an id Rust can only
+  // refuse.
+  if (regionTargetId.value !== null && !hasSource(regionTargetId.value)) {
+    regionTargetId.value = null;
+  }
+  const known = hasSource(selectedId.value) || selectedId.value === region.value?.sourceId;
+  if (selectedId.value && !known) {
+    selectedId.value = null;
   }
 }
 
@@ -82,20 +129,7 @@ async function onSelectRegion() {
 async function loadSources() {
   try {
     sources.value = await invoke<CaptureSourceInfo[]>("list_capture_sources");
-    // A region id is NEVER in `sources` — it is built from a selection, not
-    // enumerated — so the "drop what the list no longer offers" rule has to
-    // ask about the region's MONITOR instead. Without this the region is
-    // cleared on every refresh and Start silently disarms itself.
-    if (region.value && !sources.value.some((s) => s.id === regionTargetId.value)) {
-      region.value = null;
-      regionTargetId.value = null;
-    }
-    const known =
-      sources.value.some((s) => s.id === selectedId.value) ||
-      selectedId.value === region.value?.sourceId;
-    if (selectedId.value && !known) {
-      selectedId.value = null;
-    }
+    dropVanished();
   } catch (e) {
     // An empty list and a failed read mean different things — "nothing to
     // capture" invites opening a window, a failure invites a retry — so this
@@ -176,7 +210,9 @@ async function onStart() {
         <ScreenRegionPicker
           :screens="screens"
           :target-id="regionTargetId"
+          :monitor-id="regionMonitorId"
           :region="region"
+          :starting="starting"
           :selected-id="selectedId"
           :selecting="selectingRegion"
           @update:target-id="regionTargetId = $event"
