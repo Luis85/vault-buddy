@@ -330,8 +330,12 @@ mod tests {
 
     // Segment keys are read by the names the editor WRITES onto disk
     // (camelCase). `Segment` has no serde derives (GAP-135), so this is a
-    // hand mapping on purpose -- and it is the only place in Rust that spells
-    // the on-disk names at all.
+    // hand mapping on purpose. It was the ONLY place in Rust spelling the
+    // on-disk names until phase 5; `export_commands::timeline_from_sidecar`
+    // is now the second, and it is PRODUCTION code rather than a test. Two
+    // hand mappings of one wire shape, still held together by nothing but
+    // this fixture table -- which is why GAP-135 stays open. Change one and
+    // you must change the other.
     fn segments_of(v: &serde_json::Value) -> Vec<Segment> {
         v.as_array()
             .expect("segments array")

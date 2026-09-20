@@ -537,6 +537,41 @@ Export writes to a temp inside the staging dir. **The staged capture is deleted
 only after the vault write has landed** — the never-lose invariant applied to
 the export step.
 
+> **Reconciled after phase 5 (2026-09-20).** The paragraph above is still the
+> design; the five numbered steps are not the implementation, because the
+> route changed while phase 5 was three tasks in (commit `1b458dd`, a decision
+> by the repository owner). The export shells out to a **user-installed
+> ffmpeg** — the posture and the reasoning §3 already gave for declining to
+> ship a large copyleft binary — instead of building a Media Foundation
+> reader, a second sink and a sample pump. Testability decided it: under the
+> MF design every one of those was Windows-only and executed in no automated
+> test on any platform, whereas the argument vector is a pure function
+> (`screen::ffmpeg_args`) and CI now installs ffmpeg and runs a real round
+> trip (`screen/tests/export_roundtrip.rs`). What that means for the steps:
+> - **1–3 collapse into one ffmpeg pass.** `select::plan(&timeline)` is
+>   unchanged and still where the ordering lives; it now feeds
+>   `filter_complex` — one `trim`/`atrim` + `setpts`/`asetpts` pair per span,
+>   numbered by PLAN index, then `concat`. The order of the concat inputs IS
+>   the user's reorder. The fast path is `-c copy -movflags +faststart`.
+> - **4 is unchanged in substance.** Progress is
+>   `screen:exportProgress { fraction }`, throttled through `core::throttle`,
+>   derived from ffmpeg's own `-progress out_time_us`.
+> - **5 is a TIMED poll, not a per-span one.** There are no spans to poll
+>   between when ffmpeg owns the whole pass — and the fast path is a single
+>   span, so a per-span poll would have made the longest, most unattended
+>   export the only uncancellable one. `export.rs` blocks on
+>   `recv_timeout(CANCEL_POLL)` (200 ms) against the progress channel, so even
+>   an export emitting no progress at all answers Cancel promptly; cancelling
+>   kills the child, reaps it, joins both reader threads, and **deletes the
+>   truncated output** (leaving it would offer a broken file as a saved one).
+> - Two deviations this route RETIRED rather than inherited: the per-span
+>   versus per-sample cancellation question disappears with the child process,
+>   and the fast path's unverifiable passthrough disappears because copying
+>   streams is a flag (`-c copy`) rather than an inference from a media type.
+>
+> Media Foundation keeps the CAPTURE side untouched — §6 is unaffected. The
+> app carries two media stacks on purpose, each where it is strongest.
+
 ## 9. The vault write
 
 This is the **ninth sanctioned vault write**. AGENTS.md's vault-domain list
@@ -661,6 +696,41 @@ documented rule.
 >   `screen_*` config fields are parsed and preserved but read by nothing
 >   until phase 6.
 
+> **Reconciled again after phase 5 (2026-09-20).** The shipped surface is now
+> **92 commands** — measured with the one-liner in AGENTS.md, never
+> incremented; that sentence has been wrong four times. Everything the phase-4
+> note listed as "still ahead" has landed, and in different modules from the
+> ones named below:
+> - **`export_commands.rs`** — the export LIFECYCLE and, with it, all five of
+>   the feature's export events through one warning-logging emitter:
+>   `export_and_save_capture` *(async)*, `cancel_export` *(sync — one mutex,
+>   one flag, no I/O)*.
+> - **`staged_commands.rs`** — a staged capture as an OBJECT:
+>   `discard_staged_capture` *(async)*, `list_staged_captures` *(async)*,
+>   `open_screen_capture` *(sync)*. The split is not a design change; one file
+>   carrying both came to 989 nonblank lines against the repo's 800 Rust cap.
+>   `screen:discarded` is still emitted from `export_commands`' single
+>   emitter, so the one-emitter invariant survives it.
+> - **`ffmpeg.rs`** — `detect_ffmpeg` *(async)* and `set_ffmpeg_path`
+>   *(async)*, which this section does not name because the MF design needed
+>   no external tool. **Neither has a frontend caller** (docs/Gaps.md
+>   GAP-144).
+> - `screen_config_commands.rs` still does not exist — but the "five of seven
+>   read by nothing" half of the note above is now **false**: `export_worker`
+>   reads all five, and `screen_quality`/`screen_fps` were already read by the
+>   capture worker. **All seven are read; none has a settings surface.** That
+>   is what phase 6 owes, and it is a different statement from the one this
+>   note used to make.
+>
+> **The Events table below is one event short.** `screen:discarded { base }`
+> is not listed here and ships deliberately: without it, discarding a capture
+> leaves the store's `lastStaged` pointing at a base no longer on disk, so the
+> panel keeps offering **Edit** and the editor fails with a banner the user
+> cannot act on. `screen:exported` also carries more than "export lifecycle"
+> suggests — `{ base, videoPath, notePath, vaultId, vaultName, warning }` —
+> because the editor window installs no store and cannot turn a vault id into
+> a name. AGENTS.md's Events table is the one to read as shipped.
+
 | Defined in | Commands |
 | --- | --- |
 | `screen_commands.rs` | `list_capture_sources` *(async)*, `select_capture_region` *(async — shows the overlay, resolves to a rect or null)*, `start_screen_capture` *(async)*, `pause_screen_capture`, `resume_screen_capture`, `stop_screen_capture` *(async)*, `screen_capture_status` *(sync)* |
@@ -751,6 +821,19 @@ invariant).
 | Disk fills during capture | Capture stops and **finalizes**; the partial capture is staged and offered, with an explicit "stopped: disk full". |
 | Export fails or is cancelled | Staged capture and timeline are **kept**; the editor stays open with the error. |
 | Vault write fails | Staged capture **kept**, exported temp kept, error surfaced with retry. Nothing is deleted on a failed save. |
+
+> **Reconciled after phase 5 (2026-09-20): the exported temp is DELETED, not
+> kept.** The staged capture and the timeline are kept, which is the half that
+> matters and which this row gets right — but a kept temp is a promise
+> `screen_recovery` breaks 60 s later, when the staleness sweep removes an
+> abandoned `.export.mp4.part` as litter. That would make the same Retry
+> button behave differently depending on how long the user spent reading the
+> error message. A retry re-exports from the staged capture, which is the
+> artifact that must never be lost; the temp is a half-written transcode with
+> no independent value. Every `Err` return in `export_worker::export_blocking`
+> / `run_export` and in `screen::export` removes it, and the same is true of a
+> cancel (`remove_output`). The row's intent — "nothing the user could want is
+> deleted on a failed save" — holds; its letter does not.
 | Both capture kinds requested at once | Typed `alreadyCapturing`; neither is disturbed. |
 | Empty timeline at save | Save disabled with an inline explanation. |
 

@@ -141,7 +141,12 @@ function onExported(p: ExportResult) {
   // A warning means the video landed and its note did not: a degraded
   // SUCCESS. Dropping it would leave the user believing in a note that is
   // not there.
-  exportMessage.value = p.warning ?? `Saved ${p.base} into your vault.`;
+  // `vaultName` and not `vaultId`: the id is Obsidian's opaque hex registry
+  // key, which names nothing to a human. A payload written by an older build
+  // (or a test) carries no name, so fall back rather than render "undefined".
+  exportMessage.value =
+    p.warning ??
+    (p.vaultName ? `Saved ${p.base} to ${p.vaultName}.` : `Saved ${p.base} into your vault.`);
 }
 
 /** Spec 14: a cancel keeps the staged capture AND its timeline. There is

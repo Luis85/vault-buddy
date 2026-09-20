@@ -474,6 +474,28 @@ describe("EditorRoot", () => {
     });
   });
 
+  // The success line NAMES the vault, and that is why `screen:exported`
+  // carries `vaultName` beside `vaultId`. The id is Obsidian's opaque hex
+  // registry key; this window installs no store and has no vault list, so it
+  // cannot turn one into the other. The negative half is the load-bearing
+  // one: rendering the id instead would look like a filled-in name to any
+  // assertion that only checked the line was non-empty.
+  it("names the vault on the success line, and never its registry id", async () => {
+    const w = await open();
+    emit("screen:exported", {
+      base: "cap one",
+      videoPath: "C:\\vault\\cap one.mp4",
+      notePath: "C:\\vault\\cap one.md",
+      vaultId: "9f3c1a77bd0e4412",
+      vaultName: "Engineering",
+      warning: null,
+    });
+    await flushPromises();
+    const line = w.get('[data-testid="export-message"]').text();
+    expect(line).toContain("Engineering");
+    expect(line).not.toContain("9f3c1a77bd0e4412");
+  });
+
   // The video landed but its note did not: the export SUCCEEDED, so this is
   // a warning on the success line, never a failure. Dropping it would leave
   // the user believing a note exists that does not.

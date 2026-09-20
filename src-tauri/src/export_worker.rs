@@ -64,6 +64,13 @@ pub(crate) struct ExportSummary {
     pub video_path: PathBuf,
     pub note_path: Option<PathBuf>,
     pub vault_id: String,
+    /// The vault's DISPLAY name, carried beside the id because the editor
+    /// window installs no store and has no vault list: `vault_id` is
+    /// Obsidian's opaque hex registry key, so a window holding only that
+    /// cannot say where the capture went. It is the same string
+    /// `render_screen_note` writes into the note's `vault:` key, resolved
+    /// once in `prepare` from the live registry.
+    pub vault_name: String,
     /// Set when the video landed but its companion note did not — the
     /// degrade-to-warning arm, never a failure.
     pub warning: Option<String>,
@@ -124,6 +131,7 @@ pub(crate) fn export_blocking(app: &AppHandle, base: &str) -> Result<ExportSumma
         video_path: committed.video,
         note_path: committed.note,
         vault_id: prepared.vault_id,
+        vault_name: prepared.vault_name,
         warning: committed.warning,
     })
 }

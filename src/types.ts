@@ -469,12 +469,17 @@ export interface ExportProgress {
  *
  * `notePath` is null exactly when the vault has companion notes turned off.
  * `warning` is set when the video landed but its note did not: a degraded
- * SUCCESS, never a failure. */
+ * SUCCESS, never a failure.
+ *
+ * `vaultId` is what `open_screen_capture` needs; `vaultName` is what a human
+ * reads. Both are carried because the editor window installs no store and has
+ * no vault list, so it cannot turn one into the other. */
 export interface ExportResult {
   base: string;
   videoPath: string;
   notePath: string | null;
   vaultId: string;
+  vaultName: string;
   warning: string | null;
 }
 

@@ -157,6 +157,7 @@ fn emit_exported(app: &AppHandle, summary: &ExportSummary) {
             "videoPath": summary.video_path.to_string_lossy(),
             "notePath": summary.note_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
             "vaultId": summary.vault_id,
+            "vaultName": summary.vault_name,
             "warning": summary.warning,
         }),
     );
@@ -459,6 +460,38 @@ mod tests {
                 src.matches(&format!("\"{event}\"")).count(),
                 1,
                 "{event} is emitted from more or fewer than one place"
+            );
+        }
+    }
+
+    // The ONE seam between `ExportSummary` and the editor is a JSON object
+    // literal, so nothing in either language notices when a key stops being
+    // emitted: Rust still compiles (the field is constructed, just not
+    // serialised) and the Vitest suite still passes (it emits its own
+    // payload). `vaultName` is the key at risk, because it exists purely to
+    // be READ — drop it and the editor silently falls back to "into your
+    // vault", which looks like working software. `src/types.ts`'s
+    // `ExportResult` is the other half; this is the GAP-135 class, pinned
+    // structurally because there is no derive to enforce it.
+    #[test]
+    fn the_exported_event_carries_every_field_the_editor_reads() {
+        let src = production_src();
+        let body = src
+            .split_once("fn emit_exported(")
+            .expect("the exported emitter")
+            .1;
+        let body = &body[..body.find("\n}\n").expect("the emitter's end")];
+        for key in [
+            "\"base\"",
+            "\"videoPath\"",
+            "\"notePath\"",
+            "\"vaultId\"",
+            "\"vaultName\"",
+            "\"warning\"",
+        ] {
+            assert!(
+                body.contains(key),
+                "screen:exported must carry {key} — src/types.ts ExportResult declares it"
             );
         }
     }

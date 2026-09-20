@@ -20,13 +20,25 @@ _Avoid_: Journal entry, today's note
 The act of recording a piece of knowledge (voice, screenshot, clipboard, meeting, etc.) as the first stage of the Knowledge Lifecycle, before it has been turned into structured knowledge.
 _Avoid_: Recording — a Capture is not necessarily audio
 
-**Dated layout**:
-Vault Buddy's default on-disk layout for a capture/import domain: files land under `<folder>/YYYY/MM/`. The timestamped base name still encodes the full date, so the year/month folders are organizational, not identifying.
-_Avoid_: Archive structure — the folders exist for browsing, not retention policy
+**Staged Capture**:
+A screen recording that has been made but not yet saved into a Vault: an `.mp4` plus a `.json` sidecar (source, duration, and the editor's in-progress timeline) living in the app's own staging directory, deliberately **outside every Vault**. An unedited, unapproved capture is not knowledge, so Discarding one must leave no litter in the user's notes. It stays staged until it is Exported or Discarded, and a crash leaves it recoverable rather than lost.
+_Avoid_: Draft, temp file — a Staged Capture is the user's footage, not scratch
+
+**Export**:
+Turning a Staged Capture into a playable `.mp4` plus a companion note inside a Vault — the act that ends a Staged Capture's life. An untouched timeline is remuxed losslessly; an edited one is re-encoded to exactly the spans the editor shows. The Staged Capture is removed only after the Vault write has landed.
+_Avoid_: Render, publish, upload — nothing leaves the machine; Save is the UI's word for it
+
+**Discard**:
+Permanently deleting a Staged Capture — its video and its sidecar — without Exporting it. Always confirm-gated, because it destroys the only copy of a recording. The counterpart to Export: every Staged Capture ends as one or the other.
+_Avoid_: Cancel (that stops an Export in flight and keeps the footage), Archive (nothing is kept), Delete (reserved for the Task domain's own destructive write)
 
 **Flat layout**:
-The opt-in alternative to the Dated layout: files live directly in `<folder>`, with no year/month subfolders. It is a per-domain, per-vault choice (Recording and Document Import each have their own toggle) that changes only where **new** files are written — a domain's existing files stay exactly where they are and are still found regardless of which layout is active.
+Vault Buddy's **default** on-disk layout for a capture/import domain: files live directly in `<folder>`, with no year/month subfolders. The timestamped base name encodes the full date, so the folders were never what identified a file.
 _Avoid_: Migration — switching layouts never moves or rewrites existing files
+
+**Dated layout**:
+The opt-in alternative to the Flat layout: files land under `<folder>/YYYY/MM/`, where the year/month folders are organizational, not identifying. It is a per-domain, per-vault choice — Recording, Document Import and Screen Capture each have their own toggle, all three defaulting to Flat — that changes only where **new** files are written; a domain's existing files stay exactly where they are and are still found regardless of which layout is active.
+_Avoid_: Archive structure — the folders exist for browsing, not retention policy
 
 **Knowledge Lifecycle**:
 The seven-stage journey every piece of information follows inside Vault Buddy: Capture → Process → Organize → Act → Retrieve → Automate → Learn. Completing an action produces new knowledge, making the journey continuous.

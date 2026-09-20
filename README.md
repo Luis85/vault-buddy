@@ -9,7 +9,7 @@ it and your Obsidian vaults are one action away — no window hunting, no
 context switching. Your knowledge stays yours: everything runs locally.
 
 - **Platform:** Windows 11 (MVP)
-- **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · local offline transcription · local MCP server for AI clients
+- **Status:** vault access · cross-vault search · per-vault & cross-vault tasks · one-click meeting & voice recording · screen recording with an editor · local offline transcription · local MCP server for AI clients
 
 See the [Product Requirements Document](docs/PRD.md) for the full vision,
 principles, capabilities, and roadmap.
@@ -61,6 +61,21 @@ The buddy appears as a small, always-on-top character on your desktop.
   template, and transcription — in the panel. When the **follow-up template**
   is on (the default), each recording's companion note gets a ready-made
   `## Follow-up` section (action items, decisions, notes) to fill in after.
+- **Record your screen** into a vault: from the capture chooser pick
+  **Record screen**, then a monitor, a window, or a region you drag out — with
+  any of your audio devices mixed in. Pause, resume and stop from the capture
+  bar or the tray; Vault Buddy's own windows stay out of the picture. When you
+  stop, the recording waits in a staging area outside your vault until you
+  decide what to do with it. Click **Edit** to open it in its own window,
+  where you can split, delete and reorder blocks with undo/redo — every edit
+  is saved as you make it, so a crash costs at most the last one. Then **Save
+  to vault** writes a playable `.mp4` plus a companion note, or **Discard**
+  throws the recording away (two clicks, never silently). An untrimmed
+  recording is saved losslessly and almost instantly; a trimmed one is
+  re-encoded to exactly what you cut. Anything you walked away from — including
+  a recording interrupted by a crash — is offered back to you the next time you
+  open Record screen. **Saving needs [ffmpeg](https://ffmpeg.org/download.html)
+  installed** (recording and editing do not); Vault Buddy does not bundle it.
 - **Transcribe** locally, opt-in per vault: after a recording finishes,
   Vault Buddy runs speech-to-text on-device with whisper.cpp and writes a
   transcript that the note embeds. It downloads a small speech model on
@@ -92,14 +107,16 @@ The buddy appears as a small, always-on-top character on your desktop.
 
 Vault Buddy is careful with your vault. Browsing, searching, and opening
 notes never write anything — opening stays delegated to Obsidian via
-`obsidian://` URIs, and every launched URI is logged. **Recording and tasks
-are the two features that write into a vault**, and only where you use
-them (AI clients over MCP get the same task writes — plus creating today's
-daily note — and only after you flip the separate vault-writes switch).
-Recording saves the audio, an optional companion note, and (if
-enabled) a transcript sidecar into a dated folder you choose — always under
-fresh names, never replacing a file you already have. Tasks create new
-`type: Task` files the same collision-safe way; the edits they make to an
+`obsidian://` URIs, and every launched URI is logged. **Four things write into
+a vault, and only where you use them**: recording (audio and screen),
+importing a document, and tasks (AI clients over MCP get the same task writes
+— plus creating today's daily note — and only after you flip the separate
+vault-writes switch). Recording saves the audio, an optional companion note,
+and (if enabled) a transcript sidecar into a folder you choose — always under
+fresh names, never replacing a file you already have. Saving a screen
+recording works the same way and reserves its video and its note together, so
+the note can never end up pointing at a different file than the one beside it.
+Tasks create new `type: Task` files the same collision-safe way; the edits they make to an
 existing file (checking off or archiving a task, or changing its title,
 due date, priority, or tags in the inline editor) rewrite only the
 frontmatter lines you changed — and only in files whose frontmatter says

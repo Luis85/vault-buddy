@@ -2431,7 +2431,44 @@ what checklist item 10 produces. The running total is visible in the UI as of
 2026-09-19 (`ScreenCaptureBar.vue`'s dropped chip, GAP-118); the per-drop
 log lines and the teardown total remain the fuller record.
 
-### GAP-115 · Medium · Phase 2 never sweeps, surfaces or bounds its staging directory — for CRASHED and for cleanly finished captures alike
+### GAP-115 · ~~Medium~~ Low (NARROWED 2026-09-20, phase 5) · The staging directory is swept and surfaced now, but still unbounded and not bulk-clearable
+
+**What phase 5 closed, verified at source rather than assumed:**
+- **The sweep exists.** `src-tauri/src/screen_recovery.rs`'s
+  `run_screen_recovery`, wired into `lib.rs`'s `setup` immediately after
+  `document_commands::run_import_recovery`. A stale orphaned `.part` whose
+  prefix really holds footage (`part_holds_footage` = `mp4_boxes::scan`
+  reporting a `moov` AND at least one fragment) is PROMOTED to a staged
+  capture rather than deleted — which is exactly what this entry asked for,
+  since a sweeper that deleted evidence the crash-safe container was designed
+  to preserve would have been strictly worse than leaving it. A header-only
+  shell and an abandoned `.export.mp4.part` are deleted. Anything whose stem
+  does not round-trip through `capture_paths::is_capture_base` is classified
+  `Foreign` and never touched, symlinks are never followed, and the pass is
+  postponed while EITHER capture domain holds `CaptureGuard`.
+- **Completed staged captures are surfaced AND user-deletable.**
+  `staged_commands::list_staged_captures` backs
+  `src/components/StagedCaptureList.vue`, shown FIRST in the Record Screen
+  picker (spec §10's resume-or-discard), and `discard_staged_capture` removes
+  the `.mp4`, the sidecar and any export temp behind a two-step confirm.
+- **A staged capture now has somewhere to GO.** The export (phase 5's ninth
+  vault write) deletes it after the vault write lands, so the common path no
+  longer accumulates anything at all.
+
+**What is still open, and it is the original entry's second half:** nothing
+bounds the directory's total SIZE and there is no bulk "Clear staged
+captures" action or size readout. A user who records a dozen 1080p captures
+and saves none still accumulates gigabytes under `%LOCALAPPDATA%`; the
+Record Screen list shows them, so they are at least discoverable and
+removable one at a time, which is why this drops to Low. The 60 s staleness
+rule deliberately does NOT expire a COMPLETE staged capture — only orphans
+and temps — because deleting a recording the user has not decided about is
+the loss this whole design exists to prevent. **Fix shape:** Phase 6's
+settings card gets the size readout and the bulk clear (spec §10's
+disk-pressure paragraph); Task 9's sweep and Task 8's
+`list_staged_captures` are what it builds on.
+
+### GAP-115 (original text, for the record) · Phase 2 never sweeps, surfaces or bounds its staging directory — for CRASHED and for cleanly finished captures alike
 `src-tauri/src/lib.rs` (`setup` wires `capture_commands::run_recovery` and
 `document_commands::run_import_recovery`, and nothing for the screen domain)
 plus `src-tauri/screen/src/staging.rs`. A screen capture writes into
@@ -2996,7 +3033,31 @@ parity against that same Rust line, so the two now disagree inside one file.
 **Fix:** change the fixture to `"2560x1440 - Primary"`; no assertion in the
 suite depends on the dot.
 
-### GAP-134 · Low · The editor accepts a hand-edited sidecar timeline without validating its shape
+### GAP-134 · Low (NARROWED 2026-09-20, phase 5 — the EXPORT side is defended, the EDITOR side is not)
+**Phase 5 defended the half that mattered most, in a different place from the
+one this entry proposed.** `export_commands::timeline_from_sidecar` is now
+the ONE place the hand-editable `timeline` field is interpreted, and it is
+fully defensive: absent, null, wrong-typed, a non-numeric / negative /
+fractional bound all degrade to the WHOLE capture — safe only because
+`Timeline::is_untouched` then answers exactly as an absent field would, so a
+degraded read REMUXES rather than re-encoding. An EXPLICITLY empty segment
+list is deliberately NOT degraded: the user deleted everything, and
+`export_refusal` has to see that rather than silently restore their
+recording.
+
+**What is still open is exactly what this entry names below**, and the fix
+shape it proposed was NOT taken: `load_staged_capture` still returns
+`Option<serde_json::Value>` verbatim (`editor_commands.rs:77`, `:143`), and
+`useEditorTimeline.ts`'s `snapshot` still does `t.segments.map(...)` on it.
+A sidecar carrying `"timeline": {}` still throws `TypeError: Cannot read
+properties of undefined (reading 'map')` into the editor's load banner. So
+the export can no longer be fooled by a malformed sidecar; the editor can
+still be confused by one. **Fix shape, updated:** parse the field into a
+`Timeline` in `load_from_staging_dir` as below — and now that
+`timeline_from_sidecar` exists and is tested, reuse it rather than writing a
+third reader.
+
+### GAP-134 (original text, for the record) · The editor accepts a hand-edited sidecar timeline without validating its shape
 `src/composables/useEditorTimeline.ts` (`snapshot`, at construction) and
 `src/roots/EditorRoot.vue`'s `load`. The sidecar's `timeline` field is an
 unvalidated `serde_json::Value` from Rust all the way to the webview, and
@@ -3026,7 +3087,49 @@ let `snapshot()` be written without a shape check; read it as "whatever the
 sidecar held", not as a contract (the phase-4 review's m-5; `types.ts` now
 says so at the field).
 
-### GAP-135 · Medium · `core::timeline` has no serde derives, so the editor's on-disk timeline shape is an unenforced convention
+### GAP-135 · Medium (REWRITTEN 2026-09-20, phase 5) · The on-disk timeline shape is now spelled by hand in THREE places and enforced by no derive
+
+Phase 5's export had to read the sidecar, and the "failure scenario" below
+predicted how it would go wrong: add `#[derive(Deserialize)]`, forget
+`rename_all = "camelCase"`, and every timeline the shipped editor has written
+fails to parse. **Task 7 sidestepped that by not deriving at all** — it reads
+`sourceStartMs` / `sourceEndMs` by hand in
+`export_commands::timeline_from_sidecar` and degrades to the whole capture on
+anything it cannot read. That is a genuinely safer failure mode than the one
+predicted, and it is tested; it also means the convention is still enforced by
+nothing.
+
+**The count went up, not down.** The on-disk camelCase names are now spelled
+in three independent places:
+1. `src/utils/timelineGeometry.ts` + `useEditorTimeline.ts` — what WRITES them;
+2. `core/src/timeline.rs`'s test helper `segments_of` — the shared fixture
+   table's hand mapping (its comment used to claim it was the only place in
+   Rust; phase 5 made that false and the comment now says so);
+3. `export_commands::timeline_from_sidecar` — **production** Rust, the one
+   the export's correctness depends on.
+
+Nothing connects them: not a derive, not a type, not a test that fails when
+one is renamed. Rename `sourceStartMs` on the TypeScript side and (3) reads
+nothing, degrades silently to the whole capture, and exports footage the user
+deleted — with every test green, because (2) and its fixture table use the old
+name and still agree with each other.
+
+**A fourth, smaller instance of the same class landed with it, and IS pinned:**
+`screen:exported`'s payload is a `serde_json::json!` object literal in
+`emit_exported`, read by `src/types.ts`'s `ExportResult`. Dropping a key
+compiles in Rust (the field is still constructed) and passes Vitest (which
+emits its own payload). `export_commands`'s
+`the_exported_event_carries_every_field_the_editor_reads` scans the emitter's
+source for each key — a structural pin, because there is no derive to enforce
+it. Do the same for any new hand-mapped payload.
+
+**Fix shape, unchanged in substance:** derive `Serialize`/`Deserialize` with
+`rename_all = "camelCase"` on `Segment`/`Timeline`, have (2) and (3) both go
+through it, and keep a test that round-trips a LITERAL JSON string spelled the
+way `useEditorTimeline` writes it — a literal, not a re-serialize, so it fails
+when the names change on either side.
+
+### GAP-135 (original text, for the record) · `core::timeline` has no serde derives, so the editor's on-disk timeline shape is an unenforced convention
 `src-tauri/core/src/timeline.rs` (`Segment`, `Timeline` — `#[derive(Debug,
 Clone, Copy, PartialEq, Eq)]` and `#[derive(Debug, Clone, PartialEq, Eq,
 Default)]`; no `Serialize`, no `Deserialize`, no `rename_all`) against
@@ -3108,6 +3211,35 @@ unobserved. The residual fix, when phase 5 gives the Rust side a production
 caller, is to extend the table wherever the export's own mapping is exercised
 rather than writing a Rust-only fixture for it.
 
+**UPDATE 2026-09-20 (phase 5). The Rust side now HAS its production caller,
+and the residual fix above was followed — once.** `Timeline::is_untouched`
+is the single predicate deciding whether an export remuxes losslessly or
+re-encodes, so it rides the shared table: every case in
+`tests/fixtures/timeline-cases.json` carries an `isUntouched` array, Rust
+asserts the rows, and the Vitest side asserts only that no case can SKIP
+declaring them. **Rust deliberately owns the rule** — `timelineGeometry.ts`
+was explicitly NOT given an `isUntouched` twin, because a second copy one IPC
+hop from the original is the shape this entry exists to warn about.
+
+Building that row found a real hole, which is the argument for the table:
+relaxing `is_untouched` to ignore where a segment STARTS left the existing
+test green, because it probed a trimmed TAIL. A capture trimmed from the
+FRONT would have read as untouched, and the fast path would have restored the
+footage the user deleted — the same failure the null-timeline rule was removed
+to prevent, arriving through another door. Two cases now separate "is
+untouched" from "has one segment".
+
+**What phase 5 ADDED to this gap:** `PlanSpan::restamp`
+(`screen/src/select.rs`) is the source-to-output direction the export needs,
+and it is the Rust counterpart of TypeScript's `toOutputMs` — but it has NO
+shared row, so the pair that now exists in both languages is held apart by
+nothing. It is also the direction the phase-4 review already caught the
+TypeScript twin getting subtly wrong (a boundary written `<=` stayed green
+against seven fixtures because every probe fell outside a segment under both
+rules), which is why `restamp` is half-open at the far edge and its fixtures
+probe a span's own end. **Fix shape:** add a `restamp`/`toOutputMs` row pair
+to the shared table. Add a ROW, never a Rust-only fixture.
+
 ### GAP-137 · CLOSED · The asset protocol's staging-only scope
 `src-tauri/tauri.conf.json` — `app.security.assetProtocol = { "enable": true,
 "scope": ["$APPLOCALDATA/screen-captures/*"] }` — against
@@ -3154,6 +3286,27 @@ browser lands, the row stops being the only handle and should either expire
 like `RenamePrompt` or gain a dismiss; until then, leaving it is the safer of
 the two, and it should be a conscious decision in that phase's plan.
 
+**NARROWED 2026-09-20 (phase 5), on both halves, and now a conscious
+decision.** `lastStaged` gained a SECOND clear site: `forgetStaged(base)`,
+fired from the `screen:exported` and `screen:discarded` listeners, clears it
+when — and only when — the base matches. So the row now disappears the moment
+that capture is saved or discarded, which is the common path and the one that
+mattered. It is keyed on IDENTITY rather than lifecycle, which is what makes a
+second clear safe beside the first (`reset()`), and it deliberately does not
+bump `seq`, because it is not a capture-state transition. And the row is no
+longer the only handle: `StagedCaptureList` in the Record Screen picker
+reaches EVERY staged capture, so removing the bar's row would no longer
+strand footage.
+
+**What is still open is the narrow case the entry opened with:** a capture the
+user neither saves nor discards leaves the row on the list view for the rest
+of the process, with no dismiss and no expiry. Since the footage is now
+reachable elsewhere, an expiry or a dismiss is finally available as a choice
+rather than a loss — and that choice was NOT made in phase 5 (leaving it is
+still the safer default while the Record Screen list is a picker rather than
+spec §10's browser). **Fix shape:** Phase 6, alongside the browser — expire
+like `RenamePrompt` or add a dismiss, and decide it explicitly.
+
 ### GAP-139 · Low · Three of `useEditorTimeline`'s exports have no production consumer
 `src/composables/useEditorTimeline.ts` — `revert`, `isDirty` and `outputMs`
 are returned and read only by tests (`grep` over `src/`). `flushPending` was
@@ -3171,3 +3324,270 @@ exports), so nothing flags them. **Fix shape:** phase 5 either wires them to
 the Discard/Save surfaces the spec names, or deletes them in the same commit
 that decides not to — a returned function nobody calls is a claim about a
 surface that does not exist.
+
+**NARROWED 2026-09-20 (phase 5): THREE became TWO, and the title is now
+wrong by one.** `outputMs` got its production consumer exactly where this
+entry predicted — `EditorRoot`'s `canSave` computed, which disables **Save to
+vault** when the timeline holds no footage. That it reads the composable's
+`outputMs` rather than spelling the predicate inline is deliberate: a
+hand-rolled `segments.some(s => s.sourceEndMs > s.sourceStartMs)` would agree
+but would be a THIRD implementation of this feature's segment arithmetic, held
+against nothing (GAP-136).
+
+`revert` and `isDirty` still have no production consumer (`grep` over `src/`
+finds only tests). Phase 5 DID ship spec §8.2's Discard — but it discards the
+whole staged CAPTURE (`discard_staged_capture`, a file delete behind a
+two-step confirm), not the edit, so it needs neither. The undo stack already
+covers "undo my edits". **Fix shape, sharpened:** these two are now waiting on
+a surface nobody has proposed since the spec named it. Phase 6 should either
+name it or delete them.
+
+### GAP-140 · Medium · The export's Windows-only arms, and the whole capture side, still execute in no automated test on any platform
+`src-tauri/screen/src/disk.rs`'s `cfg(windows)` `free_bytes`
+(`GetDiskFreeSpaceExW`) and `src-tauri/screen/src/export.rs`'s three-line
+`cfg(windows)` `creation_flags` arm, plus everything GAP-117 already names
+(`sink`, `frames`, `source`'s enumeration, `session::{audio,mux,windows_session}`,
+`exclusion`, the shell's `capture_exclusion`).
+
+**State this narrowly, because the route change earned a real narrowing and
+the honest figure is much better than phase 4's.** The phase-5 plan was
+written against a Media Foundation export whose reader, sink and sample pump
+would all have been Windows-only and untestable; commit `1b458dd` replaced it
+with a user-installed ffmpeg, which moved the export's correctness into
+`ffmpeg_args` (pure) and `export` (portable), and `rust-core` now installs
+ffmpeg and runs `screen/tests/export_roundtrip.rs` — a real round trip that
+synthesizes a clip, applies a `Timeline`, and reads the output back checking
+both length AND that each block still carries its own colour and tone. That
+is the first executable end-to-end proof anywhere in this feature.
+
+**What genuinely remains untested:**
+- `disk::free_bytes`'s Windows arm. Its signature was the hard part
+  (`windows` 0.62.2 hands `GetDiskFreeSpaceExW` three `Option<*mut u64>` RAW
+  pointers, not `Option<&mut u64>`), it is type-checked by
+  `cargo clippy -p vault_buddy_screen --target x86_64-pc-windows-msvc`, and
+  its runtime behaviour is proven by nothing on any platform. The blast radius
+  is deliberately small: the API returns `Option`, so a wrong answer of `None`
+  lets a save proceed. A wrong non-`None` answer could refuse a save that
+  would have fit.
+- `export`'s `CREATE_NO_WINDOW` arm. Its absence is invisible on Linux and
+  shows on Windows as a console window that flashes and steals focus — the
+  exact Pandoc symptom that closed the settings panel out from under users.
+  The flag's VALUE and placement are pinned by a two-arm Linux test through
+  `creation_flags_for(cfg!(windows))`; that the flag reaches a real
+  `CreateProcess` is not.
+- **ffmpeg's own behaviour on Windows against a real Media Foundation
+  fragmented MP4.** CI proves the arguments and a round trip on Linux against
+  a SYNTHESIZED clip; it does not prove that MF's fMP4 remuxes cleanly through
+  a Windows ffmpeg build. That is verification-checklist row 29 and it is the
+  single highest-value manual row in the phase.
+
+**Failure scenario:** the export produces a correct file on every Linux CI run
+and fails, or silently produces an unplayable one, on the only platform that
+ships. **Fix shape:** none available in CI — this is checklist rows 29–36 and
+GAP-117's standing answer. Do not let a green `rust-core` be read as
+"the export works on Windows".
+
+### GAP-141 · Low · An export is refused while any capture is running, so a user cannot save an old capture while recording a new one
+`src-tauri/src/export_commands.rs` — `busy_refusal(app.state::<CaptureGuard>()
+.active())`, checked before the `ExportState` reservation. An audio recording
+or a screen capture in progress refuses `export_and_save_capture` with the
+guard's own busy message.
+
+**This is a deliberate trade, recorded so it is not re-discovered as a bug.**
+An export and a live capture both drive the machine's H.264 encoder, and
+between an in-progress recording (irreplaceable) and a save that can simply be
+repeated, the recording wins. Note the shape: the export READS the guard and
+never CLAIMS it, because a claim would need a second
+`release(CaptureKind::Screen)` site and a structural test pins that at exactly
+one, in `screen_commands::clear_active_screen`.
+
+**Failure scenario:** a user who records back-to-back meetings never has an
+idle moment to save the previous capture in, and the refusal names the running
+capture rather than offering to queue. Nothing is lost — staged captures
+persist — but the workflow is "stop recording to save". **Fix shape:** either
+leave it and say so in the UI (the refusal message is already specific), or
+queue the export behind the capture the way transcription already yields to a
+live recording. The transcription worker is the precedent worth copying, not
+a second `CaptureGuard` claim.
+
+### GAP-142 · Low · A saved capture cannot be renamed or re-exported, and the staged original is gone
+`src-tauri/src/export_worker.rs`'s `remove_staged_capture` (correctly, after
+the vault write lands) against the absence of any screen-capture analogue of
+`capture_commands::rename_capture`.
+
+Two consequences, both permanent once Save is pressed:
+- **No rename.** The audio domain has `rename_capture`, which keeps the
+  `YYYY-MM-DD HHmm ` prefix, moves the MP3 and the transcript sidecar on the
+  never-clobber rails, and retargets the note's embed lines. A screen capture
+  is named from its window title via `sanitize_title`, which is whatever the
+  recorded application put in its title bar — the case most in need of a
+  rename — and there is none. The user renames in Obsidian, which breaks the
+  note's embed.
+- **No re-export.** Export deletes the staged `.mp4` and its sidecar after the
+  commit, by design (spec §8.3: "the staged capture is deleted only after the
+  vault write has landed"). So a capture saved with the wrong trim, or at the
+  wrong quality, cannot be re-cut: the source of truth for the edit is gone
+  and only the exported result remains.
+
+**Failure scenario:** a user saves a 40-minute capture, notices the last
+segment is wrong, and has no path back — the editor's own timeline lived in
+the sidecar that was just deleted. **Fix shape:** the rename is a direct port
+of `rename_plan` + `rename_noreplace` + embed retargeting, and is the cheaper
+half. Re-export is a product decision, not a bug: keeping the staged copy
+after a save contradicts spec §10's discard-leaves-no-litter principle, so the
+honest options are "export is final, and the UI says so" or "an explicit Keep
+the original".
+
+### GAP-143 · Low · Screen captures are invisible to the Recordings browser and are never transcribed
+`src-tauri/core/src/transcript.rs`'s `capture_mp3s` — the walker BOTH
+`recordings::list_recordings` and `transcript::pending_transcriptions` share —
+matches `name.strip_suffix(".mp3")` only. A saved screen capture is a `.mp4`
+in the vault's `Screen Captures` folder, so:
+- it never appears in **Browse recordings**, even though it is a capture with
+  a companion note in the same house style;
+- it is never queued for transcription, so a recorded meeting captured as a
+  screen share gets no transcript while the same meeting captured as audio
+  does.
+
+Both are consistent with spec §1, which put the Recordings browser out of
+scope for this feature, and the audio path is unaffected — this is a missing
+capability, not a regression. It is recorded because the two domains now
+produce near-identical artifacts (a media file plus a `type:`-tagged note in a
+per-vault folder) and a user has no way to know why only one of them is
+listed and transcribed. **Fix shape:** `capture_mp3s` is already the single
+walker both readers share, which is the right place: widen it to a set of
+extensions and give `RecordingEntry` a kind. Transcription is the larger half
+— `transcribe::decode` is Symphonia over MP3, and an MP4's audio track needs
+demuxing first (ffmpeg is now a resolved dependency of the screen domain and
+could extract it, but only when the user has installed it — see GAP-144).
+
+### GAP-144 · Medium · `detect_ffmpeg` and `set_ffmpeg_path` have NO frontend caller, so nothing surfaces the export's hard dependency and the error message names a screen that does not exist
+`src-tauri/src/ffmpeg.rs` (both commands, registered in `lib.rs`'s
+`generate_handler!`) against `grep -rn 'detect_ffmpeg\|set_ffmpeg_path' src/
+tests/`, which returns **nothing**.
+
+The export shells out to a user-installed ffmpeg and refuses without one.
+Phase 5's own plan claimed this was handled — "Task 11 surfaces that at Record
+Screen — before the recording, not after it — so the discovery never happens
+at the payoff" — and it is not: Task 11 shipped the staged-capture list and no
+ffmpeg gate. There is no ffmpeg settings card, no `usePandocStore` analogue,
+no Record Screen pre-flight, and no Browse button anywhere.
+
+Two things follow, and the second is the sharper one:
+1. **The discovery happens at the payoff.** A user records for forty minutes,
+   edits, presses **Save to vault**, and only then learns the app needs
+   software they do not have. Capture and editing work fine without it, which
+   makes the surprise later rather than earlier.
+2. **The refusal points at a screen that does not exist.**
+   `export_worker::prepare` returns *"Saving a screen capture needs ffmpeg,
+   which is not installed. Install it, then set its location in Buddy settings
+   if it is not on your PATH."* There is no such setting in Buddy settings.
+   The override is real and is read (`document_import.ffmpeg_path`, the same
+   app-global section `pandocPath` lives in), but the only way to write it is
+   `set_ffmpeg_path` over IPC or a `config.json` hand-edit.
+
+**Failure scenario:** a user follows the error message into Buddy settings,
+finds nothing, and concludes the app is broken — having already invested a
+recording. **Fix shape:** the whole pattern exists one domain over and should
+be copied rather than invented. `DocumentImportSettings.vue` +
+`src/stores/pandoc.ts` are status card, Browse picker, Recheck and a cached
+`ensureDetected()` that intake surfaces consult; `RecordMode`'s
+blocked-Import route to a focused setup view is the pre-flight. Until then,
+**do not write documentation claiming the gate is surfaced** — the phase-5
+plan's "honest limit" section does, and it is wrong.
+
+### GAP-145 · Low · The preview seeks at every cut, so what the user approves is not frame-exact — and the export now makes that difference land in their vault
+`src/components/editor/CapturePreview.vue` — one `<video>` element seeking
+around a single source file, so a cut renders as a seek rather than a splice.
+Spec §8.2 accepted this explicitly ("boundaries are not gapless… the UI
+labels this a preview and treats export as authoritative"), and that was a
+deliberate honesty choice rather than an oversight.
+
+It is filed now because phase 5 changed what it costs. Through phase 4 the
+preview was the only artifact; the approximation had nothing to be
+approximate AGAINST. Now the user approves the preview and an exported file
+lands in their vault, and the two are produced by different machinery in
+different languages (GAP-136) — so "the preview is not authoritative" has
+become a statement about a file they keep. Verification-checklist row 30 is
+the only thing that has ever compared them, and it has not been run.
+
+**Failure scenario:** a user trims tightly against a spoken word, the preview's
+seek lands a few frames early, the export's `trim` filter lands elsewhere, and
+the saved recording cuts a syllable. **Fix shape:** none cheap — gapless
+multi-segment preview means either MSE or a pre-rendered proxy. The realistic
+mitigation is to say so at the moment it matters (a line in the editor, not
+only in the spec) and to keep row 30 as the thing that would catch a real
+divergence.
+
+### GAP-146 · Low · Export time on a long recording is unmeasured, and the progress bar is the only thing standing in for it
+`src-tauri/screen/src/export.rs`. An untouched capture takes the `-c copy`
+remux, which is I/O-bound and should be seconds; an EDITED one is a full
+`filter_complex` decode-and-re-encode pass whose cost is unknown for any real
+input. Nothing in the repository has measured either: the round-trip tests use
+clips of a few seconds, and no phase has run on hardware.
+
+Concretely unknown: how long a 60-minute 1080p edited export takes; whether
+the chosen H.264 encoder on a given machine is hardware or software (the
+capability probe picks one, and `041b567` already found that sending an x264
+preset to an encoder that does not speak it fails outright); and whether
+`STOP_TIMEOUT`-style patience is needed anywhere in the UI. The command is
+deliberately unbounded — "a deadline here would abandon a worker that is still
+writing into the user's vault" — so a pathological case has no ceiling.
+
+**Failure scenario:** a user saves a long edited capture and the editor sits
+at 12% for twenty minutes with no estimate, and no way to know whether that is
+normal. **Fix shape:** measure it first (checklist rows 29 and 30 are the
+opportunity), then decide whether the bar needs a rate or an ETA. Do not add
+one before there is a number.
+
+### GAP-147 · Low · `screen_recovery.rs` sits at exactly 800/800 nonblank lines, so the next line added to it breaches the Rust cap
+`src-tauri/src/screen_recovery.rs`, measured `grep -cve '^\s*$'` = **800**
+against `scripts/loc-baseline.json`'s `caps.rust` = 800. The LOC guard passes
+today and fails on the next added line.
+
+The correct response is an extraction, NOT an allowlist entry. The file has a
+clean seam already — the pure decision half (`classify`, `owned`,
+`part_holds_footage`, `should_postpone`, `is_stale_at`) against the
+filesystem half (`scan_dir`, the promote/delete actions, the retry loop) — and
+it can become `screen_recovery/mod.rs` plus a sibling with **no change to
+`lib.rs`**, because `mod screen_recovery;` resolves a directory module
+identically. `scripts/loc-baseline.json` is shrink-only and nothing on this
+branch has been loosened; keep it that way.
+
+**Failure scenario:** the next agent touching staging recovery adds one
+comment line, `npm run check:loc` goes red, and the path of least resistance
+is a new allowlist entry that grandfathers an 801-line file forever. **Fix
+shape:** split it before adding to it. (`src/types.ts` at 466/500 and
+`src/roots/EditorRoot.vue` at 470/500 are the frontend files closest to their
+own cap and are worth knowing about for the same reason, though neither is
+urgent.)
+
+### GAP-148 · Low · Three deliberate departures from the screen-capture design spec, each shipped and each recorded here so the spec is not read as the implementation
+`docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md` §8.3, §11
+and §14 against what phase 5 shipped. All three are in the spec's own
+reconciliation note; they are duplicated here because this file is what an
+agent scans before working in an area.
+
+1. **§8.3's per-span cancellation poll is a TIMED poll.** The spec says
+   "cancellation is a polled atomic checked per span, mirroring the search
+   scan-generation pattern". With ffmpeg owning the whole pass there are no
+   spans to poll between — and the fast path is ONE span, so a per-span poll
+   would have made the longest, most unattended export the only uncancellable
+   one. `export.rs` blocks on `recv_timeout(CANCEL_POLL)` (200 ms) against the
+   progress channel, so even an export emitting no progress answers Cancel
+   promptly, then kills the child, reaps it, joins both reader threads and
+   deletes the truncated output.
+2. **§14's "exported temp kept" on a failed vault write is "temp deleted,
+   staged capture kept".** A kept temp is a promise `screen_recovery` breaks
+   60 s later, so the same Retry button would behave differently depending on
+   how long the user spent reading the error message. A retry re-exports from
+   the staged capture, which is the artifact that must never be lost — and is
+   kept. Every `Err` return in `export_worker`/`export.rs` removes the temp.
+3. **`screen:discarded` exists and §11 does not list it.** Without it a
+   discarded capture leaves `lastStaged` pointing at a base no longer on disk,
+   so the panel keeps offering **Edit** and the editor fails with a banner the
+   user cannot act on.
+
+Not a defect list — each is a reasoned change — but a spec read as the
+implementation would get all three wrong. **Fix shape:** none. Re-check them
+if §8.3, §11 or §14 is ever edited.

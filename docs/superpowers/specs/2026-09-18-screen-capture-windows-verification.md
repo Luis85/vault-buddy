@@ -26,6 +26,11 @@ picker, §7.3 during capture, §10 staging, §11 the IPC surface, §13 phasing,
 Run against a build of `claude/screen-capture-intake-g0j49q`
 (`npx tauri build --features gpu`, or `npm run test-build` for a dev run).
 
+**Phase 5 needs one thing installed before any of rows 29–36 will run:
+ffmpeg.** The export shells out to a user-installed one and is refused
+without it, and there is no in-app status card or Browse (docs/Gaps.md
+GAP-144), so confirm `ffmpeg -version` answers in a fresh terminal first.
+
 ## Measurement discipline
 
 Follow what §6.4's spike earned: **prefer instrumentation that reports over
@@ -136,6 +141,46 @@ failing with no error anywhere in the app.
 | 27b | **The playhead is clamped by an edit that shortens the film** (the phase-4 review's m-3) | Scrub to near the END of the capture, then select and **Delete** a block that sits before the playhead. **Record:** where the playhead and the scrub thumb are afterwards (they must be at the new end of the film, not past it), and whether scrubbing and splitting work normally straight afterwards without having to drag the scrubber first. | |
 | 28 | **Edits survive a crash** (spec §10, save-on-every-edit) | Open a staged capture, **Split** twice, then kill the process from Task Manager (**End task**) — do not close the editor first. Relaunch, record a throwaway capture to get the bar back… or, quicker, read `<base>.json` in the staging dir directly. **Record:** how many segments the `timeline` field holds. Expected: three — both splits, because every edit is written through immediately. Anything fewer means the sidecar write is not landing per-edit and spec §10's "a crash loses at most the last operation" does not hold. | |
 
+## Covered by Phase 5
+
+Phase 5 is where this feature first touches a vault: a staged capture is
+exported through a **user-installed ffmpeg** and saved as a playable `.mp4`
+plus a companion note — the ninth sanctioned vault write. An unedited
+capture takes a no-re-encode `-c copy` remux; an edited one is a single
+`filter_complex` pass. Interrupted work is swept at startup
+(`run_screen_recovery`), and every staged capture is reachable from the
+Record Screen picker with *Resume editing* or *Discard*.
+
+**This phase is the first in the whole feature to carry executable
+end-to-end proof.** `rust-core` installs ffmpeg and runs
+`screen/tests/export_roundtrip.rs`: synthesize a clip, apply a real
+`Timeline`, read the output back and check both its length and that each
+block still carries its own colour and its own tone. So rows 29–36 are not
+carrying the whole burden the way rows 11–28 did. What they carry is what
+Linux cannot reach: a **Windows** ffmpeg build meeting a **Media
+Foundation** fragmented MP4, the disk probe's Windows arm, and every
+judgement about what the user actually sees.
+
+**Before running any of rows 29–36: install ffmpeg and confirm it is on
+PATH** (`ffmpeg -version` in a fresh terminal). There is no in-app ffmpeg
+settings card and no pre-flight check — `detect_ffmpeg` and
+`set_ffmpeg_path` exist but nothing in the UI calls them (docs/Gaps.md
+GAP-144) — so without ffmpeg every row below fails at Save with a message
+pointing at a Buddy-settings screen that does not exist. That is worth
+observing ONCE, deliberately, as part of row 29; it is not a finding to
+re-file.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| 29 | **The untouched fast path, and ffmpeg against a real fMP4** (spec §8.3; the highest-value row in the phase) | Record ~60 s. Open the editor, **change nothing**, press **Save to vault**. **Record:** how long the save took in seconds (a re-encode of 60 s would be plainly slower — seconds, not minutes); the saved `.mp4`'s byte size beside the staged one's; and whether it plays. Then check `vault-buddy.log` for the line `screen export: saved … (remuxed: true)` — `remuxed: false` means the fast path did not take, which is the one thing this row exists to find. Windows ffmpeg meeting Media Foundation's fragmented output is proven nowhere but here: if `-c copy` cannot remux it, this is where that shows. **Also do the no-ffmpeg case once, first**, before installing it: press Save and write down the exact message and where it tells you to go (GAP-144). | |
+| 30 | **An edited export matches the preview** (spec §8.1/§8.2; the two implementations of the segment algebra, docs/Gaps.md GAP-136) | Record ~60 s of something with a **visible running clock**. In the editor: trim the first 20 s, delete a middle block, and drag one block to reorder it. Note the clock value the preview shows at each cut. Save, then open the result in a player. **Record: the clock values at each cut in the EXPORTED file, beside the values the preview showed.** This is the only comparison anyone has ever made between the TypeScript algebra the user watched and the Rust one the export planned on. Also record the exported file's total duration against the editor's own readout. | |
+| 31 | **The companion note** (spec §9) | Open the saved note in Obsidian. **Record:** whether the video plays **inside Obsidian** from the note's embed; whether `duration` is the EXPORTED length and not the original (a capture trimmed from ten minutes to two must not claim ten); whether `resolution` matches the file's real pixels; and whether `source` survived a window title containing a colon or a quote — repeat the recording once with such a title if none is at hand. Also record whether the note's file name matches the video's. | |
+| 32 | **Never clobber** (the ninth vault write's discipline) | Save a capture. Then record and save a second one **in the same minute with the same window title**, so both derive the same base name. **Record both file names, and both note names.** The second must carry ` (2)` on BOTH, and the first must be byte-for-byte untouched (check its size and play it). A second pair that landed as `Demo.mp4` + `Demo (2).md` — video and note disagreeing about which suffix they took — is the pairwise-reservation failure this is really testing. | |
+| 33 | **Cancel** (spec §14: a cancel is not a failure) | Start a save of a LONG edited capture (so the re-encode path runs for a while) and press **Cancel** at roughly 30%. **Record:** whether the editor returns to normal with no error banner and Save offered again; whether the staged capture is still listed in Record Screen; whether the vault gained ANY file (check the target folder); and whether a `.export.mp4.part` was left in `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. Expected: no vault file, no leftover temp, staged capture intact. Then press Save again and confirm it completes. | |
+| 34 | **Discard** (spec §10: nothing is ever deleted silently) | Discard a staged capture, from the editor's **Discard** and, separately, from a row in the Record Screen list. **Record for each:** whether it takes two clicks and whether the first click can be backed out of; whether `<base>.mp4` AND `<base>.json` are both gone from the staging directory; and whether the panel's capture bar stops offering **Edit** for it. In the list, also **arm one row's Discard and then click a DIFFERENT row's** — the second must still require its own confirm. | |
+| 35 | **Recovery** (spec §10, `run_screen_recovery`) | Start a capture, let it run ~60 s, then kill the app from Task Manager (**End task**) — do not stop the capture. Wait a minute, relaunch, and open Record Screen. **Record:** whether the orphaned `.part` appears as a staged capture; whether it plays; and roughly how much of the recording it holds. Then repeat with a capture killed after only a second or two: a `.part` with no fragments should be swept rather than offered as a zero-length recording. Also drop a file of your own named `.something.mp4.part` into the staging directory beforehand and **record whether it survives** — it must. | |
+| 36 | **The disk check** (spec §10 disk pressure) | Run only if cheap to stage on the machine at hand. Fill the vault's volume until less remains than the export's estimate, then press **Save**. **Record the exact message.** Restore the space and confirm the same capture then saves. If filling the volume is not practical, record that this row was not attempted rather than leaving it blank — `disk::free_bytes`'s Windows arm is type-checked and executes in no test anywhere (docs/Gaps.md GAP-140), so this row is its only evidence. | |
+
 ## Known absences (do not file these as failures)
 
 - **No live `fps` readout.** `ScreenCaptureBar.vue` (plan Task 10) landed —
@@ -196,14 +241,18 @@ Do not attempt these; they have nothing behind them yet. Listed so an
 untested item is never mistaken for a passing one. A row leaves this table
 only into a phase's own table above, never into a tick here.
 
+Phase 5 emptied five rows out of this table and into the Phase 5 section
+above (rows 29–36): opening a staged capture that is not the most recent one,
+export exactness, the untouched fast path, the vault write and its note, and
+`run_screen_recovery`. What is left:
+
 | Item | Arrives in |
 | --- | --- |
-| Opening a staged capture that is NOT the most recent one (the resume-or-discard browser) | Phase 5 |
-| Export exactness (cut boundaries, reordered segments) | Phase 5 |
-| The untouched-timeline fast path (remux rather than re-encode) | Phase 5 |
-| The vault write, the companion note, and playback of the saved note inside Obsidian | Phase 5 |
-| `run_screen_recovery` sweeping an orphaned `.part` | Phase 5 |
-| The settings tab, staging size + clear action | Phase 6 |
+| The screen-capture settings tab (`screen_quality`, `screen_fps`, the capture folder, the date-folder toggle — all `config.json` hand-edits today) | Phase 6 |
+| The staging directory's total size and a "Clear staged captures" action (docs/Gaps.md GAP-115's remaining half) | Phase 6 |
+| An in-app ffmpeg status card / Browse / pre-flight check (docs/Gaps.md GAP-144 — `detect_ffmpeg` and `set_ffmpeg_path` exist and nothing calls them) | unscheduled |
+| Renaming a saved capture, or re-exporting one (docs/Gaps.md GAP-142) | unscheduled |
+| Saved screen captures in the Recordings browser, and transcribing them (docs/Gaps.md GAP-143) | unscheduled |
 
 ## Sign-off
 
