@@ -2172,13 +2172,17 @@ pub struct StagedCaptureSummaryDto {
         assert_eq!(summary_output_duration_ms(None, 9_000), 9_000);
     }
 
-    // Discard is the phase's DESTRUCTIVE path. It must refuse a base that
-    // does not name a file directly in the staging directory, by the same
-    // rule every other base-taking command uses -- and it must refuse while
-    // that base is being exported, or it deletes the file out from under a
-    // running re-encode.
+    // NOTE -- this test is NOT the discard guard's proof, and must not be
+    // read as one. It calls `is_safe_base` directly, so it would pass
+    // unchanged if `discard_staged_capture` dropped its guard entirely.
+    // `editor_commands` already owns tests for this function; the reason to
+    // restate the table here is that these seven strings are the ones a
+    // DESTRUCTIVE path must refuse, and naming them beside the destructive
+    // command is worth one screen. The load-bearing test is the structural
+    // scan below (mutation M5) -- that one goes red when the guard is
+    // removed. Do not let this test's green stand in for that one's.
     #[test]
-    fn discard_refuses_an_unsafe_base() {
+    fn the_strings_a_destructive_base_taker_must_refuse() {
         for bad in ["../obsidian", "a/b", ".hidden", "trailing.", "C:Windows", "COM1", "x "] {
             assert!(
                 !crate::editor_commands::is_safe_base(bad),
@@ -2226,6 +2230,15 @@ pub struct StagedCaptureSummaryDto {
     }
 
     #[test]
+    fn the_progress_payload_carries_a_fraction_not_a_percent() {
+        assert_eq!(progress_payload_fraction(0), 0.0);
+        assert_eq!(progress_payload_fraction(50), 0.5);
+        assert_eq!(progress_payload_fraction(100), 1.0);
+        // The bug this exists for: a bar that is full from the first tick.
+        assert!(progress_payload_fraction(1) < 0.5);
+    }
+
+    #[test]
     fn discard_refuses_while_that_capture_is_being_exported() {
         assert!(discard_conflict(Some("2026-09-20 1432 Demo"), "2026-09-20 1432 Demo").is_some());
         assert!(discard_conflict(Some("2026-09-20 1432 Other"), "2026-09-20 1432 Demo").is_none());
@@ -2264,6 +2277,19 @@ pub(crate) fn summary_output_duration_ms(
     timeline_from_sidecar(timeline, source_duration_ms).output_duration_ms()
 }
 
+/// The number `screen:exportProgress` carries.
+///
+/// Extracted from the emitter so a Rust test can pin the SHAPE. `export`
+/// throttles on whole percents, so the number that passes the gate and the
+/// number the user sees are the same number -- but the event carries the
+/// fraction spec 8.3 names, and 0..100 where 0..1 is expected renders a
+/// progress bar that is full from the first tick and stays there. That is a
+/// one-token error with no compiler opinion about it, and until this helper
+/// existed the only test that could see it lived in another task.
+pub(crate) fn progress_payload_fraction(percent: u64) -> f64 {
+    percent as f64 / 100.0
+}
+
 /// Why this discard must be refused, or `None`.
 ///
 /// Deleting the `.mp4` out from under a running export would leave the
@@ -2283,7 +2309,16 @@ pub(crate) fn discard_conflict(exporting: Option<&str>, base: &str) -> Option<St
 
 `cancel_export`: take the `ExportState` lock, `active.cancel.store(true, Ordering::Relaxed)`, drop. Return `Ok(())` even when nothing is running — a Cancel click racing the export's own completion is not an error the user should see.
 
-`discard_staged_capture`: guard the base; read `ExportState` for the active base and apply `discard_conflict`; then `spawn_blocking` to remove the `.mp4` and the `.json` from the staging dir (`NotFound` counts as success — "the path is clear", the `delete_transcription_model` precedent); emit `screen:discarded { base }`. **Do not** follow a symlink: check `symlink_metadata` and refuse a leaf that is one, the `delete_task` no-follow discipline.
+`discard_staged_capture`: guard the base; read `ExportState` for the active base and apply `discard_conflict`; then `spawn_blocking` to remove the `.mp4`, the `.json`, **and any stranded `staging::export_part_file_name(&base)`** from the staging dir (`NotFound` counts as success — "the path is clear", the `delete_transcription_model` precedent); emit `screen:discarded { base }`. **Do not** follow a symlink: check `symlink_metadata` and refuse a leaf that is one, the `delete_task` no-follow discipline.
+
+**The export `.part` is the third file, and leaving it is a real leak.** Task 7 writes the
+export temp into the STAGING directory (`staging::export_part_file_name`), not the vault,
+so a crashed or killed export leaves `.<base>.export.mp4.part` sitting beside the capture.
+`discard_conflict` already guarantees no LIVE export can be hit here, so any `.part`
+bearing this base is abandoned by definition. Removing the `.mp4` and `.json` while
+leaving it would strand a file that is often the largest of the three, keyed to a capture
+the user just told us to forget, and only a restart's `run_screen_recovery` sweep would
+ever clear it.
 
 `list_staged_captures`: `spawn_blocking` a read of the staging dir; for each `*.json` whose stem is a safe base, `read_sidecar`, skip any whose own `base` disagrees with the file name, skip any whose `.mp4` is absent, and build a summary. Sort newest-first by `recorded_at` descending, then by base, so the order is deterministic. Degrade to an empty list on any directory error — this feeds a UI list, not a guard.
 
@@ -2291,7 +2326,17 @@ pub(crate) fn discard_conflict(exporting: Option<&str>, base: &str) -> Option<St
 
 - [ ] **Step 5: Implement the five emitters**
 
-One function per event in `export_commands.rs`, each `log::warn!`-ing a failed emit rather than `let _ =`:
+One function per event in `export_commands.rs`, each `log::warn!`-ing a failed emit
+rather than `let _ =`.
+
+**Task 7 shipped the other four emitters with `let _ = app.emit(..)`,** which this step's
+own rule forbids and which AGENTS.md's diagnostics invariant forbids outright ("No
+swallowed error: anything caught-and-hidden goes through `log::warn!`"). Fixing only the
+fifth would leave the file half-compliant. Convert all five: `emit_export_progress`,
+`emit_exported`, and the two inline `app.emit` calls in `export_and_save_capture`'s
+cancelled and failed arms (plus its panic arm, which emits the same failed event), and
+the new `screen:discarded`. Give the cancelled/failed emits named functions too, so the
+command body reads as five emitters and not two plus three literals.
 
 ```rust
 pub(crate) fn emit_export_progress(app: &AppHandle, base: &str, percent: u64) {
@@ -2308,7 +2353,7 @@ The fraction is `percent / 100.0` and nothing else, because `select::progress_fr
 
 - [ ] **Step 6: Register and run**
 
-Add all four to `generate_handler!`. The IPC surface goes from **85 to 90**; AGENTS.md's table says to **COUNT** the list rather than add to the previous number, and that sentence exists because the count has been wrong three times. Measure it:
+Add all four to `generate_handler!`. The IPC surface goes from **88 to 92**. AGENTS.md's table claims 85 and has been stale for four tasks running; its own instruction is to **COUNT** the list rather than add to the previous number, and that sentence exists because the count has been wrong three times. 88 is the measured value on this branch as of Task 7, not an increment of 85. Measure it again yourself and report what you get -- do not trust this line either:
 
 ```
 awk '/generate_handler!\[/,/\]\)/' src-tauri/src/lib.rs | grep -cE '^\s+[a-z_]+::[a-z_]+,$'
@@ -2330,7 +2375,8 @@ cd /home/user/vault-buddy && npm run check:loc; echo "exit=$?"
 | M4 | `discard_conflict`: refuse whenever ANY export is running | the same test's `"Other"` row |
 | M5 | Remove `is_safe_base` from `discard_staged_capture` | `every_new_command_is_registered_and_the_base_takers_are_guarded` |
 | M6 | Rename `discard_staged_capture`'s parameter to `name: String` | the same test's `assert_eq!(checked, 2)` — this is the evasion that beat an earlier version of this scan; confirm it goes red |
-| M7 | Emit `fraction: percent as f64` (0..100 instead of 0..1) | not caught by a Rust test — the frontend test in Task 10 covers it. Note the cross-task dependency. |
+| M8 | Drop the export-`.part` removal from `discard_staged_capture` | a discard test that stages all three files and asserts all three are gone. Write that test; a two-file assertion cannot see this. |
+| M7 | `progress_payload_fraction`: return `percent as f64` (0..100 instead of 0..1) | `the_progress_payload_carries_a_fraction_not_a_percent` |
 
 - [ ] **Step 8: Commit**
 
@@ -2591,13 +2637,40 @@ And in `tests/editorRoot.test.ts`:
   // The guard the source comment asks for, tested so the next author
   // cannot delete it as unreachable.
   it("lets a text field keep its own undo", async () => {
-    const w = await mountEditor();
+    // `mockEditor` returns the recorded `invoke` calls; every timeline
+    // mutation writes the sidecar, so a `save_capture_timeline` call is the
+    // observable proof that an undo ran. `tests/helpers/editorMount.ts`
+    // already exports `mockEditor(..)` and `lastSaved(seen)` -- use those
+    // rather than inventing a `countSaves()` helper, which does not exist.
+    const seen: Call[] = [];
+    const w = mockEditor(seen, THREE);
+    await nextTick();
+    const before = seen.filter((c) => c.cmd === "save_capture_timeline").length;
+
     const input = document.createElement("input");
     document.body.appendChild(input);
-    const saves = countSaves();
+    input.focus();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
     await nextTick();
-    expect(countSaves()).toBe(saves);   // no timeline undo ran
+
+    const after = seen.filter((c) => c.cmd === "save_capture_timeline").length;
+    expect(after).toBe(before);   // no timeline undo ran
+    input.remove();
+  });
+
+  // The guard must NOT swallow the shortcut everywhere: a Ctrl+Z that did
+  // not come from a field still has to undo, or the test above passes by
+  // the editor having no undo at all.
+  it("still undoes when the keystroke did not come from a text field", async () => {
+    const seen: Call[] = [];
+    const w = mockEditor(seen, THREE);
+    await nextTick();
+    // Make an edit first, so there is something on the undo stack.
+    ...
+    const before = seen.filter((c) => c.cmd === "save_capture_timeline").length;
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
+    await nextTick();
+    expect(seen.filter((c) => c.cmd === "save_capture_timeline").length).toBeGreaterThan(before);
   });
 ```
 
@@ -2609,7 +2682,17 @@ cd /home/user/vault-buddy && npx vitest run tests/exportBar.test.ts tests/editor
 
 - [ ] **Step 3: Implement `ExportBar.vue`, then wire `EditorRoot`**
 
-`EditorRoot` gains: `exportPhase`, `exportFraction`, `exportMessage`, `savedPath`, `discardBusy` refs; four `listen()` subscriptions registered in `onMounted` **before** the first `openRequested()` and torn down in `onBeforeUnmount` beside the existing `editor:open` unlisten; handlers that **ignore any event whose `base` is not the open capture's**; `canSave` computed as `timeline.value.segments.some((s) => s.sourceEndMs > s.sourceStartMs)` — **a UI hint, not the rule.** `export::export_refusal` is the authority and refuses the same case server-side; this exists only so Save reads as disabled rather than failing on click. That is the established posture for exactly this shape (the task-hierarchy picker pre-disables self and descendants while core's cycle check remains the authority), and it is why the predicate is deliberately trivial: anything cleverer would be a second implementation of a Rust rule, which is the divergence GAP-136 already tracks. Add a comment saying so; and `load()` resetting all four export refs so opening a second capture does not inherit the first's success state.
+`EditorRoot` gains: `exportPhase`, `exportFraction`, `exportMessage`, `savedPath`, `discardBusy` refs; four `listen()` subscriptions registered in `onMounted` **before** the first `openRequested()` and torn down in `onBeforeUnmount` beside the existing `editor:open` unlisten; handlers that **ignore any event whose `base` is not the open capture's**; `canSave` computed as `outputMs.value > 0` — **a UI hint, not the rule.**
+
+**Use `outputMs`, which `useEditorTimeline` already returns** (`outputMs:
+computed(() => outputDurationMs(timeline.value))`). An earlier draft of this plan
+spelled the predicate out as `timeline.value.segments.some((s) => s.sourceEndMs >
+s.sourceStartMs)`. The two agree — a sum of segment lengths is positive exactly when
+one segment has positive length — but writing it out longhand mints a THIRD
+implementation of the timeline's arithmetic in the same paragraph that warns against
+minting a second. `outputDurationMs` is the TypeScript half of the pair that
+`tests/fixtures/timeline-cases.json` holds against `core::timeline`; a hand-rolled
+`.some()` is held against nothing. `export::export_refusal` is the authority and refuses the same case server-side; this exists only so Save reads as disabled rather than failing on click. That is the established posture for exactly this shape (the task-hierarchy picker pre-disables self and descendants while core's cycle check remains the authority), and it is why the predicate is deliberately trivial: anything cleverer would be a second implementation of a Rust rule, which is the divergence GAP-136 already tracks. Add a comment saying so; and `load()` resetting all four export refs so opening a second capture does not inherit the first's success state.
 
 Delete the phase-4 honesty line at `EditorRoot.vue:297-303` — "Saving into a vault arrives in a later update." — and its comment. It is now false.
 
@@ -2643,6 +2726,7 @@ cd /home/user/vault-buddy && npx vitest run tests/exportBar.test.ts tests/editor
 | M5 | `EditorRoot`: treat `screen:exportCancelled` as a failure | `returns to idle without an error banner when an export is cancelled` |
 | M6 | `EditorRoot`: `invoke("export_and_save_capture", { base: detail.value.base })` → a captured constant from the first load | `sends the open base to export_and_save_capture, not a stale one` |
 | M7 | `EditorRoot`: delete the `closest("input, textarea…")` guard | `lets a text field keep its own undo` |
+| M7b | `EditorRoot`: make the guard unconditional (`return` before any undo runs, whatever the target) | `still undoes when the keystroke did not come from a text field`. **Run M7 and M7b separately.** A guard that swallows everything passes M7's test, so M7 alone proves only that the shortcut is dead — which is the exact shape of the recurring fixture flaw this plan keeps naming. |
 | M8 | `EditorRoot`: `fraction * 1` → render the raw fraction as the percent | `reads screen:exportProgress as a fraction between zero and one` |
 | M9 | `EditorRoot`: don't reset `exportPhase` in `load()` | **add a test if none fails** — open A, save it, open B, and assert B's bar is `idle` with Save available. A stale `done` would leave B unsaveable. |
 
@@ -2791,7 +2875,32 @@ A docs task's failure mode is a **confident false statement** in the one file th
    ```
 4. **The Events table gains five rows.** All five are `app.emit`; the table's opener names `region:begin` and `editor:open` as the only two exceptions, and that stays true — check it rather than assuming.
 5. **"What compiles where"** — the `screen` crate row gains `reader`, `export` and `disk` to its `cfg(windows)` list, and `select`'s pure list is unchanged but now has a production caller.
-6. **The three-orphans sentence is now wrong.** It says `core::timeline`, `screen::select` and `core::screen_note` "STILL have no production caller after phase 4". All three now have one. Rewrite it; do not delete it — the remaining orphan (`screen::mp4_boxes`, reachable only from the feature-gated spike) still needs naming, and `mp4_boxes` in fact gains a caller here too, via `screen_recovery` and `export`'s precondition check. **Verify with grep before writing either claim.**
+6. **The three-orphans sentence is now wrong, and so is its `mp4_boxes` caveat.** It
+   says `core::timeline`, `screen::select` and `core::screen_note` "STILL have no
+   production caller after phase 4", and separately that `screen::mp4_boxes` is
+   "reachable only from the feature-gated `fmp4_spike`". **After phase 5 there are no
+   orphans left at all** — that is the honest replacement, and it retires a paragraph
+   this file has carried since phase 1.
+
+   Measured on this branch after Task 9; **re-run it yourself before writing the
+   sentence**, because Tasks 10–11 land in between:
+
+   ```
+   grep -rn "mp4_boxes" src-tauri --include=*.rs | grep -v fmp4_spike | grep -v '^src-tauri/screen/src/mp4_boxes.rs'
+   ```
+
+   | Module | Production caller found |
+   | --- | --- |
+   | `core::timeline` | `export_commands.rs:24`, `export_worker.rs:44`, `screen/src/export.rs:59` |
+   | `screen::select` | `screen/src/ffmpeg_args.rs:49` (`use crate::select::PlanSpan`) |
+   | `core::screen_note` | `export_worker.rs:43`, called at `export_worker.rs:375` |
+   | `screen::mp4_boxes` | `screen_recovery.rs:35`, called at `screen_recovery.rs:132` |
+
+   Note what the `mp4_boxes` caller actually is, because it is the interesting half: it
+   is **not** the export's precondition check (an earlier draft of this plan guessed
+   that and was wrong). It is `screen_recovery::part_holds_footage`, deciding whether an
+   abandoned `.part` holds real footage or is an empty shell to sweep. Do not repeat the
+   guess — cite the line.
 7. **The config section:** five of the seven `screen_*` fields are now read (`screen_capture_folder`, `screen_capture_date_folders`, `screen_create_note`, `screen_extra_frontmatter`, `screen_body_template`); `screen_quality` and `screen_fps` are read by export too. Check whether any remain write-only and say exactly which.
 8. **`EditorRoot` installs no store** — still true, and now it listens to four Rust events directly. The per-window `init()` rule does not start applying, because there is still no store to initialise; say why, so the next reader does not "fix" it.
 9. **A fourth process-wide lock**, `ExportState`, beside `config_write_lock`, the per-file task lock and `CaptureGuard`. It stands outside the ordering rule the same way `CaptureGuard` does: taken, decided, dropped. Add it to the concurrency note.
