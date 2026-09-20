@@ -430,12 +430,7 @@ export interface TimelineDto {
 /** What `load_staged_capture` returns. `assetPath` is the file name RELATIVE
  * to the staging directory — the editor joins it onto the asset origin
  * itself, because the asset protocol's staging-only scope is the only thing
- * that lets the webview read it.
- *
- * @expected-unused Phase 4 Task 2 (the commands) lands ahead of Task 6 (the
- * editor UI that consumes this DTO) — the wire contract is defined here so
- * Tasks 3-7 can build against a fixed shape. Remove this tag when Task 6
- * wires up a real consumer. */
+ * that lets the webview read it. */
 export interface StagedCaptureDetail {
   base: string;
   assetPath: string;
