@@ -248,8 +248,35 @@ fn with_timeline(
     sidecar
 }
 
-/// ASYNC: an fsync'd sidecar rewrite on every editor operation must not sit
-/// on the main thread.
+/// The disk write behind `save_capture_timeline`, pulled out of its
+/// `spawn_blocking` closure for the same reason `load_from_staging_dir` is:
+/// taking a plain `&Path` makes it unit-testable without a running Tauri
+/// app, and it pins the one thing that could actually break here — WHICH
+/// base names the file being written.
+///
+/// `requested_base` is the validated one from the command, and it is what
+/// both the read and the write are addressed by. `existing.base` is a field
+/// read off disk out of a file `read_sidecar`'s own doc says may be
+/// hand-edited, so it is untrusted input and must never become a path;
+/// `staging::write_sidecar` refuses the disagreement (C-1), which is the
+/// same refusal `load_from_staging_dir` already makes on the read side.
+fn save_to_staging_dir(
+    dir: &Path,
+    requested_base: &str,
+    timeline: Option<serde_json::Value>,
+) -> Result<(), String> {
+    let sidecar_path = dir.join(staging::sidecar_file_name(requested_base));
+    let existing = staging::read_sidecar(&sidecar_path)
+        .ok_or_else(|| "That capture's details could not be read.".to_string())?;
+    staging::write_sidecar(dir, requested_base, &with_timeline(existing, timeline))
+        .map_err(|e| format!("Could not save the edit: {e}"))?;
+    Ok(())
+}
+
+/// ASYNC: the sidecar rewrite is a temp + fsync + replacing rename
+/// (`staging::write_sidecar`, over `capture_note::write_atomic_replacing`),
+/// and that must not sit on the main thread — on every editor operation,
+/// no less.
 #[tauri::command]
 pub async fn save_capture_timeline(
     app: AppHandle,
@@ -257,6 +284,10 @@ pub async fn save_capture_timeline(
     timeline: Option<serde_json::Value>,
 ) -> Result<(), String> {
     if !is_safe_base(&base) {
+        // M-1: both siblings log their refusal, and this is the one of the
+        // three that WRITES -- the refusal you most want in the log when
+        // reading a bug report.
+        log::warn!("save_capture_timeline: refused a base outside staging: {base:?}");
         return Err("That capture name is not one of ours.".to_string());
     }
     let dir = staging::staging_dir(
@@ -264,16 +295,9 @@ pub async fn save_capture_timeline(
             .app_local_data_dir()
             .map_err(|e| format!("Could not resolve the staging directory: {e}"))?,
     );
-    tauri::async_runtime::spawn_blocking(move || {
-        let sidecar_path = dir.join(staging::sidecar_file_name(&base));
-        let existing = staging::read_sidecar(&sidecar_path)
-            .ok_or_else(|| "That capture's details could not be read.".to_string())?;
-        staging::write_sidecar(&dir, &with_timeline(existing, timeline))
-            .map_err(|e| format!("Could not save the edit: {e}"))?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("Saving the edit failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || save_to_staging_dir(&dir, &base, timeline))
+        .await
+        .map_err(|e| format!("Saving the edit failed: {e}"))?
 }
 
 #[cfg(test)]
@@ -294,6 +318,7 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-20T10:00:00Z".into(),
             timeline: None,
+            extra: Default::default(),
         }
     }
 
@@ -431,7 +456,7 @@ mod tests {
     fn load_from_staging_dir_returns_a_relative_asset_name_not_a_disk_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = "cap one";
-        staging::write_sidecar(dir.path(), &sidecar(base)).expect("write sidecar");
+        staging::write_sidecar(dir.path(), base, &sidecar(base)).expect("write sidecar");
         std::fs::write(dir.path().join(staging::mp4_file_name(base)), b"x").expect("write mp4");
 
         let detail = load_from_staging_dir(dir.path(), base).expect("load");
@@ -459,6 +484,55 @@ mod tests {
         assert!(load_from_staging_dir(dir.path(), "cap").is_err());
     }
 
+    // C-1: the save path READ with the validated request base but WROTE
+    // with `sidecar.base`, a field read off disk out of a file
+    // `read_sidecar`'s own doc says may be hand-edited. `staging`'s own
+    // tests pin that a base escaping the directory is refused; what this
+    // pins is the shell's contribution -- WHICH base this call site hands
+    // to the writer. The fixture is deliberately an ordinary, perfectly
+    // safe name: "other" trips no containment or `is_safe_base` clause, so
+    // nothing but the requested-vs-stored mismatch can fail it, and the
+    // failure it demonstrates survives containment entirely -- saving an
+    // edit to "cap" would create and own a DIFFERENT capture's sidecar.
+    #[test]
+    fn a_save_never_writes_to_a_name_other_than_the_one_it_was_asked_for() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut s = sidecar("cap");
+        s.base = "other".to_string();
+        std::fs::write(
+            dir.path().join("cap.json"),
+            serde_json::to_vec_pretty(&s).expect("serialize sidecar"),
+        )
+        .expect("write sidecar");
+
+        let result = save_to_staging_dir(
+            dir.path(),
+            "cap",
+            Some(serde_json::json!({"segments": [{"sourceStartMs": 0, "sourceEndMs": 1}]})),
+        );
+
+        assert!(result.is_err(), "a mismatched sidecar must not be written");
+        assert!(
+            !dir.path().join("other.json").exists(),
+            "the save must address the capture it was asked for, never the \
+             name the file on disk claims"
+        );
+    }
+
+    // The ordinary path: a save lands on the requested sidecar, in place.
+    #[test]
+    fn a_save_rewrites_the_requested_sidecar_in_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        staging::write_sidecar(dir.path(), "cap", &sidecar("cap")).expect("write sidecar");
+
+        save_to_staging_dir(dir.path(), "cap", Some(serde_json::json!({"segments": []})))
+            .expect("save");
+
+        let back = staging::read_sidecar(&dir.path().join("cap.json")).expect("reads back");
+        assert_eq!(back.timeline, Some(serde_json::json!({"segments": []})));
+        assert_eq!(back.duration_ms, 42_000, "the rest of the sidecar survives");
+    }
+
     // T-2: `is_safe_base` is well tested as a function above, but its
     // APPLICATION was not -- removing the guard from a command body left
     // the whole shell test suite green, because `AppHandle` makes a unit
@@ -481,8 +555,16 @@ mod tests {
         let src = include_str!("editor_commands.rs");
         let production = src.split("#[cfg(test)]").next().unwrap_or(src);
 
+        let mut all: Vec<&str> = Vec::new();
         let mut checked: Vec<&str> = Vec::new();
-        for (offset, _) in production.match_indices("#[tauri::command]") {
+        // Matched by PREFIX, not against the exact literal
+        // `#[tauri::command]`: an attribute written with arguments --
+        // `#[tauri::command(rename_all = "snake_case")]`, a shape this
+        // codebase already uses -- is invisible to a literal match, so a
+        // command added in it would be scanned by nothing at all
+        // (mutation-proven: an unguarded `discard_staged_capture` in that
+        // shape left this test green).
+        for (offset, _) in production.match_indices("#[tauri::command") {
             let rest = &production[offset..];
             // `cargo fmt` closes every top-level item with a brace in
             // column 0 and indents everything inside one, so this is an
@@ -498,20 +580,54 @@ mod tests {
                 .nth(1)
                 .and_then(|s| s.split('(').next())
                 .expect("a #[tauri::command] must declare a function");
+            all.push(name);
             if !signature.contains("base: String") {
                 continue;
             }
+            let guard = body.find("if !is_safe_base(&base) {").unwrap_or_else(|| {
+                panic!(
+                    "{name} accepts a base from the frontend but does not refuse \
+                     an unsafe one before it becomes a path"
+                )
+            });
+            // Presence is not refusal: a guard whose body only logs passes
+            // a `contains` check while validating nothing (mutation-proven).
+            // The block cannot be bounded by its first `}` -- every one of
+            // these logs the refused base with a `{base:?}` interpolation --
+            // so it is bounded by the four-space dedent `cargo fmt`
+            // guarantees for a block at function-body level.
+            let end = body[guard..]
+                .find("\n    }")
+                .map(|i| guard + i)
+                .unwrap_or(body.len());
             assert!(
-                body.contains("is_safe_base(&base)"),
-                "{name} accepts a base from the frontend but does not refuse \
-                 an unsafe one before it becomes a path"
+                body[guard..end].contains("return Err("),
+                "{name} checks is_safe_base but does not REFUSE an unsafe base"
             );
             checked.push(name);
         }
 
         // Without this the scan would pass vacuously on a file whose
         // commands had all drifted out of the shape it matches -- the
-        // failure mode a source scan is most prone to.
+        // failure mode a source scan is most prone to. It lists EVERY
+        // command, not only the base-taking ones, because the evasion that
+        // matters is a NEW command that takes the untrusted name under some
+        // other parameter name (`capture: String`) and is therefore skipped
+        // by the loop above and invisible to a base-takers-only list. Tasks
+        // 5 and 6 add discard and export -- a discard written in that shape
+        // is an arbitrary DELETE. Adding any command here must force a human
+        // to decide whether it takes a base and guards it.
+        assert_eq!(
+            all,
+            [
+                "open_capture_editor",
+                "take_editor_request",
+                "load_staged_capture",
+                "save_capture_timeline"
+            ],
+            "this file's command set changed; confirm whether the new command \
+             turns frontend text into a path, then update this list"
+        );
         assert_eq!(
             checked,
             [
@@ -534,16 +650,26 @@ mod tests {
         let mut s = sidecar("cap");
         s.inputs = vec!["Mic".into(), "Speakers".into()];
         s.paused_ms = 7_000;
-        let updated = with_timeline(
-            s.clone(),
-            Some(serde_json::json!({"segments": [{"sourceStartMs": 5, "sourceEndMs": 9}]})),
+        s.extra
+            .insert("exportedTo".into(), serde_json::json!("Work/cap.md"));
+        let timeline = serde_json::json!({"segments": [{"sourceStartMs": 5, "sourceEndMs": 9}]});
+        let updated = with_timeline(s.clone(), Some(timeline.clone()));
+
+        // I-2: this asserted six of eleven fields, and a mutation that
+        // rebuilt the struct while preserving those six -- blanking
+        // `source_title`, `source_kind`, `width` and `height` -- left it
+        // green. `width`/`height` are what phase 5's export encodes
+        // against. Comparing the WHOLE struct is what stops the assertion
+        // going stale the way a hand-listed six did: `..s` carries a field
+        // added later automatically, so the next field to join the sidecar
+        // is pinned here without anybody remembering to widen this.
+        assert_eq!(
+            updated,
+            StagedSidecar {
+                timeline: Some(timeline),
+                ..s
+            }
         );
-        assert_eq!(updated.inputs, s.inputs);
-        assert_eq!(updated.paused_ms, 7_000);
-        assert_eq!(updated.duration_ms, s.duration_ms);
-        assert_eq!(updated.vault_id, s.vault_id);
-        assert_eq!(updated.recorded_at, s.recorded_at);
-        assert_eq!(updated.timeline.unwrap()["segments"][0]["sourceStartMs"], 5);
     }
 
     // Clearing is how "revert to the whole capture" is expressed, and it

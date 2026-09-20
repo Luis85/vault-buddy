@@ -205,7 +205,7 @@ pub fn reserve_base(dir: &Path, base: &str) -> String {
 }
 
 /// What the editor needs to resume a staged capture (spec 10).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedSidecar {
     pub base: String,
@@ -225,13 +225,83 @@ pub struct StagedSidecar {
     /// `None` until the editor touches it.
     #[serde(default)]
     pub timeline: Option<serde_json::Value>,
+    /// Every key this build does not declare, carried through verbatim.
+    ///
+    /// The same forward-compatibility goal `source_kind`'s own doc states,
+    /// applied to the whole file rather than one field. Phase 4 made the
+    /// sidecar a READ-MODIFY-WRITE surface (`save_capture_timeline` rewrites
+    /// it on every editor operation), and a plain struct round-trip drops
+    /// whatever it does not declare — so a downgrade, a rollback, or a
+    /// mixed-version sync folder would have this build silently erase a
+    /// newer one's fields on the user's next keystroke. Flattening them into
+    /// a catch-all makes the rewrite a genuine patch instead.
+    #[serde(flatten, default)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-pub fn write_sidecar(dir: &Path, sidecar: &StagedSidecar) -> std::io::Result<PathBuf> {
-    let path = dir.join(sidecar_file_name(&sidecar.base));
-    let json = serde_json::to_vec_pretty(sidecar)
+/// Write `sidecar` as `<base>.json` inside `dir`, atomically.
+///
+/// **`base` is a separate argument on purpose (GAP-108).** The path is
+/// derived from the CALLER's base, never from `sidecar.base`, because a
+/// sidecar is a file on disk that `read_sidecar`'s own doc says may be
+/// hand-edited — so in a read-modify-write (phase 4's
+/// `save_capture_timeline`) that field is untrusted input that would
+/// otherwise become a path. `dir.join("../../obsidian/obsidian.json")` lands
+/// outside staging entirely, and on Windows `"C:Windows"` reaches
+/// drive-C-relative and `"COM1"` reaches the serial port. The caller
+/// validates its base (`sanitize_title` + `reserve_base` at capture time,
+/// `editor_commands::is_safe_base` at edit time); the two assertions below
+/// are the backstop that makes that a property of this function rather than
+/// of every present and future caller remembering.
+///
+/// A disagreement between `base` and `sidecar.base` is REFUSED rather than
+/// silently corrected: the two naming the same capture is the invariant the
+/// read side already enforces (`load_from_staging_dir`'s mismatch refusal),
+/// and writing the struct under the caller's name would leave a file whose
+/// own `base` no longer matches it — un-loadable, i.e. the user's edit lost
+/// anyway, but quietly.
+///
+/// The write itself is temp + fsync + replacing rename
+/// (`capture_note::write_atomic_replacing`, the same writer
+/// `core::transcript`'s sidecar uses). A plain `fs::write` truncates the
+/// file before the first new byte lands, so a crash inside that window
+/// leaves an empty sidecar, `read_sidecar` returns `None`, and the staged
+/// `.mp4` is orphaned with no recovery sweep to find it (GAP-115) — a crash
+/// mid-edit losing the WHOLE capture instead of spec 10's "at most the last
+/// operation".
+pub fn write_sidecar(dir: &Path, base: &str, sidecar: &StagedSidecar) -> std::io::Result<PathBuf> {
+    if sidecar.base != base {
+        log::warn!(
+            "screen staging: refusing to write a sidecar carrying base {:?} as {:?}",
+            sidecar.base,
+            base
+        );
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "sidecar base {:?} does not match the name it would be written under ({base:?})",
+                sidecar.base
+            ),
+        ));
+    }
+    let path = dir.join(sidecar_file_name(base));
+    if path.parent() != Some(dir) {
+        // Containment, structurally: a base carrying a separator, a `..`, or
+        // a Windows drive prefix moves the joined path out of `dir`, and
+        // `join` REPLACES `self` outright for the drive-prefix case. Comparing
+        // the parent catches all three without re-spelling the caller's
+        // validation rules here.
+        log::warn!(
+            "screen staging: refusing a sidecar base that escapes the staging directory: {base:?}"
+        );
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("sidecar base {base:?} does not name a file inside the staging directory"),
+        ));
+    }
+    let json = serde_json::to_string_pretty(sidecar)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&path, json)?;
+    vault_buddy_core::capture_note::write_atomic_replacing(&path, &json)?;
     Ok(path)
 }
 
@@ -407,13 +477,154 @@ mod tests {
             height: 1080,
             recorded_at: "2026-09-18T14:32:00+02:00".into(),
             timeline: None,
+            extra: Default::default(),
         };
         let dir = tempfile::tempdir().unwrap();
-        let path = write_sidecar(dir.path(), &s).unwrap();
+        let path = write_sidecar(dir.path(), &s.base, &s).unwrap();
         let back = read_sidecar(&path).expect("sidecar reads back");
         assert_eq!(back.base, s.base);
         assert_eq!(back.duration_ms, 197_000);
         assert_eq!(back.source_title, "Figma \u{2014} Design System");
+    }
+
+    fn sidecar_named(base: &str) -> StagedSidecar {
+        StagedSidecar {
+            base: base.to_string(),
+            vault_id: "v".into(),
+            source_title: "t".into(),
+            source_kind: "screen".into(),
+            inputs: vec![],
+            duration_ms: 1,
+            paused_ms: 0,
+            width: 2,
+            height: 2,
+            recorded_at: "r".into(),
+            timeline: None,
+            extra: Default::default(),
+        }
+    }
+
+    // C-1: a sidecar is a file on disk that `read_sidecar`'s own doc says
+    // may be hand-edited, so in phase 4's read-modify-write `sidecar.base`
+    // is untrusted input. Deriving the WRITE path from it (what this
+    // function used to do) turns a hand-edited `"base": "../../evil"` into a
+    // write outside staging altogether -- and the caller, which validated
+    // only the base it was ASKED for, sees `Ok`. The path comes from the
+    // caller's base now, and a disagreement is refused rather than silently
+    // corrected: writing it under the caller's name would leave a file whose
+    // own `base` no longer matches it, which the read side then refuses,
+    // losing the edit anyway.
+    //
+    // Single-guard fixture on purpose: "cap" is a perfectly safe base, so
+    // the containment assertion below cannot be what fails this.
+    #[test]
+    fn a_sidecar_whose_base_disagrees_with_the_requested_name_is_refused() {
+        // The escape target is a sibling INSIDE this test's own tempdir,
+        // never the shared system temp directory: two tests that both
+        // reached `dir.parent()` would collide on one `evil.json` and each
+        // would then be asserting against the other's leftovers.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("screen-captures");
+        std::fs::create_dir(&dir).unwrap();
+        let escaping = root.path().join("evil.json");
+        let mut s = sidecar_named("cap");
+        s.base = "../evil".to_string();
+
+        assert!(write_sidecar(&dir, "cap", &s).is_err());
+        assert!(
+            !escaping.exists(),
+            "the write must not land outside the staging directory"
+        );
+        assert!(
+            !dir.join("cap.json").exists(),
+            "a refused write must leave nothing behind at all"
+        );
+    }
+
+    // The backstop that makes containment a property of this function
+    // rather than of every present and future caller remembering to
+    // validate (GAP-108). Single-guard fixture: `base` and `sidecar.base`
+    // AGREE here, so the mismatch refusal above cannot be what fails it.
+    #[test]
+    fn a_base_that_escapes_the_staging_directory_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("screen-captures");
+        std::fs::create_dir(&dir).unwrap();
+        let escaping = root.path().join("evil.json");
+        let s = sidecar_named("../evil");
+
+        assert!(write_sidecar(&dir, "../evil", &s).is_err());
+        assert!(!escaping.exists(), "nothing may be written outside staging");
+    }
+
+    // I-1: `fs::write` is create-truncate -- it empties the file before the
+    // first new byte lands, so a crash inside that window leaves an empty
+    // sidecar, `read_sidecar` then returns `None`, and the staged `.mp4` is
+    // orphaned with no recovery sweep to find it (GAP-115). Spec 10 promises
+    // a crash mid-edit loses at most the last OPERATION; that writer loses
+    // the whole CAPTURE, and phase 4 is what put the rewrite on a
+    // once-per-editor-operation path.
+    //
+    // A hard link is a second name for the SAME bytes, so it witnesses
+    // which of the two happened: a temp + rename writer builds a new file
+    // and swaps it in, leaving the original bytes intact behind the link,
+    // while a create-truncate writer destroys them in place.
+    #[test]
+    fn a_rewrite_builds_a_new_file_rather_than_truncating_the_old_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_sidecar(dir.path(), "cap", &sidecar_named("cap")).unwrap();
+        let witness = dir.path().join("witness");
+        std::fs::hard_link(&path, &witness).unwrap();
+
+        let mut second = sidecar_named("cap");
+        second.duration_ms = 999;
+        write_sidecar(dir.path(), "cap", &second).unwrap();
+
+        assert_eq!(read_sidecar(&path).unwrap().duration_ms, 999);
+        assert_eq!(
+            read_sidecar(&witness).unwrap().duration_ms,
+            1,
+            "the previous sidecar's bytes must never be rewritten in place -- \
+             the new content has to be built elsewhere and renamed over"
+        );
+        // And the temp it was built in must not be left behind: phase 5's
+        // staging recovery will sweep this directory.
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["cap.json".to_string(), "witness".to_string()]);
+    }
+
+    // I-3: `source_kind`'s own doc states forward compatibility as a design
+    // goal of this file -- "a sidecar written by a future version ... still
+    // deserializes here instead of failing the whole file". Phase 4 made
+    // this file a read-modify-write surface, and a plain struct round-trip
+    // drops every key this build does not declare, so a downgrade, a
+    // rollback or a mixed-version sync folder would have an older build
+    // erase a newer one's fields on the user's next editor keystroke.
+    #[test]
+    fn a_rewrite_preserves_keys_this_build_does_not_declare() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut written = serde_json::to_value(sidecar_named("cap")).unwrap();
+        written["exportedTo"] = serde_json::json!("Work/Screen Captures/cap.md");
+        written["cropRect"] = serde_json::json!({"x": 1, "y": 2});
+        std::fs::write(
+            dir.path().join("cap.json"),
+            serde_json::to_vec_pretty(&written).unwrap(),
+        )
+        .unwrap();
+
+        let mut back = read_sidecar(&dir.path().join("cap.json")).expect("reads back");
+        back.timeline = Some(serde_json::json!({"segments": []}));
+        let path = write_sidecar(dir.path(), "cap", &back).unwrap();
+
+        let reread: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(reread["exportedTo"], "Work/Screen Captures/cap.md");
+        assert_eq!(reread["cropRect"]["y"], 2);
+        assert_eq!(reread["timeline"]["segments"], serde_json::json!([]));
     }
 
     #[test]
@@ -445,6 +656,7 @@ mod tests {
             height: 2,
             recorded_at: "r".into(),
             timeline: None,
+            extra: Default::default(),
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"vaultId\""), "got {json}");

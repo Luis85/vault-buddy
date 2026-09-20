@@ -429,8 +429,9 @@ fn finalize_stopped(
         height: outcome.height,
         recorded_at,
         timeline: None,
+        extra: Default::default(),
     };
-    if let Err(e) = staging::write_sidecar(dir, &sidecar) {
+    if let Err(e) = staging::write_sidecar(dir, &base, &sidecar) {
         log::warn!("screen capture: writing the sidecar failed: {e}");
     }
     (
