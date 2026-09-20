@@ -9,6 +9,7 @@
 //! `rename_noreplace` with suffix retry, the note written AFTER the video
 //! commits and named from where the video actually landed.
 
+use crate::capture_note::NOTE_TMP_SUFFIX;
 use crate::capture_paths::{candidate, rename_noreplace};
 use std::path::{Path, PathBuf};
 
@@ -89,12 +90,15 @@ pub fn reserve_final_screen(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
 /// permanently, with an "Invalid cross-device link" the UI would have to
 /// show them.
 ///
-/// The copy is EXCLUSIVE-CREATE, so it is never-clobber by construction
-/// rather than by a preceding `exists()` check: a destination that appeared
-/// since the reservation fails with `AlreadyExists`, which is precisely the
-/// signal `commit_screen_capture`'s suffix retry keys on. A copy that fails
-/// part-way removes its own partial destination — leaving it would both
-/// litter the vault and make every retry read as a fresh collision.
+/// The copy lands by `rename_noreplace` out of an owned temp, so it is
+/// never-clobber by construction rather than by a preceding `exists()` check:
+/// a destination that appeared since the reservation fails with
+/// `AlreadyExists`, which is precisely the signal `commit_screen_capture`'s
+/// suffix retry keys on. It is also CRASH-SAFE by construction — the final
+/// vault name never names a half-written file, because it does not exist
+/// until every byte is fsync'd (see `copy_noreplace`). A copy that fails
+/// part-way removes its own temp; leaving it would litter a vault folder no
+/// janitor sweeps.
 pub(crate) fn move_or_copy_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     move_or_copy_with(from, to, rename_noreplace)
 }
@@ -116,37 +120,87 @@ fn move_or_copy_with(
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
         // Anything else is "this move could not happen HERE" — most often a
         // volume boundary. There is deliberately NO `to.exists()` arm in
-        // front of this: the copy's own `create_new` is the arbiter, the
-        // same doctrine `commit_screen_capture` states one function down
-        // ("THE MOVE IS THE ARBITER, not the `exists()` check"). An
-        // `exists()` guard here would be both racy AND — because it fires
-        // first — able to hide a copy that had stopped being
-        // never-clobber, which is exactly what it did: swapping
-        // `create_new` for a truncating open left the whole suite green.
+        // front of this: the copy's own landing `rename_noreplace` is the
+        // arbiter, the same doctrine `commit_screen_capture` states one
+        // function down ("THE MOVE IS THE ARBITER, not the `exists()`
+        // check"). An `exists()` guard here would be both racy AND —
+        // because it fires first — able to hide a copy that had stopped
+        // being never-clobber, which is exactly what it did: swapping the
+        // exclusive create for a truncating open left the whole suite green.
         Err(_) => copy_noreplace(from, to),
     }
 }
 
-/// Exclusive-create `to`, stream `from` into it, fsync, then drop `from`.
+/// Copy `from` into an OWNED, HIDDEN temp beside `to`, fsync it, land it on
+/// `to` with `rename_noreplace`, then drop `from`.
 ///
-/// A failed `remove_file` of the source is a WARNING, exactly as in
+/// **The temp hop is the whole point, and it is not a tidiness measure.**
+/// Streaming straight into `to` makes the user-visible vault name the file
+/// that is being filled, so a crash, a kill or a power loss mid-copy leaves a
+/// TRUNCATED `.mp4` in the vault under a perfectly ordinary name. That is not
+/// an exotic window either: this fallback is the ORDINARY export path —
+/// staging lives under `%LOCALAPPDATA%` and the vault is very often on
+/// another drive, so `hard_link`/`rename` return EXDEV and we land here for
+/// most real exports. And nothing would ever collect the residue:
+/// `screen_recovery` sweeps staging only, `capture::recovery` knows
+/// `.mp3.part` and note temps alone, and a plain `Demo.mp4` carries neither a
+/// leading dot nor an ownership marker for either to key on. A sync client
+/// watching the vault would upload the growing partial as a finished video.
+/// So the bytes accumulate somewhere nobody mistakes for a saved capture, and
+/// the final name appears only once every byte is on disk.
+///
+/// The temp is created in the SAME DIRECTORY as `to`. A temp on any other
+/// volume would reintroduce at rename time the exact cross-device failure
+/// this function exists to work around. It wears `NOTE_TMP_SUFFIX` — the same
+/// ownership marker the note writer stamps, reused rather than respelled —
+/// and takes a numbered name when one is already there, so a temp orphaned by
+/// an earlier crashed run routes a later export around itself instead of
+/// blocking it forever (nothing sweeps a vault capture folder).
+///
+/// `rename_noreplace` stays THE ARBITER of collisions — there is deliberately
+/// no `exists()` check in front of it, exactly as in `commit_screen_capture`
+/// and for the same reason: a check would be racy AND, firing first, able to
+/// hide a landing that had stopped being never-clobber.
+///
+/// A failed `remove_file` of the SOURCE is a WARNING, exactly as in
 /// `rename_noreplace`: the bytes are already safely at `to`, so returning an
 /// error here would send the suffix-retry loop round again against a
 /// destination that now exists — a fresh "collision" on every attempt.
 fn copy_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    copy_noreplace_with(from, to, stream_and_sync)
+}
+
+/// The default inner step: stream every byte across, then fsync.
+fn stream_and_sync(source: &mut std::fs::File, dest: &mut std::fs::File) -> std::io::Result<()> {
+    std::io::copy(source, dest)?;
+    dest.sync_all()
+}
+
+/// The copy, with its inner step injected so a test can observe the
+/// directory DURING the stream — the only deterministic way to assert that
+/// the final name does not exist yet — and force a part-way failure.
+fn copy_noreplace_with(
+    from: &Path,
+    to: &Path,
+    stream: impl FnOnce(&mut std::fs::File, &mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut source = std::fs::File::open(from)?;
-    let mut dest = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(to)?;
-    if let Err(e) = std::io::copy(&mut source, &mut dest).and_then(|_| dest.sync_all()) {
+    let (tmp, mut dest) = create_owned_temp(to)?;
+    if let Err(e) = stream(&mut source, &mut dest) {
         drop(dest);
-        // Our own half-written file. Leaving it would litter the vault AND
-        // make the destination look taken to every later attempt.
-        let _ = std::fs::remove_file(to);
+        // Our own half-written temp. Nothing sweeps a vault capture folder,
+        // so what we leave here we leave forever.
+        let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
     drop(dest);
+    if let Err(e) = rename_noreplace(&tmp, to) {
+        // A destination taken since the reservation reports AlreadyExists
+        // here, which is precisely the signal `commit_screen_capture`'s
+        // suffix retry keys on — but the temp is ours either way.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     if let Err(e) = std::fs::remove_file(from) {
         log::warn!(
             "screen export: copied {} to {} but could not remove the source ({e}); \
@@ -156,6 +210,38 @@ fn copy_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Exclusive-create a hidden, ownership-marked temp beside `to`.
+///
+/// Exclusive because `File::create` on a predictable name would truncate
+/// whatever is there or follow a planted symlink out of the vault; numbered
+/// because an orphan from an earlier crashed run must not wedge every later
+/// export. Both rules, and the marker itself, are the note writer's
+/// (`capture_note::write_note_atomic`) — one spelling, one meaning.
+fn create_owned_temp(to: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    let dir = to.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = to
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for attempt in 0u32.. {
+        let candidate = if attempt == 0 {
+            dir.join(format!(".{file_name}{NOTE_TMP_SUFFIX}"))
+        } else {
+            dir.join(format!(".{file_name}.{attempt}{NOTE_TMP_SUFFIX}"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => return Ok((candidate, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("the numbered temp search always terminates")
 }
 
 /// Move the exported temp into the vault under `base`, never replacing.
@@ -325,6 +411,170 @@ mod tests {
         assert_eq!(calls.get(), 1);
         assert_eq!(fs::read(&to).unwrap(), b"footage");
         assert!(!from.exists());
+    }
+
+    /// Every name in a directory, sorted — so a test can say exactly what
+    /// the vault holds, not merely that the file it looked for is absent.
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    // REGRESSION (the partial-export residue): while the copy is streaming,
+    // the FINAL vault name must not exist. The bytes have to accumulate in an
+    // owned, hidden temp and reach `Demo.mp4` only by `rename_noreplace`.
+    //
+    // The failure this pins is a crash, kill or power loss mid-copy leaving a
+    // TRUNCATED `.mp4` in the user's vault under a perfectly ordinary name.
+    // It is not exotic: the cross-volume copy is the ORDINARY export path
+    // (staging sits in %LOCALAPPDATA%, the vault is very often another drive,
+    // so the move returns EXDEV and this fallback runs), and NOTHING would
+    // ever collect the residue — `screen_recovery` sweeps staging only,
+    // `capture::recovery` knows `.mp3.part` and note temps alone, and the
+    // file is neither dot-prefixed nor ownership-marked. A sync client
+    // watching the vault uploads the growing partial as a finished video.
+    #[test]
+    fn a_partial_copy_is_never_visible_at_the_final_vault_name() {
+        let staging = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let from = staging.path().join("temp.mp4");
+        let to = vault.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+
+        // Observed from INSIDE the copy, so this is deterministic rather than
+        // a race against a background thread.
+        let mid_copy = std::cell::RefCell::new(Vec::new());
+        copy_noreplace_with(&from, &to, |source, dest| {
+            let outcome = stream_and_sync(source, dest);
+            *mid_copy.borrow_mut() = entries(vault.path());
+            outcome
+        })
+        .expect("the copy lands");
+
+        let mid_copy = mid_copy.into_inner();
+        assert!(
+            !mid_copy.iter().any(|n| n == "Demo.mp4"),
+            "the final vault name existed while the copy was still streaming: {mid_copy:?}"
+        );
+        assert_eq!(
+            mid_copy.len(),
+            1,
+            "expected exactly one in-flight temp: {mid_copy:?}"
+        );
+        let tmp = &mid_copy[0];
+        assert!(
+            tmp.starts_with('.'),
+            "the in-flight temp is not hidden: {tmp}"
+        );
+        assert!(
+            tmp.ends_with(crate::capture_note::NOTE_TMP_SUFFIX),
+            "the in-flight temp carries no ownership marker: {tmp}"
+        );
+
+        // ...and the landing is still a landing.
+        assert_eq!(entries(vault.path()), vec!["Demo.mp4".to_string()]);
+        assert_eq!(fs::read(&to).unwrap(), b"footage");
+        assert!(!from.exists(), "the source survived a completed move");
+    }
+
+    // The temp hop must not cost a byte. A payload several read buffers long,
+    // so a copy that landed only its first chunk shows up here.
+    #[test]
+    fn a_completed_copy_lands_the_sources_exact_bytes() {
+        let staging = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let from = staging.path().join("temp.mp4");
+        let to = vault.path().join("Demo.mp4");
+        let payload: Vec<u8> = (0..(1usize << 18)).map(|i| (i % 251) as u8).collect();
+        fs::write(&from, &payload).unwrap();
+
+        copy_noreplace(&from, &to).expect("the copy lands");
+
+        assert_eq!(fs::read(&to).unwrap(), payload, "the bytes did not survive");
+        assert_eq!(
+            entries(vault.path()),
+            vec!["Demo.mp4".to_string()],
+            "the copy left something else in the vault"
+        );
+    }
+
+    // A copy that dies part-way must leave the vault exactly as it found it:
+    // no file at the final name AND no orphaned temp. Nothing sweeps a vault
+    // capture folder, so anything left here is left forever.
+    #[test]
+    fn a_copy_that_fails_partway_leaves_neither_a_partial_nor_a_temp() {
+        use std::io::Write as _;
+        let staging = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let from = staging.path().join("temp.mp4");
+        let to = vault.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+
+        let err = copy_noreplace_with(&from, &to, |_source, dest| {
+            dest.write_all(b"half a video")?;
+            Err(std::io::Error::other("the disk filled up"))
+        })
+        .expect_err("a failed copy must be an error");
+
+        assert_eq!(err.to_string(), "the disk filled up");
+        assert_eq!(
+            entries(vault.path()),
+            Vec::<String>::new(),
+            "a failed copy left residue in the vault"
+        );
+        assert!(from.exists(), "the source was dropped after a failed copy");
+    }
+
+    // A temp IS the residue a crash can leave, and nothing sweeps this
+    // directory — so the next export must route around one instead of
+    // failing on a name it cannot create, and must never write through it.
+    #[test]
+    fn a_temp_left_by_an_earlier_crashed_export_does_not_block_a_later_one() {
+        let staging = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let from = staging.path().join("temp.mp4");
+        let to = vault.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+        let stale = vault
+            .path()
+            .join(format!(".Demo.mp4{}", crate::capture_note::NOTE_TMP_SUFFIX));
+        fs::write(&stale, b"A CRASHED RUN'S BYTES").unwrap();
+
+        copy_noreplace(&from, &to).expect("a stale temp must not block an export");
+
+        assert_eq!(fs::read(&to).unwrap(), b"footage");
+        assert_eq!(
+            fs::read(&stale).unwrap(),
+            b"A CRASHED RUN'S BYTES",
+            "the earlier run's temp was written through"
+        );
+    }
+
+    // Never-clobber holds, and the refusal leaves no litter either: the temp
+    // the attempt created has to go before the error returns.
+    #[test]
+    fn a_refused_destination_keeps_the_interloper_and_leaves_no_temp() {
+        let staging = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let from = staging.path().join("temp.mp4");
+        let to = vault.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+        fs::write(&to, b"THE USER'S OWN FILE").unwrap();
+
+        let err = copy_noreplace(&from, &to).expect_err("an existing destination must refuse");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&to).unwrap(), b"THE USER'S OWN FILE");
+        assert_eq!(
+            entries(vault.path()),
+            vec!["Demo.mp4".to_string()],
+            "the refused attempt left a temp behind"
+        );
+        assert!(from.exists(), "the source was dropped without landing");
     }
 
     fn touch(dir: &std::path::Path, name: &str) {
