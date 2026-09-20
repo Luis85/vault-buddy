@@ -2336,14 +2336,14 @@ against the spec finds the reasoning instead of assuming an oversight.
    per-device level emit that runs during enumeration/preview, not a frontend
    one — so phase 3 should not "add the bars" against the current event set.
 2. ~~**There is no Region tab** (`ScreenSourcePicker`'s `TABS`).~~ **Closed by
-   phase 3 task 7.** The Region tab ships: it lists the monitors as *targets*
+   `b78648c` (phase 3 task 7).** The Region tab ships: it lists the monitors as *targets*
    (a region lives on exactly one monitor and the overlay covers exactly one),
    opens `select_capture_region` on the picked one, and renders the result as a
    selectable row. The inverted pin is `tests/screenSourcePicker.test.ts`'s
    "offers Screen, Window and Region tabs", which also asserts all three tab
    labels.
-3. ~~**The chooser hint reads "Screen or window"**~~ **Closed by phase 3 task
-   7.** `RecordMode`'s `OPTIONS` now reads "Screen, window, or region", §7.1's
+3. ~~**The chooser hint reads "Screen or window"**~~ **Closed by `b78648c` (phase 3 task
+   7).** `RecordMode`'s `OPTIONS` now reads "Screen, window, or region", §7.1's
    own wording, pinned in `tests/record-mode.test.ts` in both the visible text
    and the aria label.
 
@@ -2456,14 +2456,14 @@ plus a size readout, and Phase 5's editor/export giving a finished capture
 somewhere to GO; until then the honest statement is that Phase 2 stages
 without ever collecting.
 
-### GAP-116 · Low · Vault Buddy's own windows appear in a Phase 2 recording
+### GAP-116 · Low · Vault Buddy's own windows are filtered out of the picker by TITLE, not HWND
 `src-tauri/src/screen_commands.rs` (`our_window_titles`, used only to filter
 `list_capture_sources`). Spec §7.2's rule — never offer ourselves as a
 capture *source* — is implemented, though **by TITLE rather than by HWND**,
 which is a fourth unrecorded deviation from that section: `our_window_titles`
 collects `WebviewWindow::title()` strings and `source.rs` drops any
 enumerated window whose title matches one exactly. It is inert today — all
-three windows are `skipTaskbar: true`, which tao implements as
+four windows are `skipTaskbar: true`, which tao implements as
 `WS_EX_TOOLWINDOW`, and `windows-capture`'s `Window::is_valid()` already
 rejects those, so the filter never fires — but it becomes load-bearing in
 **Phase 4**, whose spec'd `editor` window is `skipTaskbar: false` and will
@@ -2488,12 +2488,16 @@ config-derived label test a complete source and a one-shot apply at capture
 start sufficient. If Phase 4 builds its `editor` window on demand instead,
 BOTH halves go blind at once: the test never checks a window it cannot see in
 the config, and an editor opened DURING a capture is never excluded and
-appears in the footage. **Failure scenario:** a user recording their whole monitor gets the
-buddy, the panel, and any bubble baked into the footage, including whatever
-vault names the panel was showing. It is cosmetic rather than a data leak in
-the ordinary case (the user can see what is on their own screen), but it is
-surprising enough that it is called out explicitly in the Phase 2 Windows
-verification checklist so a verifier does not file it as a bug. **Fix
+appears in the footage. **Failure scenario:** Phase 4's `editor` window is spec'd
+`skipTaskbar: false`, so it really enumerates — and a title filter drops it
+only while its title string matches exactly, so an editor whose title carries
+the document name (or any runtime suffix) is offered to the user as a capture
+source, and capturing it recurses. The converse costs the user instead: any
+window of THEIRS whose title happens to equal one of ours is silently missing
+from the Window tab, with nothing to explain the absence. Note this is the
+SOURCE half only; the PIXEL half is closed, and on a supported build the buddy
+appearing in the footage IS a failure — file it against verification row 16,
+not here. **Fix
 shape, for the SOURCE half that remains open:** filter by HWND rather than by
 title — collect our windows' handles on the main thread and drop enumerated
 windows by handle, so a user window sharing a title is never hidden and a

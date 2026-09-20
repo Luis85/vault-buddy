@@ -347,7 +347,7 @@ below; listeners noted are the windows that actually subscribe.
 | Vault registry (read-only input) | `%APPDATA%\obsidian\obsidian.json` |
 | Per-vault capture/tasks/`documents_folder` settings (including six additive per-vault template fields — `note_extra_frontmatter`/`note_body_template` capture-owned via `set_capture_config`, `task_extra_frontmatter`/`task_body_template` owned by `set_task_template_config`, `document_extra_frontmatter`/`document_body_template` documents-owned via `set_documents_config`; each save preserves the other two pairs untouched — `config_merge.rs`'s `merge_capture_owned`/`merge_documents_owned` for the capture/documents surfaces, a direct read-modify-write for the task-template surface) + app-global `mcp`, `document_import` (user-set `pandoc_path` override), and `panel` (the S/M/L preset size, `core::panel_config`) sections | `%APPDATA%\vault-buddy\config.json` (documented in docs/DEVELOPMENT.md; per-field defensive parse; `serialize_config` round-trips every section) |
 | Whisper models | `%APPDATA%\vault-buddy\models\ggml-<tier>.bin` + `ggml-silero-v5.1.2.bin` (pinned Hugging Face URLs + SHA-256) |
-| Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble denylisted) |
+| Buddy window position | tauri-plugin-window-state file in `%APPDATA%\com.vaultbuddy.desktop` (POSITION only; panel/bubble/overlay denylisted — `tray::POSITION_DENYLIST`) |
 | Logs / crash records / run marker | `%LOCALAPPDATA%\com.vaultbuddy.desktop\logs` — `vault-buddy.log` (5 MB rotate), `crash.log`, `.vault-buddy.run` |
 | Frontend settings | localStorage `vault-buddy.animations/.character/.dragging/.messages/.messageDuration/.checkUpdatesOnStart` |
 | Recent searches | localStorage `vault-buddy:recent-searches` (cap 5) |
@@ -990,7 +990,9 @@ companion note. Do not add one here.
   was threaded through.
 - **`WDA_EXCLUDEFROMCAPTURE` keeps our own windows out of the FOOTAGE (spec
   §5.3).** `capture_exclusion::apply` sets the affinity on every label in
-  `EXCLUDED_LABELS` (config-derived, see the window-system section) from ONE
+  `EXCLUDED_LABELS` (a hardcoded const PINNED to `tauri.conf.json` by tests in
+  both directions — adding a window to the config does not add it here, the
+  test just starts failing until you do; see the window-system section) from ONE
   place, `screen_capture_worker`'s `start_screen_capture_blocking`, before the
   session opens; `capture_exclusion::clear` lifts it from ONE place,
   `screen_commands::clear_active_screen` — the chokepoint every teardown
