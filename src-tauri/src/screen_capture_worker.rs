@@ -143,8 +143,8 @@ pub(crate) fn start_screen_capture_blocking(
     // which is the one place the exclusion is lifted. Applying it before
     // the session opens means the first frames are already clean; it is
     // fire-and-forget on the main thread, so a busy event loop can still
-    // let a frame or two of buddy through (docs/Gaps.md, recorded in
-    // task 8) rather than delaying the start.
+    // let a frame or two of buddy through (docs/Gaps.md GAP-124)
+    // rather than delaying the start.
     crate::capture_exclusion::apply(app);
 
     // Live source-loss / device warnings: forwarded to the panel while

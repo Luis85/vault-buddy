@@ -2317,13 +2317,12 @@ argues for the first option. For the plan owner to decide; until then the
 timeout arm's comment states the real behaviour rather than the invariant it
 does not have.
 
-### GAP-111 · Low · Three Phase-2 screen-capture surfaces deliberately fall short of the approved spec
-`src/components/ScreenAudioPicker.vue`, `src/components/ScreenSourcePicker.vue`,
-`src/components/RecordMode.vue`. The phase-2 source picker ships three
-knowing deviations from the screen-capture spec. Each is right for phase 2
-and each is recorded here so phase 3 restores it deliberately rather than by
-accident — and so a reader diffing the shipped picker against the spec finds
-the reasoning instead of assuming an oversight.
+### GAP-111 · Low · One Phase-2 screen-capture surface deliberately falls short of the approved spec
+`src/components/ScreenAudioPicker.vue`. The phase-2 source picker shipped three
+knowing deviations from the screen-capture spec. **Two are closed** — phase 3
+task 7 added the Region tab and restored the chooser hint (see the closed items
+below) — and one remains, recorded here so a reader diffing the shipped picker
+against the spec finds the reasoning instead of assuming an oversight.
 
 1. **§7.2's per-device audio level bars are omitted** (`ScreenAudioPicker`).
    Nothing could feed them: `capture:level` is emitted from exactly one place,
@@ -2336,16 +2335,17 @@ the reasoning instead of assuming an oversight.
    intent as engagement). **Restoring it is a Rust change first** — a
    per-device level emit that runs during enumeration/preview, not a frontend
    one — so phase 3 should not "add the bars" against the current event set.
-2. **There is no Region tab** (`ScreenSourcePicker`'s `TABS`). Region capture
-   is phase 3; a disabled third tab is dead UI inviting a click with nothing
-   behind it. Pinned in both directions by a test ("offers Screen and Window
-   tabs, and no Region tab in this phase"), which phase 3 must update in the
-   same commit that adds the tab.
-3. **The chooser hint reads "Screen or window" where §7.1 says "Screen,
-   window, or region"** (`RecordMode`'s `OPTIONS`). Same reason as (2):
-   advertising region from the chooser while the picker cannot do it is the
-   same dead promise. **This string must change back when the Region tab
-   lands**, or the app will under-advertise a capability it has.
+2. ~~**There is no Region tab** (`ScreenSourcePicker`'s `TABS`).~~ **Closed by
+   phase 3 task 7.** The Region tab ships: it lists the monitors as *targets*
+   (a region lives on exactly one monitor and the overlay covers exactly one),
+   opens `select_capture_region` on the picked one, and renders the result as a
+   selectable row. The inverted pin is `tests/screenSourcePicker.test.ts`'s
+   "offers Screen, Window and Region tabs", which also asserts all three tab
+   labels.
+3. ~~**The chooser hint reads "Screen or window"**~~ **Closed by phase 3 task
+   7.** `RecordMode`'s `OPTIONS` now reads "Screen, window, or region", §7.1's
+   own wording, pinned in `tests/record-mode.test.ts` in both the visible text
+   and the aria label.
 
 ### GAP-112 · Low · The static-screen heartbeat repeats at a fixed 500 ms rather than adapting
 `src-tauri/screen/src/session/mod.rs` (`HEARTBEAT: Duration =
@@ -2469,24 +2469,66 @@ rejects those, so the filter never fires — but it becomes load-bearing in
 **Phase 4**, whose spec'd `editor` window is `skipTaskbar: false` and will
 therefore enumerate. A title match is also, in principle, capable of hiding a
 USER's window that happens to carry the exact same string. Phase 4 must not
-assume an HWND filter exists. Spec §5.3's rule — never appear *in* a
-recording — is not implemented at all, because `WDA_EXCLUDEFROMCAPTURE` is
-Phase 3's row in §13. **Failure scenario:** a user recording their whole monitor gets the
+assume an HWND filter exists.
+
+**Phase 3's `WDA_EXCLUDEFROMCAPTURE` does NOT close this entry.** Spec §5.3's
+separate rule — never appear *in* a recording — IS implemented as of `714bbb7`
+for `main`/`panel`/`bubble`/`overlay` (`src-tauri/src/capture_exclusion.rs`).
+That affinity keeps our windows out of a recording's PIXELS; this entry is
+about our windows being offered as SOURCES. Two rules, two spec sections,
+neither one closing the other — do not retire GAP-116 on the strength of the
+exclusion.
+
+**The surviving warning below is still load-bearing**: the affinity must be
+re-applied per window creation, and today that is satisfied only because
+NOTHING builds a window at runtime — verified, there is no
+`WebviewWindowBuilder` or `WindowBuilder` anywhere under `src-tauri/src/`.
+Every window is declared in `tauri.conf.json`, which is what makes the
+config-derived label test a complete source and a one-shot apply at capture
+start sufficient. If Phase 4 builds its `editor` window on demand instead,
+BOTH halves go blind at once: the test never checks a window it cannot see in
+the config, and an editor opened DURING a capture is never excluded and
+appears in the footage. **Failure scenario:** a user recording their whole monitor gets the
 buddy, the panel, and any bubble baked into the footage, including whatever
 vault names the panel was showing. It is cosmetic rather than a data leak in
 the ordinary case (the user can see what is on their own screen), but it is
 surprising enough that it is called out explicitly in the Phase 2 Windows
 verification checklist so a verifier does not file it as a bug. **Fix
-shape:** Phase 3 sets `SetWindowDisplayAffinity(hwnd,
-WDA_EXCLUDEFROMCAPTURE)` on the buddy, panel, bubble and overlay windows —
-note it must be re-applied per window creation, and that the call fails on
-Windows builds older than 2004, which needs its own degrade path.
+shape, for the SOURCE half that remains open:** filter by HWND rather than by
+title — collect our windows' handles on the main thread and drop enumerated
+windows by handle, so a user window sharing a title is never hidden and a
+`skipTaskbar: false` window of ours is never offered. (The PIXEL half is
+done: `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` over
+`capture_exclusion::EXCLUDED_LABELS`. It fails on Windows builds older than
+2004; that degrade path logs a warning and records with the buddy in frame,
+by design.)
 
-### GAP-117 · Medium · The `cfg(windows)` arms of `sink`/`source`/`session` execute in no automated test anywhere
+### GAP-117 · Medium · The `cfg(windows)` arms of `sink`/`source`/`session`/`exclusion` execute in no automated test anywhere
 `src-tauri/screen/src/sink.rs`, `source.rs`, `session/windows_session.rs`,
-`session/audio.rs`, `session/mux.rs`, `frames.rs`. This is the honest
-coverage statement for Phase 2, recorded so nobody reads the green CI badge
-as covering it. `rust-core` runs the crate on Linux, where those modules are
+`session/audio.rs`, `session/mux.rs`, `frames.rs`, and — added by Phase 3 —
+`src-tauri/screen/src/exclusion.rs` (`set_display_affinity`'s `cfg(windows)`
+body) plus `src-tauri/src/capture_exclusion.rs` (`set_affinity`'s whole
+`run_on_main_thread` closure, and the `cfg(windows)` `window_handle` arm that
+compiles NOWHERE locally — CI's `windows-app` job is its first compile). This
+is the honest coverage statement for Phases 2–3, recorded so nobody reads the
+green CI badge as covering it.
+
+**What Phase 3 added to this list, specifically:** `source::resolve`'s Region
+arm (monitor lookup and the live monitor dimensions it clamps against — the
+pure `region_dims` it delegates to IS tested on Linux, the resolution around it
+is not), the widened `FrameFlags` crop fields and the session plumbing that
+carries them into `frames.rs`'s conversion call, and the exclusion apply/clear
+pair above. **The Windows-target clippy runs
+(`cargo clippy -p vault_buddy_screen --all-targets --target
+x86_64-pc-windows-msvc` and the capture crate's `--lib` twin) prove only that
+these arms TYPE-CHECK.** They are not compiled into a test binary and nothing
+executes them; a wrong monitor index, an inverted affinity direction or a crop
+field threaded to the wrong parameter all type-check perfectly. (The shell
+crate has no such cross-check at all: `cargo clippy -p vault-buddy --target
+x86_64-pc-windows-msvc` cannot run on Linux at any scope — `ring v0.17.14`
+fails in cc-rs for want of MSVC's `lib.exe` — which is the reason
+`set_display_affinity` lives in the screen crate and takes its `HWND` as an
+`isize`.) `rust-core` runs the crate on Linux, where those modules are
 either absent or reduce to an `Unsupported` arm; `windows-app` now runs the
 crate's tests on Windows too (GAP-102, closed in this PR), but **those tests
 are the pure modules' tests** — `clock`, `select`, `convert`, `staging`,
@@ -2724,3 +2766,195 @@ second, but the per-frame NV12 copy and encode load on a still screen now
 match a busy one. That is the price of a timeline whose durations are true,
 and the alternative — variable durations with a frame of lookahead — trades
 it for VFR MP4s that players handle unevenly.
+
+### GAP-124 · Low · The capture exclusion is applied fire-and-forget, so the first frames of a capture can still contain Vault Buddy's own windows
+`src-tauri/src/capture_exclusion.rs` (`set_affinity` posts to
+`run_on_main_thread` and returns immediately) and
+`src-tauri/src/screen_capture_worker.rs` (the apply site, inside
+`start_screen_capture_blocking`). The exclusion is applied *before* the WGC
+session opens, which is the right ordering — but the apply itself is a queued
+main-thread closure, and the start path carries on without acknowledging it.
+Both call sites carry a comment pointing here, which is what this entry
+answers. **Failure scenario:** on a busy event loop the session can deliver
+its first frame or two before the affinity lands, so a recording opens with
+the buddy (and whatever the panel was showing) visible for ~30 ms. Cosmetic
+in the ordinary case, but it is the one window where spec §5.3's promise is
+not kept. **Why not fixed:** waiting for the closure means a worker thread
+blocking on the event loop, which is exactly the deadlock shape this
+codebase's window rules exist to prevent (the original drag crash — see
+AGENTS.md's window-system section). **Fix shape:** acknowledge the closure
+through a bounded channel the way `select_capture_region`'s own
+`OVERLAY_SHOW_TIMEOUT` setup handshake does, so the start waits a bounded few
+hundred milliseconds and reports a wedged event loop rather than waiting
+forever; or apply the exclusion once at app startup and never lift it, which
+trades this window for making our own windows permanently invisible to every
+other capture tool, which is worse.
+
+### GAP-125 · Low · Region capture reads back the whole monitor every frame and crops on the CPU
+`src-tauri/screen/src/frames.rs` (the WGC callback copies the full frame out
+of the GPU staging texture) and `src-tauri/screen/src/convert.rs`
+(`bgra_crop_to_nv12`). Spec §17.2 asks whether the crop can happen on the GPU
+texture before readback. It does not, and that is deliberate: the crop lives
+in a pure function precisely so Linux can test it, and that pure test is the
+ONLY automated coverage region capture has anywhere (GAP-117). **Failure
+scenario:** recording a 640×480 region of a 4K monitor at 60 fps costs the
+full-monitor readback and the full BGRA→NV12 pass regardless of how small the
+region is, so a small region is no cheaper than a full-screen capture. On a
+machine where 4K60 is already near the edge, a region does not buy the
+headroom a user would reasonably expect it to. **Fix shape:** a D3D11
+`CopySubresourceRegion` before the CPU readback — which would move the crop
+into code that nothing can test on any CI runner. Worth it only if the
+verification checklist's 4K60 measurement (row 10, deferred to Phase 6) shows
+the readback is actually the bottleneck.
+
+### GAP-126 · Low · A region selection nobody answers cancels silently after two minutes
+`src-tauri/src/region_commands.rs` (`REGION_TIMEOUT`, 120 s). If the overlay
+webview dies, never renders, or never resolves, the wait expires,
+`finish_region_selection` hides the overlay and `select_capture_region`
+returns `Ok(None)` — indistinguishable, to the picker, from the user pressing
+Escape. **Failure scenario:** a user whose overlay failed to render sees the
+picker come back with no region and no explanation, and every repeat attempt
+costs another two minutes of a full-screen invisible always-on-top window
+before it clears. **Why it is this way:** the alternative — an error toast on
+expiry — would also fire on an ordinary slow-but-legitimate selection that
+happened to run past the deadline, and a false "something went wrong" on a
+selection the user simply took their time over is worse than a quiet cancel.
+**Fix shape:** distinguish the two outcomes in the reply (`cancelled` vs
+`timedOut`) and surface only the latter — once real hardware has shown which
+one actually occurs. The bound itself is not the gap: it exists so a dead
+webview cannot strand that window forever, and it must stay.
+
+### GAP-127 · Low · There is no keyboard-only way to draw a region
+`src/roots/RegionRoot.vue`. The overlay reads pointer events only. Escape
+cancels, but nothing selects. **Failure scenario:** a user who cannot use a
+pointing device can record a screen or a window but not a region — the one
+capture source with no keyboard path, on a surface that takes over the whole
+display and therefore cannot be worked around with an external tool. **Fix
+shape:** arrow-key cursor movement (with a larger step on Shift) plus Space to
+anchor and Enter to commit, and an `aria-live` readout of the rectangle's
+current size and origin so the state is legible without seeing the band. The
+task list's own drag-and-drop keyboard fallback (`TaskDragHandle`) is the
+established pattern in this repo for "a pointer gesture that needs a key
+route".
+
+### GAP-128 · Low · `DIALOG_ACTIVE` is a process-wide bool with two independent drivers, so a region selection and a native dialog can stomp each other's suppression
+`src-tauri/src/lib.rs` (`DIALOG_ACTIVE`, a plain `AtomicBool`),
+`src-tauri/src/commands.rs` (`set_dialog_active`),
+`src/utils/nativeDialog.ts` (`withDialogSuppressed`) and
+`src-tauri/src/region_commands.rs` (`select_capture_region`). A bool was right
+while `withDialogSuppressed` was the only driver; phase 3 made the region
+overlay a second one. Each driver pairs its own set and clear at one scope, so
+neither can leave the flag stuck ON — but a bool has no depth, so the two
+overlap badly. **Failure scenario** (multi-monitor, no unusual timing): a
+region selection starts on monitor 2 and sets the flag; the panel is on
+monitor 1 and remains interactive *because* the flag suppresses its
+auto-hide, so the user opens Buddy settings → Integrations → Pandoc
+**Browse**; `withDialogSuppressed`'s `finally` clears the flag when that
+picker closes, while the region selection is still live; the user clicks back
+onto the overlay, the panel blurs, `schedule_focus_out_check` sees
+`dialog_active() == false` and hides the panel with the picker's state in it.
+**Why not fixed in phase 3:** the symmetric case (a failing region select
+clearing an open dialog's suppression) WAS fixed, by pairing set and clear at
+one scope — but the overlap needs `DIALOG_ACTIVE` to become a counter, which
+touches `lib.rs`'s shared flag and every existing caller, and that is a
+change to a window-system invariant rather than a region-capture one. **Fix
+shape:** an `AtomicUsize` with `fetch_add`/`fetch_sub` and a
+`> 0` read, plus a saturating decrement so an unbalanced clear cannot wrap the
+counter into a permanent suppression — which is the failure mode a bool
+cannot have and a counter can.
+
+### GAP-129 · Low · A hide-to-tray during a live region selection leaves the selection claim standing for up to two minutes
+`src-tauri/src/region_commands.rs` (`RegionSelectionState`,
+`finish_region_selection`) and `src-tauri/src/tray.rs` (`hide_buddy`, which
+walks `ALL_WINDOW_LABELS` — including `"overlay"`). Hiding to tray makes the
+overlay disappear, but the answer slot stays `Some` and `DIALOG_ACTIVE` stays
+`true` until `REGION_TIMEOUT` (120 s) expires and the one cleanup function
+runs. **Failure scenario:** a user re-reveals the buddy, picks *Select
+region…* again, and is told "A region selection is already in progress." with
+nothing on screen to corroborate it; meanwhile the panel cannot auto-hide.
+Self-healing within two minutes, and impossible to reach without deliberately
+hiding to tray mid-drag. **A fix must respect the one-cleanup-site rule:** a
+hide path that called `finish_region_selection` itself would be the second
+call site that
+`the_region_selection_is_cleaned_up_from_exactly_one_place` exists to forbid.
+Route the cancel through the answer channel instead — the same shape
+`resolve_region_selection` already uses for Escape — so the existing wait
+wakes and the existing cleanup runs.
+
+**A second, unrelated path to the same stuck slot, recorded for
+completeness rather than as a fix request:** the wait is
+`tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(REGION_TIMEOUT))`,
+and dropping a `JoinHandle` does not cancel a blocking task. If the command
+future were dropped, the blocking task would hold `rx` for the full 120 s and
+`finish_region_selection` would never run. Tauri spawns command futures and
+runs them to completion, so this is reachable only at runtime shutdown, where
+it does not matter.
+
+### GAP-130 · Low · `available_monitors()` is an unbounded main-thread round trip on a tokio worker
+`src-tauri/src/region_commands.rs` (`select_region_inner`). The call marshals
+to the event loop and blocks on the reply with **no timeout**. It follows the
+accepted precedent of `screen_commands::our_window_titles`, but it is the
+unbounded version of it — and the sibling handshake a few lines below in the
+same function (`setup_rx.recv_timeout(OVERLAY_SHOW_TIMEOUT)`) IS bounded at
+5 s, for exactly the reason this one is not. **Failure scenario:** a wedged
+event loop parks one tokio worker indefinitely; with enough such calls the
+blocking pool starves and unrelated async commands stop answering. Remote, and
+a wedged event loop is already a fatal condition for this app, which is why it
+is accepted. Noted so the `our_window_titles` precedent is not read as
+covering the unbounded case. **Fix shape:** the bounded-channel +
+`run_on_main_thread` pattern the same function already uses for the overlay
+show, so a wedged loop is reported rather than waited on.
+
+### GAP-131 · Low · A wedged device thread leaks the capture exclusion until restart
+`src-tauri/src/screen_capture_worker.rs` (the `screen-capture-monitor`
+thread's `done_rx.recv()`), `src-tauri/src/screen_commands.rs`
+(`clear_active_screen`), `src-tauri/src/capture_exclusion.rs`.
+`clear_active_screen` is the one place spec §5.3's `WDA_EXCLUDEFROMCAPTURE` is
+lifted, and on every ordinary teardown path the `screen-capture-monitor`
+thread is what reaches it. If the device thread never returns from
+`session.stop()` — a wedged Media Foundation `Finalize` — the monitor blocks in
+`done_rx.recv()` forever: the reservation is never dropped, the `CaptureGuard`
+is never released, and the exclusion is never lifted.
+
+**Pre-existing, with a newly EXTERNAL blast radius.** The wedged-monitor leak
+predates the exclusion work; until phase 3 its symptom was entirely internal
+("Vault Buddy will not start another capture"). It is now *additionally* "the
+user's Vault Buddy windows are missing from every other application's screen
+recording", with no error, no log line, and no plausible bug report — the
+buddy is still perfectly visible to the user, so nothing looks wrong from
+inside the app. **Bounded:** `WDA_*` is per-HWND and dies with the window, so
+restarting Vault Buddy always clears it; do not let a later edit reintroduce
+an unbounded reading of this. **A fix must respect** the one-clear-site rule
+pinned by `capture_exclusion.rs`'s structural test: any timeout-based rescue
+has to funnel through `clear_active_screen`, not add a second clear.
+
+### GAP-132 · Low · The screen source-row button markup is copy-pasted three times
+`src/components/ScreenSourcePicker.vue` (the enumerated row inside the two
+list tabs) and `src/components/ScreenRegionPicker.vue` (the target row and the
+selected-region row) are the same `<button>` with an identical nine-utility
+class string and an identical `border-violet-400 : border-white/10`
+active-state ternary. It sits under fallow's clone threshold
+(`cloneGroups=0`), so no gate catches it, but AGENTS.md's "UI primitives &
+design tokens" section exists specifically to stop this growth — the focus-ring
+string was in 25 files before that layer landed. **Failure scenario:** the
+Phase-4 editor brings a fourth copy; a later token or focus-treatment change
+lands in two of the four and the picker's tabs visibly disagree. **Fix
+shape:** a `ScreenSourceRow.vue` presentational component (`title` / `detail` /
+`pressed` / `testid`, `@click`) collapses all three without changing a pixel.
+Deliberately NOT done in the phase-3 task-7 fix wave: extracting a shared row
+is scope growth for a fix wave, and Phase 4 is the natural moment, since it
+adds the fourth call site.
+
+### GAP-133 · Low · The source-picker test fixture spells a monitor detail with a separator Rust never emits
+`tests/screenSourcePicker.test.ts`'s `SOURCES` fixture gives the monitor row
+`detail: "2560x1440 · Primary"` (a middle dot). That is the SPEC's separator;
+`list_capture_sources` actually emits `format!("{width}x{height} - Primary")`
+(`src-tauri/screen/src/source.rs`), an ASCII hyphen. Landed with the phase-2
+picker, untouched by phase 3. **Failure scenario:** limited today — the suite
+asserts `toContain("2560x1440")`, which is true of both spellings, so nothing
+is masked. But it is a fixture that does not match the wire format, which is
+exactly the kind of drift a later assertion on the full detail string would
+enshrine backwards — and the region row's own detail separator was reviewed FOR
+parity against that same Rust line, so the two now disagree inside one file.
+**Fix:** change the fixture to `"2560x1440 - Primary"`; no assertion in the
+suite depends on the dot.

@@ -66,7 +66,7 @@ fn set_affinity(app: &AppHandle, excluded: bool) {
     // API in this app, and the call is fire-and-forget: the caller is a
     // worker thread that must not wait on the event loop, and an exclusion
     // that lands a few milliseconds late costs at most a frame or two of
-    // buddy in the recording (docs/Gaps.md, recorded in task 8).
+    // buddy in the recording (docs/Gaps.md GAP-124).
     if let Err(e) = app.run_on_main_thread(move || {
         for label in EXCLUDED_LABELS {
             let Some(window) = handle.get_webview_window(label) else {

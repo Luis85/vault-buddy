@@ -86,27 +86,29 @@ here is deliberately only the shipped increments.
 ```
 vault-buddy/
 ├── AGENTS.md / CLAUDE.md / CONTEXT.md / README.md
-├── index.html                  # single HTML entry — all three windows load it
+├── index.html                  # single HTML entry — all four windows load it
 ├── package.json / vite.config.ts / tsconfig.json
 ├── .github/workflows/          # ci.yml, release.yml, bump-version.yml
 ├── .claude/                    # vendored superpowers skills + SessionStart hook
 ├── docs/                       # see the documentation map above
 ├── scripts/                    # bump-version.mjs, setup-linux-deps.sh, make-icon.mjs
-├── src/                        # Vue 3 frontend — ONE bundle, three window roots
+├── src/                        # Vue 3 frontend — ONE bundle, four window roots
 │   ├── main.ts                 # mounts rootFor(window label)
-│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot + rootFor() map
+│   ├── roots/                  # BuddyRoot / PanelRoot / BubbleRoot / RegionRoot + rootFor() map
 │   ├── components/             # panel views + buddy character (ActionPanel is the shell)
 │   ├── stores/                 # Pinia: vaults, capture, updates, settings, notifications
 │   ├── composables/            # settings sync, startup update check, bubble, announcements
 │   └── utils/                  # highlight, recentSearches, formatDuration
 ├── src-tauri/                  # Rust workspace: root shell crate + 5 member crates
-│   ├── tauri.conf.json         # the 3 windows, updater endpoint, version
-│   ├── capabilities/           # single default capability (all 3 windows)
+│   ├── tauri.conf.json         # the 4 windows, updater endpoint, version
+│   ├── capabilities/           # single default capability (all 4 windows)
 │   ├── src/                    # SHELL: lib.rs (builder/setup/metronome), commands.rs,
 │   │                           #   capture_commands.rs, capture_config_commands.rs,
 │   │                           #   transcription.rs, task_commands.rs, task_config_commands.rs,
 │   │                           #   search_commands.rs, mcp_commands.rs, document_commands.rs,
 │   │                           #   screen_commands.rs, screen_capture_worker.rs,
+│   │                           #   region_commands.rs (the overlay's selection lifecycle),
+│   │                           #   capture_exclusion.rs (WDA_EXCLUDEFROMCAPTURE apply/clear),
 │   │                           #   capture_guard.rs (cross-domain capture exclusion),
 │   │                           #   tray.rs, diagnostics.rs, config_lock_guard.rs, main.rs
 │   ├── core/src/               # PURE crate: discovery, uri, daily_notes, search, search_cache, tasks, services,
@@ -121,10 +123,12 @@ vault-buddy/
 │   ├── mcp/src/                # MCP server: service (7 tools), http (guards+runner),
 │   │                           #   token; real-socket integration tests in mcp/tests/
 │   ├── screen/src/             # SCREEN CAPTURE: clock (pause-aware time base),
-│   │                           #   select (timeline → frame plan), convert (BGRA→NV12),
-│   │                           #   staging (out-of-vault paths), sink (fMP4 via Media
-│   │                           #   Foundation), source (monitors/windows), frames (WGC
-│   │                           #   callback), session/ (3 threads, one clock)
+│   │                           #   select (timeline → frame plan), convert (BGRA→NV12
+│   │                           #   + the offset crop), staging (out-of-vault paths),
+│   │                           #   sink (fMP4 via Media Foundation), source
+│   │                           #   (monitors/windows/regions), region (the region
+│   │                           #   source id), exclusion (SetWindowDisplayAffinity),
+│   │                           #   frames (WGC callback), session/ (3 threads, one clock)
 │   └── transcribe/src/         # STT: decode (Symphonia), model (download+verify),
 │                               #   engine (whisper-rs FFI), lib (orchestration)
 └── tests/                      # Vitest suite (happy-dom + mockIPC, no Tauri runtime)
@@ -145,7 +149,7 @@ The Rust code is deliberately split so agents can work outside Windows:
 | `src-tauri/transcribe/` | Pure-ish crate: MP3→PCM decode (Symphonia), model registry/download, and whisper.cpp via `whisper-rs` behind the `whisper` feature. GPU inference via `whisper-vulkan` (Vulkan SDK required; Windows CI builds only). | Anywhere — CI builds *and tests* the `whisper` feature on Linux (the only place the whisper FFI regression tests run); the shipped engine builds on Windows; `whisper-vulkan` compiles only where the Vulkan SDK exists (Windows CI/release jobs enable it through the shell's `gpu` feature; local builds stay CPU-only) |
 | `src-tauri/capture/` | Audio engine (cpal, LAME). | Anywhere (Linux needs `libasound2-dev`); the WASAPI loopback block is Windows-only, compile-gated |
 | `src-tauri/mcp/` | Tauri-free crate: the embedded MCP server — rmcp service (seven tools over `core::services`), HTTP guards, streamable-HTTP runner. | Anywhere — unit + real-socket integration tests run on Linux; CI gates it explicitly (`-p vault_buddy_mcp`) because `tauri build` alone wouldn't run its tests. |
-| `src-tauri/screen/` | Screen capture engine: source enumeration, frame acquisition, BGRA→NV12 conversion, the fragmented-MP4 Media Foundation sink, the capture session, and out-of-vault staging. The Phase-1 `engine.rs` stub is **gone** — Phase 2 replaced it with a real `cfg(windows)` split. The PURE submodules (`clock`, `select`, `convert`, `staging`, `mp4_boxes`, `session::pacing`, and `source`'s id encoding/parsing) compile and test anywhere and deliberately carry this feature's correctness, because no CI runner can record a screen. `sink`, `frames`, `session::{audio,mux,windows_session}` and `source`'s enumeration/resolution are `cfg(windows)`, with `Unsupported` arms off Windows. `fmp4_spike` is Windows-only behind the non-default `fmp4-spike` feature (spec §6.4's answered spike, kept re-runnable). | Anywhere — `rust-core` gates the crate on Linux (clippy, tests, and the `llvm-cov` floor), and `windows-app` now runs its tests on Windows too (GAP-102). Note those Windows tests are still the PURE modules' — the `cfg(windows)` bodies execute in no automated test anywhere, which is why manual Windows verification is Phase 2's gate (GAP-117). |
+| `src-tauri/screen/` | Screen capture engine: source enumeration, frame acquisition, BGRA→NV12 conversion, the fragmented-MP4 Media Foundation sink, the capture session, and out-of-vault staging. The Phase-1 `engine.rs` stub is **gone** — Phase 2 replaced it with a real `cfg(windows)` split. The PURE submodules (`clock`, `select`, `convert`, `staging`, `mp4_boxes`, `region`, `session::pacing`, and `source`'s id encoding/parsing, including `region_dims`) compile and test anywhere and deliberately carry this feature's correctness, because no CI runner can record a screen. `sink`, `frames`, `session::{audio,mux,windows_session}` and `source`'s enumeration/resolution are `cfg(windows)`, with `Unsupported` arms off Windows. `fmp4_spike` is Windows-only behind the non-default `fmp4-spike` feature (spec §6.4's answered spike, kept re-runnable). `exclusion` is the odd one out: its `set_display_affinity` is `cfg(windows)` but it lives HERE, not in the shell, because `cargo clippy -p vault-buddy --target x86_64-pc-windows-msvc` cannot run on Linux at any scope (`ring` fails in cc-rs for want of `lib.exe`) while this crate cross-checks cleanly — and it takes the `HWND` as an `isize` because Tauri 2.11.5 pulls `windows` 0.61.3 while this crate uses 0.62.2. Both are in `Cargo.lock`; `HWND` has an identical layout in each but is a DISTINCT Rust type, so the integer hop is what bridges them. A direct-`HWND` signature does not compile, and "fixing" that by adding a second `windows` version to this crate is the trap. | Anywhere — `rust-core` gates the crate on Linux (clippy, tests, and the `llvm-cov` floor), and `windows-app` now runs its tests on Windows too (GAP-102). Note those Windows tests are still the PURE modules' — the `cfg(windows)` bodies execute in no automated test anywhere — the Windows-target clippy runs prove only that they TYPE-CHECK — which is why the manual checklist (`docs/superpowers/specs/2026-09-18-screen-capture-windows-verification.md`, a running document across phases) is this feature's real gate (GAP-117). |
 | `src-tauri/` (root crate) | Tauri shell: windows, tray, IPC commands, plugins. | **Windows** (release + behavior gate) — **also compiles on Linux** as a compile gate once GUI deps are installed (`npm run setup:linux`, then `npx tauri build --no-bundle`); CI runs both |
 | `src/` + `tests/` | Vue frontend + Vitest suite (happy-dom, no Tauri runtime needed) | Anywhere |
 
@@ -210,7 +214,7 @@ launched the app on the CI runner and never exited.
 
 ## Architecture overview
 
-Three OS windows, one frontend bundle, one Rust process:
+Four OS windows, one frontend bundle, one Rust process:
 
 ```
    ┌───────────────────────────── Rust shell (src-tauri/src) ─────────────────────────────┐
@@ -223,15 +227,16 @@ Three OS windows, one frontend bundle, one Rust process:
    │  task_commands.rs / search_commands.rs ── thin gates over core::tasks / core::search │
    │  mcp_commands.rs ── embedded MCP server lifecycle + settings (vault_buddy_mcp crate) │
    │  document_commands.rs ── pandoc detect/convert, import recovery, doc settings        │
+   │  region_commands.rs ── overlay show / answer / cleanup for region selection          │
    │  tray.rs ── tray icon/menu + hide_buddy chokepoint;  diagnostics.rs ── crash/marker  │
-   └──────┬───────────────────────────┬───────────────────────────┬───────────────────────┘
-          │ IPC commands + events     │                           │
-   ┌──────┴──────┐             ┌──────┴──────┐             ┌──────┴──────┐
-   │ main (88²)  │             │ panel       │             │ bubble      │
-   │ BuddyRoot   │             │ PanelRoot   │             │ BubbleRoot  │
-   │ character,  │             │ ActionPanel │             │ greeting /  │
-   │ drag, dots  │             │ all views   │             │ announce    │
-   └─────────────┘             └─────────────┘             └─────────────┘
+   └──────┬──────────────────┬──────────────────┬──────────────────┬──────────────────────┘
+          │                  │                  │                  │  IPC commands + events
+   ┌──────┴──────┐    ┌──────┴──────┐    ┌──────┴──────┐    ┌──────┴──────┐
+   │ main (88²)  │    │ panel       │    │ bubble      │    │ overlay     │
+   │ BuddyRoot   │    │ PanelRoot   │    │ BubbleRoot  │    │ RegionRoot  │
+   │ character,  │    │ ActionPanel │    │ greeting /  │    │ rubber band │
+   │ drag, dots  │    │ all views   │    │ announce    │    │ (1 monitor) │
+   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
       each webview = own Pinia; cross-window sync = Tauri events + localStorage `storage`
 
    pure logic lives below the shell:
@@ -258,8 +263,10 @@ Three OS windows, one frontend bundle, one Rust process:
 
 ### The IPC surface
 
-All 79 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
-Keep this table in sync when adding/removing commands.
+All 81 commands, registered in `src-tauri/src/lib.rs` (`generate_handler`).
+Keep this table in sync when adding/removing commands — and COUNT the
+`generate_handler![…]` list rather than adding to the previous number: this
+sentence has been wrong twice (73 when it was 79, then 79 when it was 81).
 
 | Defined in | Commands |
 | --- | --- |
@@ -273,7 +280,8 @@ Keep this table in sync when adding/removing commands.
 | `mcp_commands.rs` | `get_mcp_config`, `set_mcp_config` (async), `regenerate_mcp_token` (async — both join the server thread; that wait must not sit on the main thread) |
 | `document_commands.rs` | `detect_pandoc` *(async)*, `convert_document` *(async — spawns the pandoc child off the main thread)*, `get_documents_config`, `set_documents_config` *(async — now also carries the `document_date_folders` layout toggle, the `document_extract_images` images/text-only toggle, and the additive `document_extra_frontmatter`/`document_body_template` note-template fields)*, `set_pandoc_path` *(async)*, `begin_document_import` (stash a drag-dropped path + show the panel), `take_pending_import` (one-shot drain the stash), `take_add_document_request` (one-shot drain of the buddy-menu "Import document…" flag — armed by the non-command `begin_add_document`, which the lib.rs menu handler calls; routes the panel to the vault-first import picker), `open_imported_document` (launch a just-imported note in Obsidian — the success toast's "Open" action; read-only, `uri::launch`-logged) |
 | `model_commands.rs` | `list_transcription_models`, `delete_transcription_model` *(async — the delete's bounded retry must not sit on the main thread)* |
-| `screen_commands.rs` | The screen-capture phase-2 surface (the nine later-phase commands — region select, the editor, the config setters — are deliberately absent). `list_capture_sources` *(async — WGC/WinRT enumeration takes hundreds of ms, GAP-22's reasoning for `list_audio_devices`; degrades to an empty list rather than an error)*, `start_screen_capture` *(async — source re-resolve, cpal endpoint opening, sink creation and staging-directory I/O all block, and the start waits on a 15 s ready handshake)*, `stop_screen_capture` *(async — the wait is bounded at 30 s of mux teardown + fMP4 finalize + the publish rename, wider than audio's 15 s; returns typed `stillSaving` on expiry, mirroring `stop_capture`)*, `pause_screen_capture`, `resume_screen_capture`, `screen_capture_status` *(all three sync: each takes the reservation mutex for O(1) work and sends on an unbounded channel, so none can block the main thread — the same posture as the audio siblings)*. Mutual exclusion with the audio domain lives in `CaptureGuard` (spec §7.3), claimed before the reservation and freed from exactly one chokepoint, `clear_active_screen` — both facts pinned by structural tests |
+| `screen_commands.rs` | The screen-capture CAPTURE-lifecycle surface (the later-phase commands — the editor and the config setters — are deliberately absent; region select landed in phase 3, in its own `region_commands.rs` below). `list_capture_sources` *(async — WGC/WinRT enumeration takes hundreds of ms, GAP-22's reasoning for `list_audio_devices`; degrades to an empty list rather than an error)*, `start_screen_capture` *(async — source re-resolve, cpal endpoint opening, sink creation and staging-directory I/O all block, and the start waits on a 15 s ready handshake)*, `stop_screen_capture` *(async — the wait is bounded at 30 s of mux teardown + fMP4 finalize + the publish rename, wider than audio's 15 s; returns typed `stillSaving` on expiry, mirroring `stop_capture`)*, `pause_screen_capture`, `resume_screen_capture`, `screen_capture_status` *(all three sync: each takes the reservation mutex for O(1) work and sends on an unbounded channel, so none can block the main thread — the same posture as the audio siblings)*. Mutual exclusion with the audio domain lives in `CaptureGuard` (spec §7.3), claimed before the reservation and freed from exactly one chokepoint, `clear_active_screen` — both facts pinned by structural tests |
+| `region_commands.rs` | The overlay's selection lifecycle (spec §5.2), split out of `screen_commands.rs` because it is a WINDOW-lifecycle concern — it touches no `CaptureGuard`, no `ScreenCaptureState` and no session. `select_capture_region` *(async — it waits for a human to draw a rectangle; on the main thread that would freeze the very event loop that dispatches the overlay's own pointer events. Bounded at 120 s so a webview that never answers cannot strand a full-screen invisible always-on-top window, and its overlay-show handshake is bounded at 5 s separately)*, `resolve_region_selection` *(sync — O(1) under a mutex plus one unbounded-channel send, the posture of the screen domain's own sync siblings)* |
 
 `get_autostart`/`set_autostart` wrap launch-at-login, OS-owned state behind
 `tauri-plugin-autostart`. Tray + buddy context menu live in `tray.rs`; menu
@@ -281,8 +289,8 @@ item events are handled in `lib.rs`.
 
 ### Events (Rust → webviews)
 
-All emitted app-wide (`app.emit`); listeners noted are the windows that
-actually subscribe.
+All emitted app-wide (`app.emit`) with ONE exception, `region:begin`, noted
+below; listeners noted are the windows that actually subscribe.
 
 | Event | Meaning | Listened to by |
 | --- | --- | --- |
@@ -302,6 +310,7 @@ actually subscribe.
 | `screen:failed` | `{message, retainedPath}` — `retainedPath` is the `.part` a stop that failed AFTER writing real footage deliberately left behind, carried as data so the UI can offer that (still playable) file | screenCapture store |
 | `screen:warning` | `{message}` — spec §14: a vanished source or audio device warns, the capture finalizes cleanly. Toasted only when it arrives outside a live capture | screenCapture store |
 | `screen:frames` | `{fps, dropped}` ~2 Hz, advisory & lossy (the audio domain's `capture:level` posture) | screenCapture store → `ScreenCaptureBar`'s dropped chip (`dropped > 0` only; `fps` stays log-only, a rate is not an anomaly) |
+| `region:begin` | The overlay is about to be shown for a NEW selection. **The one event emitted to a single window** (`emit_to("overlay", …)`, not `app.emit`): it re-arms a one-shot latch that exists in exactly one webview and means nothing anywhere else. Emitted from INSIDE the same main-thread closure as `set_size`, immediately BEFORE `show()` — a hidden window takes no pointer input and the webview's task queue is FIFO, so the re-arm cannot lose the race to the user's first pointerdown. A failed emit is a hard error, not a `let _ =`: an un-armed overlay IS a full-screen scrim that ignores every click and Escape for the whole 120 s wait | RegionRoot (overlay) |
 | `mcp:status` | MCP server state `{state, port?, message?}` on every transition | McpSettings (panel) |
 | `mcp:write` | An MCP client's successful vault write `{kind, title, vaultName}` | useBuddyAnnouncements (buddy window ONLY — exactly-once) |
 
@@ -346,7 +355,7 @@ actually subscribe.
 
 ## The window system (most invariant-heavy area)
 
-Three separate always-on-top transparent windows, so the buddy window never
+Four separate always-on-top transparent windows, so the buddy window never
 resizes. The old design was one window that grew from 88×88 to hold the
 panel; WebView2 repaints its stale last frame at the new bounds for a frame
 on resize, flashing the buddy to a corner. Splitting the concerns removed the
@@ -369,9 +378,34 @@ resize entirely:
   off-screen; the mixed-DPI cross-monitor corner of that clamp is a tracked
   gap), created hidden.
 - **`bubble`** — the greeting speech bubble (260×150), created hidden.
+- **`overlay`** — the region-selection surface (spec §5.2), created hidden.
+  Sized and positioned over ONE monitor **while hidden**, then shown, like
+  `panel` and `bubble` and for the same stale-frame reason. Covering exactly
+  one monitor is load-bearing, not a simplification: it makes the webview's
+  viewport origin the monitor's origin, which is the only arrangement
+  `core::screen_geometry::to_physical`'s single scale factor describes
+  correctly (its module doc says why a mixed-DPI virtual desktop cannot be),
+  so the overlay's coordinates are monitor-local by construction rather than
+  by a subtraction somebody has to remember. The webview's own
+  `devicePixelRatio` is carried across but never used in the arithmetic — the
+  monitor's `scale_factor` is the single authority, and a disagreement is
+  LOGGED so a mixed-DPI mis-scale is visible in a bug report instead of
+  silently halving a rectangle. `select_capture_region` holds `DIALOG_ACTIVE`
+  for the selection's whole duration — the overlay steals focus and the
+  panel's focus-out check would otherwise hide the picker mid-selection — and
+  every exit funnels through one cleanup function,
+  `finish_region_selection` (hide the overlay, drop the answer slot, clear
+  `DIALOG_ACTIVE`, refocus the panel), pinned by a structural test in the
+  `clear_active_screen` shape. The wait is bounded at 120 s so a webview that
+  never answers cannot strand a full-screen invisible always-on-top window.
+  The overlay is hidden and REUSED, never reloaded, so its component state
+  survives between selections — which is why `region:begin` exists (see the
+  Events table).
 
-`panel` and `bubble` are *positioned while hidden, then shown* — a moved-only
-window has no stale-frame flash. Placement is one pure function,
+`panel`, `bubble` and `overlay` are *positioned while hidden, then shown* — a
+moved-only window has no stale-frame flash. (The overlay is also RESIZED while
+hidden, to its target monitor's full bounds, which is the same rule: the panel
+is only ever resized hidden for exactly this reason.) Placement is one pure function,
 `core::companion_placement::place_beside(buddy, work_area, w, h, prefer, vmode)
 -> (Point, Anchor)` (unit-tested on Linux): it sits the window on the `prefer`
 side of the buddy, flips to the other side when that overflows the screen edge,
@@ -467,6 +501,15 @@ Invariants:
   import's `Converting…`/toast state, which render in the panel window) out
   from under the user. Unlike the timed pin it's a plain bool (a dialog stays
   open arbitrarily long), cleared in the frontend's `finally`; still only-hide.
+  **It now has TWO independent drivers** — `withDialogSuppressed` and
+  `region_commands::select_capture_region`, which holds it for the overlay's
+  whole selection — and a bool cannot count. Each driver pairs its own set and
+  clear at one scope, so neither can leave the flag stuck on; but the two
+  OVERLAP badly, because a bool has no depth: a native dialog opened DURING a
+  region selection clears the suppression when it closes, while the selection
+  is still live. It needs a counter; that is docs/Gaps.md GAP-128, deliberately
+  out of scope for phase 3 because it touches `lib.rs`'s shared flag and every
+  existing caller.
 - Buddy drags go through the `start_buddy_drag` command, never the raw
   `startDragging()` JS API. Being synchronous it runs on the main thread,
   where it re-checks the **logical (swap-aware) primary button** via
@@ -516,7 +559,15 @@ Invariants:
   from `tauri.conf.json`, because the overlay was once added to the config
   and to none of those lists: quit then failed WebView2's
   `Chrome_WidgetWin_0` unregister every time, and hide-to-tray would have
-  stranded a full-monitor always-on-top window with the buddy gone. The quit
+  stranded a full-monitor always-on-top window with the buddy gone. Read
+  "the ONE list" as covering the hide and destroy walks only: there is a
+  FOURTH window-label list, `capture_exclusion::EXCLUDED_LABELS`, and it is a
+  deliberate sibling rather than drift. It is semantically its own set (a
+  later window could legitimately need destroying on quit without needing to
+  be hidden from a recording, or the reverse), and it is pinned to
+  `tauri.conf.json` by its own pair of tests in both directions — every
+  declared window is excluded, and no excluded label names a window that does
+  not exist — so the two lists cannot silently diverge. The quit
   path carries the same pair: its `shutdown-finalize` worker finalizes the
   audio recording AND the screen capture before `finish_quit`, so neither can
   be stranded by an exit.
@@ -761,13 +812,13 @@ found the failure it prevents:
   (documented in `docs/DEVELOPMENT.md`); parsing is per-field defensive so
   one malformed value can never flip a vault's mode.
 
-### Screen capture (phase 2) — `src-tauri/screen/` + `screen_commands.rs` / `screen_capture_worker.rs` + `screenCapture` store
+### Screen capture (phases 2–3) — `src-tauri/screen/` + `screen_commands.rs` / `screen_capture_worker.rs` / `region_commands.rs` / `capture_exclusion.rs` + `screenCapture` store
 
-The second capture provider: record a chosen monitor or window, with any
-number of selected audio devices mixed into one stereo track, into a
-crash-survivable file. Spec:
+The second capture provider: record a chosen monitor, window or REGION of a
+monitor, with any number of selected audio devices mixed into one stereo
+track, into a crash-survivable file. Spec:
 `docs/superpowers/specs/2026-09-18-screen-capture-intake-design.md`
-(phasing in §13). **Phase 2 writes NOTHING into a vault** — a staged capture
+(phasing in §13). **Phases 2–3 write NOTHING into a vault** — a staged capture
 lives entirely outside every vault and the ninth sanctioned vault write does
 not exist yet; it arrives in Phase 5 along with the editor's export and the
 companion note. Do not add one here.
@@ -891,27 +942,112 @@ companion note. Do not add one here.
   The audio domain shares the tail ordering but has no self-finalize path,
   which is why this was reachable only here.
 - **Our own windows are filtered out of the picker by TITLE, not HWND**
-  (spec §7.2 says HWND). Inert today — all three windows are
+  (spec §7.2 says HWND). Inert today — all four windows are
   `skipTaskbar: true`, which tao implements as `WS_EX_TOOLWINDOW`, and
   `windows-capture`'s `Window::is_valid()` already rejects those, so the
   title filter never fires. It becomes load-bearing in Phase 4, whose spec'd
   `editor` window is `skipTaskbar: false`: do not assume an HWND filter
-  exists (GAP-116).
-- **Four Phase-1 modules have no production caller yet** — `core::timeline`
-  and `screen::select` (Phases 4/5), `core::screen_geometry` (Phase 3's
-  region select) and `core::screen_note` (Phase 5's vault write), plus
-  `screen::mp4_boxes`, reachable only from the feature-gated `fmp4_spike`.
-  All are unit-tested and count toward the coverage floor; none is dead code
-  to delete. Five of the seven `screen_*` `vault_config` fields are likewise
-  parsed, serialized and merge-preserved but read by nothing until Phase 6.
+  exists (GAP-116). Phase 3's `WDA_EXCLUDEFROMCAPTURE` does NOT supersede
+  this: the affinity keeps our windows out of a recording's PIXELS, while
+  this filter is about our windows being offered as SOURCES. Two rules, two
+  spec sections, neither closing the other.
+- **Region capture is an ID, not a parameter (phase 3).** A region is a
+  `SourceId::Region { monitor, rect }` — `region:<display>,<x>,<y>,<w>,<h>`,
+  PHYSICAL pixels relative to that monitor's own origin — so
+  `start_screen_capture` took NO new argument: the picker hands back a source
+  id like any other and `source::resolve`'s Region arm turns it into a crop.
+  The id crosses IPC as untrusted text and comes back, so `region::parse_payload`
+  demands a canonical round-trip (`encode_payload(parsed) == input`): `"+1"`,
+  `"01"` and `" 1"` differ in whether `u32::from_str` accepts them in ways
+  nobody remembers, and a lenient parse that resolved to *some* rectangle
+  would record something the user never drew. The payload is comma-separated
+  because `SourceId::parse` splits on the FIRST `:` and rejects a second one.
+  **`clamp_to_frame` runs TWICE, deliberately**: once in
+  `region_commands::region_from_pick` at selection time, where a rectangle off
+  the screen is a friendly refusal while the user is still looking at the
+  picker; and again in `source::resolve` at capture start, where it is the
+  correctness gate — the resolution can change in between, and only the second
+  one can be trusted. The geometry that survives it is derived by the pure
+  `source::region_dims`, extracted precisely because an inlined assignment was
+  pinned by nothing: a transposed crop axis or a swapped width/height captures
+  the wrong rectangle in silence, and the tests for it are deliberately
+  ASYMMETRIC, since a square fixture cannot distinguish a swap.
+- **The crop is a CPU crop, at the BGRA stage.** `convert::bgra_crop_to_nv12`
+  is the one implementation; the whole-frame path is literally its
+  zero-origin case (pinned by a test asserting the two agree byte-for-byte),
+  so a region and a full screen cannot drift apart. The crop origin is
+  deliberately NOT rounded to an even pixel: chroma is averaged from the
+  full-colour BGRA source *inside* the crop, so an odd origin reads the right
+  pixels rather than needing the destination to be re-aligned. Only the
+  output DIMENSIONS are forced even, which the encoder requires.
+  `pacing::usable_frame` measures the arriving frame against the crop's FAR
+  edge (origin + size), not against the output size — a region makes those
+  two different numbers for the first time, and `pacing::required_dims`
+  (saturating, so a wrapped sum can never report a requirement SMALLER than
+  the frame it just rejected) feeds the zero-video diagnostic so the message
+  the user actually sees is true too. That message is the one that REPLACES
+  an unactionable `HRESULT`; regions made it arithmetically false until it
+  was threaded through.
+- **`WDA_EXCLUDEFROMCAPTURE` keeps our own windows out of the FOOTAGE (spec
+  §5.3).** `capture_exclusion::apply` sets the affinity on every label in
+  `EXCLUDED_LABELS` (config-derived, see the window-system section) from ONE
+  place, `screen_capture_worker`'s `start_screen_capture_blocking`, before the
+  session opens; `capture_exclusion::clear` lifts it from ONE place,
+  `screen_commands::clear_active_screen` — the chokepoint every teardown
+  already funnels through, including all of the start path's early returns.
+  Both the count AND the enclosing function are pinned by a structural test,
+  because moving the apply into `start_screen_capture`'s async tail, or the
+  clear into `stop_screen_capture`, both leak permanently under §14's
+  self-finalize and both looked fine to a file-granular assertion. The
+  direction each wrapper carries is pinned too: `apply`/`clear` read
+  `EXCLUDE`/`INCLUDE` rather than bare `true`/`false`, and a test asserts
+  both the values and their placement, because swapping which wrapper carries
+  which constant is the whole failure this code exists to prevent and it is
+  one token. **Why a leak is invisible from inside the app:** the affinity
+  makes a window absent from OTHER applications' captures while remaining
+  perfectly visible to the user, so a clear that never runs shows no symptom
+  here — it shows up as Vault Buddy silently missing from a later Teams share
+  or OBS recording, with no error and no log line and no plausible bug
+  report. It is bounded only by the fact that `WDA_*` is per-HWND and dies
+  with the window, so a restart always clears it. The apply is
+  fire-and-forget on the main thread (a worker must not block the event
+  loop), so the first frame or two of a capture can still contain our UI —
+  docs/Gaps.md GAP-124. Windows 10 before 2004 has no
+  `WDA_EXCLUDEFROMCAPTURE`: the call logs a warning and the capture proceeds
+  with the buddy in frame, by design.
+- **Three Phase-1 modules have no production caller yet** — `core::timeline`
+  and `screen::select` (Phases 4/5) and `core::screen_note` (Phase 5's vault
+  write), plus `screen::mp4_boxes`, reachable only from the feature-gated
+  `fmp4_spike`. `core::screen_geometry` is no longer among them: phase 3 gave
+  it two production callers, `region_commands::region_from_pick`
+  (`to_physical` + `clamp_to_frame`) and `source::resolve`'s Region arm
+  (`clamp_to_frame`, via `region_dims`). All are unit-tested and count toward
+  the coverage floor; none is dead code to delete. Five of the seven
+  `screen_*` `vault_config` fields are likewise parsed, serialized and
+  merge-preserved but read by nothing until Phase 6.
 
 - **Frontend.** `RecordMode.vue`'s chooser → `ScreenSourcePicker.vue`
-  (Screen / Window tabs, `ScreenAudioPicker.vue` for the multi-select
-  devices) on the `screenCapture` panel view; the `screenCapture` Pinia
+  (Screen / Window / Region tabs — the Region tab is the presentational
+  `ScreenRegionPicker.vue`, which lists the monitors as *targets* for
+  `select_capture_region` and renders the chosen region as a row;
+  `ScreenAudioPicker.vue` for the multi-select devices) on the
+  `screenCapture` panel view; the `screenCapture` Pinia
   store mirrors Rust state from the seven `screen:*` events and re-reads
-  `screen_capture_status` rather than trusting event arrival order. Three
-  picker surfaces deliberately fall short of the spec in this phase
-  (GAP-111). `ScreenCaptureBar.vue` renders the store's live state on the
+  `screen_capture_status` rather than trusting event arrival order. One
+  picker surface still deliberately falls short of the spec — the per-device
+  audio level bars, which need a Rust-side emit first (GAP-111 item 1).
+  A selected region's MONITOR is snapshotted with the region
+  (`regionMonitorId`), never read back from the highlighted target row: the
+  two diverge on any click, and a target-keyed label would name a different
+  monitor than the Rust string the capture bar and the staging sidecar render
+  (`src/utils/regionLabel.ts`), while a target-keyed drop rule would both
+  clear a valid region when some OTHER monitor goes and keep one whose own
+  monitor went — the latter a §7.2 vanished-source violation. Start is gated
+  on a region selection in flight as well as on a start in flight, and the
+  select button on both: the overlay does NOT make the panel unclickable
+  (`select_capture_region` sets `DIALOG_ACTIVE`, so the panel does not even
+  auto-hide), so on a second monitor the user can press Start while still
+  drawing. `ScreenCaptureBar.vue` renders the store's live state on the
   panel's LIST view beside `RecordingBar` (the two domains cannot run at
   once, so it is a sibling, never a stack) — elapsed via the store's own
   `elapsedMs` so the paused-time arithmetic has ONE implementation, the
@@ -2274,11 +2410,19 @@ docs/DEVELOPMENT.md § Logs & crash reporting.
 Each window loads the same bundle and mounts a different root by its label:
 `main.ts` reads `getCurrentWindow().label` and `rootFor(label)`
 (`src/roots/index.ts`, a pure map, unit-tested) picks the component —
-`main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`, any
+`main` → `BuddyRoot`, `panel` → `PanelRoot`, `bubble` → `BubbleRoot`,
+`overlay` → `RegionRoot`, any
 unexpected label → `BuddyRoot`. The roots are thin: `BuddyRoot` hosts
 `CompanionCharacter` and invokes `toggle_panel`/`close_panel`; `PanelRoot`
 hosts `ActionPanel` and closes via `close_panel` on Escape/gutter-click;
-`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss. Each
+`BubbleRoot` hosts the greeting and calls `close_bubble` on dismiss;
+`RegionRoot` paints the rubber band and answers with
+`resolve_region_selection` (a rectangle, or `null` for Escape / a click with
+no drag / a degenerate box). **`RegionRoot` installs no store** — it is the
+one root that mirrors no Rust state, which is why it is the one root that
+needs no per-window `init()` wiring; the only event it listens to is
+`region:begin`, and that re-arms its own one-shot latch rather than carrying
+state. Each
 window is its own webview with its own Pinia stores, so any store that mirrors
 Rust state must be wired up per window: **both** `BuddyRoot` and `PanelRoot`
 call `capture.init()` (or the panel never sees `capture:*` events — dead level

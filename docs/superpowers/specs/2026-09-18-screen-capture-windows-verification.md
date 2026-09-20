@@ -1,17 +1,27 @@
-# Screen Capture — Windows Verification Checklist (Phase 2)
+# Screen Capture — Windows Verification Checklist
 
-Manual end-to-end verification on a real Windows machine. This is **Phase
-2's gate**, not a formality: no CI runner can record a screen, so every
-claim below is one the automated gates structurally cannot make. `rust-core`
-proves the pure modules on Linux and `windows-app` now compiles and runs the
-crate on Windows (GAP-102), but the `cfg(windows)` arms of `sink.rs`,
-`source.rs` and `session/windows_session.rs` are exercised by nothing
-automated anywhere — they are exercised **here**.
+Manual end-to-end verification on a real Windows machine. **A running
+document across phases**, not one phase's gate: each phase appends its own
+table of rows and carries forward the rows earlier phases left open, so the
+file always shows the whole verified surface of the feature rather than the
+last increment's slice. No CI runner can record a screen, so every claim
+below is one the automated gates structurally cannot make. `rust-core` proves
+the pure modules on Linux and `windows-app` compiles and runs the crate on
+Windows (GAP-102), but the `cfg(windows)` arms of `sink.rs`, `source.rs`,
+`session/windows_session.rs`, `exclusion.rs` and the shell's
+`capture_exclusion.rs` are exercised by nothing automated anywhere
+(docs/Gaps.md GAP-117) — they are exercised **here**.
+
+**Manual Windows re-testing is currently DEFERRED by the user until after
+the final phase.** Rows are written as they are earned; nobody is being asked
+to run them yet. A row whose *Result* is empty has not been run, which is not
+the same as a row that failed.
 
 Spec: [2026-09-18-screen-capture-intake-design.md](2026-09-18-screen-capture-intake-design.md)
-(§6 the pipeline, §6.2/6.3 clock and pause, §6.4 fragmented MP4, §6.5 audio,
-§7.3 during capture, §10 staging, §13 phasing, §14 error handling,
-§15 testing).
+(§5.2 the region overlay, §5.3 excluding our own windows, §6 the pipeline,
+§6.2/6.3 clock and pause, §6.4 fragmented MP4, §6.5 audio, §7.1/7.2 the
+picker, §7.3 during capture, §10 staging, §11 the IPC surface, §13 phasing,
+§14 error handling, §15 testing).
 
 Run against a build of `claude/screen-capture-intake-g0j49q`
 (`npx tauri build --features gpu`, or `npm run test-build` for a dev run).
@@ -56,7 +66,33 @@ or Task Manager makes it visible), and the wall-clock time Stop took to
 return for each capture (the stop wait is bounded at 30 s and reports
 `stillSaving` on expiry).
 
-## Known Phase-2 absences (do not file these as failures)
+Rows **2** (the mic+loopback mix), **5** (whether a warning surfaced and
+whether the file holds everything up to the close), **7**'s badge half (the
+buddy red/amber dot and the vault-row dot) and **9** (the still-screen
+heartbeat, now unblocked by `d5ed392` and the sharpest test of that fix)
+remain OPEN and are carried forward, not closed. Row **10** stays deferred to
+Phase 6.
+
+## Covered by Phase 3
+
+The same measurement discipline applies, and applies hardest here: rows 12
+and 13 are the phase gate, and a DPI bug shows up as an exact numeric factor.
+**Write the numbers in.** A tick in row 12 hides precisely the failure row 12
+exists to find.
+
+| # | Check | Steps | Result |
+| --- | --- | --- | --- |
+| 11 | **Region on the primary monitor at 100%** | Capture knowledge → *Record screen* → **Region** tab → pick the primary screen → *Select region…* → drag a rectangle over something with readable text → Start → record ~20 s → Stop. Play the staged `.mp4`. **Record the file's pixel dimensions** and whether the recorded content is exactly the rectangle drawn — check all four edges, not just that "it looks right". | |
+| 12 | **Region at 125 / 150 / 200% display scaling** | Repeat row 11 at each scale (Settings → System → Display → Scale), relaunching the app after each change. **Record, per scale: the rectangle drawn (approximate logical size), the file's actual pixel dimensions, and the ratio between them.** The expected ratio is the scale factor — this row IS the phase gate. An off-by-scale bug shows here as a file that is exactly 1/1.5 or 1/2 of the expected size, or a recording offset from the rectangle by the origin times the scale. | |
+| 13 | **Region on a SECONDARY monitor, at a different scale from the primary** | With two monitors at different scales, select a region on the non-primary one. **Record which monitor the overlay appeared on, and whether the recorded content matches the rectangle.** This is the mixed-DPI case `core::screen_geometry`'s module doc warns about; if any row fails, it will be this one. | |
+| 14 | **The overlay's own behaviour** | Open *Select region…* and, in separate attempts: (a) press Escape; (b) click once without dragging; (c) drag a tiny box (< 8 px); (d) drag from bottom-right to top-left; (e) complete one selection, then open *Select region…* a SECOND time in the same app run and draw another. **Record for each:** whether the overlay closed, whether the panel came back with focus, and whether the picker shows a region. Expected: (a)(b)(c) no region, (d) the same region as an equivalent top-left-to-bottom-right drag, (e) a normal second selection — (e) is the `region:begin` re-arm, which no automated gate on any platform can reach. | |
+| 15 | **The panel does not auto-hide during a selection** | With the panel open, start a region selection and leave the overlay up for ~10 s before dragging. **Record whether the panel is still open underneath afterwards.** This is `DIALOG_ACTIVE`; a failure here loses the picker's state mid-selection. | |
+| 16 | **`WDA_EXCLUDEFROMCAPTURE`** (spec §5.3) | Start any screen capture with the buddy and the panel plainly in frame. **Record whether they are visible to you during the capture (they must be) and whether they appear in the played-back file (they must not).** Note the Windows build number. | |
+| 17 | **The exclusion is lifted afterwards** | After the capture from row 16 stops, record the same screen with a **different** tool (Xbox Game Bar `Win+Alt+R`, or a Teams screen share). **Record whether Vault Buddy's windows are visible in THAT recording.** They must be. A failure here is the leaked-exclusion case the structural test exists to prevent, and is invisible from inside the app — nothing looks wrong to the user, because the buddy is still on their own screen. | |
+| 18 | **Resolution changed between selecting and starting** | Select a region near the right or bottom edge, then change the display resolution to something smaller **before** pressing Start. **Record the message.** Expected: a refusal naming the source as gone, not a started capture. | |
+
+
+## Known absences (do not file these as failures)
 
 - **No live `fps` readout.** `ScreenCaptureBar.vue` (plan Task 10) landed —
   it renders elapsed, paused state, the source title, warnings and the
@@ -71,14 +107,20 @@ return for each capture (the stop wait is bounded at 30 s and reports
   glance, not the measurement. The `fps` value the `screen:frames` event
   carries is deliberately **not** shown at all: a rate is not an anomaly,
   and spec §17.3's signal is the drop count.
-- **Three deliberate picker deviations from the spec** — no per-device audio
-  level bars (§7.2), no Region tab, and the "Screen or window" chooser hint
-  where §7.1 says "Screen, window, or region". Each is recorded and reasoned
-  in docs/Gaps.md **GAP-111**; Phase 3 restores them deliberately.
-- **Vault Buddy's own windows DO appear in a Phase 2 recording.** This is
-  expected, not a bug: `WDA_EXCLUDEFROMCAPTURE` (spec §5.3) is Phase 3. If
-  the buddy is in frame in a recording made here, that is the documented
-  state.
+- **One deliberate picker deviation from the spec remains** — the per-device
+  audio level bars (§7.2). Nothing emits a per-device level outside a running
+  audio recording, so restoring them is a Rust change first. The other two
+  (no Region tab, and the "Screen or window" chooser hint) were closed by
+  Phase 3. All three are recorded and reasoned in docs/Gaps.md **GAP-111**.
+- **Vault Buddy's own windows are now EXCLUDED from a recording** (spec
+  §5.3, Phase 3 — row 16). A build older than Windows 10 2004 has no
+  `WDA_EXCLUDEFROMCAPTURE`: there the call logs a warning and the capture
+  records with the buddy in frame, by design, and that is the documented
+  state rather than a failure. On any supported build, the buddy appearing in
+  the footage IS a failure — file it against row 16. Note that the exclusion
+  is applied fire-and-forget, so the first frame or two of a capture may
+  still contain our windows (docs/Gaps.md GAP-124); that is known, and is not
+  what row 16 is asking about.
 - **No staging recovery, and nothing collects finished captures either.** A
   capture killed at item 8 leaves its `.part` behind permanently, and every
   capture that stops CLEANLY leaves a `<base>.mp4` + `<base>.json` in the
@@ -86,21 +128,23 @@ return for each capture (the stop wait is bounded at 30 s and reports
   sweeps either until Phase 5's `run_screen_recovery` / Phase 6's "Clear
   staged captures" (docs/Gaps.md GAP-115). Clean the staging directory by
   hand between verification runs, and expect it to grow fast at 4K.
+- **There is no keyboard-only way to draw a region** (docs/Gaps.md GAP-127).
+  The overlay reads pointer events only; Escape cancels, but nothing selects.
+  Row 14 is a pointer test by necessity, not by preference.
 - **The stop notification says "Screen capture ready", not "saved", on
-  purpose.** Phase 2 writes nothing into any vault. If you go looking in
+  purpose.** Phases 2–3 write nothing into any vault. If you go looking in
   Obsidian for a captured file you will not find one — the file is in
   `%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures`. That is the
   documented state, not a failure.
 
-## NOT reachable in Phase 2
+## NOT reachable yet
 
 Do not attempt these; they have nothing behind them yet. Listed so an
-untested item is never mistaken for a passing one.
+untested item is never mistaken for a passing one. A row leaves this table
+only into a phase's own table above, never into a tick here.
 
 | Item | Arrives in |
 | --- | --- |
-| Region capture; region accuracy across mixed-DPI monitors | Phase 3 |
-| `WDA_EXCLUDEFROMCAPTURE` — excluding our own windows from the recording | Phase 3 |
 | The editor window: preview, timeline edits, undo/redo, sidecar persistence | Phase 4 |
 | Export exactness (cut boundaries, reordered segments) | Phase 5 |
 | The untouched-timeline fast path (remux rather than re-encode) | Phase 5 |
