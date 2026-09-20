@@ -65,6 +65,99 @@ pub fn reserve_final_screen(dir: &Path, base: &str) -> (PathBuf, PathBuf) {
     (names.final_mp4, names.note_md)
 }
 
+/// Move `from` onto `to` without ever replacing it, ACROSS VOLUMES.
+///
+/// **This is the one way the screen domain differs from the audio one, and
+/// it is not a refinement.** Every other sanctioned vault write finalizes a
+/// temp that already sits in the destination DIRECTORY, so
+/// `rename_noreplace` — a `hard_link` + `remove_file`, falling back to
+/// `MoveFileExW` with flags `0` — is exactly right and its own doc says so
+/// ("same-directory move (all callers), no copy fallback needed"). An export
+/// is the first write in this app whose source and destination are on
+/// different filesystems BY DESIGN: the temp is staged under
+/// `%LOCALAPPDATA%` (spec §10 — an unapproved capture is not knowledge and
+/// must not sit in a vault) while the vault is wherever the user keeps it.
+///
+/// A cross-volume `hard_link` reports `CrossesDevices` (EXDEV / os error 18;
+/// `ERROR_NOT_SAME_DEVICE` on Windows), which `hard_link_error_is_decisive`
+/// correctly treats as "try the fallback" — but that fallback is a
+/// non-replacing MOVE, which fails across volumes too. Measured here, on two
+/// real filesystems: both `hard_link` and `rename` return EXDEV and the
+/// destination is never created. Without this function a user whose vault
+/// lives on any drive other than the one holding `%LOCALAPPDATA%` could
+/// never save a capture at all — every export would fail at the last step,
+/// permanently, with an "Invalid cross-device link" the UI would have to
+/// show them.
+///
+/// The copy is EXCLUSIVE-CREATE, so it is never-clobber by construction
+/// rather than by a preceding `exists()` check: a destination that appeared
+/// since the reservation fails with `AlreadyExists`, which is precisely the
+/// signal `commit_screen_capture`'s suffix retry keys on. A copy that fails
+/// part-way removes its own partial destination — leaving it would both
+/// litter the vault and make every retry read as a fresh collision.
+pub(crate) fn move_or_copy_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    move_or_copy_with(from, to, rename_noreplace)
+}
+
+/// The decision, with the move injected so BOTH arms are testable on one
+/// filesystem. A cross-device failure cannot be provoked in CI (the runner
+/// has one volume), and a fallback that is only reachable on a machine
+/// nobody tests on is a fallback nobody knows works.
+fn move_or_copy_with(
+    from: &Path,
+    to: &Path,
+    mv: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match mv(from, to) {
+        Ok(()) => Ok(()),
+        // A taken destination is the collision signal, not a reason to
+        // copy: copying here would be the clobber this whole module exists
+        // to make impossible.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
+        // Anything else is "this move could not happen HERE" — most often a
+        // volume boundary. There is deliberately NO `to.exists()` arm in
+        // front of this: the copy's own `create_new` is the arbiter, the
+        // same doctrine `commit_screen_capture` states one function down
+        // ("THE MOVE IS THE ARBITER, not the `exists()` check"). An
+        // `exists()` guard here would be both racy AND — because it fires
+        // first — able to hide a copy that had stopped being
+        // never-clobber, which is exactly what it did: swapping
+        // `create_new` for a truncating open left the whole suite green.
+        Err(_) => copy_noreplace(from, to),
+    }
+}
+
+/// Exclusive-create `to`, stream `from` into it, fsync, then drop `from`.
+///
+/// A failed `remove_file` of the source is a WARNING, exactly as in
+/// `rename_noreplace`: the bytes are already safely at `to`, so returning an
+/// error here would send the suffix-retry loop round again against a
+/// destination that now exists — a fresh "collision" on every attempt.
+fn copy_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut source = std::fs::File::open(from)?;
+    let mut dest = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)?;
+    if let Err(e) = std::io::copy(&mut source, &mut dest).and_then(|_| dest.sync_all()) {
+        drop(dest);
+        // Our own half-written file. Leaving it would litter the vault AND
+        // make the destination look taken to every later attempt.
+        let _ = std::fs::remove_file(to);
+        return Err(e);
+    }
+    drop(dest);
+    if let Err(e) = std::fs::remove_file(from) {
+        log::warn!(
+            "screen export: copied {} to {} but could not remove the source ({e}); \
+             the staging sweep will collect it",
+            from.display(),
+            to.display()
+        );
+    }
+    Ok(())
+}
+
 /// Move the exported temp into the vault under `base`, never replacing.
 ///
 /// THE MOVE IS THE ARBITER, not the `exists()` check: a destination created
@@ -100,7 +193,7 @@ pub fn commit_screen_capture(
 ) -> Result<(PathBuf, PathBuf), String> {
     for _ in 0..MAX_COMMIT_ATTEMPTS {
         let (mp4, note) = reserve_final_screen(dir, base);
-        match rename_noreplace(from, &mp4) {
+        match move_or_copy_noreplace(from, &mp4) {
             Ok(()) => return Ok((mp4, note)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             // Some Windows API paths report a taken destination as
@@ -123,6 +216,116 @@ pub fn commit_screen_capture(
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A mover that always reports a cross-volume failure, the exact error
+    /// `hard_link` and `rename` both return between two filesystems
+    /// (EXDEV / os error 18, measured; `ERROR_NOT_SAME_DEVICE` on Windows).
+    fn always_cross_device(_: &Path, _: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::from_raw_os_error(18))
+    }
+
+    // THE cross-volume case, which is the ORDINARY one for an export: the
+    // temp is staged under %LOCALAPPDATA% and the vault is wherever the
+    // user keeps it. Without the copy fallback every export onto another
+    // drive fails at the last step, permanently.
+    #[test]
+    fn a_move_that_cannot_cross_volumes_falls_back_to_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("temp.mp4");
+        let to = dir.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+
+        move_or_copy_with(&from, &to, always_cross_device).expect("the copy fallback runs");
+
+        assert_eq!(
+            fs::read(&to).unwrap(),
+            b"footage",
+            "the bytes did not arrive"
+        );
+        assert!(!from.exists(), "the source survived a completed move");
+    }
+
+    // ...and the fallback is still NEVER-CLOBBER. `create_new` is what makes
+    // that structural rather than a check somebody has to remember; a copy
+    // that truncated an existing file here would destroy a user's note or
+    // recording with no error at all.
+    #[test]
+    fn the_copy_fallback_refuses_an_existing_destination_and_leaves_it_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("temp.mp4");
+        let to = dir.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+        fs::write(&to, b"THE USER'S OWN FILE").unwrap();
+
+        let err = move_or_copy_with(&from, &to, always_cross_device)
+            .expect_err("an existing destination must never be written through");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&to).unwrap(), b"THE USER'S OWN FILE");
+        assert!(from.exists(), "the source was dropped without landing");
+    }
+
+    // The exclusive create is what makes the fallback never-clobber, and it
+    // is asserted DIRECTLY rather than only through `move_or_copy_with`: a
+    // guard in front of the copy would answer this assertion without the
+    // copy itself being safe at all.
+    #[test]
+    fn the_copy_itself_refuses_to_write_through_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("temp.mp4");
+        let to = dir.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+        fs::write(&to, b"THE USER'S OWN FILE").unwrap();
+
+        let err = copy_noreplace(&from, &to).expect_err("create_new must refuse");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&to).unwrap(), b"THE USER'S OWN FILE");
+        assert!(from.exists(), "the source was dropped without landing");
+    }
+
+    // A decisive AlreadyExists is the suffix-retry signal and must be
+    // PASSED THROUGH, never answered with a copy. Copying there is exactly
+    // the clobber the move refused.
+    #[test]
+    fn a_move_that_reports_a_taken_destination_is_never_answered_with_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("temp.mp4");
+        let to = dir.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+        // NOTE: `to` deliberately does NOT exist, so the only thing that can
+        // stop a copy here is honouring the mover's own verdict.
+        let err = move_or_copy_with(&from, &to, |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "taken",
+            ))
+        })
+        .expect_err("AlreadyExists must propagate");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!to.exists(), "a copy ran despite a decisive collision");
+    }
+
+    // The ordinary same-volume path must still take the MOVE, not the copy:
+    // a copy of a multi-gigabyte recording where a rename would do is
+    // minutes of disk I/O nobody asked for.
+    #[test]
+    fn a_move_that_succeeds_is_not_followed_by_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("temp.mp4");
+        let to = dir.path().join("Demo.mp4");
+        fs::write(&from, b"footage").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        move_or_copy_with(&from, &to, |a, b| {
+            calls.set(calls.get() + 1);
+            rename_noreplace(a, b)
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(fs::read(&to).unwrap(), b"footage");
+        assert!(!from.exists());
+    }
 
     fn touch(dir: &std::path::Path, name: &str) {
         fs::write(dir.join(name), b"x").unwrap();

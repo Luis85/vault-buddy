@@ -62,9 +62,9 @@ const MAX_RETRIES: u32 = 960;
 const PART_SNIFF_LEN: u64 = 1024 * 1024;
 
 /// The infix an export temp carries (`.<base>.export.mp4.part`), so an
-/// abandoned one is never mistaken for a capture and PROMOTED — which would
-/// offer the user a half-written transcode as a recording.
-const EXPORT_PART_INFIX: &str = ".export";
+/// abandoned one is never mistaken for a capture and PROMOTED. Imported,
+/// never respelled: two literals is how a temp quietly stops being swept.
+use vault_buddy_screen::staging::EXPORT_PART_INFIX;
 
 /// What a name in the staging directory is, decided by name alone:
 /// `.<base>.mp4.part` (a capture being written), `.<base>.export.mp4.part`
@@ -487,8 +487,9 @@ mod tests {
         assert_eq!(classify(".2026-09-20 1432 Demo.mp4.part"), b(Entry::Part));
         assert_eq!(classify("2026-09-20 1432 Demo.mp4"), b(Entry::Staged));
         assert_eq!(classify("2026-09-20 1432 Demo.json"), b(Entry::Sidecar));
+        // Minted by the helper the export worker itself uses.
         assert_eq!(
-            classify(".2026-09-20 1432 Demo.export.mp4.part"),
+            classify(&staging::export_part_file_name(BASE)),
             b(Entry::ExportTemp)
         );
         // Not ours by extension or shape. Every one has been a real file

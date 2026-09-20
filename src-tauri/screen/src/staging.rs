@@ -113,6 +113,25 @@ pub fn part_file_name(base: &str) -> String {
     format!(".{base}{PART_SUFFIX}")
 }
 
+/// The infix an EXPORT temp carries between its base and `.mp4.part`.
+///
+/// Shared, not spelled twice: `export_part_file_name` below mints the name
+/// the export worker writes, and `screen_recovery::classify` recognises an
+/// abandoned one by stripping exactly this. Two independent literals is how
+/// a temp stops being swept and becomes permanent litter in the user's
+/// staging directory, with nothing red anywhere.
+pub const EXPORT_PART_INFIX: &str = ".export";
+
+/// The hidden in-progress file an export writes into, `.<base>.export.mp4.part`.
+///
+/// Deliberately the capture `.part` shape with an infix rather than a new
+/// suffix: `screen_recovery` classifies every name in the staging directory
+/// through `base_from_part`, and a shape that does not round-trip through it
+/// is a shape the sweep never sees.
+pub fn export_part_file_name(base: &str) -> String {
+    part_file_name(&format!("{base}{EXPORT_PART_INFIX}"))
+}
+
 /// Recover the base from a part file name, or `None` when the name is not
 /// one of ours. Phase 5's recovery deletes what this recognizes, so it is
 /// deliberately strict — a loose match would let recovery delete a user
@@ -393,6 +412,37 @@ mod tests {
         let part = part_file_name(base);
         assert_eq!(part, ".2026-09-18 1432 Figma walkthrough.mp4.part");
         assert_eq!(base_from_part(&part).as_deref(), Some(base));
+    }
+
+    // The export temp's name and the sweep that deletes it must agree.
+    // `screen_recovery::classify` strips EXPORT_PART_INFIX off the base
+    // `base_from_part` recovers; if this round trip ever breaks, an
+    // abandoned export temp stops being recognized and becomes permanent
+    // litter -- silently, because nothing else in the app ever reads it.
+    #[test]
+    fn an_export_temp_name_round_trips_back_to_its_base() {
+        let base = "2026-09-20 1432 Demo";
+        let name = export_part_file_name(base);
+        assert_eq!(name, ".2026-09-20 1432 Demo.export.mp4.part");
+        let recovered = base_from_part(&name).expect("an export temp is a part file");
+        assert_eq!(
+            recovered.strip_suffix(EXPORT_PART_INFIX),
+            Some(base),
+            "the sweep recovers a different base than the worker wrote"
+        );
+    }
+
+    // And it must NOT be mistaken for an ordinary capture part: a capture
+    // part promotes to a staged recording, so an export temp classified as
+    // one would offer the user a half-written transcode as footage.
+    #[test]
+    fn an_export_temp_is_not_an_ordinary_capture_part() {
+        let base = "2026-09-20 1432 Demo";
+        assert_ne!(export_part_file_name(base), part_file_name(base));
+        assert_ne!(
+            base_from_part(&export_part_file_name(base)).as_deref(),
+            Some(base)
+        );
     }
 
     #[test]

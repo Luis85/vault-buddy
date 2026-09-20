@@ -98,11 +98,10 @@ pub(crate) fn pick_h264_encoder(encoders_stdout: &str) -> Option<String> {
 
 /// What an export needs to know about the staged source file.
 ///
-/// `allow(dead_code)`: this and `parse_probe_output`/`probe_source` are the
-/// Task 4 half of the export's source inspection; the export itself (Tasks
-/// 5-7) is the caller. The parsing is fixture-tested here so the capability
-/// lands complete rather than half-written next to its first use.
-#[allow(dead_code)]
+/// Read by the export worker: the encoder needs the real pixel dimensions
+/// and whether an audio track exists at all, and the companion note records
+/// the same dimensions -- the file's own, never the staged sidecar's
+/// hand-editable copies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceFacts {
     pub width: u32,
@@ -123,7 +122,6 @@ pub(crate) struct SourceFacts {
 /// dimensions are absent, zero, or odd. H.264 4:2:0 requires even dimensions,
 /// and a zero would reach the encoder as an invalid frame size and fail deep in
 /// the filter graph with an unreadable error.
-#[allow(dead_code)]
 pub(crate) fn parse_probe_output(stdout: &str) -> Option<SourceFacts> {
     let mut has_audio = false;
     let mut kind: Option<&str> = None;
@@ -248,7 +246,6 @@ pub(crate) fn resolve_working_ffmpeg() -> Option<FfmpegTools> {
 /// repository's container (no ffmpeg installed); `parse_probe_output` is
 /// fixture-tested and is where the parsing correctness lives. Task 6 installs
 /// ffmpeg in CI, which is where this call first runs for real.
-#[allow(dead_code)]
 pub(crate) fn probe_source(tools: &FfmpegTools, path: &Path) -> Result<SourceFacts, String> {
     let mut cmd = tool_command(&tools.ffprobe);
     cmd.args([

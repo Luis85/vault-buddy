@@ -465,6 +465,8 @@ Everything here is Linux-testable against a `tempfile::tempdir()`, and it is the
 
 1. **Pairwise.** A base is usable only when BOTH `<base>.mp4` and `<base>.md` are free. Reserving them independently lets a capture land its video on `Demo.mp4` and its note on `Demo (2).md`, so the note embeds a file it does not sit beside.
 2. **The move is the arbiter, not the check.** `commit_screen_capture` re-reserves and retries inside the loop, so a file created by a sync client between the check and the move fails with `AlreadyExists`, advances the suffix and retries. An `exists()`-then-`rename` would clobber.
+
+   **AND IT MUST BE ABLE TO CROSS A VOLUME.** An earlier draft moved with `rename_noreplace` alone. That is `hard_link` + `remove_file`, falling back to `MoveFileExW(.., 0)` / a guarded `std::fs::rename` — **none of which copies.** The export temp lives under `%LOCALAPPDATA%` and the vault can be on another drive, which is an ordinary setup. Reproduced on two real filesystems: `hard_link` and `rename` both fail `EXDEV / errno 18 / "Invalid cross-device link"`, and `EXDEV` is not `AlreadyExists` or `NotFound`, so it is not "decisive" and the fallback fails identically. A user with the vault on D: and `%LOCALAPPDATA%` on C: could **never** save a capture — no data loss, but the feature permanently broken, showing them "Invalid cross-device link". The commit therefore goes through `move_or_copy_noreplace`, whose fallback is an **exclusive-create** (`create_new`) copy + `sync_all` + source removal, removing its own partial destination on a mid-copy failure. Keep `create_new` as the SOLE arbiter: an `exists()` arm in front of the copy is both racy and able to HIDE a copy that stopped being never-clobber — measured, swapping `create_new` for a truncating open left the whole suite green behind such a guard.
 3. **Never `std::fs::rename`.** It replaces on every platform. `rename_noreplace` is hard-link-based with a `MoveFileExW(.., 0)` fallback.
 4. **A linked-but-not-unlinked source is SUCCESS.** `rename_noreplace` returns `Ok(())` when the hard link landed but removing the source failed. Treating that as an error sends this retry loop into an endless suffix-minting spin, because `to` now exists and every retry reads as a fresh collision. `capture_paths` documents this; a caller that "improves" it re-breaks it.
 
@@ -1968,6 +1970,17 @@ In order, with each step's reason in a comment:
 4.  cfg = capture_config::vault_config(&capture_config::load_config(), &sidecar.vault_id)
 5.  root = capture_paths::safe_recording_root(&vault_path, cfg.screen_capture_root())?
     capture_paths::assert_path_inside_vault(&vault_path, &root)?
+    *** ORDER MATTERS: every cheap refusal runs BEFORE this. *** An earlier
+    draft created the dated directory at step 6, then refused at 7, 8 and 9,
+    so "no ffmpeg", "nothing left to export", "no H.264 encoder" and "the
+    staged video is missing" each left an empty `Screen Captures/2026/09`
+    behind in the user's NOTES for a save that never happened. Resolve the
+    tool, parse the timeline, take the refusal and confirm the source first;
+    creating the directory must be the FIRST thing in the whole path that
+    touches the vault at all. (The free-space check is the one exception —
+    a directory that does not exist reports no free space — so it runs just
+    after creation.)
+
 6.  date  = the sidecar's recorded_at date, else today
     dir   = capture_paths::capture_dir(&root, date, cfg.screen_capture_date_folders)
     capture_paths::assert_path_inside_vault(&vault_path, &dir)?    // PRE
@@ -1975,12 +1988,16 @@ In order, with each step's reason in a comment:
     capture_paths::assert_path_inside_vault(&vault_path, &dir)?    // POST
 7.  timeline = timeline_from_sidecar(sidecar.timeline.clone(), sidecar.duration_ms)
     if let Some(msg) = screen::export::export_refusal(&timeline) { return Err(msg) }
-8.  needed = screen_capture_config::export_size_estimate_bytes(
+8.  MEASURE BOTH VOLUMES, not just the vault's: the encoder writes the temp
+    into STAGING while the commit lands in the VAULT, and on the ordinary
+    cross-volume layout those are different drives. Refuse on the larger
+    shortfall; an unmeasurable volume still never refuses.
+    needed = screen_capture_config::export_size_estimate_bytes(
         timeline.output_duration_ms(), sidecar.width, sidecar.height,
         cfg.screen_fps, cfg.screen_quality)
     if let Some(short) = export_space_shortfall(needed, screen::disk::free_bytes(&dir)) {
         return Err(format!("There is not enough free space to save this capture — \
-                            about {} more is needed.", human_bytes(short)))
+                            about {} more is needed.", human_mib(short))  // NB: no `human_bytes` exists in this repo)
     }
 9.  temp = staging.join(format!(".{base}.export.mp4.part"))
     let cancel = the Arc cloned out of ExportState under its lock

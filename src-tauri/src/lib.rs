@@ -11,6 +11,8 @@ mod config_lock_guard;
 mod diagnostics;
 mod document_commands;
 mod editor_commands;
+mod export_commands;
+mod export_worker;
 mod external_tool;
 mod ffmpeg;
 mod mcp_commands;
@@ -359,6 +361,7 @@ pub fn run() {
         .manage(document_commands::DocumentImportPending::default())
         .manage(document_commands::AddDocumentPending::default())
         .manage(editor_commands::EditorRequest::default())
+        .manage(export_commands::ExportState::default())
         // Alt+F4 / session shutdown destroy the window without going through
         // tray::quit, and the window-state plugin saves POSITION on
         // destruction.
@@ -487,6 +490,7 @@ pub fn run() {
             editor_commands::take_editor_request,
             editor_commands::load_staged_capture,
             editor_commands::save_capture_timeline,
+            export_commands::export_and_save_capture,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
