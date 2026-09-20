@@ -3167,9 +3167,21 @@ TypeScript side). Both implement spec §8.1's segment algebra. The TypeScript
 side also has `toOutputMs`, the inverse the preview needs, which the Rust side
 does not have at all.
 
-They coexist for a real reason — the preview has to map the playhead in the
-webview, and the export has to map it in Rust — so this is not a delete-one
-gap. The risk is that they DRIFT, and phase 5's export plans on the Rust one
+They coexist for a real reason, but NOT the one this entry used to give. It
+said "the preview has to map the playhead in the webview, and the export has
+to map it in Rust". **The second clause is false, measured on this tree:**
+`Timeline::{split_at, delete, reorder, to_source_ms}` — 70 non-blank lines —
+have ZERO production callers. Every hit is inside a `#[cfg(test)]` module or
+`screen/tests/export_roundtrip.rs`. The editing algebra shipped in TypeScript
+in phase 4 and Rust's copy was never called; what the export actually uses
+from `core::timeline` is `Segment`, `Timeline`, `whole`,
+`output_duration_ms`, `is_empty` and `is_untouched`.
+
+The real reason to keep the Rust copy is that it is the EXECUTABLE SPEC the
+shared fixture table checks TypeScript against — which is worth keeping. But
+nobody should read this entry and conclude the Rust algebra is
+battle-tested production code, or "optimize" the export onto it expecting
+that. It is a test oracle. This is still not a delete-one gap. The risk is that they DRIFT, and phase 5's export plans on the Rust one
 while the user watched the TypeScript one, so a disagreement means the
 exported file does not match the preview the user approved.
 
@@ -3729,3 +3741,125 @@ already holds the character set and the label escape) in `render_note`, and
 teach `retarget_embed` both forms in the same change, with a round-trip test
 that renames a metacharacter title twice. Do not fix the writer without the
 retarget.
+
+### GAP-154 · High · Alt+F4 on the buddy destroys only `main`, leaving the process alive with four hidden windows and crash detection switched off
+
+`src-tauri/src/window_close.rs`, the non-capturing arm of `handle_main_close`.
+It does not `prevent_close()`; it logs "clean shutdown (window close)", calls
+`diagnostics::mark_clean_shutdown()` and lets the default close destroy `main`,
+on the strength of its own comment: *"the window is about to be destroyed and
+the process exits with it."*
+
+That comment is false. `tauri.conf.json` declares FIVE windows, all built at
+startup and only ever hidden; `lib.rs`'s run handler matches `RunEvent::Exit`
+alone and never prevents or forces an exit. Tauri exits when the LAST window is
+destroyed, so destroying `main` leaves four live hidden webviews and the process
+survives. `tray::finish_quit` is the proof the codebase already knows this: it
+walks `ALL_WINDOW_LABELS` destroying every window and only then calls
+`app2.exit(0)`.
+
+Failure: the user presses Alt+F4. `main` is destroyed, so
+`get_webview_window("main")` returns `None` for the rest of the process — tray
+"Show / Hide" can never bring the buddy back, `show_bubble` refuses, and
+`single_instance`'s reveal callback no-ops. Meanwhile `mark_clean_shutdown()`
+has already latched `MARKER_GATE`, so the metronome stops heartbeating the run
+marker and any later native fault goes unreported at the next launch. The
+capturing arm re-triggers `window.close()` after finalizing and lands in this
+same arm, inheriting it.
+
+**NOT introduced by the screen-capture increment.** `git show
+main:src-tauri/tauri.conf.json` declares three windows and `main`'s `lib.rs`
+carries the identical arm and the identical comment; phase 4's `window_close.rs`
+moved it verbatim and added the screen gate beside the audio one. The increment
+raised the window count 3 → 5, which does not change reachability.
+
+Fix shape: route this arm through `tray::finish_quit`, or at minimum the
+`ALL_WINDOW_LABELS` destroy walk followed by `app.exit(0)`.
+**Trap:** this is the application's exit path and nothing in CI exercises it —
+`linux-app` only compiles the shell, and manual Windows verification is deferred
+by standing decision. Land it with a Windows check, not inside an unrelated PR.
+
+### GAP-155 · Medium · No shutdown path consults `ExportState`, so quitting mid-export abandons the one write that touches a vault
+
+`src-tauri/src/tray.rs` (`quit`) and `src-tauri/src/window_close.rs`
+(`handle_main_close`) both gate solely on
+`capture_commands::recording_blocks_shutdown || screen_commands::capture_blocks_shutdown`.
+Measured: every `ExportState` reference in the shell outside `export_commands.rs`
+is in `screen_recovery/{mod,decide}.rs`, `staged_commands.rs` and `lib.rs`'s
+`.manage` — there is no shutdown reference at all.
+
+So a user who starts a ten-minute export and then quits from the tray (or
+Alt+F4s) hits `finish_quit` immediately: neither capture domain is live, every
+window is destroyed and `app2.exit(0)` runs while the `screen-export` thread is
+mid-`commit_into_vault`. Because that commit is video → note → staged-removal,
+the process can die between the video's landing and the note, and
+`Prepared::created_dirs` never reaches `rollback_export_dir`. The updater's
+`std::process::exit` route has the same exposure.
+
+Worse, the ffmpeg child is a separate process: nothing kills it on the way out,
+so it keeps writing `.<base>.export.mp4.part` into staging after the app is gone.
+
+This is asymmetric with the rest of the design — both capture domains get
+`finalize_if_recording` / `finalize_if_capturing` on a `shutdown-finalize`
+worker, and the export is the only one of the three that touches a vault.
+AGENTS.md's "The quit path carries the same pair" is silent on the export, which
+reads as coverage.
+
+Fix shape: add `export_commands::export_blocks_shutdown(app)` to both gates, and
+in the `shutdown-finalize` worker set the cancel flag and wait bounded on the
+reservation clearing — a cancel already kills the child, deletes the truncated
+output and rolls the directory back. Cancelling beats waiting: an export is
+repeatable and the staged capture is kept.
+
+### GAP-156 · Medium · Spec §14 promises an explicit "disk full" stop during capture that does not exist
+
+The error-handling table says: *"Disk fills during capture | Capture stops and
+finalizes; the partial capture is staged and offered, with an explicit
+'stopped: disk full'."*
+
+Measured: `grep -rniE 'disk.?full|no space|ENOSPC'` over `src-tauri/screen/src`
+and `src-tauri/src` finds no production detection — every hit is a test fixture
+string or the EXPORT-side pre-flight free-space check
+(`export_worker/vault_dir.rs`), which runs before a save and says nothing about a
+capture in progress. Nothing polls free space during a capture and there is no
+typed disk-full stop; ENOSPC surfaces as a generic `ScreenError::Io`/`Sink`.
+
+The `Retained` path still preserves the footage, which is the half that matters.
+The promised message does not exist.
+Fix shape: either poll free space on the mux thread with a typed stop, or
+reconcile the spec row the way the export-temp row directly above it was
+reconciled after phase 5.
+
+### GAP-157 · Low · `retainedPath` is typed frontend state that nothing renders
+
+Measured: `grep -rn retainedPath src/` matches only
+`src/stores/screenCapture.ts` (declared, assigned from `screen:failed`, cleared).
+No component reads it.
+
+AGENTS.md states the path is carried *"TYPED, not stringified into the message,
+so a caller can offer the retained file to the user instead of only logging its
+location"*. Nothing offers it. The user's only route to a capture that failed
+AFTER writing real footage — the entire reason the fragmented-MP4 container was
+chosen — is the raw path interpolated into the failure toast by
+`ScreenError::Retained`'s `Display`, on Windows possibly in `\\?\` extended form.
+
+Fix shape: render it (an actionable toast, or a persistent line in
+`ScreenCaptureBar` while `retainedPath !== null`), or delete the field and the
+claim. A typed field nothing reads is a promise made in three documents and kept
+in none.
+
+**Related, and cheap:** `screen_recovery` only `log::info!`s, while audio
+recovery toasts "Recording recovered" (`capture_commands.rs`). A user who never
+opens Record Screen never learns a recording was recovered at all.
+
+### GAP-158 · Low · docs/Gaps.md records no tombstone for its own retired number
+
+The backlog jumps 103 → 105. GAP-104 is deliberately retired — three phase plans
+say *"GAP-104 is retired and must never be reused"* — but this file carries no
+note, so the hole reads as an accident and invites reuse. **GAP-104 is retired.**
+
+Separately, five gap ids are cited from shipped code and defined nowhere:
+GAP-55, 60, 90, 91, 92 (measured: 146 entries defined, 55 distinct ids cited
+across `.rs`/`.ts`/`.vue`). Those are task/document-domain entries closed and
+DELETED, whereas the screen era closes with a strikethrough and keeps the entry.
+Two conventions in one file.

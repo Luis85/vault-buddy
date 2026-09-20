@@ -1027,8 +1027,12 @@ write here, it belongs in `export_worker/` or it is a design change.
   the user's notes. `sanitize_title` is a security boundary, not cosmetics —
   a window title is whatever the recorded application put in its title bar,
   and an unsanitized separator in it escapes the staging directory (its
-  reserved-device-name hole is GAP-108). **It maps only what is unsafe as a
-  PATH** (`: \ / ? * " < > |` and controls): `#`, `^`, `[` and `]` are legal
+  reserved-device-name hole is GAP-108). **It maps what is unsafe as a
+  PATH** (`: \ / ? * " < > |` and controls), and makes exactly one further
+  edit: a title ending in `EXPORT_PART_INFIX` is disambiguated, because a base
+  ending in `.export` is name-identical to an export temp and
+  `screen_recovery::classify` deletes those without a footage check (not
+  retroactive — an already-staged base keeps it): `#`, `^`, `[` and `]` are legal
   file-name characters and deliberately SURVIVE into the base, because
   mapping them would rename people's files and change the identity
   `is_capture_base`, the sidecar's own `base` round-trip and
@@ -1469,7 +1473,7 @@ write here, it belongs in `export_worker/` or it is a design change.
   `select_capture_region` and renders the chosen region as a row;
   `ScreenAudioPicker.vue` for the multi-select devices) on the
   `screenCapture` panel view; the `screenCapture` Pinia
-  store mirrors Rust state from the seven `screen:*` events and re-reads
+  store mirrors Rust state from the nine `screen:*` events and re-reads
   `screen_capture_status` rather than trusting event arrival order. One
   picker surface still deliberately falls short of the spec — the per-device
   audio level bars, which need a Rust-side emit first (GAP-111 item 1).
@@ -1595,8 +1599,14 @@ write here, it belongs in `export_worker/` or it is a design change.
     TypeScript twin (GAP-136), and where the divergence is unreachable
     because `prepare` refuses a recovered capture before a timeline is ever
     consulted — `StagedCaptureSummaryDto` carries `recovered`, the row reads
-    "recovered · length unknown", and Resume is not rendered at all. Discard
-    is, because it is the only honest action left.
+    "recovered · length unknown", and Resume is not rendered at all. Discard is
+    the only BUTTON left — so the row also states that the video survived and
+    where it is (`%LOCALAPPDATA%\com.vaultbuddy.desktop\screen-captures\<base>.mp4`,
+    rendered as selectable text because NO IPC command opens that folder:
+    `open_logs_folder` opens the sibling logs directory, `open_external_url`
+    is https-only, and `open_screen_capture` needs the vault id a recovered
+    capture lacks). Permanent deletion must never be the whole story a row
+    tells about a real recording.
   - **`lastStaged` now has TWO clear sites, and the second is keyed on
     IDENTITY rather than lifecycle.** `reset()` clears it as part of a
     lifecycle transition; `forgetStaged(base)` clears it only when the base
@@ -3076,7 +3086,7 @@ views and the list view; see the document-import domain), `screenCapture`
 `fps`/`dropped`, `warning`, `retainedPath`, `vaultId`, and `lastStaged` (the
 finished capture's staged `.mp4`, which since phase 4 is what the capture
 bar's **Edit** action opens); driven by the
-seven `screen:*` events with a `seq` ticket so a stale reply never
+nine `screen:*` events with a `seq` ticket so a stale reply never
 overwrites a newer locally-applied transition, and seeded/reconciled from
 `screen_capture_status`), and
 `notifications` (the toast queue rendered by `NotificationHost`).

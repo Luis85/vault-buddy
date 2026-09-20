@@ -424,14 +424,14 @@ ever written into your vaults except recordings and their notes.
   for whichever of the two keys is absent, so an upgrade seeds both modes
   from the old value with no data loss. Saving the vault's Recording settings
   writes only the two new keys — `recordingFolder` never reappears.
-- `recordingDateFolders` / `documentDateFolders` (bool, default `true`) —
+- `recordingDateFolders` / `documentDateFolders` (bool, default `false`) —
   whether NEW recordings/imports land in a dated `YYYY/MM` subfolder (the
   long-standing layout) or flat, directly in the folder. Existing files are
   always found in **either** layout regardless of the current setting —
   flipping it only changes where the next capture/import lands, it never
-  moves or rewrites what's already there. Omitted when `true` (the default);
-  written only when `false`, so existing configs stay untouched until a user
-  opts into the flat layout.
+  moves or rewrites what's already there. Omitted when `false` (the default);
+  written only when `true`, so existing configs stay untouched until a user
+  opts into the dated layout.
 - `documentExtractImages` (bool, default `true`) — whether a document import
   extracts the source's images into a media folder beside the note (the
   default) or produces a **text-only** note with images dropped. When off, the
