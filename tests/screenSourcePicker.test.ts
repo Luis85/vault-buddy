@@ -55,10 +55,25 @@ const DEVICES = {
   outputs: [{ name: "Speakers (Realtek)", isDefault: false }],
 };
 
-function mockSources(sources: unknown[] = SOURCES, devices: unknown = NO_DEVICES) {
+/** The reply `select_capture_region` gives for a 1280x720 region at
+ * (320, 180) on display 1. */
+const REGION = {
+  sourceId: "region:1,320,180,1280,720",
+  x: 320,
+  y: 180,
+  width: 1280,
+  height: 720,
+};
+
+function mockSources(
+  sources: unknown[] = SOURCES,
+  devices: unknown = NO_DEVICES,
+  region: unknown = REGION,
+) {
   mockIPC((cmd) => {
     if (cmd === "list_capture_sources") return sources;
     if (cmd === "list_audio_devices") return devices;
+    if (cmd === "select_capture_region") return region;
     return undefined;
   });
 }
@@ -100,17 +115,166 @@ describe("ScreenSourcePicker", () => {
     expect(w.get('[data-testid="tab-screen"]').attributes("aria-selected")).toBe("false");
   });
 
-  it("offers Screen and Window tabs, and no Region tab in this phase", async () => {
-    // Region capture arrives in phase 3. A disabled tab is dead UI that
-    // invites a click with nothing behind it. Asserting only the absence
-    // would also pass on a picker that rendered no tabs at all, so the two
-    // tabs that DO exist are pinned in the same test.
+  it("offers Screen, Window and Region tabs", async () => {
+    // GAP-111 item 2: phase 2 shipped without a Region tab on purpose and
+    // pinned its absence; phase 3 adds the tab and flips the pin, in the
+    // same commit, as that entry requires.
     mockSources();
     const w = await mountPicker();
     expect(w.find('[data-testid="tab-screen"]').exists()).toBe(true);
     expect(w.find('[data-testid="tab-window"]').exists()).toBe(true);
-    expect(w.find('[data-testid="tab-region"]').exists()).toBe(false);
-    expect(w.text()).not.toContain("Region");
+    expect(w.find('[data-testid="tab-region"]').exists()).toBe(true);
+    // And it is reachable, not merely rendered.
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    expect(w.get('[data-testid="tab-region"]').attributes("aria-selected")).toBe("true");
+  });
+
+  it("selects a region on the picked monitor and arms Start with it", async () => {
+    const calls: Record<string, unknown>[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, ...(args as object) });
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "select_capture_region") return REGION;
+      if (cmd === "start_screen_capture") return STARTED;
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+
+    // The overlay is opened for the monitor the user picked, not "the
+    // primary" and not whatever the Screen tab happened to have selected.
+    expect(calls.find((c) => c.cmd === "select_capture_region")).toMatchObject({
+      sourceId: "screen:1",
+    });
+    // The row reads as spec 7.2 asks: size, origin, and which screen.
+    expect(panel(w, "region")).toContain("1280x720 at (320, 180)");
+    expect(panel(w, "region")).toContain("Region on Screen 1");
+    // And Start now sends the region id, not the monitor id.
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    expect(calls.find((c) => c.cmd === "start_screen_capture")).toMatchObject({
+      sourceId: "region:1,320,180,1280,720",
+    });
+  });
+
+  it("keeps a cancelled region selection from arming Start", async () => {
+    // `select_capture_region` resolves null when the user pressed Escape or
+    // clicked without dragging. Arming Start off a null would send the
+    // string "null" as a source id.
+    mockSources(SOURCES, NO_DEVICES, null);
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeDefined();
+    expect(w.find('[data-testid="source-region:1,320,180,1280,720"]').exists()).toBe(false);
+  });
+
+  it("keeps the region already chosen when a reselect is cancelled", async () => {
+    // The other half of the cancel contract, and the half a naive
+    // `region.value = picked` gets wrong: a cancelled RESELECT must leave the
+    // region that was already armed exactly as it was, not wipe it and
+    // silently disarm Start.
+    let picks = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "select_capture_region") {
+        picks += 1;
+        return picks === 1 ? REGION : null;
+      }
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+    // Second run: the user opened the overlay again and pressed Escape.
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+    expect(picks).toBe(2);
+    expect(panel(w, "region")).toContain("1280x720 at (320, 180)");
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeUndefined();
+  });
+
+  it("surfaces a failed region selection inline", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "select_capture_region") throw new Error("That screen is no longer connected.");
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+    expect(w.get('[data-testid="screen-error"]').text()).toContain("no longer connected");
+  });
+
+  // THE REGRESSION THIS TASK IS MOST LIKELY TO SHIP. `loadSources()` drops
+  // a selection the refreshed list no longer offers -- and a region id is
+  // NEVER in that list, so the naive check clears it on every refresh and
+  // Start silently disarms itself.
+  it("keeps a selected region across a source refresh", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "list_capture_sources") return SOURCES;
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "select_capture_region") return REGION;
+      if (cmd === "start_screen_capture") throw new Error("nope");
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+    // A failed start triggers a refresh; the region must survive it.
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    expect(panel(w, "region")).toContain("1280x720 at (320, 180)");
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeUndefined();
+  });
+
+  // The other direction: if the region's own MONITOR goes away, the region
+  // is as gone as a closed window and must not stay armed.
+  it("drops a selected region when its monitor disappears", async () => {
+    let listed = 0;
+    mockIPC((cmd) => {
+      if (cmd === "list_capture_sources") {
+        listed += 1;
+        // Second read: the monitor is unplugged, only the window remains.
+        return listed === 1 ? SOURCES : [SOURCES[1]];
+      }
+      if (cmd === "list_audio_devices") return NO_DEVICES;
+      if (cmd === "select_capture_region") return REGION;
+      if (cmd === "start_screen_capture") throw new Error("nope");
+      return undefined;
+    });
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    await w.get('[data-testid="region-select"]').trigger("click");
+    await flushPromises();
+    await w.get('[data-testid="screen-start"]').trigger("click");
+    await flushPromises();
+    expect(panel(w, "region")).not.toContain("1280x720 at (320, 180)");
+    expect(w.get('[data-testid="screen-start"]').attributes("disabled")).toBeDefined();
+  });
+
+  it("keeps the region Select button disabled until a monitor is picked", async () => {
+    mockSources();
+    const w = await mountPicker();
+    await w.get('[data-testid="tab-region"]').trigger("click");
+    expect(w.get('[data-testid="region-select"]').attributes("disabled")).toBeDefined();
+    await w.get('[data-testid="region-target-screen:1"]').trigger("click");
+    expect(w.get('[data-testid="region-select"]').attributes("disabled")).toBeUndefined();
   });
 
   it("keeps Start disabled until a source is picked", async () => {

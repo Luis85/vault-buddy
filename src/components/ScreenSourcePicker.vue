@@ -5,19 +5,27 @@ import { computed, onMounted, ref } from "vue";
 import { logWarning } from "../logging";
 import { useScreenCaptureStore } from "../stores/screenCapture";
 import { useVaultsStore } from "../stores/vaults";
-import type { CaptureSourceInfo } from "../types";
+import type { CaptureSourceInfo, RegionSelection } from "../types";
 import ScreenAudioPicker from "./ScreenAudioPicker.vue";
+import ScreenRegionPicker from "./ScreenRegionPicker.vue";
 import TabGroup from "./TabGroup.vue";
 import AppButton from "./ui/AppButton.vue";
 import Banner from "./ui/Banner.vue";
 import EmptyState from "./ui/EmptyState.vue";
 
-// Screen and Window only. Region capture is phase 3, and a disabled Region
-// tab would be dead UI inviting a click with nothing behind it.
+// Screen, Window and Region (spec 7.2). The Region tab arrived in phase 3
+// together with the overlay it opens; phase 2 deliberately shipped without
+// it rather than rendering a disabled tab with nothing behind it
+// (docs/Gaps.md GAP-111 item 2).
 const TABS = [
   { id: "screen", label: "Screen" },
   { id: "window", label: "Window" },
+  { id: "region", label: "Region" },
 ] as const;
+
+/** The two tabs that render a plain row list from `list_capture_sources`.
+ * Region builds its own row from a selection, so it gets its own slot. */
+const LIST_TABS = TABS.filter((t) => t.id !== "region");
 
 const props = defineProps<{ vaultId: string }>();
 const store = useVaultsStore();
@@ -30,9 +38,39 @@ const outputs = ref<string[]>([]);
 const error = ref<string | null>(null);
 const starting = ref(false);
 
+const region = ref<RegionSelection | null>(null);
+/** Which monitor "Select region…" opens the overlay on. A region lives on
+ * exactly one monitor — see the overlay's own reasoning — so the Region tab
+ * lists the monitors as targets rather than guessing the primary. */
+const regionTargetId = ref<string | null>(null);
+const selectingRegion = ref(false);
+
 const rowsFor = (kind: string) =>
   sources.value.filter((s) => s.kind === kind);
+const screens = computed(() => rowsFor("screen"));
 const canStart = computed(() => selectedId.value !== null && !starting.value);
+
+async function onSelectRegion() {
+  if (regionTargetId.value === null || selectingRegion.value) return;
+  selectingRegion.value = true;
+  error.value = null;
+  try {
+    const picked = await invoke<RegionSelection | null>("select_capture_region", {
+      sourceId: regionTargetId.value,
+    });
+    // `null` is a cancel (Escape, or a click that was not a drag), not a
+    // failure: leave whatever was selected before exactly as it was.
+    if (picked) {
+      region.value = picked;
+      selectedId.value = picked.sourceId;
+    }
+  } catch (e) {
+    logWarning(`select_capture_region failed: ${String(e)}`);
+    error.value = String(e);
+  } finally {
+    selectingRegion.value = false;
+  }
+}
 
 /**
  * Re-enumerate. A selection the refreshed list no longer offers is dropped:
@@ -44,7 +82,18 @@ const canStart = computed(() => selectedId.value !== null && !starting.value);
 async function loadSources() {
   try {
     sources.value = await invoke<CaptureSourceInfo[]>("list_capture_sources");
-    if (selectedId.value && !sources.value.some((s) => s.id === selectedId.value)) {
+    // A region id is NEVER in `sources` — it is built from a selection, not
+    // enumerated — so the "drop what the list no longer offers" rule has to
+    // ask about the region's MONITOR instead. Without this the region is
+    // cleared on every refresh and Start silently disarms itself.
+    if (region.value && !sources.value.some((s) => s.id === regionTargetId.value)) {
+      region.value = null;
+      regionTargetId.value = null;
+    }
+    const known =
+      sources.value.some((s) => s.id === selectedId.value) ||
+      selectedId.value === region.value?.sourceId;
+    if (selectedId.value && !known) {
       selectedId.value = null;
     }
   } catch (e) {
@@ -91,7 +140,7 @@ async function onStart() {
     </Banner>
     <TabGroup :tabs="[...TABS]">
       <template
-        v-for="t in TABS"
+        v-for="t in LIST_TABS"
         #[t.id]
       >
         <EmptyState
@@ -122,6 +171,18 @@ async function onStart() {
             </button>
           </li>
         </ul>
+      </template>
+      <template #region>
+        <ScreenRegionPicker
+          :screens="screens"
+          :target-id="regionTargetId"
+          :region="region"
+          :selected-id="selectedId"
+          :selecting="selectingRegion"
+          @update:target-id="regionTargetId = $event"
+          @update:selected-id="selectedId = $event"
+          @select="onSelectRegion"
+        />
       </template>
     </TabGroup>
     <div class="border-t border-white/10 pt-3">

@@ -74,6 +74,15 @@ describe("RecordMode", () => {
     expect(importDoc).toBeGreaterThan(screen);
   });
 
+  // GAP-111 item 3: the chooser must not under-advertise a capability the
+  // picker now has. Pinned in both directions so a revert is visible.
+  it("advertises region capture in the intake chooser", async () => {
+    const { wrapper } = await mountView();
+    const screen = wrapper.get('[data-testid="mode-screen"]');
+    expect(screen.text()).toContain("Screen, window, or region");
+    expect(screen.attributes("aria-label")).toContain("region");
+  });
+
   it("routes Record Screen to the source picker instead of starting a recording", async () => {
     // A screen capture needs a source chosen first, so this entry point
     // navigates. Falling through to start_capture would start an AUDIO

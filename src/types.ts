@@ -376,13 +376,11 @@ export interface RegionPick {
 
 /** `select_capture_region`'s reply. `null` means the user cancelled.
  *
- * Declared ahead of its consumer: the Rust command it describes is phase 3
- * task 5 and the picker that reads it is task 7, so nothing can import it
- * yet. Suppressed rather than parked behind a raised `deadCodeIssues`
- * ceiling, because the suppression is self-enforcing in a way the ceiling is
- * not: fallow counts a STALE suppression as an issue, so the moment task 7
- * imports this type the ratchet fails until the line below is deleted. */
-// fallow-ignore-next-line unused-type
+ * Declared ahead of its consumer while the command existed and the picker did
+ * not; `ScreenRegionPicker` reads it now, so the self-enforcing
+ * `fallow-ignore-next-line unused-type` that parked it has been removed —
+ * fallow counts a STALE suppression as an issue, which is exactly what made
+ * it safe to leave in the tree in the first place. */
 export interface RegionSelection {
   sourceId: string;
   x: number;

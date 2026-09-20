@@ -27,13 +27,15 @@ const documentImports = useDocumentImportsStore();
 // entry NAVIGATES rather than starting anything — a screen capture needs a
 // source picked first — so each option carries its own aria label instead of
 // the old derived "Start a <title> recording" (which would have read "Start a
-// record screen recording"). The hint deliberately says "Screen or window",
-// not the spec's "Screen, window, or region": region capture is phase 3, and
-// advertising it here is the same dead promise a disabled Region tab would be.
+// record screen recording"). The hint reads spec 7.1's own wording now that
+// the picker really offers all three: phase 2 shipped "Screen or window"
+// deliberately, because advertising region from the chooser while the picker
+// could not do it was the same dead promise a disabled Region tab would be
+// (docs/Gaps.md GAP-111 item 3).
 const OPTIONS = [
   { key: "meeting", title: "Meeting", hint: "Microphone + desktop audio", testId: "mode-meeting", aria: "Start a meeting recording" },
   { key: "voice-note", title: "Voice Note", hint: "Microphone only", testId: "mode-voice-note", aria: "Start a voice note recording" },
-  { key: "screen", title: "Record Screen", hint: "Screen or window", testId: "mode-screen", aria: "Choose a screen or window to capture" },
+  { key: "screen", title: "Record Screen", hint: "Screen, window, or region", testId: "mode-screen", aria: "Choose a screen, window, or region to capture" },
 ] as const;
 
 type ModeKey = (typeof OPTIONS)[number]["key"];
