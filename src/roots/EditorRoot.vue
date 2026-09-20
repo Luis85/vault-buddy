@@ -8,6 +8,8 @@
 
 <template>
   <main class="flex h-screen w-screen items-center justify-center bg-slate-900 text-fg">
-    <p class="text-sm text-fg-muted">Loading capture…</p>
+    <p class="text-sm text-fg-muted">
+      Loading capture…
+    </p>
   </main>
 </template>
