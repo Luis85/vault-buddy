@@ -41,6 +41,16 @@ pub fn affinity_value(excluded: bool) -> u32 {
 /// Taking a raw handle rather than a Tauri window type is what keeps this
 /// crate free of a Tauri dependency, and is why the call can be type-checked
 /// for the Windows target at all.
+///
+/// The `isize` is also load-bearing for a reason no signature can show: it
+/// bridges a `windows` VERSION SPLIT. Tauri 2.11.5 links `windows` 0.61.3
+/// and this crate links 0.62.2 -- both are in Cargo.lock, both define
+/// `HWND(pub *mut c_void)` identically, and they are still DISTINCT Rust
+/// types. So `WebviewWindow::hwnd()` hands the shell a 0.61 `HWND` that
+/// cannot be passed to this crate's 0.62 `SetWindowDisplayAffinity`.
+/// "Simplifying" this parameter to `HWND` does not compile, and the way to
+/// make it compile is to add a second `windows` version to this crate.
+/// Don't.
 #[cfg(windows)]
 pub fn set_display_affinity(hwnd: isize, excluded: bool) -> Result<(), ScreenError> {
     use windows::Win32::Foundation::HWND;
