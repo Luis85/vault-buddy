@@ -148,6 +148,11 @@ fn missing_ancestors(vault_path: &Path, dir: &Path) -> Vec<PathBuf> {
 /// Deepest first (`2026/09` before `2026`), and the first one that will not
 /// go stops the walk: every shallower directory now holds it, so every
 /// further `remove_dir` would fail anyway and logging each would be noise.
+/// A directory that is not THERE is the one exception and is skipped rather
+/// than stopping the walk — `created` is sampled before `create_dir_all`,
+/// so a create that failed part way leaves entries here that were never
+/// made, and they are the deepest ones. Stopping on the first of those
+/// would keep every directory that really was created.
 ///
 /// Best-effort and never an error: the user's save already failed, and a
 /// folder that outlives it is litter, not loss.
