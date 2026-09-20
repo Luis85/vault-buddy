@@ -12,6 +12,7 @@ mod document_commands;
 mod mcp_commands;
 mod model_commands;
 mod pandoc;
+mod region_commands;
 mod screen_capture_worker;
 mod screen_commands;
 mod search_commands;
@@ -340,6 +341,7 @@ pub fn run() {
         .manage(capture_commands::CaptureState::default())
         .manage(capture_guard::CaptureGuard::default())
         .manage(screen_commands::ScreenCaptureState::default())
+        .manage(region_commands::RegionSelectionState::default())
         .manage(transcription::TranscriptionState::default())
         .manage(mcp_commands::McpServerState::default())
         .manage(document_commands::ImportLock::default())
@@ -498,6 +500,8 @@ pub fn run() {
             screen_commands::pause_screen_capture,
             screen_commands::resume_screen_capture,
             screen_commands::screen_capture_status,
+            region_commands::select_capture_region,
+            region_commands::resolve_region_selection,
         ])
         .setup(|app| {
             // Give the panic hook the real log dir; until now it falls back to
