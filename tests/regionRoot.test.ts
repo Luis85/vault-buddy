@@ -1,6 +1,18 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { enableAutoUnmount, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Captured so a test can drive `region:begin` the way Rust does, from the
+// same main-thread closure that shows the overlay.
+const listeners: Record<string, (e: { payload: unknown }) => void> = {};
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (event: string, cb: (e: { payload: unknown }) => void) => {
+    listeners[event] = cb;
+    return Promise.resolve(() => {
+      delete listeners[event];
+    });
+  },
+}));
 
 // Each test mounts its own RegionRoot and several leave it mid-drag
 // (unresolved) rather than driving it to a terminal state. Without
@@ -31,6 +43,7 @@ let calls: Call[] = [];
 
 beforeEach(() => {
   calls = [];
+  for (const key of Object.keys(listeners)) delete listeners[key];
   mockIPC((cmd, args) => {
     calls.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
     return Promise.resolve(null);
@@ -58,6 +71,24 @@ async function drag(
 
 function resolved() {
   return calls.filter((c) => c.cmd === "resolve_region_selection");
+}
+
+/** Mount and wait for the async `region:begin` subscription to land. */
+async function mountArmed() {
+  const w = mount(RegionRoot);
+  await flushPromises();
+  return w;
+}
+
+/** What Rust does immediately before it shows the overlay for a NEW
+ * selection. */
+async function beginSelection(w: ReturnType<typeof mount>) {
+  const begin = listeners["region:begin"];
+  expect(begin, "RegionRoot must subscribe to region:begin").toBeTypeOf(
+    "function",
+  );
+  begin({ payload: null });
+  await w.vm.$nextTick();
 }
 
 describe("RegionRoot", () => {
@@ -250,6 +281,101 @@ describe("RegionRoot", () => {
     await surface(w).trigger("pointermove", { clientX: 400, clientY: 400 });
     expect(w.find('[data-testid="region-box"]').exists()).toBe(false);
     expect(resolved()).toHaveLength(1);
+  });
+
+  // The overlay window is hidden and REUSED, never reloaded, so this
+  // component and its one-shot latch survive every selection. Without the
+  // `region:begin` reset the second selection of an app run paints a
+  // full-screen, always-on-top scrim that drops every pointerdown and every
+  // Escape for the whole of Rust's 120-second wait, then reports a cancel
+  // the user never made.
+  it("arms a second selection when Rust says one is beginning", async () => {
+    const w = await mountArmed();
+    await drag(w, [0, 0], [100, 100]);
+    expect(resolved()).toHaveLength(1);
+
+    await beginSelection(w);
+
+    // The band paints again, so the press was honoured rather than dropped
+    // by the stale latch.
+    await surface(w).trigger("pointerdown", { clientX: 200, clientY: 100 });
+    await surface(w).trigger("pointermove", { clientX: 520, clientY: 280 });
+    expect(w.find('[data-testid="region-box"]').exists()).toBe(true);
+    await surface(w).trigger("pointerup", { clientX: 520, clientY: 280 });
+
+    expect(resolved()).toHaveLength(2);
+    // Hand-derived: x = 200, y = 100, width = 320, height = 180.
+    expect(resolved()[1].args.rect).toMatchObject({
+      x: 200,
+      y: 100,
+      width: 320,
+      height: 180,
+    });
+  });
+
+  // Escape is the other half: `report` has its own latch check, so a reset
+  // that only re-enabled `onDown` would still leave the second selection
+  // impossible to cancel.
+  it("cancels a re-armed selection on Escape", async () => {
+    const w = await mountArmed();
+    await drag(w, [0, 0], [100, 100]);
+    await beginSelection(w);
+
+    await surface(w).trigger("pointerdown", { clientX: 10, clientY: 10 });
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await w.vm.$nextTick();
+
+    expect(resolved()).toHaveLength(2);
+    expect(resolved()[1].args.rect).toBeNull();
+  });
+
+  // Re-arming must not weaken the duplicate-answer guard WITHIN one
+  // selection: Rust has already taken its one-shot sender out of the state
+  // by then, so an extra call is a silent no-op that hides a real
+  // double-fire. Only `region:begin` re-opens the latch.
+  it("still swallows a duplicate answer inside a re-armed selection", async () => {
+    const w = await mountArmed();
+    await drag(w, [0, 0], [100, 100]);
+    await beginSelection(w);
+    await drag(w, [200, 100], [520, 280]);
+    expect(resolved()).toHaveLength(2);
+
+    // A second pointerup, a stray press, and an Escape — all after the
+    // re-armed selection has answered.
+    await surface(w).trigger("pointerup", { clientX: 600, clientY: 600 });
+    await surface(w).trigger("pointerdown", { clientX: 600, clientY: 600 });
+    await surface(w).trigger("pointermove", { clientX: 700, clientY: 700 });
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await w.vm.$nextTick();
+
+    expect(resolved()).toHaveLength(2);
+    expect(w.find('[data-testid="region-box"]').exists()).toBe(false);
+  });
+
+  // A selection that Rust's own bounded wait timed out while the user was
+  // still holding the button leaves `dragging` true with nothing ever
+  // resolving. The overlay then hides and is reused, so re-arming without
+  // clearing `dragging` would open the next selection already painting the
+  // PREVIOUS one's rectangle.
+  it("clears a leftover band when it re-arms", async () => {
+    const w = await mountArmed();
+    await surface(w).trigger("pointerdown", { clientX: 10, clientY: 10 });
+    await surface(w).trigger("pointermove", { clientX: 410, clientY: 210 });
+    expect(w.find('[data-testid="region-box"]').exists()).toBe(true);
+    expect(resolved()).toHaveLength(0);
+
+    await beginSelection(w);
+
+    expect(w.find('[data-testid="region-box"]').exists()).toBe(false);
+    expect(w.find('[data-testid="region-hint"]').exists()).toBe(true);
+  });
+
+  it("stops listening for region:begin on unmount", async () => {
+    const w = await mountArmed();
+    expect(listeners["region:begin"]).toBeTypeOf("function");
+    w.unmount();
+    await flushPromises();
+    expect(listeners["region:begin"]).toBeUndefined();
   });
 
   // The repo's "no swallowed error" invariant, at this file's only catch.

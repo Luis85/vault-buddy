@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { logWarning } from "../logging";
@@ -23,8 +24,11 @@ import type { RegionPick } from "../types";
  * This root deliberately wires NO Pinia store, and that is not an omission:
  * AGENTS.md's per-window `init()` rule exists because a store that mirrors
  * Rust state is dead in any webview that never subscribed. This root mirrors
- * no Rust state and listens to no event — it only PRODUCES one answer, via
- * `resolve_region_selection` — so there is nothing to wire per window.
+ * no Rust state — it PRODUCES one answer per selection, via
+ * `resolve_region_selection` — so there is nothing to wire per window. Its
+ * one subscription, `region:begin`, carries no state: it is the edge that
+ * re-arms this component for a new selection, because the overlay window is
+ * hidden and reused rather than reloaded. See `beginSelection`.
  */
 
 /** Below this, on either axis, a drag is a stray click rather than a
@@ -37,9 +41,12 @@ const startY = ref(0);
 const curX = ref(0);
 const curY = ref(0);
 const dragging = ref(false);
-/** One-shot: the Rust side takes its sender out of the state on the first
- * answer, so a second call is a silent no-op that would hide a double-fire
- * rather than being harmless. */
+/** One-shot PER SELECTION: the Rust side takes its sender out of the state on
+ * the first answer, so a second call is a silent no-op that would hide a
+ * double-fire rather than being harmless. Re-armed by `region:begin` — see
+ * `beginSelection` — because this window is hidden and reused, never
+ * reloaded, so the latch would otherwise outlive the selection it belongs to
+ * and make every later one inert. */
 const resolvedOnce = ref(false);
 
 const box = computed(() => ({
@@ -118,8 +125,41 @@ function onKeydown(e: KeyboardEvent) {
   report(null);
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+/**
+ * A NEW selection is starting. Rust emits `region:begin` from the same
+ * main-thread closure that shows this window, immediately BEFORE the show.
+ *
+ * The overlay window is hidden and reused rather than reloaded, so this
+ * component — and `resolvedOnce` with it — survives from one selection to
+ * the next. Without this reset the second selection of an app run paints a
+ * scrim that drops every pointerdown and every Escape, for the full length
+ * of Rust's bounded wait, and then reports a cancel the user never made.
+ *
+ * It cannot lose a race with the user's first press: a hidden window
+ * receives no pointer input, so no pointerdown for this selection can exist
+ * before the show, and the event that runs this was already queued on the
+ * same FIFO task queue before the show made input possible.
+ *
+ * `dragging` is reset too. A selection that ended via Escape mid-drag leaves
+ * a band painted on a window that is about to be hidden; re-arming without
+ * clearing it would show the previous selection's rectangle for the first
+ * frame of the next one.
+ */
+function beginSelection() {
+  resolvedOnce.value = false;
+  dragging.value = false;
+}
+
+let unlistenBegin: (() => void) | undefined;
+
+onMounted(async () => {
+  window.addEventListener("keydown", onKeydown);
+  unlistenBegin = await listen("region:begin", beginSelection);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
+  unlistenBegin?.();
+});
 </script>
 
 <template>

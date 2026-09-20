@@ -25,13 +25,24 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 use vault_buddy_core::screen_geometry::{clamp_to_frame, to_physical, LogicalRect};
 use vault_buddy_core::sync_util::lock_ignoring_poison;
 use vault_buddy_screen::region::{self, RegionSource};
 use vault_buddy_screen::source::SourceId;
 
 const OVERLAY_LABEL: &str = "overlay";
+
+/// Told to the overlay immediately before it is shown, so `RegionRoot` can
+/// re-arm itself for a NEW selection.
+///
+/// The overlay window is hidden and REUSED, never reloaded, so the webview's
+/// component state survives from one selection to the next — including the
+/// one-shot latch that stops a second answer to a single selection. Without
+/// this signal the second selection of an app run paints a full-screen,
+/// always-on-top scrim that ignores every pointerdown AND Escape until the
+/// 120-second wait below expires, then reports a cancel the user never made.
+const REGION_BEGIN_EVENT: &str = "region:begin";
 
 /// A selection nobody ever answers must not strand a full-screen,
 /// invisible, always-on-top window over the user's desktop. Generous
@@ -147,6 +158,25 @@ fn region_from_pick(
     })
 }
 
+/// Claim the one-shot answer slot for this selection, or report that one is
+/// already in flight.
+///
+/// Returns `false` **without disturbing the sender already there**: refusing
+/// a second selection, never stealing the first one's answer. An
+/// unconditional `*slot = Some(tx)` would compile, still return `false`, and
+/// leave the first caller parked on a channel nobody can ever answer.
+///
+/// Its own function, and free of `AppHandle`, so the refusal is a real unit
+/// test rather than a byte-offset proxy over the source.
+fn claim_slot(state: &RegionSelectionState, tx: Sender<Option<RegionPick>>) -> bool {
+    let mut slot = lock_ignoring_poison(&state.0);
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(tx);
+    true
+}
+
 /// Hide the overlay, drop any pending answer slot, let the panel auto-hide
 /// again, and give the panel back its focus.
 ///
@@ -191,14 +221,26 @@ pub async fn select_capture_region(
     // would cancel the selection it is refusing to duplicate — the exact
     // opposite of refusing rather than stealing the first one's answer.
     let (tx, rx) = mpsc::channel::<Option<RegionPick>>();
-    {
-        let state = app.state::<RegionSelectionState>();
-        let mut slot = lock_ignoring_poison(&state.0);
-        if slot.is_some() {
-            return Err("A region selection is already in progress.".to_string());
-        }
-        *slot = Some(tx);
+    // The `State` guard is a statement temporary so it cannot be held across
+    // the `.await` below.
+    if !claim_slot(&app.state::<RegionSelectionState>(), tx) {
+        return Err("A region selection is already in progress.".to_string());
     }
+
+    // Set beside the claim, not deeper in: the one cleanup below clears this
+    // flag unconditionally, so anything that sets it later leaves early
+    // failure paths CLEARING a suppression they never set — and
+    // `DIALOG_ACTIVE` is one process-wide bool the frontend's
+    // `withDialogSuppressed` drives too, so that clear would un-suppress an
+    // open native file dialog and let the panel auto-hide out from under it.
+    // Set and cleared at the same scope as the slot; every path that clears
+    // it has now also set it.
+    //
+    // Why it is needed at all: the overlay steals OS focus the moment it is
+    // shown, and without the suppression the panel's focus-out check hides
+    // the panel — and the picker state the user is halfway through — out
+    // from under them.
+    crate::set_dialog_active(true);
 
     let outcome = select_region_inner(&app, display, rx).await;
     finish_region_selection(&app);
@@ -226,12 +268,6 @@ async fn select_region_inner(
     let scale = monitor.scale_factor();
     drop(monitor);
 
-    // The overlay steals OS focus the moment it is shown; without this the
-    // panel's focus-out check hides the panel — and the picker state the
-    // user is halfway through — out from under them. Cleared in the one
-    // cleanup function, on every path.
-    crate::set_dialog_active(true);
-
     // POSITION AND SIZE WHILE HIDDEN, then show: a moved-or-resized window
     // that is already visible repaints its stale last frame at the new
     // bounds for a frame (AGENTS.md, "The window system"). Physical units
@@ -250,6 +286,23 @@ async fn select_region_inner(
             overlay
                 .set_size(PhysicalSize::new(size.width, size.height))
                 .map_err(|e| format!("Could not size the region overlay: {e}"))?;
+            // Re-arm the overlay's one-shot latch BEFORE it is shown, and
+            // from inside this same main-thread closure so the ordering is
+            // not a hope. The latch cannot lose a race with the user's
+            // first press of the NEW selection: a hidden window receives no
+            // pointer input at all, so no pointer event for this selection
+            // can exist yet, and this event is already queued onto the
+            // webview's own task queue — which is FIFO — by the time
+            // `show()` makes input possible. Emitting after the show, or
+            // from a worker thread, would have neither guarantee.
+            //
+            // A failed emit is a hard error rather than a `let _ =`: an
+            // overlay that was not re-armed is the inert full-screen scrim
+            // this event exists to prevent, so refusing to show it beats
+            // showing one the user cannot dismiss for two minutes.
+            shower
+                .emit_to(OVERLAY_LABEL, REGION_BEGIN_EVENT, ())
+                .map_err(|e| format!("Could not arm the region overlay: {e}"))?;
             overlay
                 .show()
                 .map_err(|e| format!("Could not show the region overlay: {e}"))?;
@@ -295,7 +348,16 @@ pub fn resolve_region_selection(app: AppHandle, rect: Option<RegionPick>) {
     let sender = lock_ignoring_poison(&state.0).take();
     match sender {
         Some(tx) => {
-            let _ = tx.send(rect);
+            if tx.send(rect).is_err() {
+                // The bounded wait expired and dropped the receiver between
+                // the `take()` above and this send, so the rectangle the
+                // user drew has nowhere to go and the selection reports a
+                // cancel. A narrow race, but "the app threw away a region I
+                // drew" must not be invisible in the log.
+                log::warn!(
+                    "region select: an answer arrived just after the wait expired; discarding it"
+                );
+            }
         }
         // Not an error: a duplicate pointerup, or an answer arriving after
         // the timeout already cancelled. Logged, never silent.
@@ -429,6 +491,41 @@ mod tests {
         assert_eq!(target_display("nonsense"), None);
     }
 
+    // The semantic half of "a second selection is refused rather than
+    // stealing the first one's answer". The `false` return is the cheap
+    // half; the half that matters is that the FIRST caller's sender is
+    // still the one in the slot afterwards. An unconditional
+    // `*slot = Some(tx)` that returned `slot.is_none()` would satisfy the
+    // return-value assertion, compile, and silently park the first caller
+    // on a channel nobody can answer for the full 120-second wait.
+    #[test]
+    fn a_second_claim_is_refused_without_replacing_the_first_sender() {
+        let state = RegionSelectionState::default();
+        let (tx1, rx1) = mpsc::channel::<Option<RegionPick>>();
+        // `_rx2` is a real binding, not a bare `_`: the second receiver has
+        // to stay alive, or sending on a leaked tx2 would fail for the
+        // wrong reason and the probe below would pass by accident.
+        let (tx2, _rx2) = mpsc::channel::<Option<RegionPick>>();
+
+        assert!(claim_slot(&state, tx1), "the first claim takes a free slot");
+        assert!(
+            !claim_slot(&state, tx2),
+            "a second claim while one is in flight is refused"
+        );
+
+        let held = lock_ignoring_poison(&state.0)
+            .take()
+            .expect("the slot still holds a sender after the refused claim");
+        assert!(
+            held.send(None).is_ok(),
+            "the sender in the slot must still have a live receiver"
+        );
+        assert!(
+            matches!(rx1.try_recv(), Ok(None)),
+            "the slot must still hold the FIRST caller's sender, not the refused one"
+        );
+    }
+
     /// Production source only. `include_str!` pulls in THIS file, tests
     /// included, so a scan over the whole string counts the test's own
     /// literals and an `== 1` assertion becomes unreachable — the
@@ -465,6 +562,25 @@ mod tests {
             src.matches("overlay.hide()").count(),
             1,
             "the overlay is hidden from the one cleanup function"
+        );
+        // The `false` side was pinned from the start and the `true` side
+        // was not, which made deleting the `true` a silent, green mutation:
+        // the panel then auto-hides the moment the overlay takes focus,
+        // losing the picker state mid-selection — exactly what the flag
+        // exists to prevent.
+        assert_eq!(
+            src.matches("set_dialog_active(true)").count(),
+            1,
+            "DIALOG_ACTIVE must be set once, beside the slot claim, or the panel auto-hides under the overlay"
+        );
+        // Deleting this leaves the slot `Some` forever after any selection
+        // that ended without an answer (the timeout path), so every later
+        // one is refused for the life of the process — and the resolve path
+        // hides it, because that already `take()`s the sender.
+        assert_eq!(
+            src.matches("RegionSelectionState>().0) = None").count(),
+            1,
+            "the answer slot must be dropped in the one cleanup function"
         );
     }
 
