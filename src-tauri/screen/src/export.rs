@@ -517,6 +517,58 @@ mod tests {
         assert_eq!(creation_flags_for(false), 0);
     }
 
+    // The VALUE test above cannot reach the line that APPLIES the flag:
+    // `command.creation_flags(..)` is `#[cfg(windows)]` and so executes in
+    // no test on any platform (the GAP-117 class). Deleting it left the
+    // whole suite green on Linux AND on Windows while shipping an ffmpeg
+    // console that flashes up and steals foreground focus for the MINUTES
+    // an export runs. So this scans the module's own production source --
+    // `external_tool.rs`'s `the_windows_apply_site_still_passes_the_flag_\
+    // from_one_chokepoint`, the sibling this file's flag helper was lifted
+    // from, and the same `sink.rs` / `capture_exclusion` structural-pin
+    // precedent -- and fails if the apply is deleted, duplicated, moved out
+    // of `run`, or rewired to a literal that could drift from
+    // `creation_flags_for`.
+    #[test]
+    fn the_windows_apply_site_still_passes_the_flag_from_one_chokepoint() {
+        let production = production_src();
+        assert_eq!(
+            // The leading dot is what distinguishes the APPLY from the
+            // definition (`const fn creation_flags_for`) and from the
+            // `debug_assert_eq!(creation_flags, 0)` belt on the other arm.
+            production.matches(".creation_flags(").count(),
+            1,
+            "exactly one apply site -- a second Command builder that skipped it \
+             would pop a console window and steal focus for the length of an export"
+        );
+        assert!(
+            production.contains("command.creation_flags(creation_flags)"),
+            "the apply must read the binding fed by `creation_flags_for`, not a literal"
+        );
+        assert!(
+            production.contains("let creation_flags = creation_flags_for(cfg!(windows));"),
+            "the applied value must come from the two-arm helper the VALUE test pins, \
+             so a literal cannot drift away from it"
+        );
+        // And that one site lives inside `run`, the single place a child is
+        // spawned -- not somewhere a future second spawn path could bypass.
+        let body = production
+            .split_once("\nfn run(")
+            .expect("the spawn chokepoint `run` must exist")
+            .1;
+        let apply = body
+            .find("command.creation_flags(creation_flags)")
+            .expect("the apply must live inside `run`");
+        let spawn = body
+            .find("command.spawn()")
+            .expect("`run` must be where the child is spawned");
+        assert!(
+            apply < spawn,
+            "the flag must be applied BEFORE the child is spawned; applying it \
+             afterwards changes nothing about the console that already appeared"
+        );
+    }
+
     /// This file up to (not including) its test module. The scans below
     /// necessarily name the thing they forbid, so scanning the whole file
     /// would make them self-match -- the same fix `sink.rs` applies.

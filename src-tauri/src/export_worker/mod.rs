@@ -691,18 +691,89 @@ mod tests {
         );
     }
 
+    /// The body of one production function, from its signature to its
+    /// closing brace at column 0.
+    fn fn_body(sig: &str) -> &'static str {
+        let src = production_src();
+        let start = src
+            .find(sig)
+            .unwrap_or_else(|| panic!("{sig} must exist in the production source"));
+        let end = src[start..]
+            .find("\n}\n")
+            .map(|i| start + i)
+            .unwrap_or_else(|| panic!("{sig} must have a closing brace"));
+        &src[start..end]
+    }
+
+    /// Everything after `marker`'s own line — the region in which an
+    /// obligation established BY that line is outstanding.
+    fn after_line(body: &'static str, marker: &str) -> &'static str {
+        let at = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("{marker} must be present"));
+        let eol = body[at..].find('\n').map(|i| at + i).unwrap_or(body.len());
+        &body[eol..]
+    }
+
     // Every way out of an export that is not a save rolls the directory
     // back: the space refusal in `prepare`, the `run_export` failure arm
-    // (which is BOTH the user's Cancel and an ffmpeg failure) and the commit
-    // failure arm. A behavioural test covers what a rollback does; only this
-    // can see that a future fourth failure arm was given one.
+    // (which is BOTH the user's Cancel and an ffmpeg failure) and the
+    // commit failure arm.
+    //
+    // This COUNTED those three and its own comment claimed it was "the only
+    // thing that can see that a future fourth failure arm was given one".
+    // It could not: adding a fourth early return with no rollback left the
+    // count at three and the test green (verified by injecting one into
+    // `prepare`). It detected the DELETION of a rollback, never the
+    // OMISSION it named — which is the direction that actually happens,
+    // because an author adds an arm and does not think about the vault.
+    //
+    // So it walks the two regions where `created_dirs` is outstanding and
+    // requires every fallible exit in them to be accompanied, on its own
+    // branch, by a rollback. The obligation starts at the line that creates
+    // the directories and is carried into `export_blocking` by `Prepared`,
+    // so the walk spans both functions. The total is DERIVED from what the
+    // walk saw, never a literal — `prepare_export_dir` itself grew a fourth
+    // and a fifth rollback site (its own two post-creation failures), and a
+    // hardcoded 3 re-pointed at 5 would be exactly as blind.
     #[test]
     fn every_non_saving_exit_rolls_the_export_directory_back() {
-        let src = production_src();
+        use crate::structural_scan::assert_every_exit_is_paired;
+
+        // Region 1: `prepare`, from the moment the vault is first touched.
+        let prepare = after_line(
+            fn_body("fn prepare(app: &AppHandle, base: &str)"),
+            "prepare_export_dir(&vault_path, &dir)?;",
+        );
+        let in_prepare = assert_every_exit_is_paired(prepare, "rollback_export_dir(", "prepare");
+
+        // Region 2: `export_blocking`, from the moment `prepare` handed it
+        // the `created_dirs` it now owns.
+        let blocking = after_line(
+            fn_body("pub(crate) fn export_blocking("),
+            "let prepared = prepare(app, base)",
+        );
+        let in_blocking =
+            assert_every_exit_is_paired(blocking, "rollback_export_dir(", "export_blocking");
+
+        // Vacuity: a walk that found no exits proves nothing, and a walk
+        // that found no rollbacks would have failed above only if it found
+        // an exit. Both floors are the shape the code has today, not a
+        // ceiling — a new GUARDED arm raises them without touching this.
+        assert!(
+            in_prepare.exits >= 1 && in_blocking.exits >= 2,
+            "the walk found {} exit(s) in prepare and {} in export_blocking -- it is \
+             broken, not the invariant",
+            in_prepare.exits,
+            in_blocking.exits
+        );
+        // And every rollback in the file is one the walk accounted for: a
+        // rollback added OUTSIDE these two regions is either dead code or
+        // evidence the obligation now spans somewhere this test cannot see.
         assert_eq!(
-            src.matches("rollback_export_dir(&").count(),
-            3,
-            "an exit was added or removed without its rollback"
+            production_src().matches("rollback_export_dir(&").count(),
+            in_prepare.releases + in_blocking.releases,
+            "a rollback lives outside the regions where created_dirs is outstanding"
         );
     }
 

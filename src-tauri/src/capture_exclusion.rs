@@ -108,7 +108,12 @@ fn window_handle(_window: &tauri::WebviewWindow, label: &str) -> Option<isize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    // The shell's shared structural-pin machinery: one file-set walk, one
+    // production-half/comment stripper, read by every pin in this crate.
+    // This module grew its own copy first; `screen_commands.rs`'s
+    // `CaptureGuard` pin then grew a NARROWER one and was silently blind to
+    // eight modules, which is what moved the walk somewhere both could read.
+    use crate::structural_scan::{call_sites, offset_of, production_half};
 
     /// Every window label declared in `tauri.conf.json`.
     fn declared_window_labels() -> Vec<String> {
@@ -161,68 +166,6 @@ mod tests {
         }
     }
 
-    /// Recursively collect every `.rs` file under `dir`, skipping this
-    /// test's OWN file -- which necessarily names the functions being
-    /// searched for. The `config_lock_guard.rs` precedent, including its
-    /// `CARGO_MANIFEST_DIR` root (not the CWD) and its vacuity self-check.
-    fn rust_files(dir: &Path, self_name: &std::ffi::OsStr, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                rust_files(&path, self_name, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
-                && path.file_name() != Some(self_name)
-            {
-                out.push(path);
-            }
-        }
-    }
-
-    fn shell_sources() -> Vec<(PathBuf, String)> {
-        let shell_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let self_name = Path::new(file!())
-            .file_name()
-            .expect("file!() always has a file name")
-            .to_owned();
-        let mut files = Vec::new();
-        rust_files(&shell_src, &self_name, &mut files);
-        // A self-check on the walk, not on the invariant: an empty walk
-        // would make every assertion below vacuously true.
-        assert!(
-            files.len() > 5,
-            "scan under {shell_src:?} found only {} file(s) -- the walk is broken, not the \
-             invariant",
-            files.len()
-        );
-        files
-            .into_iter()
-            .map(|p| {
-                let text = std::fs::read_to_string(&p)
-                    .unwrap_or_else(|e| panic!("could not read {p:?}: {e}"));
-                (p, text)
-            })
-            .collect()
-    }
-
-    /// The production half of a shell source file: everything before its
-    /// inline `#[cfg(test)]` module, so a needle spelled out in a test
-    /// cannot satisfy an assertion about production code.
-    fn production_half(src: &str) -> &str {
-        src.split("#[cfg(test)]").next().unwrap_or(src)
-    }
-
-    /// Byte offset of `needle`, with a message that names it -- the
-    /// building block of the enclosing-function assertions below
-    /// (`screen_capture_worker.rs`'s own structural test uses the same
-    /// `find(a) < find(b)` idiom).
-    fn offset_of(src: &str, needle: &str) -> usize {
-        src.find(needle)
-            .unwrap_or_else(|| panic!("expected to find {needle:?} in the production source"))
-    }
-
     // Swapping `apply` and `clear` compiles, runs, and looks -- from
     // inside Vault Buddy -- like nothing happened: the windows are in
     // frame during the capture, exactly as they were before this module
@@ -254,19 +197,6 @@ mod tests {
             "`clear` must be the INCLUDE wrapper -- it is what puts the windows back in \
              view of every OTHER application's recording"
         );
-    }
-
-    /// One entry per occurrence, naming the file it was found in, so a
-    /// failure says WHERE the extra call site is rather than only that the
-    /// count is wrong.
-    fn call_sites(needle: &str) -> Vec<String> {
-        let mut hits = Vec::new();
-        for (path, text) in shell_sources() {
-            for _ in 0..text.matches(needle).count() {
-                hits.push(path.display().to_string());
-            }
-        }
-        hits
     }
 
     // A LEAKED exclusion does not break Vault Buddy -- it makes the user's

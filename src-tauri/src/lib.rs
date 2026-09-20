@@ -23,7 +23,12 @@ mod screen_capture_worker;
 mod screen_commands;
 mod screen_recovery;
 mod search_commands;
+// Test-only: the shared file-set + scan machinery every structural pin in
+// this crate reads, so a pin's coverage is a property of one module rather
+// than of whichever files its author happened to `include_str!`.
 mod staged_commands;
+#[cfg(test)]
+mod structural_scan;
 mod task_commands;
 mod task_config_commands;
 mod transcription;

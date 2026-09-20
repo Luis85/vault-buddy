@@ -72,12 +72,50 @@ fn human_mib(bytes: u64) -> String {
 /// then does not happen can put the vault back exactly as it found it —
 /// `rollback_export_dir` below.
 pub(super) fn prepare_export_dir(vault_path: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
-    assert_path_inside_vault(vault_path, dir)?;
+    prepare_export_dir_confirmed(vault_path, dir, &assert_path_inside_vault)
+}
+
+/// `prepare_export_dir` with its containment check as a parameter.
+///
+/// The POST check fires only when a symlink or junction is swapped in
+/// between the PRE check and `create_dir_all` — a real TOCTOU window that
+/// cannot be produced on demand from a test, and the one case that can leak
+/// directories OUTSIDE the vault. So the check is a seam: a test drives the
+/// second call into failing and asserts the tree is gone, which is the only
+/// way that arm is executed anywhere.
+fn prepare_export_dir_confirmed(
+    vault_path: &Path,
+    dir: &Path,
+    confirm: &dyn Fn(&Path, &Path) -> Result<(), String>,
+) -> Result<Vec<PathBuf>, String> {
+    confirm(vault_path, dir)?;
     let created = missing_ancestors(vault_path, dir);
+    // ONE arm out for both remaining failures, because both can fire with
+    // part of the tree already on disk. `create_dir_all` makes the parents
+    // and then fails on a leaf it cannot make; the POST check fires only
+    // when something was swapped in while we were creating, which is the
+    // one case where what we leave behind can be OUTSIDE the vault. Each
+    // used to return on its own `?` with `created` dropped on the floor.
+    match create_and_confirm(vault_path, dir, confirm) {
+        Ok(()) => Ok(created),
+        Err(e) => {
+            rollback_export_dir(&created);
+            Err(e)
+        }
+    }
+}
+
+/// The two steps that can fail with part of the tree already created.
+/// Separate so `prepare_export_dir_confirmed` has exactly one place to roll
+/// back from, rather than one per `?`.
+fn create_and_confirm(
+    vault_path: &Path,
+    dir: &Path,
+    confirm: &dyn Fn(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("Could not create the folder for this capture: {e}"))?;
-    assert_path_inside_vault(vault_path, dir)?;
-    Ok(created)
+    confirm(vault_path, dir)
 }
 
 /// The ancestors of `dir` that do not exist YET, deepest first, stopping at
@@ -115,6 +153,18 @@ fn missing_ancestors(vault_path: &Path, dir: &Path) -> Vec<PathBuf> {
 /// folder that outlives it is litter, not loss.
 pub(super) fn rollback_export_dir(created: &[PathBuf]) {
     for dir in created {
+        // Nothing there is not the same as "not empty", and only the second
+        // is the guard. `created` is sampled BEFORE `create_dir_all`, so a
+        // create that failed part way leaves entries here that were never
+        // made — and they are the DEEPEST ones, so stopping on the first of
+        // them would keep every directory that really was created.
+        if !dir.exists() {
+            log::info!(
+                "screen export: {} was never created; continuing",
+                dir.display()
+            );
+            continue;
+        }
         match std::fs::remove_dir(dir) {
             Ok(()) => log::info!(
                 "screen export: removed {}, empty after a save that did not happen",
@@ -236,36 +286,123 @@ mod tests {
         prepare_export_dir(vault.path(), &dir).unwrap();
         assert!(dir.is_dir());
     }
+    // The POST containment assert is the ONE refusal that can fire after
+    // `create_dir_all` has already built part of the tree -- and the one
+    // whose whole reason for existing is a symlink swapped in underneath
+    // us, so what it leaves behind can be OUTSIDE the vault. It returned on
+    // `?` with `created` dropped on the floor, leaking every directory this
+    // export had just made, for a save that was refused precisely because
+    // something was wrong with that path.
+    //
+    // Driven through the `confirm` seam because the race cannot be produced
+    // on demand: PRE canonicalises the nearest EXISTING ancestor, so every
+    // symlink a test can plant is refused before anything is created. This
+    // is the only execution of that arm anywhere.
+    #[test]
+    fn a_containment_failure_after_creation_removes_what_it_created() {
+        let vault = tempfile::tempdir().expect("tempdir");
+        let root = vault.path().join("Screen Captures");
+        fs::create_dir_all(&root).expect("the capture root already exists");
+        let dir = root.join("2026").join("09");
+
+        let calls = std::cell::Cell::new(0u32);
+        let confirm = |v: &Path, d: &Path| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                // PRE: genuinely inside, so the create really happens.
+                assert_path_inside_vault(v, d)
+            } else {
+                // POST: a junction was swapped in while we were creating.
+                Err("Path escapes the vault".to_string())
+            }
+        };
+
+        let err = prepare_export_dir_confirmed(vault.path(), &dir, &confirm)
+            .expect_err("a post-create containment failure must refuse");
+        assert!(err.contains("escapes"), "unexpected error: {err}");
+        assert_eq!(calls.get(), 2, "both containment checks must run");
+        assert!(
+            !root.join("2026").exists(),
+            "the refused export leaked {} -- directories it created for a save that \
+             never happened, on the one path where they can be outside the vault",
+            root.join("2026").display()
+        );
+        assert!(
+            root.exists(),
+            "the pre-existing capture root is not this export's to remove"
+        );
+    }
+
+    // The other post-`missing_ancestors` failure: `create_dir_all` itself.
+    // It is the likelier partial-create -- the leaf fails and its parents
+    // are already on disk -- and it left them behind for the same reason.
+    // Forced with a leaf longer than NAME_MAX rather than with permissions,
+    // so the test says nothing about who is running it.
+    #[test]
+    fn a_create_that_fails_leaves_no_new_directories_behind() {
+        let vault = tempfile::tempdir().expect("tempdir");
+        let root = vault.path().join("Screen Captures");
+        fs::create_dir_all(&root).expect("the capture root already exists");
+        let dir = root.join("2026").join("09").join("x".repeat(300));
+
+        let err = prepare_export_dir(vault.path(), &dir).expect_err("an impossible leaf must fail");
+        assert!(err.contains("Could not create"), "unexpected error: {err}");
+        assert!(
+            !root.join("2026").exists(),
+            "the failed create leaked {}",
+            root.join("2026").display()
+        );
+        assert!(root.exists(), "the pre-existing capture root must survive");
+    }
+
     // The dated directory is asserted inside the vault BEFORE create_dir_all
     // (so a pre-existing symlink is not followed) and AFTER it (closing the
     // swap-in race). The PRE half also has a behavioural test above; the
-    // POST half can only be pinned here, because the race it closes cannot
-    // be provoked deterministically.
+    // POST half is driven through the `confirm` seam, because the race it
+    // closes cannot be provoked deterministically -- but only this can see
+    // that the seam is WIRED to the real check rather than to a stub, and
+    // that the two calls really straddle the create.
     #[test]
     fn the_export_directory_is_asserted_inside_the_vault_before_and_after_creation() {
         let src = include_str!("vault_dir.rs")
             .split("#[cfg(test)]")
             .next()
             .expect("the production prefix");
-        let start = src
-            .find("fn prepare_export_dir(")
-            .expect("prepare_export_dir");
-        let end = src[start..]
-            .find("\n}\n")
-            .map(|i| start + i)
-            .expect("its end");
-        let body = &src[start..end];
-        let create = body.find("create_dir_all(").expect("create_dir_all");
-        let asserts: Vec<usize> = body
-            .match_indices("assert_path_inside_vault(")
-            .map(|(i, _)| i)
-            .collect();
+        let body_of = |sig: &str| -> &str {
+            let start = src.find(sig).unwrap_or_else(|| panic!("{sig} must exist"));
+            let end = src[start..]
+                .find("\n}\n")
+                .map(|i| start + i)
+                .unwrap_or_else(|| panic!("{sig} must end"));
+            &src[start..end]
+        };
+
+        // The seam carries the REAL containment check in production.
         assert!(
-            asserts.iter().any(|&i| i < create),
-            "no containment assertion before create_dir_all"
+            body_of("pub(super) fn prepare_export_dir(").contains("&assert_path_inside_vault"),
+            "prepare_export_dir must hand the real containment check to the seam"
         );
+
+        // PRE: before anything is sampled or created.
+        let pre = body_of("fn prepare_export_dir_confirmed(");
+        let first_confirm = pre
+            .find("confirm(vault_path, dir)?;")
+            .expect("the PRE check");
+        let create_call = pre.find("create_and_confirm(").expect("the create step");
         assert!(
-            asserts.iter().any(|&i| i > create),
+            first_confirm < create_call,
+            "no containment assertion before the create"
+        );
+
+        // POST: after create_dir_all, inside the one step that can fail
+        // with part of the tree on disk.
+        let post = body_of("fn create_and_confirm(");
+        let create = post.find("create_dir_all(").expect("create_dir_all");
+        let second_confirm = post
+            .find("confirm(vault_path, dir)")
+            .expect("the POST check");
+        assert!(
+            create < second_confirm,
             "no containment assertion after create_dir_all"
         );
     }

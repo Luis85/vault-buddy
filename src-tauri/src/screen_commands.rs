@@ -695,43 +695,70 @@ mod tests {
         );
     }
 
-    // Structural regression, mirroring config_lock_guard.rs: the guard must
-    // be released from exactly one place in this file. A second release site
-    // can free a claim on a path that never made one, letting a capture
-    // start on top of a live one; a missing one wedges both domains until
-    // restart, with no error and no log line.
+    // Structural regression: the guard must be released from exactly one
+    // place in the WHOLE shell crate. A second release site can free a
+    // claim on a path that never made one, letting a capture start on top
+    // of a live one; a missing one wedges both domains until restart. Both
+    // failures are silent -- no error, no log line.
+    //
+    // This scanned TWO named files (`screen_commands.rs` and
+    // `screen_capture_worker.rs`) until a rogue
+    // `app.state::<CaptureGuard>().release(CaptureKind::Screen)` injected
+    // into `discard_staged_capture` left the entire shell suite green: 185
+    // passed, 0 failed. Eight modules that can reach the guard were
+    // unguarded -- `staged_commands`, `region_commands`, `editor_commands`,
+    // `screen_recovery`, `tray`, `window_close`, `lib`, `commands`. A scan
+    // is worth exactly what its file set covers, so the file set now comes
+    // from `structural_scan::shell_sources`, which walks the tree and
+    // self-checks for vacuity. `capture_exclusion.rs` had already learned
+    // this lesson once, for the same reason (the lifecycle split into
+    // `screen_capture_worker.rs`); the two pins now share one walk.
+    //
+    // Test halves, comments and string literals are stripped, so neither
+    // this comment nor the assertions below can satisfy themselves, and the
+    // four module docs that QUOTE the invariant are not counted as calls.
     #[test]
     fn the_screen_guard_is_released_only_from_the_clear_chokepoint() {
-        // include_str! pulls in this ENTIRE file, including this assertion's
-        // own string literal — scanning the whole thing would always find
-        // one more "release(CaptureKind::Screen)" than production actually
-        // contains (this very line). config_lock_guard.rs's cross-file scan
-        // doesn't hit this because it reads a DIFFERENT file than the one
-        // holding the test; here the test and the code it checks are the
-        // same file, so only the portion BEFORE the trailing `#[cfg(test)]`
-        // module — this file's one and only test module, always last — is
-        // scanned. That is production code alone, which is what the
-        // invariant is actually about.
-        let src = include_str!("screen_commands.rs");
-        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
-        let releases = production.matches("release(CaptureKind::Screen)").count();
-        assert_eq!(
-            releases, 1,
-            "expected exactly one Screen release (clear_active_screen); found {releases}"
+        let releases = crate::structural_scan::call_args(".release(");
+        assert!(
+            releases
+                .iter()
+                .all(|(_, arg)| arg.contains("Screen") || arg.contains("Audio")),
+            "a CaptureGuard release whose kind this scan cannot read: {releases:?}. \
+             Pass the variant literally, or these pins stop classifying it."
         );
-        // The scan must span BOTH files, because the split is what created
-        // the hole: 10 of the 11 guard-freeing paths (every lifecycle
-        // early-return) live in the worker and reach the guard only through
-        // `clear_active_screen`, so scanning this file alone left the file
-        // most likely to grow a raw release entirely unguarded. No
-        // self-match problem here — the literal lives in this file, not in
-        // the one being scanned, so the worker is read whole.
-        let worker = include_str!("screen_capture_worker.rs");
-        let worker_releases = worker.matches("release(CaptureKind::Screen)").count();
+        let sites: Vec<&String> = releases
+            .iter()
+            .filter(|(_, arg)| arg.contains("Screen"))
+            .map(|(file, _)| file)
+            .collect();
         assert_eq!(
-            worker_releases, 0,
-            "screen_capture_worker.rs must free the guard only through clear_active_screen; \
-             found {worker_releases} raw release site(s)"
+            sites.len(),
+            1,
+            "expected exactly one Screen release in the whole shell crate \
+             (clear_active_screen); found {sites:?}. Funnel it through \
+             clear_active_screen instead."
+        );
+        assert!(
+            sites[0].ends_with("screen_commands.rs"),
+            "the release must live in clear_active_screen -- the single chokepoint every \
+             screen-capture teardown already funnels through -- but it is in {}",
+            sites[0]
+        );
+
+        // And in the right FUNCTION of that file: moved into
+        // `stop_screen_capture` it is skipped entirely by spec 14's
+        // self-finalize, which never goes through that command, and the
+        // count above would not move.
+        let production =
+            crate::structural_scan::production_code(include_str!("screen_commands.rs"));
+        let chokepoint = crate::structural_scan::offset_of(&production, "fn clear_active_screen(");
+        let release =
+            crate::structural_scan::offset_of(&production, ".release(CaptureKind::Screen)");
+        let after = crate::structural_scan::offset_of(&production, "\npub fn is_capturing(");
+        assert!(
+            chokepoint < release && release < after,
+            "the release must sit INSIDE clear_active_screen"
         );
     }
 }

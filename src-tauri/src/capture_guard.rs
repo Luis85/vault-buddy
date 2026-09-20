@@ -171,21 +171,69 @@ mod tests {
             .contains("screen capture"));
     }
 
-    // Structural regression: the guard is released from exactly one place in
-    // the audio domain (`clear_active`). If a future edit adds a second
-    // release site, or moves the one release out of the chokepoint, the
-    // claim can leak on some path and BOTH capture domains wedge until the
-    // app restarts — a failure with no error message and no log line. This
-    // scan fails loudly instead.
+    // Structural regression: the guard is released from exactly one place
+    // in the audio domain (`clear_active`), plus one defensive
+    // already-reserved arm in `start_capture_blocking`. If a future edit
+    // adds a third release site, or moves one out of its function, the
+    // claim can be freed on a path that never made it -- letting a screen
+    // capture and a recording run on the same audio endpoints, which is the
+    // single failure this guard exists to prevent. There is no error and no
+    // log line either way.
+    //
+    // Scans the WHOLE shell crate, not `capture_commands.rs` alone. The
+    // single-file form this replaces was blind to a release added anywhere
+    // else -- the same hole the screen half was PROVEN to have (a rogue
+    // release in `staged_commands.rs` left all 185 tests green).
+    // `structural_scan` strips test halves, comments and string literals,
+    // so this comment and the assertions below cannot satisfy themselves.
     #[test]
     fn audio_releases_the_guard_only_from_the_clear_active_chokepoint() {
-        let src = include_str!("capture_commands.rs");
-        let releases = src.matches("release(CaptureKind::Audio)").count();
+        // The METHOD is the needle and the ARGUMENT is what classifies the
+        // site, because a module that does not import `CaptureKind` writes
+        // `release(crate::capture_guard::CaptureKind::Audio)` -- a spelling
+        // a whole-call literal cannot see.
+        let releases = crate::structural_scan::call_args(".release(");
+        let sites: Vec<&String> = releases
+            .iter()
+            .filter(|(_, arg)| arg.contains("Audio"))
+            .map(|(file, _)| file)
+            .collect();
         assert_eq!(
-            releases, 2,
-            "expected exactly two Audio releases in capture_commands.rs \
-             (clear_active, and the defensive already-reserved arm); found {releases}. \
+            sites.len(),
+            2,
+            "expected exactly two Audio releases in the whole shell crate \
+             (clear_active, and the defensive already-reserved arm); found {sites:?}. \
              If you added a release site, funnel it through clear_active instead."
+        );
+        for site in &sites {
+            assert!(
+                site.ends_with("capture_commands.rs"),
+                "an Audio release outside the audio domain: {site}"
+            );
+        }
+
+        // And in the right FUNCTIONS: a release that drifted out of
+        // `clear_active` into, say, `emit_saved` would keep the count at two
+        // while freeing the claim on a path the stop-waiters never reach.
+        let production =
+            crate::structural_scan::production_code(include_str!("capture_commands.rs"));
+        let chokepoint = crate::structural_scan::offset_of(&production, "fn clear_active(");
+        let after_chokepoint = crate::structural_scan::offset_of(&production, "fn emit_saved(");
+        let defensive =
+            crate::structural_scan::offset_of(&production, "fn start_capture_blocking(");
+        let releases: Vec<usize> = production
+            .match_indices(".release(CaptureKind::Audio)")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(releases.len(), 2);
+        assert!(
+            chokepoint < releases[0] && releases[0] < after_chokepoint,
+            "the first Audio release must sit inside clear_active"
+        );
+        assert!(
+            defensive < releases[1],
+            "the second Audio release must sit inside start_capture_blocking's \
+             already-reserved arm"
         );
     }
 }

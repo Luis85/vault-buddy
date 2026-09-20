@@ -239,10 +239,15 @@ pub async fn export_and_save_capture(app: AppHandle, base: String) -> Result<(),
     // the main thread. Unbounded on purpose: an export of a long recording
     // can legitimately take many minutes, and a deadline here would abandon
     // a worker that is still writing into the user's vault.
-    let received = tauri::async_runtime::spawn_blocking(move || done_rx.recv())
-        .await
-        .map_err(|e| format!("The export could not be awaited: {e}"))?;
+    let joined = tauri::async_runtime::spawn_blocking(move || done_rx.recv()).await;
+    // Cleared BEFORE the join is unwrapped, not after. A `?` here used to
+    // sit ahead of this line, so a `JoinError` returned past the only
+    // release and leaked the reservation for the life of the process:
+    // every later export refused as "already running", that base
+    // permanently undiscardable, and `screen_recovery::should_postpone`
+    // reading an export as live forever, so staging is never swept again.
     clear_active_export(&app);
+    let received = joined.map_err(|e| format!("The export could not be awaited: {e}"))?;
     match received {
         Ok(Ok(summary)) => {
             emit_exported(&app, &summary);
@@ -307,6 +312,64 @@ mod tests {
         .iter()
         .map(|src| src.split("#[cfg(test)]").next().unwrap_or(src))
         .collect()
+    }
+
+    /// The body of `export_and_save_capture`, from its signature to its
+    /// closing brace at column 0.
+    fn export_command_body() -> &'static str {
+        let src = production_src();
+        let start = src
+            .find("pub async fn export_and_save_capture(")
+            .expect("the export command must exist");
+        let end = src[start..]
+            .find("\n}\n")
+            .map(|i| start + i)
+            .expect("its closing brace");
+        &src[start..end]
+    }
+
+    // A LEAKED `ExportState` reservation is permanent for the process, and
+    // silent: every later export is refused with "An export of X is already
+    // running", `discard_staged_capture` refuses that base forever, and
+    // `screen_recovery::should_postpone` reads the reservation as live, so
+    // staging is never swept again. Nothing logs it and nothing recovers it
+    // short of a restart.
+    //
+    // The bug this pins was a `?` on the join-await sitting AHEAD of
+    // `clear_active_export(&app)`, so a `JoinError` returned past the one
+    // release. Structural because the command takes an `AppHandle` and
+    // cannot be driven without a Tauri runtime (the GAP-117 class) -- and
+    // because the property is an ORDERING, which no value assertion sees.
+    //
+    // The walk is `structural_scan`'s, shared with `export_worker`'s
+    // rollback pin: the two are the same property over different state, and
+    // a flat "has a clear been seen yet" version of it (written first, for
+    // both) is fooled by the spawn-failure arm clearing inside its own
+    // block.
+    #[test]
+    fn the_export_reservation_is_cleared_before_every_fallible_exit() {
+        let body = export_command_body();
+        let install = body
+            .find("*guard = Some(ActiveExport {")
+            .expect("the reservation must be installed in this command");
+        let eol = body[install..]
+            .find('\n')
+            .map(|i| install + i)
+            .expect("its line ends");
+        let scan = crate::structural_scan::assert_every_exit_is_paired(
+            &body[eol..],
+            "clear_active_export(&app)",
+            "export_and_save_capture",
+        );
+        // Vacuity: the walk above is trivially satisfiable by a region with
+        // nothing in it.
+        assert!(
+            scan.exits >= 2 && scan.releases >= 2,
+            "the scan found {} exit(s) and {} clear(s) after the reservation is \
+             installed -- the walk is broken, not the invariant",
+            scan.exits,
+            scan.releases
+        );
     }
 
     // Export must not claim the cross-domain capture guard: the one
